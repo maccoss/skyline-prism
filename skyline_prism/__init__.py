@@ -28,13 +28,29 @@ from .normalization import (
 from .rollup import (
     tukey_median_polish,
     rollup_to_proteins,
+    batch_correct_proteins,
+    protein_output_pipeline,
+    ProteinBatchCorrectionResult,
+    MedianPolishResult,
+    extract_peptide_residuals,
+    extract_transition_residuals,
+    flag_outlier_peptides,
 )
 from .transition_rollup import (
     rollup_transitions_to_peptides,
     VarianceModelParams,
     learn_variance_model,
+    TransitionRollupResult,
 )
 from .validation import (
     validate_correction,
     generate_qc_report,
+)
+from .batch_correction import (
+    combat,
+    combat_from_long,
+    ComBatResult,
+    evaluate_batch_correction,
+    combat_with_reference_samples,
+    BatchCorrectionEvaluation,
 )

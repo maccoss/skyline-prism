@@ -157,16 +157,47 @@ parsimony:
 # Combine peptides into protein-level quantities.
 
 protein_rollup:
-  # Method: median_polish, topn, ibaq, maxlfq, directlfq
+  # Method for combining peptides into protein abundances:
+  #
+  # median_polish (recommended): Tukey median polish - robust two-way decomposition
+  #   - Separates peptide ionization effects from sample abundances
+  #   - Automatically downweights outliers through median operation
+  #   - Handles missing values naturally
+  #
+  # topn: Average of top N most intense peptides per sample
+  #   - Simple and fast
+  #   - Assumes most intense peptides are most reliable
+  #
+  # ibaq: Intensity-Based Absolute Quantification
+  #   - Total intensity / number of theoretical peptides
+  #   - Enables cross-protein abundance comparisons
+  #   - Requires theoretical peptide count per protein
+  #
+  # maxlfq: Maximum LFQ algorithm (MaxQuant-style)
+  #   - Uses median pairwise peptide ratios between samples
+  #   - Good when relative quantification is more reliable than absolute
+  #
+  # quality_weighted: Variance-model weighted average
+  #   - Weights peptides by inverse predicted variance
+  #   - Requires quality metrics (ShapeCorrelation, Coeluting)
+  #
+  # sum: Simple sum of all peptide intensities
+  #   - Similar to spectral counting
+  #   - Not recommended for label-free quantification
+  #
   method: "median_polish"
   
   # Minimum peptides required per protein (fewer = flagged)
   min_peptides: 3
   
-  # For topn method
+  # For topn method: number of peptides to average
   topn_n: 3
   
-  # For median_polish
+  # For ibaq method: theoretical peptide count (per protein)
+  # Usually provided via protein database annotation
+  ibaq_theoretical_peptides: null
+  
+  # For median_polish method
   median_polish:
     max_iterations: 10
     convergence_tolerance: 0.0001
@@ -197,6 +228,11 @@ output:
   # Include intermediate outputs (peptide-level, diagnostics)
   include_peptides: true
   include_diagnostics: true
+  
+  # Include median polish residuals for outlier analysis
+  # Following Plubell et al. 2022, residuals may indicate biologically
+  # interesting variation (proteoforms, PTMs, protein processing)
+  include_residuals: true
   
   # Compress output files
   compress: true

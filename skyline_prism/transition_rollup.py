@@ -9,13 +9,19 @@ Key concepts:
 - Each transition gets a single weight based on intensity-weighted quality
 - Poor-quality transitions (low shape correlation, not coeluting) are downweighted
 - Variance model parameters can be learned from reference samples
+- When using median_polish, transition-level residuals are captured for outlier analysis
 """
+
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
+
+if TYPE_CHECKING:
+    from .rollup import MedianPolishResult
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +68,23 @@ class VarianceModelParams:
 
 @dataclass
 class TransitionRollupResult:
-    """Result of transition to peptide rollup."""
+    """
+    Result of transition to peptide rollup.
+    
+    When using median_polish method, transition_residuals contains per-peptide
+    dictionaries of MedianPolishResult objects, which include the residual matrix.
+    Large residuals may indicate transitions with interference or biologically
+    interesting variation.
+    """
 
     peptide_abundances: pd.DataFrame  # Peptide × sample matrix
     peptide_uncertainties: pd.DataFrame  # Uncertainty estimates
-    transition_weights: pd.DataFrame  # Weights used per transition
+    transition_weights: pd.DataFrame  # Weights used per transition (quality_weighted)
     n_transitions_used: pd.DataFrame  # Number of transitions per peptide/sample
     variance_model: VarianceModelParams  # Model parameters used
+    # Median polish results per peptide (when method='median_polish')
+    # Keys are peptide identifiers, values are MedianPolishResult objects
+    median_polish_results: Optional[Dict[str, "MedianPolishResult"]] = None
 
 
 def compute_transition_variance(
@@ -273,6 +289,7 @@ def rollup_transitions_to_peptides(
     peptide_uncertainties = pd.DataFrame(index=peptides, columns=samples, dtype=float)
     n_transitions_used = pd.DataFrame(index=peptides, columns=samples, dtype=int)
     all_weights = {}
+    all_median_polish_results = {}  # Store median polish results for residual output
 
     for peptide in peptides:
         pep_data = data[data[peptide_col] == peptide]
@@ -353,6 +370,8 @@ def rollup_transitions_to_peptides(
                     np.sqrt(residual_var.mean()), index=intensity_matrix.columns
                 )
                 n_used = len(intensity_matrix)
+                # Store the full result for residual analysis
+                all_median_polish_results[peptide] = result
             else:
                 abundances = pd.Series(np.nan, index=samples)
                 uncertainties = pd.Series(np.nan, index=samples)
@@ -389,6 +408,7 @@ def rollup_transitions_to_peptides(
         transition_weights=weights_df,
         n_transitions_used=n_transitions_used,
         variance_model=params,
+        median_polish_results=all_median_polish_results if all_median_polish_results else None,
     )
 
 

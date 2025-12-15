@@ -163,6 +163,8 @@ The main output for downstream analysis. Contains normalized, batch-corrected pr
 | cv_peptides | float | CV across peptides (quality metric) |
 | qc_flag | string | Any QC warnings (nullable) |
 
+**Note:** To investigate which peptides are outliers for a given protein, use the peptide-level parquet file and filter by `protein_group_id`. Peptide residuals from the protein rollup median polish are available in the peptides file.
+
 **Usage:**
 ```python
 import pandas as pd
@@ -202,6 +204,14 @@ For drilling down into protein quantification or peptide-level analysis.
 | idotp | float | Isotope dot product (if available) |
 | library_dotp | float | Library dot product (if available) |
 | qc_flag | string | Any QC warnings (nullable) |
+| residual | float | Median polish residual (peptide→protein rollup) |
+| row_effect | float | Peptide ionization effect from median polish (α_i) |
+| residual_mean | float | Mean residual for this peptide across samples |
+| residual_std | float | Standard deviation of residuals |
+| residual_mad | float | Median absolute deviation (robust measure) |
+| residual_max_abs | float | Maximum absolute residual |
+
+**Note on residuals:** Following Plubell et al. 2022 ([doi:10.1021/acs.jproteome.1c00894](https://doi.org/10.1021/acs.jproteome.1c00894)), peptides with large residuals should not be automatically discarded - they may indicate biologically interesting proteoform variation, post-translational modifications, or protein processing. The residual columns allow users to identify and investigate these peptides for potential biological significance.
 
 #### 3. `{name}_metadata.json` - Processing Metadata
 
@@ -508,8 +518,10 @@ Use the inter-experiment reference to **learn** what RT-dependent technical vari
 
 | Control Type | Composition | Purpose | Replicates per Batch |
 |--------------|-------------|---------|---------------------|
-| Inter-experiment reference | Commercial pool (e.g., Golden West CSF, pooled plasma) | Calibration anchor, RT correction derivation | 2-4 |
-| Intra-experiment pool | Pool of experimental samples from current study | Validation, assess prep consistency | 2-4 |
+| Inter-experiment reference | Commercial pool (e.g., Golden West CSF, pooled plasma) | Calibration anchor, RT correction derivation | 1-8 |
+| Intra-experiment pool | Pool of experimental samples from current study | Validation, assess prep consistency | 1-8 |
+
+**Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
 ### Internal QCs (in all samples including controls)
 
@@ -549,46 +561,68 @@ When normalizing at the protein level first, you implicitly average over RT befo
 
 ### Processing Order
 
+The pipeline splits into two arms after RT-aware normalization, depending on the desired output level:
+
 ```
-Raw peptide abundances
+Raw transition abundances
         │
         ▼
 ┌───────────────────────────────────────┐
-│  STEP 1: Log2 transformation          │
+│  STEP 1: Transition → Peptide rollup  │
+│  - Combine all transitions per peptide│
+│  - Median polish or quality-weighted  │
+└───────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────┐
+│  STEP 2: Log2 transformation          │
 │  - Handle zeros (imputation or +1)    │
 └───────────────────────────────────────┘
         │
         ▼
 ┌───────────────────────────────────────┐
-│  STEP 2: RT-aware normalization       │
+│  STEP 3: RT-aware normalization       │
 │  - Reference-anchored correction      │
-│  - Address RT-dependent biases        │
+│  - Addresses RT-dependent biases      │
+│  - Subsumes global normalization      │
 └───────────────────────────────────────┘
         │
-        ▼
-┌───────────────────────────────────────┐
-│  STEP 3: Global normalization         │
-│  - Median centering or VSN            │
-│  - Address sample loading differences │
-└───────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────┐
-│  STEP 4: Batch correction             │
-│  - ComBat or similar                  │
-│  - Address batch effects              │
-└───────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────┐
-│  STEP 5: Protein rollup               │
-│  - Tukey median polish                │
-│  - Robust to outlier peptides         │
-└───────────────────────────────────────┘
-        │
-        ▼
-Normalized protein abundances
+        ├─────────────────────────────────────────────┐
+        │                                             │
+        ▼                                             ▼
+┌─────────────────────────────┐         ┌─────────────────────────────┐
+│  PEPTIDE OUTPUT ARM         │         │  PROTEIN OUTPUT ARM         │
+├─────────────────────────────┤         ├─────────────────────────────┤
+│                             │         │                             │
+│  STEP 4a: Batch correction  │         │  STEP 4b: Protein rollup    │
+│  - ComBat or similar        │         │  - Tukey median polish      │
+│  - Correct at peptide level │         │  - Robust to outlier peps   │
+│                             │         │                             │
+│            │                │         │            │                │
+│            ▼                │         │            ▼                │
+│                             │         │                             │
+│  Normalized peptide         │         │  STEP 5b: Batch correction  │
+│  abundances                 │         │  - ComBat or similar        │
+│                             │         │  - Correct at protein level │
+│                             │         │                             │
+│                             │         │            │                │
+│                             │         │            ▼                │
+│                             │         │                             │
+│                             │         │  Normalized protein         │
+│                             │         │  abundances                 │
+└─────────────────────────────┘         └─────────────────────────────┘
 ```
+
+**Rationale for two-arm design:**
+
+1. **RT-aware normalization subsumes global normalization**: The reference-anchored RT correction already addresses sample loading differences and systematic biases. Adding a separate global normalization step would be redundant and could interfere with the RT-based corrections.
+
+2. **Batch correction should match reporting level**: 
+   - If reporting peptide-level data, batch correct peptides directly
+   - If reporting protein-level data, roll up first, then batch correct proteins
+   - Batch correcting peptides then rolling up can introduce artifacts from the rollup process
+
+3. **Protein rollup before batch correction**: For protein output, rolling up normalized peptides to proteins first allows batch correction to operate on the final quantities of interest. This avoids having batch effects "averaged out" unevenly across peptides during rollup.
 
 ### Tukey Median Polish for Protein Quantification
 
@@ -639,7 +673,14 @@ Output: β_j as protein abundance estimates
 | Top-N | Average of N most intense peptides | Simple, interpretable |
 | iBAQ | Sum intensity / theoretical peptide count | For absolute/cross-protein comparison |
 | maxLFQ | Maximum peptide ratio extraction | When peptide ratios are reliable |
-| directLFQ | Direct estimation from peptide ratios | Alternative to maxLFQ, faster |
+
+**Future consideration: directLFQ**
+
+For very large cohorts (hundreds to thousands of samples), directLFQ offers linear runtime scaling vs. the quadratic scaling of maxLFQ. directLFQ uses an "intensity trace" approach rather than pairwise ratio comparisons.
+
+- **Citation:** Ammar C, Schessner JP, Willems S, Michaelis AC, Mann M. "Accurate label-free quantification by directLFQ to compare unlimited numbers of proteomes." Molecular & Cellular Proteomics. 2023;22(7):100581. doi:10.1016/j.mcpro.2023.100581
+- **GitHub:** https://github.com/MannLabs/directlfq
+- **Status:** Not yet implemented in PRISM. Consider for future versions when processing very large sample cohorts.
 
 ---
 
@@ -649,13 +690,13 @@ The data flows through multiple rollup stages. Each stage can use median polish 
 
 ### Key Design Principles
 
-1. **Complete data matrix**: Skyline imputes integration boundaries for peptides not detected in specific replicates, so we have actual measurements (including zeros) everywhere. No missing value handling is needed.
+1. **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use Tukey median polish by default. This provides robust estimation that automatically downweights outliers (interfered transitions, problematic peptides) without requiring explicit quality metrics or pre-filtering.
 
-2. **Per-transition weighting (not per-replicate)**: When using quality-weighted aggregation, a single weight is computed for each transition based on its average quality across all replicates. If a transition has interference in the experiment, it's downweighted everywhere consistently.
+2. **Complete data matrix**: Skyline imputes integration boundaries for peptides not detected in specific replicates, so we have actual measurements (including zeros) everywhere. No missing value handling is needed.
 
-3. **Median polish doesn't remove transitions**: It decomposes the matrix into transition effects + sample effects + residuals. Outlier transitions contribute to residuals, not to the final peptide estimate.
+3. **Median polish doesn't remove signals**: It decomposes the matrix into row effects + column effects + residuals. Outlier signals contribute to residuals, not to the final abundance estimate. This is more robust than filtering.
 
-### Stage 1: Transition to Peptide Rollup
+### Stage 1: Transition to Peptide Rollup (Default: Median Polish)
 
 Skyline reports can include individual transition intensities. These should be combined into peptide-level quantities before normalization.
 
@@ -664,9 +705,11 @@ Skyline reports can include individual transition intensities. These should be c
 - Some transitions may be truncated or poorly integrated  
 - Robust combination reduces impact of problematic transitions
 
+**Default method: Tukey Median Polish** - This is the recommended approach because it automatically handles interference without requiring quality metrics from Skyline.
+
 **Available methods:**
 
-#### 1. Tukey Median Polish (Default)
+#### 1. Tukey Median Polish (Default, Recommended)
 
 Robust iterative algorithm that removes row (transition) and column (sample) effects:
 - Automatically downweights outlier transitions through the median operation
@@ -682,9 +725,9 @@ Where:
 - $\beta_j$ = sample effect = **peptide abundance estimate**
 - $\epsilon_{ij}$ = residuals (captures noise and outliers)
 
-#### 2. Quality-Weighted Aggregation
+#### 2. Quality-Weighted Aggregation (Alternative)
 
-Uses Skyline's per-transition quality metrics to weight the combination:
+Uses Skyline's per-transition quality metrics to weight the combination. This is an alternative to median polish when you want to explicitly incorporate Skyline's quality scores.
 
 **Key principle: Per-transition weights using intensity-weighted quality**
 
@@ -722,38 +765,25 @@ Simple sum of transition intensities (converted to linear scale, then back to lo
 
 **Note on MS1 data:** By default, MS1 signal is **not** used for quantification even if present in the output. Fragment-based quantification is typically more specific. This can be enabled via configuration.
 
-### Stage 2: Precursor to Peptide Rollup
+**Handling multiple charge states:** When a peptide has multiple precursor charge states (e.g., +2 and +3), the transitions from all charge states are treated as additional transitions for that peptide. They are combined together in the same transition→peptide rollup step using median polish or quality-weighted aggregation. This approach:
+- Treats all transitions equivalently regardless of precursor charge state
+- Allows median polish to naturally handle charge state-specific effects as "transition effects"
+- Avoids arbitrary decisions about which charge state is "best"
+- Maximizes information use when peptides are observed at multiple charge states
 
-If multiple charge states exist for the same modified peptide sequence, combine them.
+### Stage 2: Peptide to Protein Rollup (Default: Median Polish)
 
-**Note:** Skyline typically already handles this - the "Peptide" level in Skyline aggregates across charge states. If working with precursor-level data:
+After normalization (RT correction and batch correction), combine peptides into protein-level quantities.
 
-```
-For each modified peptide sequence:
-    precursors (charge states) × samples matrix
-           │
-           ▼  
-    Take maximum or median across charge states
-           │
-           ▼
-    peptide abundance
-```
-
-**Rationale for maximum:** The charge state with best ionization/detection should give the most reliable quantification.
-
-### Stage 3: Peptide to Protein Rollup
-
-After normalization (RT correction, global normalization, batch correction), combine peptides into protein-level quantities.
-
-**Important:** Tukey median polish at this level provides similar robustness benefits to quality-weighted aggregation - it naturally downweights peptides that are inconsistent with the majority. The main difference is:
-- Quality-weighted: Uses explicit quality metrics to set weights a priori
-- Median polish: Uses the data itself to identify and downweight outliers
-
-Both approaches address the same problem (outlier signals) from different angles.
+**Default method: Tukey Median Polish** - Consistent with the transition→peptide rollup, median polish is the default because it:
+- Automatically downweights peptides that behave inconsistently across samples
+- Requires no explicit quality metrics or pre-filtering
+- Produces interpretable peptide effects (ionization efficiency differences)
+- Is robust to outliers from misintegrations or interferences that weren't caught earlier
 
 ### Rollup Method Details
 
-#### Tukey Median Polish (Default)
+#### Tukey Median Polish (Default, Recommended)
 
 See mathematical details section. Key properties:
 - Robust to outlier peptides
@@ -816,9 +846,21 @@ def rollup_maxlfq(peptide_matrix):
     return abundances - abundances.mean()  # Center
 ```
 
-#### directLFQ
+#### directLFQ (NOT YET IMPLEMENTED)
 
-Similar principle to maxLFQ but uses direct estimation without iterative optimization. See Mund et al. 2022 for details.
+DirectLFQ is a fundamentally different algorithm from maxLFQ, not just an optimization. While both preserve peptide ratios, directLFQ uses an "intensity trace" approach with linear O(n) runtime scaling, making it suitable for very large cohorts (100s-1000s of samples) where maxLFQ's O(n²) pairwise comparisons become prohibitive.
+
+**Key algorithmic differences from maxLFQ:**
+1. Creates an "anchor intensity trace" from a subset of ions/samples
+2. Aligns all ion traces to this anchor via normalization
+3. Extracts protein intensities from aligned traces
+4. Runtime scales linearly with sample count
+
+**Citation:** Ammar C, Schessner JP, Willems S, Michaelis AC, Mann M. "Accurate label-free quantification by directLFQ to compare unlimited numbers of proteomes." Molecular & Cellular Proteomics. 2023;22(7):100581. doi:10.1016/j.mcpro.2023.100581
+
+**GitHub:** https://github.com/MannLabs/directlfq
+
+**Status:** Not implemented in PRISM. The current `maxlfq` method uses the original pairwise ratio approach. For very large cohorts, users should consider using the directLFQ package directly or this may be added in a future version.
 
 ---
 
@@ -894,39 +936,45 @@ For internal QCs (PRTC, ENO):
 
 ### Phase 2: RT-Dependent Correction Factor Estimation
 
-**Approach A: Spline-based RT modeling**
+#### Spline-based RT Modeling (Implemented)
+
+The primary approach uses smoothing splines to model RT-dependent technical variation:
 
 ```
 For each sample s:
-    For each reference replicate r in same batch:
-        1. Calculate log-ratio: ratio_pr = log2(sample_abundance_p / reference_abundance_p)
-        2. Fit smooth function f(RT) to ratios using splines or LOESS
-        3. This captures RT-dependent deviation from reference
+    1. Calculate residuals: For each peptide p, compute
+       residual_p = log2(sample_abundance_p) - log2(reference_mean_p)
     
-    Correction factor for peptide p in sample s:
-        correction_ps = median(f_r(RT_p)) across reference replicates r
+    2. Fit smooth spline f(RT) to residuals vs retention time
+       - Uses reference samples from the same batch
+       - Spline captures systematic RT-dependent deviation
+       - Degrees of freedom controls smoothness (default: 5)
+    
+    3. Correction factor for peptide p:
+       correction_p = f(RT_p)
+    
+    4. Apply correction:
+       corrected_abundance_p = raw_abundance_p - correction_p
 ```
 
-**Approach B: RUV-style factor analysis**
+**Implementation details:**
+- Uses `scipy.interpolate.UnivariateSpline` for smooth fitting
+- Falls back to binned median correction if spline fitting fails
+- Can fit per-batch models (recommended) or a single global model
+- With multiple reference replicates, uses median RT per peptide for stability
 
-```
-1. Construct matrix Y of reference replicate abundances (peptides × reference injections)
-2. Since reference replicates should be identical, perform SVD/factor analysis
-3. Factors capturing variance = unwanted technical variation
-4. Model: Y = W*α + ε  where W = unwanted factors
-5. Apply learned W to experimental samples, regressing out unwanted variation
-```
+#### Alternative Approaches (Future Work)
 
-**Approach C: ComBat-like RT-window adjustment**
+The following approaches may be implemented in future versions:
 
-```
-1. Bin RT into windows (e.g., 5-minute bins)
-2. For each RT bin:
-    a. Calculate location (mean) and scale (variance) from reference replicates
-    b. Use empirical Bayes shrinkage to stabilize estimates
-    c. Adjust experimental samples to match reference distribution
-3. Preserve known biological covariates by including them in the model
-```
+**RUV-style factor analysis:**
+- Use SVD/factor analysis on reference replicates to identify unwanted variation factors
+- Regress these factors out of experimental samples
+- Advantage: Can capture complex, non-RT-dependent technical variation
+
+**ComBat-like RT-window adjustment:**
+- Bin peptides by RT and apply empirical Bayes adjustment per window
+- Advantage: More robust estimates when peptide counts are low
 
 ### Phase 3: Apply Correction to Experimental Samples
 
@@ -1298,7 +1346,7 @@ parsimony:
 
 # Peptide to protein rollup
 protein_rollup:
-  method: "median_polish"  # options: median_polish, topn, ibaq, maxlfq, directlfq
+  method: "median_polish"  # options: median_polish, topn, ibaq, maxlfq
   min_peptides: 3          # minimum peptides per protein
   
   # Method-specific parameters
@@ -1320,8 +1368,10 @@ filtering:
 
 output:
   transitions_rolled: "transitions_to_peptides.parquet"  # if transition rollup enabled
+  transition_residuals: "transition_residuals.parquet"   # median polish residuals per transition
   corrected_peptides: "corrected_peptides.parquet"
   corrected_proteins: "corrected_proteins.parquet"
+  peptide_residuals: "peptide_residuals.parquet"         # median polish residuals per peptide
   protein_groups: "protein_groups.tsv"
   qc_report: "normalization_qc_report.html"
   diagnostic_plots: "plots/"

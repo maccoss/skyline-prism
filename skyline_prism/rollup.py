@@ -4,9 +4,10 @@ Protein rollup module with Tukey median polish and other aggregation methods.
 Supports:
 - Transition → Peptide rollup with optional quality weighting
 - Peptide → Protein rollup
-- Multiple methods: median_polish, topn, ibaq, maxlfq, directlfq
+- Multiple methods: median_polish, topn, ibaq, maxlfq
 - Flexible shared peptide handling: all_groups, unique_only, razor
 - Uncertainty propagation through rollup steps
+- Protein-level batch correction (ComBat)
 """
 
 import pandas as pd
@@ -15,18 +16,58 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Set
 import logging
 
+from .batch_correction import (
+    combat,
+    evaluate_batch_correction,
+    BatchCorrectionEvaluation,
+)
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class MedianPolishResult:
-    """Result of Tukey median polish."""
+    """
+    Result of Tukey median polish.
+    
+    The residuals matrix captures deviations from the additive model:
+        y_ij = μ + α_i + β_j + ε_ij
+    
+    Large residuals may indicate:
+    - Technical outliers (interference, poor peak picking)
+    - Biologically interesting variation (proteoforms, PTMs, protein processing)
+    
+    Following Plubell et al. 2022 (doi:10.1021/acs.jproteome.1c00894), outlier
+    peptides should not be discarded but flagged for potential biological interest.
+    """
     overall: float                    # Grand effect (μ)
     row_effects: pd.Series            # Peptide/transition effects (α)
     col_effects: pd.Series            # Sample effects (β) - abundance estimates
-    residuals: pd.DataFrame           # Residual matrix
+    residuals: pd.DataFrame           # Residual matrix (rows × samples)
     n_iterations: int
     converged: bool
+    
+    def get_row_residual_summary(self) -> pd.DataFrame:
+        """
+        Compute per-row (peptide/transition) residual summary statistics.
+        
+        Returns a DataFrame with one row per peptide/transition containing:
+        - residual_mean: Mean residual across samples
+        - residual_std: Standard deviation of residuals
+        - residual_mad: Median absolute deviation (robust)
+        - residual_max_abs: Maximum absolute residual
+        
+        Large values indicate the row deviates from the additive model,
+        potentially indicating biological interest (proteoforms, PTMs).
+        """
+        residuals_arr = self.residuals.values
+        
+        return pd.DataFrame({
+            'residual_mean': np.nanmean(residuals_arr, axis=1),
+            'residual_std': np.nanstd(residuals_arr, axis=1),
+            'residual_mad': np.nanmedian(np.abs(residuals_arr - np.nanmedian(residuals_arr, axis=1, keepdims=True)), axis=1),
+            'residual_max_abs': np.nanmax(np.abs(residuals_arr), axis=1),
+        }, index=self.residuals.index)
 
 
 @dataclass
@@ -762,28 +803,35 @@ def rollup_directlfq(
     matrix: pd.DataFrame,
 ) -> pd.Series:
     """
-    directLFQ-style rollup.
+    DirectLFQ-style rollup - PLACEHOLDER, NOT FULLY IMPLEMENTED.
     
-    Similar to maxLFQ but uses direct normalization without 
-    iterative optimization. Based on Mund et al. 2022.
+    NOTE: This is a simplified placeholder that does NOT implement the true
+    directLFQ algorithm. The real directLFQ uses an "intensity trace" approach
+    with linear O(n) runtime scaling, suitable for very large cohorts.
+    
+    For the actual directLFQ algorithm, see:
+    - Paper: Ammar et al. 2023, MCP. doi:10.1016/j.mcpro.2023.100581
+    - GitHub: https://github.com/MannLabs/directlfq
+    
+    This placeholder simply centers peptides and takes medians, which is
+    NOT equivalent to directLFQ. Use maxlfq or median_polish instead.
     
     Args:
         matrix: Peptide × sample matrix (log2 values)
         
     Returns:
         Series of protein abundances per sample
+        
+    Raises:
+        NotImplementedError: Always raises - use maxlfq or median_polish instead
     """
-    # Simplified directLFQ implementation
-    # Center each peptide to its median, then take sample medians
-    
-    peptide_medians = matrix.median(axis=1)
-    centered = matrix.subtract(peptide_medians, axis=0)
-    
-    # Sample abundance = median of centered peptides + overall level
-    sample_effects = centered.median(axis=0)
-    overall = matrix.median().median()
-    
-    return sample_effects + overall
+    raise NotImplementedError(
+        "directLFQ is not implemented in PRISM. The directLFQ algorithm uses a "
+        "fundamentally different 'intensity trace' approach with O(n) scaling. "
+        "For large cohorts, use the directLFQ package directly: "
+        "https://github.com/MannLabs/directlfq. "
+        "For PRISM, use 'median_polish' (recommended) or 'maxlfq' instead."
+    )
 
 
 def rollup_sum(matrix: pd.DataFrame) -> pd.Series:
@@ -1011,8 +1059,11 @@ def rollup_to_proteins(
             - 'median_polish': Tukey median polish (default, robust)
             - 'topn': Average of top N peptides
             - 'ibaq': Sum / theoretical peptide count
-            - 'maxlfq': Maximum peptide ratio extraction
-            - 'directlfq': Direct LFQ estimation
+            - 'maxlfq': Maximum LFQ (pairwise ratio extraction)
+            
+            Note: directLFQ is NOT implemented. For large cohorts requiring 
+            O(n) scaling, use the directLFQ package directly:
+            https://github.com/MannLabs/directlfq
         min_peptides: Minimum peptides required per protein
         shared_peptide_handling: How to handle shared peptides:
             - 'all_groups': Apply to ALL groups (default, recommended)
@@ -1204,3 +1255,461 @@ def flag_outlier_peptides(
             })
     
     return pd.DataFrame(rows)
+
+
+def extract_peptide_residuals(
+    polish_results: Dict[str, MedianPolishResult],
+) -> pd.DataFrame:
+    """
+    Extract peptide residuals from median polish results in long format.
+    
+    This function extracts the raw residuals from protein-level median polish
+    for output to parquet files. Users can apply their own outlier thresholds
+    downstream.
+    
+    Following Plubell et al. 2022 (doi:10.1021/acs.jproteome.1c00894), peptides
+    with large residuals should not be discarded - they may indicate biologically
+    interesting proteoform variation.
+    
+    Args:
+        polish_results: Dict of protein_group_id -> MedianPolishResult
+        
+    Returns:
+        DataFrame in long format with columns:
+        - protein_group_id: Protein group identifier
+        - peptide: Peptide identifier
+        - replicate_name: Sample identifier
+        - residual: Raw residual from median polish
+        - row_effect: Peptide ionization effect (α_i)
+        
+        Plus summary statistics per peptide across samples:
+        - residual_mean: Mean residual for this peptide
+        - residual_std: Standard deviation of residuals
+        - residual_mad: Median absolute deviation (robust)
+        - residual_max_abs: Maximum absolute residual
+    """
+    rows = []
+    
+    for group_id, result in polish_results.items():
+        # Get per-row summary statistics
+        row_summary = result.get_row_residual_summary()
+        
+        # Melt residuals to long format
+        residuals_long = result.residuals.reset_index().melt(
+            id_vars=[result.residuals.index.name or 'index'],
+            var_name='replicate_name',
+            value_name='residual'
+        )
+        residuals_long.rename(columns={result.residuals.index.name or 'index': 'peptide'}, inplace=True)
+        
+        # Add protein group and row effects
+        residuals_long['protein_group_id'] = group_id
+        residuals_long['row_effect'] = residuals_long['peptide'].map(result.row_effects)
+        
+        # Add summary statistics
+        for col in ['residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs']:
+            residuals_long[col] = residuals_long['peptide'].map(row_summary[col])
+        
+        rows.append(residuals_long)
+    
+    if not rows:
+        return pd.DataFrame(columns=[
+            'protein_group_id', 'peptide', 'replicate_name', 'residual', 
+            'row_effect', 'residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs'
+        ])
+    
+    return pd.concat(rows, ignore_index=True)
+
+
+def extract_transition_residuals(
+    transition_rollup_result,  # TransitionRollupResult
+) -> Optional[pd.DataFrame]:
+    """
+    Extract transition residuals from transition rollup results in long format.
+    
+    This function extracts the raw residuals from transition-to-peptide median
+    polish for output to parquet files.
+    
+    Args:
+        transition_rollup_result: TransitionRollupResult with median_polish_results
+        
+    Returns:
+        DataFrame in long format with columns:
+        - peptide: Peptide identifier
+        - transition: Transition identifier  
+        - replicate_name: Sample identifier
+        - residual: Raw residual from median polish
+        - row_effect: Transition ionization effect
+        - residual_mean, residual_std, residual_mad, residual_max_abs: Summary stats
+        
+        Returns None if median_polish_results is not available (e.g., when
+        quality_weighted method was used).
+    """
+    if transition_rollup_result.median_polish_results is None:
+        return None
+    
+    rows = []
+    
+    for peptide, result in transition_rollup_result.median_polish_results.items():
+        # Get per-row summary statistics
+        row_summary = result.get_row_residual_summary()
+        
+        # Melt residuals to long format
+        residuals_long = result.residuals.reset_index().melt(
+            id_vars=[result.residuals.index.name or 'index'],
+            var_name='replicate_name',
+            value_name='residual'
+        )
+        residuals_long.rename(columns={result.residuals.index.name or 'index': 'transition'}, inplace=True)
+        
+        # Add peptide and row effects
+        residuals_long['peptide'] = peptide
+        residuals_long['row_effect'] = residuals_long['transition'].map(result.row_effects)
+        
+        # Add summary statistics
+        for col in ['residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs']:
+            residuals_long[col] = residuals_long['transition'].map(row_summary[col])
+        
+        rows.append(residuals_long)
+    
+    if not rows:
+        return None
+    
+    return pd.concat(rows, ignore_index=True)
+
+
+# ============================================================================
+# Protein-Level Batch Correction
+# ============================================================================
+
+@dataclass
+class ProteinBatchCorrectionResult:
+    """Result of protein-level batch correction.
+    
+    Attributes:
+        corrected_data: DataFrame with batch-corrected protein abundances
+        evaluation: BatchCorrectionEvaluation metrics (if reference/pool available)
+        used_fallback: Whether fallback to uncorrected data was used
+        method_log: List of processing steps
+    """
+    corrected_data: pd.DataFrame
+    evaluation: Optional[BatchCorrectionEvaluation]
+    used_fallback: bool
+    method_log: List[str]
+
+
+def batch_correct_proteins(
+    protein_data: pd.DataFrame,
+    sample_metadata: pd.DataFrame,
+    sample_col: str = 'replicate_name',
+    batch_col: str = 'batch',
+    sample_type_col: str = 'sample_type',
+    reference_type: str = 'reference',
+    pool_type: str = 'pool',
+    par_prior: bool = True,
+    mean_only: bool = False,
+    evaluate: bool = True,
+    fallback_on_failure: bool = True,
+) -> ProteinBatchCorrectionResult:
+    """
+    Apply ComBat batch correction to protein-level abundances.
+    
+    This implements Step 5b from the PRISM specification: batch correction
+    at the protein level AFTER peptide→protein rollup.
+    
+    The protein-level batch correction operates on the protein × sample matrix
+    produced by rollup_to_proteins(). It uses reference and pool samples for
+    QC evaluation, with automatic fallback if correction degrades data quality.
+    
+    Args:
+        protein_data: DataFrame with proteins as rows, samples as columns
+            (wide format from rollup_to_proteins)
+        sample_metadata: DataFrame with sample annotations including batch
+        sample_col: Column in metadata with sample identifiers
+        batch_col: Column in metadata with batch labels
+        sample_type_col: Column in metadata with sample types
+        reference_type: Value indicating reference samples
+        pool_type: Value indicating pool samples
+        par_prior: Use parametric empirical Bayes (recommended)
+        mean_only: Only correct location effects, not scale
+        evaluate: Whether to evaluate correction using reference/pool
+        fallback_on_failure: If True, revert to uncorrected data on QC failure
+        
+    Returns:
+        ProteinBatchCorrectionResult with corrected data and diagnostics
+        
+    Example:
+        >>> # After rollup_to_proteins
+        >>> protein_df, polish_results = rollup_to_proteins(peptide_data, groups)
+        >>> 
+        >>> # Apply protein-level batch correction
+        >>> result = batch_correct_proteins(
+        ...     protein_df,
+        ...     sample_metadata,
+        ...     batch_col='batch'
+        ... )
+        >>> corrected_proteins = result.corrected_data
+    """
+    method_log = []
+    
+    # Extract abundance columns (exclude metadata columns)
+    metadata_cols = ['leading_protein', 'leading_name', 'n_peptides', 
+                     'n_unique_peptides', 'protein_group_id']
+    sample_cols = [c for c in protein_data.columns if c not in metadata_cols]
+    
+    # Get abundance matrix (proteins × samples)
+    abundance_matrix = protein_data[sample_cols].copy()
+    
+    # Map samples to batches
+    sample_to_batch = dict(zip(
+        sample_metadata[sample_col], 
+        sample_metadata[batch_col]
+    ))
+    batch_labels = [sample_to_batch.get(s) for s in sample_cols]
+    
+    # Check we have valid batches
+    if None in batch_labels:
+        missing = [s for s, b in zip(sample_cols, batch_labels) if b is None]
+        logger.warning(f"Samples missing batch info: {missing[:5]}...")
+        method_log.append(f"WARNING: {len(missing)} samples missing batch info")
+    
+    n_batches = len(set(b for b in batch_labels if b is not None))
+    logger.info(f"Applying protein-level batch correction across {n_batches} batches")
+    method_log.append(f"Protein-level batch correction: {n_batches} batches")
+    
+    if n_batches < 2:
+        logger.warning("Only one batch - skipping batch correction")
+        method_log.append("Skipped: only one batch")
+        return ProteinBatchCorrectionResult(
+            corrected_data=protein_data.copy(),
+            evaluation=None,
+            used_fallback=False,
+            method_log=method_log,
+        )
+    
+    # Apply ComBat to protein matrix (proteins × samples)
+    try:
+        corrected_matrix = combat(
+            abundance_matrix.values,
+            np.array(batch_labels),
+            par_prior=par_prior,
+            mean_only=mean_only,
+        )
+        corrected_df = pd.DataFrame(
+            corrected_matrix,
+            index=abundance_matrix.index,
+            columns=abundance_matrix.columns,
+        )
+        method_log.append(f"ComBat applied (par_prior={par_prior}, mean_only={mean_only})")
+        
+    except Exception as e:
+        logger.error(f"Protein-level batch correction failed: {e}")
+        method_log.append(f"ComBat FAILED: {e}")
+        return ProteinBatchCorrectionResult(
+            corrected_data=protein_data.copy(),
+            evaluation=None,
+            used_fallback=True,
+            method_log=method_log,
+        )
+    
+    # Evaluate using reference and pool samples
+    evaluation = None
+    used_fallback = False
+    
+    if evaluate:
+        # Get sample type mapping
+        sample_to_type = dict(zip(
+            sample_metadata[sample_col],
+            sample_metadata[sample_type_col]
+        ))
+        
+        reference_cols = [s for s in sample_cols 
+                         if sample_to_type.get(s) == reference_type]
+        pool_cols = [s for s in sample_cols 
+                    if sample_to_type.get(s) == pool_type]
+        
+        if len(reference_cols) >= 2 and len(pool_cols) >= 2:
+            # Calculate CVs before and after
+            def calc_cv(df, cols):
+                subset = df[cols]
+                linear = np.power(2, subset)  # Convert from log2
+                cv_per_protein = linear.std(axis=1) / linear.mean(axis=1)
+                return float(cv_per_protein.median())
+            
+            ref_cv_before = calc_cv(abundance_matrix, reference_cols)
+            ref_cv_after = calc_cv(corrected_df, reference_cols)
+            pool_cv_before = calc_cv(abundance_matrix, pool_cols)
+            pool_cv_after = calc_cv(corrected_df, pool_cols)
+            
+            ref_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before
+            pool_improvement = (pool_cv_before - pool_cv_after) / pool_cv_before
+            
+            if pool_improvement > 0:
+                overfitting_ratio = ref_improvement / pool_improvement
+            elif ref_improvement > 0:
+                overfitting_ratio = float('inf')
+            else:
+                overfitting_ratio = 1.0
+            
+            # Calculate batch variance
+            batch_var_before = np.var([
+                abundance_matrix[sample_cols].mean().values
+            ])
+            batch_var_after = np.var([
+                corrected_df[sample_cols].mean().values
+            ])
+            
+            # Determine pass/fail
+            warnings = []
+            passed = True
+            
+            if pool_cv_after > pool_cv_before * 1.1:
+                passed = False
+                warnings.append(
+                    f"Pool CV increased: {pool_cv_before:.3f} -> {pool_cv_after:.3f}"
+                )
+            
+            if overfitting_ratio > 2.0:
+                passed = False
+                warnings.append(
+                    f"Possible overfitting: ref improved {ref_improvement:.1%}, "
+                    f"pool only {pool_improvement:.1%}"
+                )
+            
+            evaluation = BatchCorrectionEvaluation(
+                reference_cv_before=ref_cv_before,
+                reference_cv_after=ref_cv_after,
+                pool_cv_before=pool_cv_before,
+                pool_cv_after=pool_cv_after,
+                reference_improvement=ref_improvement,
+                pool_improvement=pool_improvement,
+                overfitting_ratio=overfitting_ratio,
+                batch_variance_before=batch_var_before,
+                batch_variance_after=batch_var_after,
+                passed=passed,
+                warnings=warnings,
+            )
+            
+            method_log.append(
+                f"Evaluation: ref CV {ref_cv_before:.3f} -> {ref_cv_after:.3f}, "
+                f"pool CV {pool_cv_before:.3f} -> {pool_cv_after:.3f}"
+            )
+            
+            # Handle fallback
+            if fallback_on_failure and not passed:
+                logger.warning(
+                    "Protein-level batch correction failed QC - using uncorrected data"
+                )
+                for w in warnings:
+                    logger.warning(f"  - {w}")
+                
+                corrected_df = abundance_matrix.copy()
+                used_fallback = True
+                evaluation.warnings.append(
+                    "FALLBACK: Using uncorrected protein data due to QC failure"
+                )
+                method_log.append("FALLBACK to uncorrected data")
+            elif passed:
+                logger.info("Protein-level batch correction passed QC")
+                method_log.append("QC PASSED")
+            else:
+                logger.warning("Protein-level batch correction failed QC but keeping corrected data")
+                method_log.append("QC FAILED (keeping corrected data)")
+        else:
+            logger.warning(
+                f"Cannot evaluate: {len(reference_cols)} reference, {len(pool_cols)} pool samples"
+            )
+            method_log.append(
+                f"Evaluation skipped: need >=2 reference and pool samples"
+            )
+    
+    # Reconstruct full DataFrame with metadata
+    result_df = protein_data.copy()
+    for col in sample_cols:
+        result_df[col] = corrected_df[col]
+    
+    return ProteinBatchCorrectionResult(
+        corrected_data=result_df,
+        evaluation=evaluation,
+        used_fallback=used_fallback,
+        method_log=method_log,
+    )
+
+
+def protein_output_pipeline(
+    peptide_data: pd.DataFrame,
+    protein_groups: List,
+    sample_metadata: pd.DataFrame,
+    abundance_col: str = 'abundance',
+    sample_col: str = 'replicate_name',
+    peptide_col: str = 'peptide_modified',
+    batch_col: str = 'batch',
+    sample_type_col: str = 'sample_type',
+    rollup_method: str = 'median_polish',
+    min_peptides: int = 3,
+    shared_peptide_handling: str = 'all_groups',
+    batch_correction: bool = True,
+    batch_correction_params: Optional[Dict] = None,
+) -> Tuple[pd.DataFrame, Dict, ProteinBatchCorrectionResult]:
+    """
+    Complete protein output pipeline: rollup then batch correction.
+    
+    This implements the Protein Output Arm from the PRISM specification:
+    1. Peptide → Protein rollup (median polish or other method)
+    2. Protein-level batch correction (ComBat with QC evaluation)
+    
+    Args:
+        peptide_data: Normalized peptide data in long format
+        protein_groups: List of ProteinGroup objects from parsimony
+        sample_metadata: Sample annotations including batch info
+        abundance_col: Column with peptide abundances
+        sample_col: Column with sample identifiers
+        peptide_col: Column with peptide identifiers
+        batch_col: Column with batch labels
+        sample_type_col: Column with sample types (reference/pool/experimental)
+        rollup_method: Method for peptide→protein rollup
+        min_peptides: Minimum peptides per protein
+        shared_peptide_handling: How to handle shared peptides
+        batch_correction: Whether to apply protein-level batch correction
+        batch_correction_params: Parameters for ComBat
+        
+    Returns:
+        Tuple of:
+        - DataFrame with final protein abundances
+        - Dict of MedianPolishResult per protein (if method='median_polish')
+        - ProteinBatchCorrectionResult (or None if batch_correction=False)
+    """
+    # Step 1: Peptide → Protein rollup
+    logger.info("Step 1: Peptide to protein rollup")
+    protein_df, polish_results = rollup_to_proteins(
+        peptide_data,
+        protein_groups,
+        abundance_col=abundance_col,
+        sample_col=sample_col,
+        peptide_col=peptide_col,
+        method=rollup_method,
+        min_peptides=min_peptides,
+        shared_peptide_handling=shared_peptide_handling,
+    )
+    
+    # Step 2: Protein-level batch correction
+    batch_result = None
+    if batch_correction:
+        logger.info("Step 2: Protein-level batch correction")
+        params = batch_correction_params or {}
+        
+        batch_result = batch_correct_proteins(
+            protein_df,
+            sample_metadata,
+            sample_col=sample_col,
+            batch_col=batch_col,
+            sample_type_col=sample_type_col,
+            par_prior=params.get('par_prior', True),
+            mean_only=params.get('mean_only', False),
+            evaluate=params.get('evaluate', True),
+            fallback_on_failure=params.get('fallback_on_failure', True),
+        )
+        protein_df = batch_result.corrected_data
+    
+    return protein_df, polish_results, batch_result
+

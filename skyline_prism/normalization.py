@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Callable
 import logging
 
+from .batch_correction import combat_from_long, combat_with_reference_samples
+
 logger = logging.getLogger(__name__)
 
 
@@ -405,6 +407,8 @@ def normalize_pipeline(
     global_method: str = 'median',
     spline_df: int = 5,
     per_batch: bool = True,
+    batch_correction: bool = False,
+    batch_correction_params: Optional[Dict] = None,
 ) -> NormalizationResult:
     """
     Run full normalization pipeline.
@@ -413,6 +417,7 @@ def normalize_pipeline(
     1. Compute reference statistics
     2. Apply RT-dependent correction (optional)
     3. Apply global normalization
+    4. Apply batch correction via ComBat (optional)
     
     Args:
         data: DataFrame with peptide data
@@ -426,6 +431,8 @@ def normalize_pipeline(
         global_method: Global normalization method ('median', 'quantile', 'none')
         spline_df: Degrees of freedom for RT spline
         per_batch: Whether to fit RT models per batch
+        batch_correction: Whether to apply ComBat batch correction
+        batch_correction_params: Additional parameters for ComBat (par_prior, mean_only, ref_batch)
         
     Returns:
         NormalizationResult with normalized data and diagnostics
@@ -495,6 +502,86 @@ def normalize_pipeline(
         
     else:
         raise ValueError(f"Unknown global normalization method: {global_method}")
+    
+    # Step 4: Batch correction (ComBat)
+    if batch_correction:
+        # Check if batch column exists and has multiple batches
+        if batch_col not in data.columns:
+            logger.warning(f"Batch column '{batch_col}' not found - skipping batch correction")
+        else:
+            n_batches = data[batch_col].nunique()
+            if n_batches < 2:
+                logger.warning(f"Only {n_batches} batch(es) found - skipping batch correction")
+            else:
+                # Determine which abundance column to use
+                if 'abundance_normalized' in data.columns:
+                    input_abundance = 'abundance_normalized'
+                elif 'abundance_rt_corrected' in data.columns:
+                    input_abundance = 'abundance_rt_corrected'
+                else:
+                    input_abundance = abundance_col
+                
+                # Get ComBat parameters
+                combat_params = batch_correction_params or {}
+                par_prior = combat_params.get('par_prior', True)
+                mean_only = combat_params.get('mean_only', False)
+                evaluate = combat_params.get('evaluate', True)
+                fallback_on_failure = combat_params.get('fallback_on_failure', True)
+                
+                logger.info(f"Applying ComBat batch correction across {n_batches} batches")
+                
+                try:
+                    # Use combat_with_reference_samples for automatic QC evaluation
+                    combat_result, evaluation = combat_with_reference_samples(
+                        data,
+                        abundance_col=input_abundance,
+                        feature_col=precursor_col,
+                        sample_col=replicate_col,
+                        batch_col=batch_col,
+                        sample_type_col=sample_type_col,
+                        par_prior=par_prior,
+                        mean_only=mean_only,
+                        evaluate=evaluate,
+                        fallback_on_failure=fallback_on_failure,
+                    )
+                    
+                    # Store batch-corrected values
+                    corrected_col = f'{input_abundance}_batch_corrected'
+                    data['abundance_batch_corrected'] = combat_result[corrected_col]
+                    
+                    # Log results
+                    if evaluation is not None:
+                        if evaluation.passed:
+                            method_log.append(
+                                f"Applied ComBat batch correction "
+                                f"(ref CV: {evaluation.reference_cv_before:.3f} -> "
+                                f"{evaluation.reference_cv_after:.3f}, "
+                                f"pool CV: {evaluation.pool_cv_before:.3f} -> "
+                                f"{evaluation.pool_cv_after:.3f})"
+                            )
+                        else:
+                            if fallback_on_failure:
+                                method_log.append(
+                                    f"ComBat batch correction FAILED QC - using uncorrected data "
+                                    f"(ref CV improvement: {evaluation.reference_improvement:.1%}, "
+                                    f"pool CV improvement: {evaluation.pool_improvement:.1%})"
+                                )
+                            else:
+                                method_log.append(
+                                    f"ComBat batch correction applied but FAILED QC "
+                                    f"({'; '.join(evaluation.warnings)})"
+                                )
+                    else:
+                        method_log.append(
+                            f"Applied ComBat batch correction (par_prior={par_prior}, "
+                            f"mean_only={mean_only}) - no QC evaluation"
+                        )
+                    
+                    logger.info("ComBat batch correction completed")
+                    
+                except Exception as e:
+                    logger.error(f"Batch correction failed: {e}")
+                    method_log.append(f"Batch correction FAILED: {e}")
     
     return NormalizationResult(
         normalized_data=data,
