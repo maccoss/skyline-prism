@@ -1,10 +1,14 @@
-# RT-Aware Normalization for Proteomics Data
+# Skyline-PRISM Specification
+
+**PRISM**: Proteomics Reference-Integrated Signal Modeling
 
 ## Specification Document for Implementation
 
 ### Overview
 
-This document specifies an approach to retention time (RT)-aware normalization that borrows ideas from batch correction methods (SVA, ComBat, RUV) while using the dual-control experimental design from the MacCoss lab QC framework. The key insight is to use the **inter-experiment reference** (e.g., commercial plasma/CSF pool) as the calibration standard for deriving normalization factors, and the **intra-experiment pool** (pooled experimental samples) as validation to assess whether the normalization worked without overfitting.
+This document specifies the PRISM approach to retention time (RT)-aware normalization that borrows ideas from batch correction methods (SVA, ComBat, RUV) while using the dual-control experimental design from the MacCoss lab QC framework. The key insight is to use the **inter-experiment reference** (e.g., commercial plasma/CSF pool) as the calibration standard for deriving normalization factors, and the **intra-experiment pool** (pooled experimental samples) as validation to assess whether the normalization worked without overfitting.
+
+PRISM is designed to work with data exported from [Skyline](https://skyline.ms), the widely-used targeted mass spectrometry environment.
 
 ### Design Principles
 
@@ -1233,7 +1237,7 @@ def flag_outlier_peptides(residuals, threshold=3):
 ## Configuration Parameters
 
 ```yaml
-# rt_normalization_config.yaml
+# prism_config.yaml
 
 data:
   abundance_column: "TotalAreaFragment"  # or "TotalAreaMs1"
