@@ -22,7 +22,7 @@ from .parsimony import (
 )
 from .normalization import (
     normalize_pipeline,
-    rt_correction,
+    rt_correction_from_reference,
     median_normalize,
 )
 from .rollup import (

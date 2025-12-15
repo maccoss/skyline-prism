@@ -19,6 +19,7 @@ class TestBuildPeptideProteinMap:
         df = pd.DataFrame({
             'peptide_sequence': ['PEPTIDE1', 'PEPTIDE2', 'PEPTIDE3'],
             'protein_ids': ['P001', 'P002', 'P003'],
+            'protein_names': ['Protein1', 'Protein2', 'Protein3'],
         })
 
         pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)
@@ -32,6 +33,7 @@ class TestBuildPeptideProteinMap:
         df = pd.DataFrame({
             'peptide_sequence': ['SHARED', 'SHARED', 'UNIQUE1', 'UNIQUE2'],
             'protein_ids': ['P001', 'P002', 'P001', 'P002'],
+            'protein_names': ['Protein1', 'Protein2', 'Protein1', 'Protein2'],
         })
 
         pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)
@@ -47,6 +49,7 @@ class TestBuildPeptideProteinMap:
         df = pd.DataFrame({
             'peptide_sequence': ['PEPTIDE1'],
             'protein_ids': ['P001;P002;P003'],
+            'protein_names': ['Protein1;Protein2;Protein3'],
         })
 
         pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)

@@ -96,3 +96,4 @@ dmypy.json
 data/
 output/
 results/
+.venv/
