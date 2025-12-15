@@ -1,0 +1,202 @@
+# PRISM Configuration Template
+# Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+#
+# Copy this file and modify for your experiment.
+# See SPECIFICATION.md for detailed documentation of all options.
+
+# =============================================================================
+# Data Column Mapping
+# =============================================================================
+# Map your Skyline report column names to PRISM internal names.
+# These are the defaults for standard Skyline exports.
+
+data:
+  # Abundance measurement column (usually from transitions)
+  abundance_column: "TotalAreaFragment"  # or "TotalAreaMs1" for MS1 quant
+  
+  # Retention time column
+  rt_column: "BestRetentionTime"
+  
+  # Peptide identification
+  peptide_column: "PeptideModifiedSequence"  # Modified forms are separate peptides
+  
+  # For transition-level data (optional)
+  precursor_column: "PrecursorCharge"
+  fragment_column: "FragmentIon"
+  
+  # Protein identification
+  protein_column: "ProteinAccession"  # UniProt accessions preferred
+  protein_name_column: "ProteinName"
+  
+  # Sample identification
+  sample_column: "ReplicateName"
+  batch_column: "Batch"
+  run_order_column: "RunOrder"
+  sample_type_column: "SampleType"
+
+# =============================================================================
+# Sample Type Detection
+# =============================================================================
+# Patterns to automatically identify sample types from replicate names.
+# Uses regex matching (case-insensitive).
+
+sample_annotations:
+  # Inter-experiment reference (commercial pool for calibration)
+  reference_pattern: "GoldenWest|CommercialPool|InterExpRef|Reference"
+  
+  # Intra-experiment pool (pooled experimental samples for validation)
+  pool_pattern: "StudyPool|IntraPool|ExpPool|QCPool"
+  
+  # Experimental samples (everything else by default)
+  experimental_pattern: "^(?!.*(Pool|Ref)).*"
+
+# =============================================================================
+# Stage 0: Transition to Peptide Rollup
+# =============================================================================
+# Only used if input is transition-level data from Skyline.
+
+transition_rollup:
+  enabled: false  # Set true if input has individual transitions
+  
+  # Rollup method: median_polish, sum, quality_weighted
+  method: "median_polish"
+  
+  # Whether to include MS1 signal in quantification
+  use_ms1: false  # Fragment-based is typically more specific
+  
+  # Minimum transitions required per peptide
+  min_transitions: 3
+  
+  # For quality_weighted method - variance model parameters
+  # These are learned from reference samples if not specified
+  variance_model:
+    alpha: 1.0        # Shot noise coefficient (Poisson)
+    beta: 0.01        # Multiplicative noise coefficient
+    gamma: 100.0      # Additive noise floor
+    delta: 1.0        # Quality penalty coefficient
+    shape_corr_exponent: 2.0
+  
+  # Skyline quality columns to use (if available)
+  quality_columns:
+    shape_correlation: "ShapeCorrelation"
+    coeluting: "Coeluting"
+
+# =============================================================================
+# Stage 1: RT-Aware Normalization
+# =============================================================================
+# Reference-anchored correction for RT-dependent technical variation.
+
+rt_correction:
+  enabled: true
+  
+  # Method: spline, loess, ruv, combat_rt
+  method: "spline"
+  
+  # Degrees of freedom for spline (higher = more flexible)
+  spline_df: 5
+  
+  # Fit separate models per batch (recommended)
+  per_batch: true
+  
+  # Minimum peptides per RT bin for robust estimation
+  min_peptides_per_bin: 10
+
+# =============================================================================
+# Stage 2: Global Normalization
+# =============================================================================
+# Address overall sample loading differences.
+
+global_normalization:
+  # Method: median, vsn, quantile, none
+  method: "median"
+  
+  # For VSN: target mean/variance
+  vsn_params:
+    target_mean: 0.0
+    target_variance: 1.0
+
+# =============================================================================
+# Stage 3: Batch Correction
+# =============================================================================
+# Remove systematic batch effects.
+
+batch_correction:
+  enabled: true
+  
+  # Method: combat, limma, none
+  method: "combat"
+  
+  # Preserve these experimental factors during correction
+  preserve_factors: []
+
+# =============================================================================
+# Protein Parsimony
+# =============================================================================
+# How to handle shared peptides that map to multiple proteins.
+
+parsimony:
+  # Strategy: all_groups, unique_only, razor
+  # 
+  # all_groups (recommended): Apply shared peptides to ALL protein groups
+  #   - Acknowledges proteoform complexity
+  #   - Avoids assumptions based on FASTA annotations
+  #
+  # unique_only: Only use peptides unique to a single protein group
+  #   - Most conservative
+  #   - May lose proteins with few unique peptides
+  #
+  # razor: Assign shared peptides to group with most peptides
+  #   - MaxQuant-style
+  #   - Makes strong assumptions about protein presence
+  
+  shared_peptide_handling: "all_groups"
+
+# =============================================================================
+# Protein Rollup
+# =============================================================================
+# Combine peptides into protein-level quantities.
+
+protein_rollup:
+  # Method: median_polish, topn, ibaq, maxlfq, directlfq
+  method: "median_polish"
+  
+  # Minimum peptides required per protein (fewer = flagged)
+  min_peptides: 3
+  
+  # For topn method
+  topn_n: 3
+  
+  # For median_polish
+  median_polish:
+    max_iterations: 10
+    convergence_tolerance: 0.0001
+
+# =============================================================================
+# Quality Control
+# =============================================================================
+# Thresholds for QC flagging.
+
+qc:
+  # Maximum CV in reference samples (flag if exceeded)
+  max_reference_cv: 0.20
+  
+  # Minimum variance reduction expected
+  min_variance_reduction: 0.10
+  
+  # Outlier detection threshold (in MADs)
+  outlier_threshold: 3.0
+
+# =============================================================================
+# Output Options
+# =============================================================================
+
+output:
+  # File format: parquet, csv, tsv
+  format: "parquet"
+  
+  # Include intermediate outputs (peptide-level, diagnostics)
+  include_peptides: true
+  include_diagnostics: true
+  
+  # Compress output files
+  compress: true

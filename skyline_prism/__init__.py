@@ -29,6 +29,11 @@ from .rollup import (
     tukey_median_polish,
     rollup_to_proteins,
 )
+from .transition_rollup import (
+    rollup_transitions_to_peptides,
+    VarianceModelParams,
+    learn_variance_model,
+)
 from .validation import (
     validate_correction,
     generate_qc_report,

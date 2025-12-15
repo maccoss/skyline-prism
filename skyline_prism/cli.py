@@ -1,5 +1,9 @@
 """
-Command-line interface for RT-aware normalization.
+Command-line interface for Skyline-PRISM.
+
+PRISM: Proteomics Reference-Integrated Signal Modeling
+
+RT-aware normalization for Skyline proteomics data with robust protein quantification.
 """
 
 import argparse
@@ -218,10 +222,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='RT-aware normalization for proteomics data',
+        prog='prism',
+        description='Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling\n\n'
+                    'RT-aware normalization for Skyline proteomics data with robust protein quantification.\n\n'
+                    'See https://github.com/maccoss/skyline-prism for documentation.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    parser.add_argument('--version', action='version', version='%(prog)s 0.1.0')
     
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
