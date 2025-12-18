@@ -4,12 +4,12 @@
 
 ## Key Features
 
-- **Reference-anchored RT correction**: Uses inter-experiment reference samples to learn and correct RT-dependent technical variation using spline-based modeling
-- **Dual-control validation**: Uses intra-experiment pool samples to validate that corrections work without overfitting
 - **Robust quantification with Tukey median polish**: Default method for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
-- **ComBat batch correction**: Full implementation of empirical Bayes batch correction with reference sample evaluation
+- **Reference-anchored ComBat batch correction**: Full implementation of empirical Bayes batch correction with automatic QC evaluation using reference/pool samples
+- **Dual-control validation**: Uses intra-experiment pool samples to validate that corrections work without overfitting
 - **Flexible protein inference**: Multiple strategies for handling shared peptides (all_groups, unique_only, razor)
 - **Two-arm normalization pipeline**: Separate paths for peptide-level and protein-level output, with batch correction applied at the appropriate level
+- **Optional RT correction**: Reference-anchored RT correction is available but disabled by default (search engine RT calibration may not generalize between samples)
 
 ## Installation
 
@@ -53,7 +53,7 @@ prism validate --before unified_data.parquet --after normalized_peptides.parquet
 
 ## Processing Pipeline
 
-The pipeline follows a two-arm design after RT normalization:
+The pipeline follows a two-arm design:
 
 ```
 Raw transition abundances
@@ -66,8 +66,8 @@ Raw transition abundances
         │
         ▼
 ┌─────────────────────────────────────┐
-│  RT-aware normalization             │
-│  (Spline-based, reference-anchored) │
+│  [Optional] RT-aware normalization  │
+│  (Disabled by default)              │
 └─────────────────────────────────────┘
         │
         ├──────────────────────────────────┐
@@ -113,9 +113,9 @@ transition_rollup:
   method: "median_polish"  # default, recommended
   min_transitions: 3
 
-# RT correction
+# RT correction (disabled by default - see docs)
 rt_correction:
-  enabled: true
+  enabled: false  # DIA-NN RT calibration may not generalize between samples
   method: "spline"
   spline_df: 5
   per_batch: true

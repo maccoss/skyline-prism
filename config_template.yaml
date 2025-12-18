@@ -82,12 +82,18 @@ transition_rollup:
     coeluting: "Coeluting"
 
 # =============================================================================
-# Stage 1: RT-Aware Normalization
+# Stage 1: RT-Aware Normalization (DISABLED BY DEFAULT)
 # =============================================================================
 # Reference-anchored correction for RT-dependent technical variation.
+#
+# NOTE: RT correction is DISABLED by default. DIA-NN and other search engines
+# apply per-file RT calibration that may not generalize between reference and
+# experimental samples, making spline-based RT correction unreliable.
+#
+# The implementation is preserved for future experimentation.
 
 rt_correction:
-  enabled: true
+  enabled: false  # Disabled by default - see note above
   
   # Method: spline, loess, ruv, combat_rt
   method: "spline"
@@ -95,7 +101,7 @@ rt_correction:
   # Degrees of freedom for spline (higher = more flexible)
   spline_df: 5
   
-  # Fit separate models per batch (recommended)
+  # Fit separate models per batch (recommended if enabled)
   per_batch: true
   
   # Minimum peptides per RT bin for robust estimation

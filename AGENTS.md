@@ -4,20 +4,20 @@ This document provides context and guidelines for AI agents working on the Skyli
 
 ## Project Overview
 
-**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for RT-aware normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish.
+**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction.
 
 ### Key Concepts
 
-- **Reference-anchored correction**: Uses inter-experiment reference samples (e.g., commercial plasma/CSF pool) to learn and correct RT-dependent technical variation via spline-based modeling
-- **Dual-control validation**: Uses intra-experiment pool samples to validate corrections without overfitting
 - **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use median polish by default for robust outlier handling
-- **Two-arm pipeline**: After RT normalization, the pipeline splits - batch correction is applied at the reporting level (peptide or protein)
-- **ComBat batch correction**: Full empirical Bayes implementation for removing batch effects
+- **Reference-anchored ComBat batch correction**: Uses inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality
+- **Dual-control validation**: Uses intra-experiment pool samples to validate corrections without overfitting
+- **Two-arm pipeline**: Pipeline splits at peptide level - batch correction is applied at the reporting level (peptide or protein)
+- **Optional RT correction**: RT-dependent correction is implemented but DISABLED by default (search engine RT calibration may not generalize between samples)
 
 ### Processing Pipeline
 
 ```
-Transitions → [Median Polish] → Peptides → [RT Correction] → 
+Transitions → [Median Polish] → Peptides → [Optional RT Correction] → 
     ├─→ [Batch Correction] → Normalized Peptides (peptide output)
     └─→ [Median Polish] → Proteins → [Batch Correction] → Normalized Proteins (protein output)
 ```

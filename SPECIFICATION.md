@@ -12,15 +12,15 @@ PRISM is designed to work with data exported from [Skyline](https://skyline.ms),
 
 ### Design Principles
 
-1. **Peptide-first normalization**: Always normalize at the peptide level to address RT-dependent and abundance-dependent biases where they actually occur, before rolling up to protein level.
+1. **Robust protein quantification via Tukey median polish**: Use Tukey median polish for both transition→peptide and peptide→protein rollups, minimizing the influence of outliers without explicit filtering.
 
-2. **Robust protein quantification**: Use Tukey median polish (or similar robust method) to combine peptides into protein-level quantities, minimizing the influence of outlier peptides.
+2. **Reference-anchored ComBat batch correction**: Use inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality.
 
-3. **Reference-anchored correction**: Derive RT-dependent correction factors from the inter-experiment reference only, since any variation in reference replicates is purely technical.
+3. **Validation with held-out control**: Use the intra-experiment pool to validate that corrections improved data quality without overfitting.
 
-4. **Validation with held-out control**: Use the intra-experiment pool to validate that corrections improved data quality without overfitting.
+4. **Proper protein inference**: Handle protein parsimony before peptide-to-protein rollup to avoid double-counting shared peptides.
 
-5. **Proper protein inference**: Handle protein parsimony before peptide-to-protein rollup to avoid double-counting shared peptides.
+5. **Optional RT-dependent correction**: RT-dependent spline correction is implemented but **disabled by default**. Modern search engines (e.g., DIA-NN) apply per-file RT calibration that may not generalize between reference and experimental samples, making this correction less reliable. Enable only if RT-dependent technical variation is clearly observed in your data.
 
 ---
 
@@ -615,14 +615,12 @@ Raw transition abundances
 
 **Rationale for two-arm design:**
 
-1. **RT-aware normalization subsumes global normalization**: The reference-anchored RT correction already addresses sample loading differences and systematic biases. Adding a separate global normalization step would be redundant and could interfere with the RT-based corrections.
-
-2. **Batch correction should match reporting level**: 
+1. **Batch correction should match reporting level**: 
    - If reporting peptide-level data, batch correct peptides directly
    - If reporting protein-level data, roll up first, then batch correct proteins
    - Batch correcting peptides then rolling up can introduce artifacts from the rollup process
 
-3. **Protein rollup before batch correction**: For protein output, rolling up normalized peptides to proteins first allows batch correction to operate on the final quantities of interest. This avoids having batch effects "averaged out" unevenly across peptides during rollup.
+2. **Protein rollup before batch correction**: For protein output, rolling up normalized peptides to proteins first allows batch correction to operate on the final quantities of interest. This avoids having batch effects "averaged out" unevenly across peptides during rollup.
 
 ### Tukey Median Polish for Protein Quantification
 
