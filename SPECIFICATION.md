@@ -72,6 +72,7 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 | Detection Q Value | detection_qvalue | mProphet q-value (DIA) |
 | Average Mass Error PPM | mass_error_ppm | Mass accuracy |
 | Is Decoy | is_decoy | Decoy flag |
+| Acquired Time | acquired_time | Result file acquisition timestamp (for batch estimation) |
 
 #### Skyline Report Configuration
 
@@ -98,9 +99,12 @@ Transition Results > Shape Correlation
 Transition Results > Coeluting
 Transition Results > Truncated
 Replicates > Replicate Name
+Result File > Acquired Time
 ```
 
 **Important:** Do NOT check "Pivot Replicate Name". Export as long format.
+
+**Note:** Including `Result File > Acquired Time` enables automatic batch estimation when batch metadata is not provided. See [Batch Estimation](#batch-estimation) for details.
 
 ---
 
@@ -112,12 +116,14 @@ A separate CSV/TSV file mapping replicate names to experimental metadata:
 |--------|----------|-------------|
 | replicate_name | Yes | Must match Skyline replicate names exactly |
 | sample_type | Yes | One of: `experimental`, `pool`, `reference` |
-| batch | Yes | Batch identifier |
+| batch | Conditional | Batch identifier. Also accepts `Batch Name` (Skyline convention). If not provided, will be estimated. |
 | run_order | Yes | Acquisition order within batch (integer) |
 | subject_id | No | For paired/longitudinal designs |
 | condition | No | Treatment group |
 | timepoint | No | For longitudinal studies |
 | ... | No | Additional annotations as needed |
+
+**Note:** If `batch` (or `Batch Name`) is not provided in metadata, PRISM will automatically estimate batch assignments. If only one batch is detected, batch correction is skipped. See [Batch Estimation](#batch-estimation).
 
 **Sample types:**
 - `reference`: Inter-experiment reference samples for RT correction and parameter learning
@@ -138,7 +144,7 @@ Sample_003,experimental,batch1,5,Treatment,P003
 
 ### Output Files
 
-The pipeline produces three output files:
+The pipeline produces multiple output files:
 
 #### 1. `{name}_proteins.parquet` - Primary Output
 
@@ -212,6 +218,19 @@ For drilling down into protein quantification or peptide-level analysis.
 | residual_max_abs | float | Maximum absolute residual |
 
 **Note on residuals:** Following Plubell et al. 2022 ([doi:10.1021/acs.jproteome.1c00894](https://doi.org/10.1021/acs.jproteome.1c00894)), peptides with large residuals should not be automatically discarded - they may indicate biologically interesting proteoform variation, post-translational modifications, or protein processing. The residual columns allow users to identify and investigate these peptides for potential biological significance.
+
+**Method-specific output columns:**
+
+| Column | Rollup Method | Description |
+|--------|--------------|-------------|
+| residual | median_polish | Deviation from expected (row + column effects) |
+| row_effect | median_polish | Peptide ionization efficiency (α_i) |
+| topn_selected | topn (protein rollup) | Boolean - was this peptide used for protein quant? |
+| transition_weight | quality_weighted (transition rollup) | Weight assigned to each transition (0-1) |
+
+For **top-N rollup** (peptide→protein), the `topn_selected` column allows users to see exactly which peptides contributed to each protein's abundance. The same peptides are selected across all samples for comparability.
+
+For **quality-weighted rollup** (transition→peptide only), the `transition_weight` column shows how much each transition contributed, based on Skyline quality metrics (ShapeCorrelation, Coeluting).
 
 #### 3. `{name}_metadata.json` - Processing Metadata
 
@@ -288,6 +307,35 @@ Complete provenance and parameters for reproducibility.
 }
 ```
 
+#### 4. `qc_report.html` - QC Report
+
+An HTML report summarizing normalization quality with embedded or linked diagnostic plots.
+
+**Report Contents:**
+- **Header**: Processing summary with timestamp, sample counts, batch information
+- **Intensity Distribution**: Box plots showing abundance distributions per sample
+- **PCA Analysis**: Principal component analysis before/after normalization to visualize batch effects
+- **Control Correlation**: Correlation heatmaps for reference and pool samples
+- **CV Distribution**: Coefficient of variation histograms for precision assessment
+- **RT Correction**: Before/after comparison showing residuals for reference (fitted) vs pool (held-out validation)
+
+**Configuration:**
+```yaml
+qc_report:
+  enabled: true
+  filename: "qc_report.html"
+  save_plots: true        # Save individual PNG files
+  embed_plots: true       # Embed plots as base64 in HTML
+  plots:
+    intensity_distribution: true
+    pca_comparison: true
+    control_correlation: true
+    cv_distribution: true
+    rt_correction: true
+```
+
+When `save_plots: true`, a `qc_plots/` directory is created containing individual PNG files for each plot. When `embed_plots: true`, plots are base64-encoded and embedded directly in the HTML for self-contained reports.
+
 ---
 
 ### File Naming Convention
@@ -303,7 +351,88 @@ Complete provenance and parameters for reproducibility.
 
 ---
 
+## Batch Estimation
+
+When batch information is not provided in the sample metadata, PRISM can automatically estimate batch assignments. This is essential for ComBat batch correction to function properly.
+
+**Single Batch Handling:** If only one batch is detected (single Skyline document, no acquisition time gaps, and no forced division), PRISM will skip batch correction entirely. This is the expected behavior when all samples were acquired in a single run.
+
+### Priority Order
+
+Batch assignments are determined using the following priority:
+
+1. **Metadata file**: If the metadata file contains a `Batch` or `Batch Name` column (Skyline uses "Batch Name"), those assignments are used directly.
+
+2. **Source documents**: When multiple Skyline report files are loaded, each file is treated as a separate batch. This is common when each batch is exported from a separate Skyline document.
+
+3. **Acquisition time gaps**: If `Acquired Time` is available in the data, PRISM uses IQR-based outlier detection to identify batch breaks. A gap is considered a batch boundary if it exceeds `Q3 + (iqr_multiplier × IQR)`.
+
+   **Example:** If LC-MS runs are typically 65 min apart (±2 min), the IQR would be ~4 min. With the default multiplier of 1.5, the threshold would be ~73 min. An overnight break (e.g., 90 min gap) would be clearly detected as a batch boundary.
+
+4. **Equal division fallback**: If `n_batches` is explicitly configured and no other method found multiple batches, samples are divided into the specified number of batches based on acquisition order.
+
+**Note:** If none of the above methods identify multiple batches, all samples are assigned to a single batch and batch correction is skipped.
+
+### Configuration
+
+```yaml
+batch_estimation:
+  min_samples_per_batch: 12   # Minimum expected samples per batch
+  max_samples_per_batch: 100  # Maximum expected samples per batch
+  gap_iqr_multiplier: 1.5     # IQR multiplier for outlier gap detection
+  n_batches: null             # Force specific number of batches (fallback only)
+```
+
+### Acquired Time Column
+
+To enable time-based batch estimation, include `Result File > Acquired Time` in your Skyline report. This column contains the acquisition timestamp for each result file.
+
+**Important:** The typical batch size in 96-well plate formats is 12-100 samples. PRISM uses this range to validate detected batches and warn about unusual batch sizes.
+
+### API Usage
+
+```python
+from skyline_prism import estimate_batches, apply_batch_estimation
+
+# Estimate batches from a DataFrame
+result = estimate_batches(
+    df,
+    metadata=None,
+    min_samples_per_batch=12,
+    max_samples_per_batch=100,
+    gap_iqr_multiplier=1.5,
+)
+print(f"Detected {result.n_batches} batches via '{result.method}'")
+
+# Apply estimation and add batch column to DataFrame
+df, result = apply_batch_estimation(df, metadata=metadata_df)
+```
+
+---
+
 ## Protein Parsimony and Grouping
+
+### Overview
+
+Proper protein parsimony requires the **search FASTA database** to determine which proteins each detected peptide could have originated from. The peptide-to-protein mapping in Skyline reports is typically limited to the "best" protein match, which is insufficient for:
+
+1. Identifying truly unique vs shared peptides
+2. Correctly assigning razor peptides
+3. Detecting subsumable proteins
+
+### FASTA Requirement
+
+The parsimony module requires the same FASTA database used for the original search:
+
+```yaml
+parsimony:
+  fasta_path: "/path/to/search.fasta"
+  shared_peptide_handling: "all_groups"  # all_groups, unique_only, razor
+```
+
+**Peptide-Protein Mapping:** PRISM uses direct substring matching to map detected peptides to proteins. Each peptide is searched for in all protein sequences, so no enzyme parameters are needed for parsimony. This approach is simpler and works regardless of digestion specificity.
+
+**Note:** Enzyme parameters are only needed for iBAQ quantification (to count theoretical peptides). See the iBAQ section for details.
 
 ### The Problem
 
@@ -581,10 +710,9 @@ Raw transition abundances
         │
         ▼
 ┌───────────────────────────────────────┐
-│  STEP 3: RT-aware normalization       │
-│  - Reference-anchored correction      │
-│  - Addresses RT-dependent biases      │
-│  - Subsumes global normalization      │
+│  STEP 3: Global normalization         │
+│  - Median (default) or VSN            │
+│  - [Optional] RT-aware correction     │
 └───────────────────────────────────────┘
         │
         ├─────────────────────────────────────────────┐
@@ -630,9 +758,16 @@ $$y_{ij} = \mu + \alpha_i + \beta_j + \epsilon_{ij}$$
 Where:
 - $y_{ij}$ = log2 abundance of peptide $i$ in sample $j$
 - $\mu$ = overall level (grand effect)
-- $\alpha_i$ = peptide effect (ionization efficiency, some peptides fly better)
+- $\alpha_i$ = peptide effect (ionization efficiency - some peptides ionize better than others)
 - $\beta_j$ = sample effect (**this is the protein abundance estimate**)
 - $\epsilon_{ij}$ = residual
+
+**Row effects at each rollup stage:**
+
+| Rollup Stage | Row Effects ($\alpha_i$) | Column Effects ($\beta_j$) |
+|--------------|--------------------------|---------------------------|
+| Transition → Peptide | Transition interference (co-eluting analytes) | Peptide abundance |
+| Peptide → Protein | Peptide ionization efficiency | Protein abundance |
 
 **Algorithm:**
 ```
@@ -661,7 +796,17 @@ Output: β_j as protein abundance estimates
 - No need to pre-identify "bad" peptides
 - Preserves relative quantification across samples
 
-**Implementation note:** For proteins with only 1-2 peptides, median polish degenerates to simple median or single value. Consider flagging these proteins or requiring minimum peptide count.
+**Handling proteins with few peptides:**
+
+Median polish requires ≥2 peptides to decompose row/column effects. For proteins with fewer peptides:
+
+| Peptides | Behavior | Output |
+|----------|----------|--------|
+| 1 peptide | Use peptide abundance directly | Single peptide's log2 abundance |
+| 2 peptides | Mean of peptides (no robust advantage) | Mean of two peptide abundances |
+| ≥3 peptides | Full median polish | Robust column effects (β_j) |
+
+All proteins are quantified regardless of peptide count. The `n_peptides` column in output allows users to filter by peptide count if desired.
 
 ### Alternative Protein Rollup Methods
 
@@ -669,8 +814,8 @@ Output: β_j as protein abundance estimates
 |--------|-------------|-------------|
 | Tukey median polish | Iterative median subtraction, robust to outliers | Default choice, robust |
 | Top-N | Average of N most intense peptides | Simple, interpretable |
-| iBAQ | Sum intensity / theoretical peptide count | For absolute/cross-protein comparison |
 | maxLFQ | Maximum peptide ratio extraction | When peptide ratios are reliable |
+| iBAQ | Sum intensity / theoretical peptide count | Absolute quantification |
 
 **Future consideration: directLFQ**
 
@@ -790,20 +935,55 @@ See mathematical details section. Key properties:
 
 #### Top-N
 
+**Critical:** The same N peptides must be used across ALL samples for comparability. Selecting different peptides per sample would introduce bias.
+
+**Peptide selection algorithm:**
 ```python
-def rollup_top_n(peptide_matrix, n=3):
-    """Average of N most intense peptides per sample."""
-    for sample in samples:
-        sorted_peptides = peptide_matrix[sample].nlargest(n)
-        protein_abundance[sample] = sorted_peptides.mean()
+def select_top_n_peptides(peptide_matrix, n=3, method='median_abundance'):
+    """
+    Select N peptides to use for ALL samples.
+    
+    Selection criteria:
+    - median_abundance: Peptides with highest median abundance across samples
+    - frequency: Peptides detected in most samples, ties broken by median abundance
+    
+    Returns list of selected peptide identifiers.
+    """
+    if method == 'median_abundance':
+        median_per_peptide = peptide_matrix.median(axis=1)  # median across samples
+        selected = median_per_peptide.nlargest(n).index.tolist()
+    elif method == 'frequency':
+        # Count non-missing values per peptide
+        freq = peptide_matrix.notna().sum(axis=1)
+        # Sort by frequency, then by median abundance
+        median_per_peptide = peptide_matrix.median(axis=1)
+        ranking = pd.DataFrame({'freq': freq, 'median': median_per_peptide})
+        ranking = ranking.sort_values(['freq', 'median'], ascending=[False, False])
+        selected = ranking.head(n).index.tolist()
+    return selected
+
+def rollup_top_n(peptide_matrix, n=3, method='median_abundance'):
+    """
+    Average of N peptides, using the SAME peptides for all samples.
+    """
+    selected_peptides = select_top_n_peptides(peptide_matrix, n, method)
+    selected_matrix = peptide_matrix.loc[selected_peptides]
+    return selected_matrix.mean(axis=0), selected_peptides  # Return both!
 ```
+
+**Output requirements:**
+- The list of selected peptides MUST be included in output (e.g., as `topn_peptides` column)
+- This allows users to verify which peptides drove each protein's quantification
 
 **Parameters:**
 - `n`: Number of top peptides (default: 3)
-- Ties: Include all tied peptides at the Nth position
+- `selection`: How to rank peptides - 'median_abundance' (default) or 'frequency'
 
 #### iBAQ (Intensity-Based Absolute Quantification)
 
+iBAQ normalizes protein abundances by the number of theoretical peptides, enabling comparison of absolute abundance across proteins.
+
+**Algorithm:**
 ```python
 def rollup_ibaq(peptide_matrix, n_theoretical_peptides):
     """Sum of intensities divided by theoretical peptide count."""
@@ -817,7 +997,41 @@ def rollup_ibaq(peptide_matrix, n_theoretical_peptides):
     return np.log2(ibaq)
 ```
 
-**Note:** Requires theoretical peptide count from in silico digestion of protein sequence.
+**Configuration for iBAQ:**
+
+iBAQ requires enzyme parameters to calculate theoretical peptide counts:
+
+```yaml
+protein_rollup:
+  method: "ibaq"
+  
+  # iBAQ-specific settings (required when method=ibaq)
+  ibaq:
+    fasta_path: "/path/to/search.fasta"
+    enzyme: "trypsin"           # Must match search settings
+    missed_cleavages: 0         # Typically 0 for counting
+    min_peptide_length: 6
+    max_peptide_length: 30
+```
+
+**FASTA infrastructure (`skyline_prism.fasta`):**
+
+- `parse_fasta()`: Parse UniProt/NCBI format FASTA files
+- `digest_protein()`: In-silico digestion with enzyme rules
+- `get_theoretical_peptide_counts()`: Get peptide count per protein for iBAQ
+
+**Example usage:**
+```python
+from skyline_prism.fasta import get_theoretical_peptide_counts
+
+# Get theoretical peptide counts for iBAQ
+counts = get_theoretical_peptide_counts(
+    "/path/to/search.fasta",
+    enzyme="trypsin",
+    missed_cleavages=0,  # Strict for iBAQ
+)
+print(f"GAPDH has {counts['P04406']} theoretical tryptic peptides")
+```
 
 #### maxLFQ
 
@@ -1003,6 +1217,105 @@ Validation metrics:
     - If known positives: fold changes should be preserved
 ```
 
+### Phase 5: ComBat Batch Correction
+
+After RT-aware normalization (if enabled), systematic batch effects are removed using the ComBat algorithm (Johnson et al. 2007). ComBat uses empirical Bayes shrinkage to robustly estimate and remove additive and multiplicative batch effects.
+
+#### ComBat Algorithm Overview
+
+The model assumes:
+$$Y_{ijg} = \alpha_g + X\beta_g + \gamma_{ig} + \delta_{ig}\epsilon_{ijg}$$
+
+Where:
+- $Y_{ijg}$ = expression of feature $g$ in sample $j$ of batch $i$
+- $\alpha_g$ = overall mean for feature $g$
+- $X\beta_g$ = biological covariates (treatment, disease state, etc.)
+- $\gamma_{ig}$ = additive batch effect (location shift)
+- $\delta_{ig}$ = multiplicative batch effect (scale shift)
+- $\epsilon_{ijg}$ = error term
+
+**Empirical Bayes shrinkage** borrows information across features to obtain more stable batch effect estimates, especially when sample sizes are small.
+
+#### Implementation
+
+PRISM implements the full parametric ComBat algorithm:
+
+```python
+from skyline_prism import combat, combat_from_long, combat_with_reference_samples
+
+# Wide-format API (features x samples)
+corrected = combat(data, batch, reference_batch="Batch1")
+
+# Long-format API (PRISM pipeline format)
+corrected_df = combat_from_long(
+    df, 
+    abundance_col="abundance",
+    batch_col="batch",
+    sample_col="sample_id",
+    feature_col="peptide_modified"
+)
+
+# With automatic QC evaluation and fallback
+corrected_df, eval_result = combat_with_reference_samples(
+    df,
+    reference_samples=["Ref1", "Ref2"],
+    pool_samples=["Pool1", "Pool2"],
+    fallback_on_failure=True  # Revert if correction degrades quality
+)
+```
+
+#### Preserving Biological Factors (TODO)
+
+**Status: NOT YET IMPLEMENTED**
+
+ComBat can preserve known biological factors during batch correction by including them as covariates in the model matrix. This prevents biological signal from being removed along with batch effects.
+
+**Planned configuration interface:**
+
+```yaml
+batch_correction:
+  enabled: true
+  method: "combat"
+  
+  # Biological factors to preserve during batch correction
+  # These columns must exist in the sample metadata
+  preserve_factors:
+    - "treatment"      # e.g., "control", "drug_a", "drug_b"
+    - "disease_state"  # e.g., "healthy", "disease"
+    - "sex"            # e.g., "M", "F"
+```
+
+**Implementation requirements:**
+
+1. **Metadata column validation**: Verify that specified factor columns exist in sample metadata
+2. **Design matrix construction**: Build covariate matrix from factor columns
+3. **Categorical encoding**: Convert categorical factors to dummy variables
+4. **Numerical factors**: Pass through as-is (e.g., age, BMI)
+5. **Interaction handling**: Consider whether to support interaction terms
+
+**Python API (current, already supports covariates):**
+
+```python
+# The underlying combat() function already supports covariates via covar_mod
+import numpy as np
+from skyline_prism import combat
+
+# Create design matrix for biological factors
+# Example: treatment factor with 3 levels
+treatment = ["control", "drug_a", "drug_b", "control", "drug_a", "drug_b"]
+covar_mod = pd.get_dummies(treatment, drop_first=True).values
+
+# Apply ComBat while preserving treatment effect
+corrected = combat(data, batch, covar_mod=covar_mod)
+```
+
+**Why this matters:**
+
+Without specifying biological factors, ComBat may remove real biological signal if it happens to be confounded with batch. For example:
+- If all disease samples were processed in Batch 1 and all controls in Batch 2
+- ComBat would remove the batch effect, but also the disease signal
+- Specifying `preserve_factors: ["disease_state"]` prevents this
+
 ---
 
 ## Implementation Modules
@@ -1101,8 +1414,72 @@ SKYLINE_COLUMN_MAP = {
 
 ### Module 2: Protein Parsimony
 
+**FASTA-Based Peptide-Protein Mapping**
+
+The `fasta.py` module provides FASTA parsing and peptide-protein mapping for proper parsimony analysis.
+
+**Implementation:**
+
+1. **FASTA Parser** (`parse_fasta`): Parse protein sequences from FASTA file
+   - Handles UniProt and NCBI formats
+   - Extracts accession, gene name (GN=), description
+   - Supports gzipped files
+
+2. **Peptide-Protein Map** (`build_peptide_protein_map_from_fasta`): Build complete mapping
+   - Uses direct substring search (no enzyme parameters needed)
+   - Maps each detected peptide to ALL proteins whose sequence contains it
+   - Handles I/L ambiguity (isoleucine/leucine indistinguishable by MS)
+
+3. **Modified Sequence Handling** (`strip_modifications`): 
+   - Strips modifications from detected sequences for FASTA matching
+   - Supports Skyline, MaxQuant, UniMod, ProForma formats
+   - Handles terminal modifications (n[+42], c[-17])
+
+4. **In-silico Digestion** (for iBAQ only):
+   - `digest_protein()`: Generate theoretical peptides with enzyme rules
+   - `get_theoretical_peptide_counts()`: Count peptides per protein for iBAQ
+   - Supported enzymes: trypsin, trypsin/p, lysc, lysn, argc, aspn, gluc, chymotrypsin
+
+**Usage:**
+```python
+from skyline_prism.parsimony import build_peptide_protein_map_from_fasta
+
+# No enzyme parameters needed - uses substring matching
+pep_to_prot, prot_to_pep, prot_names = build_peptide_protein_map_from_fasta(
+    df,
+    fasta_path="/path/to/search.fasta",
+)
+```
+
 **Functions:**
 ```python
+def parse_fasta(fasta_path: str) -> Dict[str, str]:
+    """
+    Parse FASTA file and return protein_id -> sequence mapping.
+    """
+
+def in_silico_digest(sequences: Dict[str, str], 
+                     enzyme: str = 'trypsin',
+                     missed_cleavages: int = 2,
+                     min_length: int = 6,
+                     max_length: int = 30) -> Dict[str, Set[str]]:
+    """
+    Digest protein sequences and return protein_id -> set of peptides.
+    """
+
+def build_peptide_protein_map_from_fasta(
+    fasta_path: str,
+    detected_peptides: Set[str],
+    **digest_params
+) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+    """
+    Build peptide-protein mapping from FASTA for detected peptides only.
+    
+    Returns:
+        - peptide_to_proteins: dict[peptide] -> set of protein IDs
+        - protein_to_peptides: dict[protein] -> set of peptides
+    """
+
 def build_peptide_protein_map(data: pd.DataFrame) -> Dict[str, Set[str]]:
     """
     Build bidirectional mapping between peptides and proteins.
@@ -1331,8 +1708,8 @@ global_normalization:
 
 batch_correction:
   enabled: true
-  method: "combat"  # options: combat, limma, none
-  covariates: []    # biological covariates to preserve
+  method: "combat"  # options: combat, none
+  # preserve_factors: []  # TODO: biological covariates to preserve (not yet implemented)
 
 # Protein inference
 parsimony:
@@ -1344,12 +1721,11 @@ parsimony:
 
 # Peptide to protein rollup
 protein_rollup:
-  method: "median_polish"  # options: median_polish, topn, ibaq, maxlfq
-  min_peptides: 3          # minimum peptides per protein
+  method: "median_polish"  # options: median_polish, topn, maxlfq
   
   # Method-specific parameters
   topn_n: 3                # for topn method
-  ibaq_fasta: null         # path to FASTA for theoretical peptide count
+  # Note: iBAQ not yet implemented (requires FASTA parsing)
   
 validation:
   cv_improvement_threshold: 0.05

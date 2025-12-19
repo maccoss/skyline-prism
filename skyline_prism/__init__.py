@@ -1,5 +1,4 @@
-"""
-Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+"""Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling.
 
 A pipeline for reference-anchored, RT-aware normalization of LC-MS proteomics data
 exported from Skyline, with robust protein quantification using Tukey median polish.
@@ -9,48 +8,163 @@ See: https://skyline.ms for more information about Skyline.
 
 __version__ = "0.1.0"
 
-from .data_io import (
-    load_skyline_report,
-    merge_skyline_reports,
-    load_sample_metadata,
-    validate_skyline_report,
-)
-from .parsimony import (
-    build_peptide_protein_map,
-    compute_protein_groups,
-    ProteinGroup,
-)
-from .normalization import (
-    normalize_pipeline,
-    rt_correction_from_reference,
-    median_normalize,
-)
-from .rollup import (
-    tukey_median_polish,
-    rollup_to_proteins,
-    batch_correct_proteins,
-    protein_output_pipeline,
-    ProteinBatchCorrectionResult,
-    MedianPolishResult,
-    extract_peptide_residuals,
-    extract_transition_residuals,
-    flag_outlier_peptides,
-)
-from .transition_rollup import (
-    rollup_transitions_to_peptides,
-    VarianceModelParams,
-    learn_variance_model,
-    TransitionRollupResult,
-)
-from .validation import (
-    validate_correction,
-    generate_qc_report,
-)
+__all__ = [
+    # batch_correction
+    "BatchCorrectionEvaluation",
+    "ComBatResult",
+    "combat",
+    "combat_from_long",
+    "combat_with_reference_samples",
+    "evaluate_batch_correction",
+    # data_io
+    "BatchEstimationResult",
+    "apply_batch_estimation",
+    "estimate_batches",
+    "load_sample_metadata",
+    "load_skyline_report",
+    "merge_skyline_reports",
+    "validate_skyline_report",
+    # fasta
+    "ENZYME_RULES",
+    "ProteinEntry",
+    "build_peptide_protein_map_from_fasta",
+    "build_protein_name_map",
+    "digest_fasta",
+    "digest_protein",
+    "get_detected_peptides_from_data",
+    "get_theoretical_peptide_counts",
+    "normalize_for_matching",
+    "parse_fasta",
+    "strip_modifications",
+    # normalization
+    "median_normalize",
+    "normalize_pipeline",
+    "quantile_normalize",
+    "rt_correction_from_reference",
+    "vsn_normalize",
+    # parsimony
+    "ProteinGroup",
+    "build_peptide_protein_map",
+    "compute_protein_groups",
+    "parsimony_from_fasta",
+    # rollup
+    "AggregationResult",
+    "MedianPolishResult",
+    "ProteinBatchCorrectionResult",
+    "TopNResult",
+    "batch_correct_proteins",
+    "extract_peptide_residuals",
+    "extract_quality_weights",
+    "extract_topn_selections",
+    "extract_transition_residuals",
+    "flag_outlier_peptides",
+    "protein_output_pipeline",
+    "rollup_to_proteins",
+    "rollup_top_n",
+    "tukey_median_polish",
+    # transition_rollup
+    "TransitionRollupResult",
+    "VarianceModelParams",
+    "learn_variance_model",
+    "rollup_transitions_to_peptides",
+    # validation
+    "generate_qc_report",
+    "validate_correction",
+    # visualization
+    "plot_comparative_cv",
+    "plot_comparative_pca",
+    "plot_control_correlation_heatmap",
+    "plot_cv_distribution",
+    "plot_intensity_distribution",
+    "plot_normalization_comparison",
+    "plot_pca",
+    "plot_rt_correction_comparison",
+    "plot_rt_correction_per_sample",
+    "plot_rt_residuals",
+    "plot_sample_correlation_matrix",
+]
+
 from .batch_correction import (
+    BatchCorrectionEvaluation,
+    ComBatResult,
     combat,
     combat_from_long,
-    ComBatResult,
-    evaluate_batch_correction,
     combat_with_reference_samples,
-    BatchCorrectionEvaluation,
+    evaluate_batch_correction,
+)
+from .data_io import (
+    BatchEstimationResult,
+    apply_batch_estimation,
+    estimate_batches,
+    load_sample_metadata,
+    load_skyline_report,
+    merge_skyline_reports,
+    validate_skyline_report,
+)
+from .fasta import (
+    ENZYME_RULES,
+    ProteinEntry,
+    build_peptide_protein_map_from_fasta,
+    build_protein_name_map,
+    digest_fasta,
+    digest_protein,
+    get_detected_peptides_from_data,
+    get_theoretical_peptide_counts,
+    normalize_for_matching,
+    parse_fasta,
+    strip_modifications,
+)
+from .normalization import (
+    median_normalize,
+    normalize_pipeline,
+    quantile_normalize,
+    rt_correction_from_reference,
+    vsn_normalize,
+)
+from .parsimony import (
+    ProteinGroup,
+    build_peptide_protein_map,
+    compute_protein_groups,
+)
+from .parsimony import (
+    build_peptide_protein_map_from_fasta as parsimony_from_fasta,
+)
+from .rollup import (
+    AggregationResult,
+    MedianPolishResult,
+    ProteinBatchCorrectionResult,
+    TopNResult,
+    batch_correct_proteins,
+    extract_peptide_residuals,
+    extract_quality_weights,
+    extract_topn_selections,
+    extract_transition_residuals,
+    flag_outlier_peptides,
+    protein_output_pipeline,
+    rollup_to_proteins,
+    rollup_top_n,
+    tukey_median_polish,
+)
+from .transition_rollup import (
+    TransitionRollupResult,
+    VarianceModelParams,
+    learn_variance_model,
+    rollup_transitions_to_peptides,
+)
+from .validation import (
+    generate_qc_report,
+    validate_correction,
+)
+from .visualization import (
+    plot_comparative_cv,
+    plot_comparative_pca,
+    plot_control_correlation_heatmap,
+    plot_cv_distribution,
+    plot_intensity_distribution,
+    plot_normalization_comparison,
+    plot_pca,
+    plot_rt_correction_comparison,
+    plot_rt_correction_per_sample,
+    plot_rt_residuals,
+    plot_sample_correlation_matrix,
 )

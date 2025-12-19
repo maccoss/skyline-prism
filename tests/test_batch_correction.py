@@ -5,18 +5,12 @@ import pandas as pd
 import pytest
 
 from skyline_prism.batch_correction import (
-    combat,
-    combat_from_long,
-    ComBatResult,
     _check_inputs,
     _make_design_matrix,
-    _calculate_mean_var,
-    _standardize_data,
-    _fit_batch_effects,
-    _compute_priors,
     _postmean,
     _postvar,
-    _adjust_data,
+    combat,
+    combat_from_long,
 )
 
 
@@ -520,10 +514,7 @@ class TestBatchCorrectionEvaluation:
 
     def test_evaluate_batch_correction_detects_improvement(self, evaluation_data):
         """Test that evaluation detects improvement from batch correction."""
-        from skyline_prism.batch_correction import (
-            combat_from_long,
-            evaluate_batch_correction
-        )
+        from skyline_prism.batch_correction import combat_from_long, evaluate_batch_correction
 
         # Apply ComBat
         corrected = combat_from_long(
@@ -576,7 +567,6 @@ class TestBatchCorrectionEvaluation:
         """Test that evaluation flags potential overfitting."""
         from skyline_prism.batch_correction import (
             evaluate_batch_correction,
-            BatchCorrectionEvaluation
         )
 
         np.random.seed(123)

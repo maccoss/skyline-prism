@@ -27,29 +27,59 @@ pip install -e ".[dev,viz]"
 
 ## Quick Start
 
-### 1. Merge Skyline reports
+### Run the full pipeline
 
 ```bash
+# Run complete PRISM pipeline (recommended)
+prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.tsv
+```
+
+This produces:
+- `corrected_peptides.parquet` - Peptide-level quantities (batch-corrected)
+- `corrected_proteins.parquet` - Protein-level quantities (batch-corrected)  
+- `protein_groups.tsv` - Protein group definitions
+- `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
+- `metadata.json` - Processing metadata and provenance
+
+**Key output columns** in protein/peptide parquet files:
+- `abundance` - Log2 abundance (normalized, batch-corrected)
+- `abundance_raw` - Log2 abundance before corrections
+- `uncertainty` - Propagated uncertainty (standard error)
+- `cv_peptides` - CV across peptides (protein-level quality metric)
+- `n_peptides` - Number of peptides used in rollup
+- `qc_flag` - QC warnings (e.g., `low_peptide_count(n)`, `single_peptide_in_sample`)
+
+See [SPECIFICATION.md](SPECIFICATION.md) for complete column definitions.
+
+### Alternative: Step-by-step commands
+
+For more control, you can run individual steps:
+
+```bash
+# Merge multiple Skyline reports
 prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.tsv
-```
 
-### 2. Run normalization
-
-```bash
+# Run normalization only (legacy)
 prism normalize -i unified_data.parquet -o normalized_peptides.parquet -c config.yaml
-```
 
-### 3. Roll up to proteins
-
-```bash
+# Roll up to proteins only (legacy)
 prism rollup -i normalized_peptides.parquet -o proteins.parquet -g protein_groups.tsv
 ```
 
-### 4. Validate results
+### Validate results
 
 ```bash
 prism validate --before unified_data.parquet --after normalized_peptides.parquet --report qc_report.html
 ```
+
+The QC report includes:
+- **Intensity distribution plots**: Before/after normalization comparison
+- **PCA analysis**: Visualize batch effects and sample clustering across processing stages
+- **Control sample correlation**: Heatmaps showing reproducibility of reference and pool samples
+- **CV distributions**: Technical variation in control samples before/after normalization
+- **RT correction QC**: If RT-dependent normalization is enabled, shows residuals for reference (fitted) and pool (held-out validation) samples
+
+All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML report.
 
 ## Processing Pipeline
 
@@ -66,8 +96,9 @@ Raw transition abundances
         │
         ▼
 ┌─────────────────────────────────────┐
-│  [Optional] RT-aware normalization  │
-│  (Disabled by default)              │
+│  Global normalization               │
+│  (median - default, or VSN)         │
+│  + [Optional] RT-aware correction   │
 └─────────────────────────────────────┘
         │
         ├──────────────────────────────────┐
@@ -112,10 +143,15 @@ transition_rollup:
   enabled: true
   method: "median_polish"  # default, recommended
   min_transitions: 3
+  learn_variance_model: false  # Set true for quality_weighted method
 
-# RT correction (disabled by default - see docs)
+# Global normalization (always applied after peptide rollup)
+global_normalization:
+  method: "median"  # median (recommended) or vsn
+
+# RT correction (optional, applied together with global normalization)
 rt_correction:
-  enabled: false  # DIA-NN RT calibration may not generalize between samples
+  enabled: false  # Disabled by default - search engine RT calibration may not generalize
   method: "spline"
   spline_df: 5
   per_batch: true
@@ -128,12 +164,22 @@ batch_correction:
 # Protein rollup
 protein_rollup:
   method: "median_polish"  # default, recommended
-  min_peptides: 3
 
-# Shared peptide handling
+# Shared peptide handling (requires FASTA path for protein parsimony)
 parsimony:
+  fasta_path: "/path/to/database.fasta"  # FASTA used in search
   shared_peptide_handling: "all_groups"  # recommended
 ```
+
+## Automatic Batch Estimation
+
+If batch information is not provided in the metadata file, PRISM will automatically estimate batch assignments using the following priority:
+
+1. **Source documents**: Different Skyline CSV/TSV files are treated as different batches
+2. **Acquisition time gaps**: Large gaps between runs (>3× median gap) indicate batch boundaries
+3. **Equal division**: Samples are divided into approximately equal batches
+
+To enable time-based batch estimation, include `Result File > Acquired Time` in your Skyline report. See [SPECIFICATION.md](SPECIFICATION.md#batch-estimation) for details.
 
 ## Tukey Median Polish (Default Rollup Method)
 
@@ -141,21 +187,73 @@ Both transition→peptide and peptide→protein rollups use Tukey median polish 
 
 - **Automatically handles outliers**: Interfered transitions or problematic peptides are downweighted through the median operation
 - **No pre-filtering required**: Unlike quality-weighted methods, doesn't require explicit quality metrics
-- **Produces interpretable effects**: Separates row effects (transition/peptide ionization) from column effects (sample abundance)
+- **Produces interpretable effects**: Separates row effects from column effects (sample abundance)
 - **Handles missing values naturally**: Works with incomplete matrices
+
+**What the row effects represent:**
+
+| Rollup Stage | Row Effects Represent | Column Effects Represent |
+|--------------|----------------------|-------------------------|
+| Transition → Peptide | Transition interference (co-eluting analytes affecting specific transitions) | Peptide abundance per sample |
+| Peptide → Protein | Peptide ionization efficiency (some peptides ionize better than others) | Protein abundance per sample |
 
 ### Alternative Rollup Methods
 
 While median polish is recommended, these alternative methods are available:
 
+**Transition → Peptide Rollup** (when using transition-level data):
+
 | Method | Description | Use Case |
-|--------|-------------|----------|
+|--------|-------------|-----------|
+| `median_polish` | Tukey median polish (default) | General use, robust to outliers |
+| `quality_weighted` | Variance-model weighted average | When quality metrics (ShapeCorrelation, Coeluting) are available |
+| `sum` | Simple sum of intensities | Fast but sensitive to outliers |
+
+**Peptide → Protein Rollup**:
+
+| Method | Description | Use Case |
+|--------|-------------|-----------|
 | `median_polish` | Tukey median polish (default) | General use, robust to outliers |
 | `topn` | Mean of top N most intense peptides | Simple, when top peptides are reliable |
-| `ibaq` | Intensity-Based Absolute Quantification | Cross-protein abundance comparison |
+| `ibaq` | iBAQ (intensity / theoretical peptide count) | Absolute quantification across proteins |
 | `maxlfq` | Maximum LFQ (MaxQuant-style) | When peptide ratios are more reliable than absolute values |
-| `quality_weighted` | Variance-model weighted average | When quality metrics (correlation, coelution) are available |
-| `sum` | Simple sum of intensities | Spectral counting style |
+| `sum` | Simple sum of intensities | Fast but sensitive to outliers |
+
+### iBAQ (Intensity-Based Absolute Quantification)
+
+iBAQ normalizes protein abundances by the number of theoretical peptides, enabling comparison of absolute abundance across proteins:
+
+```yaml
+protein_rollup:
+  method: "ibaq"
+  ibaq:
+    fasta_path: "/path/to/database.fasta"  # Required for iBAQ
+    enzyme: "trypsin"                       # Must match search settings
+    missed_cleavages: 0                     # Typically 0 for counting
+```
+
+```python
+from skyline_prism.fasta import get_theoretical_peptide_counts
+
+# Calculate theoretical peptide counts for iBAQ
+counts = get_theoretical_peptide_counts(
+    "/path/to/database.fasta",
+    enzyme="trypsin",
+    missed_cleavages=0,
+)
+```
+
+### Quality-Weighted Rollup with Variance Model Learning
+
+For transition→peptide rollup, the `quality_weighted` method can learn optimal variance model parameters from reference samples:
+
+```yaml
+transition_rollup:
+  method: "quality_weighted"
+  learn_variance_model: true  # Learns from reference samples
+```
+
+This learns optimal weights by minimizing CV across peptides in reference samples. The variance model accounts for shot noise, multiplicative noise, and quality penalties based on Skyline's shape correlation and coelution metrics.
 
 **Note:** For very large cohorts (hundreds to thousands of samples), consider [directLFQ](https://github.com/MannLabs/directlfq) which uses a different "intensity trace" algorithm with linear runtime scaling. Our `maxlfq` implementation uses the original pairwise ratio approach which scales quadratically with sample count.
 
@@ -206,8 +304,8 @@ Median polish produces residuals that capture deviations from the additive model
 ```python
 from skyline_prism import rollup_to_proteins, extract_peptide_residuals
 
-# Protein rollup returns median polish results
-protein_df, polish_results = rollup_to_proteins(data, protein_groups)
+# Protein rollup returns median polish results and topn results
+protein_df, polish_results, topn_results = rollup_to_proteins(data, protein_groups)
 
 # Extract residuals in long format for output
 peptide_residuals = extract_peptide_residuals(polish_results)
@@ -276,8 +374,154 @@ from skyline_prism import (
     # Validation
     validate_correction,
     generate_qc_report,
+    
+    # Visualization
+    plot_intensity_distribution,
+    plot_normalization_comparison,
+    plot_pca,
+    plot_comparative_pca,
+    plot_control_correlation_heatmap,
+    plot_cv_distribution,
+    plot_comparative_cv,
+    plot_sample_correlation_matrix,
 )
 ```
+
+## Data Visualization
+
+PRISM provides visualization functions for QC assessment and normalization evaluation. Install visualization dependencies with:
+
+```bash
+pip install skyline-prism[viz]
+```
+
+### Intensity Distribution
+
+Compare sample intensity distributions before/after normalization:
+
+```python
+from skyline_prism import plot_intensity_distribution, plot_normalization_comparison
+
+# Box plot of intensity distributions
+plot_intensity_distribution(
+    data,
+    sample_types={"Sample_1": "reference", "Sample_2": "pool", ...},
+    title="Intensity Distribution"
+)
+
+# Side-by-side comparison of normalization effect
+plot_normalization_comparison(
+    data_before=raw_data,
+    data_after=normalized_data,
+    title="Normalization Effect"
+)
+```
+
+### PCA Analysis
+
+Visualize batch effects and normalization impact with PCA:
+
+```python
+from skyline_prism import plot_pca, plot_comparative_pca
+
+# Single PCA plot with sample grouping
+fig, pca_df = plot_pca(
+    data,
+    sample_groups={"Sample_1": "Batch_A", "Sample_2": "Batch_B", ...}
+)
+
+# Comparative PCA: Original → Normalized → Batch Corrected
+plot_comparative_pca(
+    data_original=raw_data,
+    data_normalized=normalized_data,
+    data_batch_corrected=corrected_data,  # Optional
+    sample_groups=sample_batches,
+    figsize=(18, 6)
+)
+```
+
+### Control Sample Correlation
+
+Assess reproducibility using correlation heatmaps for control samples:
+
+```python
+from skyline_prism import plot_control_correlation_heatmap, plot_sample_correlation_matrix
+
+# Correlation heatmap for reference and pool samples only
+fig, corr_matrix = plot_control_correlation_heatmap(
+    data,
+    sample_type_col="sample_type",
+    control_types=["reference", "pool"],
+    method="pearson"
+)
+
+# Full sample correlation matrix
+fig, corr_matrix = plot_sample_correlation_matrix(
+    data,
+    sample_types=sample_type_dict
+)
+```
+
+### CV Distribution
+
+Evaluate precision using CV distributions for control samples:
+
+```python
+from skyline_prism import plot_cv_distribution, plot_comparative_cv
+
+# CV distribution histogram for controls
+fig, cv_data = plot_cv_distribution(
+    data,
+    sample_type_col="sample_type",
+    control_types=["reference", "pool"],
+    cv_threshold=20.0
+)
+
+# Compare CV before/after normalization
+plot_comparative_cv(
+    data_before=raw_data,
+    data_after=normalized_data,
+    sample_type_col="sample_type",
+    control_type="reference"
+)
+```
+
+### RT Correction Quality Assessment
+
+Visualize RT-dependent correction effectiveness. This is critical for validating that corrections learned from reference samples generalize to held-out pool samples:
+
+```python
+from skyline_prism import plot_rt_correction_comparison, plot_rt_correction_per_sample
+
+# 2×2 comparison showing reference (fitted) vs pool (held-out validation)
+# before and after RT correction
+fig, axes = plot_rt_correction_comparison(
+    data_before=data_before_correction,
+    data_after=data_after_correction,
+    sample_type_col="sample_type",
+    reference_mean=reference_mean_df,  # Mean abundance per peptide from reference
+    figsize=(14, 10)
+)
+
+# Per-sample before/after comparison
+fig, axes = plot_rt_correction_per_sample(
+    data_before=data_before_correction,
+    data_after=data_after_correction,
+    sample_type_col="sample_type",
+    reference_mean=reference_mean_df,
+    samples_per_type=3,  # Number of samples to show per type
+    figsize=(16, 12)
+)
+```
+
+The RT correction plots help assess:
+- Whether the spline model captures RT-dependent variation in reference samples
+- Whether corrections generalize to pool samples (held-out validation)
+- Whether any samples have unusually large residuals after correction
+
+All visualization functions support:
+- `show_plot=False` to return the figure object for further customization
+- `save_path="/path/to/figure.png"` to save directly to file
 
 ## Citation
 

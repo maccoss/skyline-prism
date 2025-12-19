@@ -1,5 +1,4 @@
-"""
-Transition rollup module for quality-weighted aggregation.
+"""Transition rollup module for quality-weighted aggregation.
 
 This module handles Stage 0 of the PRISM pipeline: rolling up individual
 transition intensities to peptide-level quantities using quality-weighted
@@ -14,11 +13,12 @@ Key concepts:
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
-import logging
 
 if TYPE_CHECKING:
     from .rollup import MedianPolishResult
@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VarianceModelParams:
-    """
-    Parameters for the signal variance model.
+    """Parameters for the signal variance model.
 
     Variance model based on mass spectrometry noise sources:
         var(signal) = α·signal + β·signal² + γ + δ·quality_penalty
@@ -68,9 +67,8 @@ class VarianceModelParams:
 
 @dataclass
 class TransitionRollupResult:
-    """
-    Result of transition to peptide rollup.
-    
+    """Result of transition to peptide rollup.
+
     When using median_polish method, transition_residuals contains per-peptide
     dictionaries of MedianPolishResult objects, which include the residual matrix.
     Large residuals may indicate transitions with interference or biologically
@@ -84,7 +82,7 @@ class TransitionRollupResult:
     variance_model: VarianceModelParams  # Model parameters used
     # Median polish results per peptide (when method='median_polish')
     # Keys are peptide identifiers, values are MedianPolishResult objects
-    median_polish_results: Optional[Dict[str, "MedianPolishResult"]] = None
+    median_polish_results: dict[str, MedianPolishResult] | None = None
 
 
 def compute_transition_variance(
@@ -93,8 +91,7 @@ def compute_transition_variance(
     coeluting: np.ndarray,
     params: VarianceModelParams,
 ) -> np.ndarray:
-    """
-    Compute variance estimate for each transition based on intensity and quality.
+    """Compute variance estimate for each transition based on intensity and quality.
 
     Args:
         intensity: Transition intensities (linear scale)
@@ -104,6 +101,7 @@ def compute_transition_variance(
 
     Returns:
         Estimated variance for each transition
+
     """
     # Base variance from intensity model
     variance = params.alpha * intensity + params.beta * intensity**2 + params.gamma
@@ -127,8 +125,7 @@ def compute_transition_weights(
     coeluting: pd.DataFrame,
     params: VarianceModelParams,
 ) -> pd.DataFrame:
-    """
-    Compute per-transition weights using intensity-weighted quality averaging.
+    """Compute per-transition weights using intensity-weighted quality averaging.
 
     Key principle: A single weight per transition (not per replicate) using
     intensity-weighted averaging of quality metrics. This ensures consistent
@@ -142,6 +139,7 @@ def compute_transition_weights(
 
     Returns:
         DataFrame with one weight per transition
+
     """
     # For each transition, compute intensity-weighted average quality
     # High-abundance samples contribute more to quality assessment
@@ -180,9 +178,8 @@ def aggregate_transitions_weighted(
     intensities: pd.DataFrame,
     weights: pd.Series,
     min_transitions: int = 3,
-) -> Tuple[pd.Series, pd.Series, int]:
-    """
-    Aggregate transition intensities using quality-based weights.
+) -> tuple[pd.Series, pd.Series, int]:
+    """Aggregate transition intensities using quality-based weights.
 
     Args:
         intensities: Transition × replicate matrix (log2 scale)
@@ -191,6 +188,7 @@ def aggregate_transitions_weighted(
 
     Returns:
         Tuple of (peptide abundances, uncertainties, n_transitions_used)
+
     """
     n_transitions = len(intensities)
 
@@ -250,12 +248,11 @@ def rollup_transitions_to_peptides(
     shape_corr_col: str = "shape_correlation",
     coeluting_col: str = "coeluting",
     method: str = "quality_weighted",
-    params: Optional[VarianceModelParams] = None,
+    params: VarianceModelParams | None = None,
     min_transitions: int = 3,
     log_transform: bool = True,
 ) -> TransitionRollupResult:
-    """
-    Roll up transition-level data to peptide-level quantities.
+    """Roll up transition-level data to peptide-level quantities.
 
     Args:
         data: DataFrame with transition-level Skyline data
@@ -272,6 +269,7 @@ def rollup_transitions_to_peptides(
 
     Returns:
         TransitionRollupResult with peptide abundances and diagnostics
+
     """
     if params is None:
         params = VarianceModelParams()
@@ -414,85 +412,156 @@ def rollup_transitions_to_peptides(
 
 def learn_variance_model(
     data: pd.DataFrame,
-    reference_mask: pd.Series,
+    reference_samples: list[str],
     peptide_col: str = "peptide_modified",
     transition_col: str = "fragment_ion",
     sample_col: str = "replicate_name",
     abundance_col: str = "area",
     shape_corr_col: str = "shape_correlation",
     coeluting_col: str = "coeluting",
+    n_iterations: int = 100,
 ) -> VarianceModelParams:
-    """
-    Learn variance model parameters from reference samples.
+    """Learn variance model parameters from reference samples.
 
     Uses reference replicates to optimize variance model parameters
-    by minimizing CV across peptides.
+    by minimizing CV across peptides. Reference samples should have
+    only technical variation (no biological differences), making them
+    ideal for learning the noise model.
+
+    The learned parameters can then be used for quality-weighted
+    aggregation of transitions to peptides.
 
     Args:
         data: DataFrame with transition-level data
-        reference_mask: Boolean mask for reference samples
-        peptide_col, transition_col, etc.: Column names
+        reference_samples: List of sample names that are reference samples
+        peptide_col: Column identifying peptides
+        transition_col: Column identifying transitions
+        sample_col: Column identifying samples/replicates
+        abundance_col: Column with transition intensities
+        shape_corr_col: Column with shape correlation values
+        coeluting_col: Column with coelution boolean
+        n_iterations: Maximum optimization iterations
 
     Returns:
         Optimized VarianceModelParams
+
     """
     from scipy.optimize import minimize
 
     logger.info("Learning variance model parameters from reference samples")
 
-    ref_data = data[data[sample_col].isin(data.loc[reference_mask, sample_col].unique())]
+    # Filter to reference samples only
+    ref_data = data[data[sample_col].isin(reference_samples)].copy()
+    n_ref_samples = ref_data[sample_col].nunique()
+
+    if n_ref_samples < 2:
+        logger.warning(
+            f"Need at least 2 reference samples to learn parameters, got {n_ref_samples}. "
+            "Using default parameters."
+        )
+        return VarianceModelParams()
+
+    logger.info(f"  Using {n_ref_samples} reference samples for parameter learning")
+
+    # Check which quality columns are available
+    has_shape_corr = shape_corr_col in ref_data.columns
+    has_coeluting = coeluting_col in ref_data.columns
+
+    if not has_shape_corr:
+        logger.warning(f"Shape correlation column '{shape_corr_col}' not found")
+    if not has_coeluting:
+        logger.warning(f"Coeluting column '{coeluting_col}' not found")
 
     def objective(params_array):
-        """Objective: minimize CV across peptides in reference."""
+        """Objective: minimize median CV across peptides in reference."""
+        # Ensure positive parameters via softplus or exp
         params = VarianceModelParams(
-            alpha=params_array[0],
-            beta=params_array[1],
-            gamma=params_array[2],
-            delta=params_array[3],
-            shape_corr_exponent=params_array[4],
+            alpha=max(0.01, params_array[0]),
+            beta=max(0.0001, params_array[1]),
+            gamma=max(1.0, params_array[2]),
+            delta=max(0.01, params_array[3]) if has_shape_corr else 1.0,
+            shape_corr_exponent=max(0.5, min(5.0, params_array[4])) if has_shape_corr else 2.0,
+            coelution_penalty=max(1.0, params_array[5]) if has_coeluting else 10.0,
         )
 
-        result = rollup_transitions_to_peptides(
-            ref_data,
-            peptide_col=peptide_col,
-            transition_col=transition_col,
-            sample_col=sample_col,
-            abundance_col=abundance_col,
-            shape_corr_col=shape_corr_col,
-            coeluting_col=coeluting_col,
-            method="quality_weighted",
-            params=params,
-        )
+        try:
+            result = rollup_transitions_to_peptides(
+                ref_data,
+                peptide_col=peptide_col,
+                transition_col=transition_col,
+                sample_col=sample_col,
+                abundance_col=abundance_col,
+                shape_corr_col=shape_corr_col if has_shape_corr else None,
+                coeluting_col=coeluting_col if has_coeluting else None,
+                method="quality_weighted",
+                params=params,
+                min_transitions=3,
+            )
 
-        # Calculate CV across reference replicates for each peptide
-        cvs = result.peptide_abundances.std(axis=1) / result.peptide_abundances.mean(axis=1)
-        median_cv = cvs.median()
+            # Calculate CV across reference replicates for each peptide
+            abundances = result.peptide_abundances
+            means = abundances.mean(axis=1)
+            stds = abundances.std(axis=1)
 
-        return median_cv if not np.isnan(median_cv) else 1.0
+            # Filter out peptides with zero or near-zero mean
+            valid = means.abs() > 0.01
+            cvs = stds[valid] / means[valid].abs()
+
+            median_cv = cvs.median()
+            return median_cv if np.isfinite(median_cv) else 1.0
+
+        except Exception as e:
+            logger.debug(f"Optimization step failed: {e}")
+            return 1.0
 
     # Initial parameters
-    x0 = [1.0, 0.01, 100.0, 1.0, 2.0]
+    n_params = 6 if has_coeluting else (5 if has_shape_corr else 3)
+    x0 = [1.0, 0.01, 100.0, 1.0, 2.0, 10.0][:n_params]
 
     # Bounds
     bounds = [
-        (0.1, 10.0),  # alpha
-        (0.001, 0.1),  # beta
-        (10.0, 1000.0),  # gamma
-        (0.1, 10.0),  # delta
-        (1.0, 4.0),  # shape_corr_exponent
-    ]
+        (0.01, 10.0),     # alpha
+        (0.0001, 0.5),    # beta
+        (1.0, 10000.0),   # gamma
+        (0.01, 10.0),     # delta
+        (0.5, 5.0),       # shape_corr_exponent
+        (1.0, 100.0),     # coelution_penalty
+    ][:n_params]
 
-    result = minimize(objective, x0, method="L-BFGS-B", bounds=bounds)
+    # Calculate initial CV
+    initial_cv = objective(x0)
+    logger.info(f"  Initial median CV: {initial_cv:.4f}")
 
-    optimized = VarianceModelParams(
-        alpha=result.x[0],
-        beta=result.x[1],
-        gamma=result.x[2],
-        delta=result.x[3],
-        shape_corr_exponent=result.x[4],
+    result = minimize(
+        objective,
+        x0,
+        method="L-BFGS-B",
+        bounds=bounds,
+        options={"maxiter": n_iterations},
     )
 
-    logger.info(f"  Optimized parameters: α={optimized.alpha:.3f}, β={optimized.beta:.4f}")
-    logger.info(f"  γ={optimized.gamma:.1f}, δ={optimized.delta:.3f}")
+    # Extract optimized parameters
+    opt = result.x
+    optimized = VarianceModelParams(
+        alpha=max(0.01, opt[0]),
+        beta=max(0.0001, opt[1]),
+        gamma=max(1.0, opt[2]),
+        delta=max(0.01, opt[3]) if len(opt) > 3 else 1.0,
+        shape_corr_exponent=max(0.5, min(5.0, opt[4])) if len(opt) > 4 else 2.0,
+        coelution_penalty=max(1.0, opt[5]) if len(opt) > 5 else 10.0,
+    )
+
+    final_cv = objective(list(opt) + [10.0] * (6 - len(opt)))  # Pad if needed
+
+    logger.info("  Optimized parameters:")
+    logger.info(f"    α (shot noise) = {optimized.alpha:.3f}")
+    logger.info(f"    β (multiplicative) = {optimized.beta:.4f}")
+    logger.info(f"    γ (additive floor) = {optimized.gamma:.1f}")
+    if has_shape_corr:
+        logger.info(f"    δ (quality penalty) = {optimized.delta:.3f}")
+        logger.info(f"    shape_corr_exponent = {optimized.shape_corr_exponent:.2f}")
+    if has_coeluting:
+        logger.info(f"    coelution_penalty = {optimized.coelution_penalty:.1f}x")
+    logger.info(f"  Median CV: {initial_cv:.4f} → {final_cv:.4f}")
 
     return optimized

@@ -51,6 +51,31 @@ sample_annotations:
   experimental_pattern: "^(?!.*(Pool|Ref)).*"
 
 # =============================================================================
+# Batch Estimation
+# =============================================================================
+# When batch information is not provided in metadata, PRISM estimates batches
+# using: 1) source_document, 2) acquisition time gaps, or 3) equal division.
+#
+# Include "Result File > Acquired Time" in your Skyline report for best results.
+
+batch_estimation:
+  # Expected samples per batch (for validation and fallback estimation)
+  min_samples_per_batch: 12   # Typical 96-well plate minimum
+  max_samples_per_batch: 100  # Typical 96-well plate maximum
+  
+  # IQR multiplier for outlier gap detection
+  # A gap is considered a batch break if: gap > Q3 + (multiplier * IQR)
+  # 
+  # Example: If runs are typically 65 min apart (±2 min), the IQR would be ~4 min.
+  # With multiplier=1.5, threshold ≈ 67 + 1.5*4 = 73 min.
+  # An overnight break (e.g., 90 min gap) would be detected as a batch boundary.
+  gap_iqr_multiplier: 1.5
+  
+  # Force a specific number of batches (null = automatic estimation)
+  # Only used if other estimation methods fail
+  n_batches: null
+
+# =============================================================================
 # Stage 0: Transition to Peptide Rollup
 # =============================================================================
 # Only used if input is transition-level data from Skyline.
@@ -67,14 +92,23 @@ transition_rollup:
   # Minimum transitions required per peptide
   min_transitions: 3
   
-  # For quality_weighted method - variance model parameters
-  # These are learned from reference samples if not specified
-  variance_model:
-    alpha: 1.0        # Shot noise coefficient (Poisson)
-    beta: 0.01        # Multiplicative noise coefficient
-    gamma: 100.0      # Additive noise floor
-    delta: 1.0        # Quality penalty coefficient
-    shape_corr_exponent: 2.0
+  # Learn variance model from reference samples (only for quality_weighted)
+  # When true, optimizes variance model parameters (alpha, beta, gamma, delta)
+  # by minimizing median CV across peptides in reference samples.
+  # Requires at least 2 reference samples.
+  learn_variance_model: false
+  
+  # For quality_weighted method - explicit variance model parameters
+  # Only used if learn_variance_model is false. If neither is specified,
+  # sensible defaults are used.
+  # 
+  # variance_model:
+  #   alpha: 1.0        # Shot noise coefficient (Poisson)
+  #   beta: 0.01        # Multiplicative noise coefficient
+  #   gamma: 100.0      # Additive noise floor
+  #   delta: 2.0        # Quality penalty coefficient
+  #   shape_corr_exponent: 2.0  # Exponent for shape correlation penalty
+  #   coelution_penalty: 0.5    # Penalty for non-coeluting transitions
   
   # Skyline quality columns to use (if available)
   quality_columns:
@@ -114,33 +148,58 @@ rt_correction:
 
 global_normalization:
   # Method: median, vsn, quantile, none
+  #
+  # median   - Subtract sample median; shifts all samples to common baseline
+  #            Simple, robust, and preserves original log2 scale
+  #            RECOMMENDED for most proteomics experiments
+  #
+  # vsn      - Variance Stabilizing Normalization using arcsinh transformation
+  #            Stabilizes variance across intensity range (heteroscedasticity)
+  #            Output is on arcsinh-transformed scale, NOT log2
+  #            Use when low-abundance proteins show high variance
+  #
+  # quantile - Forces identical sample distributions
+  #            Strong normalization that may over-correct
+  #
+  # none     - Skip global normalization
+  #
   method: "median"
-  
-  # For VSN: target mean/variance
+
+  # VSN parameters (only used when method: vsn)
   vsn_params:
-    target_mean: 0.0
-    target_variance: 1.0
+    # Whether to optimize transformation parameters per sample
+    # - false (default): Use fast median-based scaling (a = 1/median)
+    # - true: Optimize parameters to minimize variance heterogeneity
+    #         using Nelder-Mead optimization. Slower but may give
+    #         better variance stabilization for some datasets.
+    optimize_params: false
 
 # =============================================================================
 # Stage 3: Batch Correction
 # =============================================================================
-# Remove systematic batch effects.
+# Remove systematic batch effects using ComBat (empirical Bayes).
 
 batch_correction:
   enabled: true
   
-  # Method: combat, limma, none
+  # Method: combat, none
+  # ComBat uses empirical Bayes shrinkage for robust batch effect estimation
   method: "combat"
-  
-  # Preserve these experimental factors during correction
-  preserve_factors: []
 
 # =============================================================================
 # Protein Parsimony
 # =============================================================================
 # How to handle shared peptides that map to multiple proteins.
+#
+# IMPORTANT: Parsimony requires the search FASTA database to correctly
+# determine peptide-to-protein mappings. Peptides are matched to proteins
+# using direct sequence lookup.
 
 parsimony:
+  # Path to the FASTA database used for the original search
+  # REQUIRED for correct peptide-to-protein mapping
+  fasta_path: null  # e.g., "/path/to/uniprot_human_reviewed.fasta"
+  
   # Strategy: all_groups, unique_only, razor
   # 
   # all_groups (recommended): Apply shared peptides to ALL protein groups
@@ -170,58 +229,53 @@ protein_rollup:
   #   - Automatically downweights outliers through median operation
   #   - Handles missing values naturally
   #
-  # topn: Average of top N most intense peptides per sample
-  #   - Simple and fast
-  #   - Assumes most intense peptides are most reliable
+  # topn: Average of top N most intense peptides (SAME peptides across all samples)
+  #   - Selects N peptides with highest median abundance across samples
+  #   - Uses those SAME peptides for all samples (ensures comparability)
+  #   - Simple and interpretable
+  #   - Selected peptides are reported in output
   #
-  # ibaq: Intensity-Based Absolute Quantification
-  #   - Total intensity / number of theoretical peptides
-  #   - Enables cross-protein abundance comparisons
-  #   - Requires theoretical peptide count per protein
+  # ibaq: iBAQ (Intensity-Based Absolute Quantification)
+  #   - Sum of intensities / theoretical peptide count
+  #   - Enables cross-protein abundance comparison
+  #   - Requires FASTA and enzyme settings (see ibaq section below)
   #
   # maxlfq: Maximum LFQ algorithm (MaxQuant-style)
   #   - Uses median pairwise peptide ratios between samples
   #   - Good when relative quantification is more reliable than absolute
   #
-  # quality_weighted: Variance-model weighted average
-  #   - Weights peptides by inverse predicted variance
-  #   - Requires quality metrics (ShapeCorrelation, Coeluting)
-  #
   # sum: Simple sum of all peptide intensities
-  #   - Similar to spectral counting
-  #   - Not recommended for label-free quantification
+  #   - Fast but sensitive to outliers
   #
   method: "median_polish"
   
-  # Minimum peptides required per protein (fewer = flagged)
-  min_peptides: 3
+  # Top-N specific settings (used when method: topn)
+  topn:
+    n: 3                              # Number of top peptides to use
+    selection: "median_abundance"     # How to rank: median_abundance, frequency
   
-  # For topn method: number of peptides to average
-  topn_n: 3
+  # iBAQ specific settings (REQUIRED when method: ibaq)
+  # iBAQ normalizes protein abundances by the number of theoretical peptides
+  ibaq:
+    fasta_path: null                  # Path to search FASTA (REQUIRED for iBAQ)
+    enzyme: "trypsin"                 # Enzyme for theoretical digestion
+    missed_cleavages: 0               # Typically 0 for iBAQ counting
+    min_peptide_length: 6             # Minimum peptide length
+    max_peptide_length: 30            # Maximum peptide length
   
-  # For ibaq method: theoretical peptide count (per protein)
-  # Usually provided via protein database annotation
-  ibaq_theoretical_peptides: null
+  # For topn method
+  topn:
+    n: 3  # Number of peptides to select
+    # Selection criterion: how to rank peptides for selection
+    # Options:
+    #   - median_abundance: Peptides with highest median across samples (default)
+    #   - frequency: Peptides detected in most samples, then by abundance
+    selection: "median_abundance"
   
   # For median_polish method
   median_polish:
     max_iterations: 10
     convergence_tolerance: 0.0001
-
-# =============================================================================
-# Quality Control
-# =============================================================================
-# Thresholds for QC flagging.
-
-qc:
-  # Maximum CV in reference samples (flag if exceeded)
-  max_reference_cv: 0.20
-  
-  # Minimum variance reduction expected
-  min_variance_reduction: 0.10
-  
-  # Outlier detection threshold (in MADs)
-  outlier_threshold: 3.0
 
 # =============================================================================
 # Output Options
@@ -231,9 +285,13 @@ output:
   # File format: parquet, csv, tsv
   format: "parquet"
   
-  # Include intermediate outputs (peptide-level, diagnostics)
-  include_peptides: true
-  include_diagnostics: true
+  # Output directory (relative to working directory or absolute path)
+  # output_dir: "prism_output/"
+  
+  # The pipeline always produces both:
+  # - corrected_peptides.parquet: peptide-level quantities (batch-corrected)
+  # - corrected_proteins.parquet: protein-level quantities (batch-corrected)
+  # - protein_groups.tsv: protein group definitions from parsimony
   
   # Include median polish residuals for outlier analysis
   # Following Plubell et al. 2022, residuals may indicate biologically
@@ -242,3 +300,29 @@ output:
   
   # Compress output files
   compress: true
+
+# =============================================================================
+# QC Report Options
+# =============================================================================
+
+qc_report:
+  # Generate QC report
+  enabled: true
+  
+  # Output filename (relative to output directory)
+  filename: "qc_report.html"
+  
+  # Save individual PNG plots to qc_plots/ subdirectory
+  save_plots: true
+  
+  # Embed plots directly in HTML (larger file but self-contained)
+  embed_plots: true
+  
+  # Plots to include (all enabled by default)
+  plots:
+    intensity_distribution: true    # Before/after intensity distributions
+    pca_comparison: true            # PCA across normalization stages
+    control_correlation: true       # Correlation heatmap for reference/pool samples
+    cv_distribution: true           # CV histograms for control samples
+    rt_correction: true             # RT-dependent residuals (if RT correction enabled)
+

@@ -34,12 +34,14 @@ skyline-prism/
 │   ├── batch_correction.py  # ComBat implementation (empirical Bayes)
 │   ├── parsimony.py         # Protein grouping and shared peptide handling
 │   ├── rollup.py            # Peptide → Protein rollup (median polish, etc.)
-│   ├── transition_rollup.py # Transition → Peptide rollup (median polish, quality-weighted)
-│   └── validation.py        # QC metrics and reporting
+│   ├── transition_rollup.py # Transition → Peptide rollup (median polish, quality-weighted, variance learning)
+│   ├── validation.py        # QC metrics and reporting (generates HTML QC reports with embedded plots)
+│   └── visualization.py     # Plotting functions for QC assessment and normalization evaluation
 ├── tests/                   # Unit tests (pytest)
 │   ├── test_data_io.py
 │   ├── test_parsimony.py
-│   └── test_rollup.py
+│   ├── test_rollup.py
+│   └── test_transition_rollup.py
 ├── SPECIFICATION.md         # Detailed technical specification
 ├── README.md                # User-facing documentation
 ├── config_template.yaml     # Configuration file template
@@ -52,9 +54,14 @@ skyline-prism/
 ### Tukey Median Polish (Default for Rollups)
 
 Used for both transition→peptide and peptide→protein rollups. Decomposes a matrix into:
-- Row effects (transition/peptide ionization efficiency)
+- Row effects (see table below)
 - Column effects (sample abundance - **this is the output**)
 - Residuals (noise/outliers - **preserved for biological analysis**)
+
+| Rollup Stage | Row Effects Represent | Column Effects |
+|--------------|----------------------|----------------|
+| Transition → Peptide | Transition interference (co-eluting analytes) | Peptide abundance |
+| Peptide → Protein | Peptide ionization efficiency | Protein abundance |
 
 The median operation automatically downweights outliers without explicit filtering.
 
@@ -82,6 +89,22 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 - Supports reference batch, parametric/non-parametric priors, mean-only correction
 
 **Implementation**: `skyline_prism/batch_correction.py` → `combat()`, `combat_from_long()`
+
+### Variance Model Learning (Quality-Weighted Rollup)
+
+For quality-weighted transition→peptide aggregation, variance model parameters (α, β, γ, δ) 
+can be learned from reference samples by minimizing median CV across peptides.
+
+Variance model: `var(signal) = α·signal + β·signal² + γ + δ·quality_penalty`
+
+**Implementation**: `skyline_prism/transition_rollup.py` → `learn_variance_model()`
+
+**Configuration:**
+```yaml
+transition_rollup:
+  method: "quality_weighted"
+  learn_variance_model: true  # Learn from reference samples
+```
 
 ## Development Guidelines
 
@@ -122,19 +145,24 @@ pytest tests/test_rollup.py::TestTukeyMedianPolish::test_simple_matrix -v
 
 The project uses:
 - **black** for code formatting
-- **ruff** for linting
+- **ruff** for linting (with auto-fix)
 - **mypy** for type checking
 
 ```bash
 # Format code
 black skyline_prism/
 
-# Lint
-ruff check skyline_prism/
+# Lint and auto-fix issues
+ruff check skyline_prism/ --fix
+
+# For more aggressive fixes (type annotation modernization, etc.)
+ruff check skyline_prism/ --fix --unsafe-fixes
 
 # Type check
 mypy skyline_prism/
 ```
+
+**Always run ruff with `--fix`** to automatically correct linting issues before committing.
 
 ### Documentation Updates
 
@@ -159,8 +187,9 @@ Comprehensive configuration file with all options documented. Key sections:
 - `transition_rollup`: Transition→peptide rollup (method: median_polish, quality_weighted, sum)
 - `rt_correction`: RT-aware normalization (method: spline)
 - `batch_correction`: ComBat settings (method: combat)
-- `protein_rollup`: Peptide→protein rollup (method: median_polish)
+- `protein_rollup`: Peptide→protein rollup (method: median_polish, topn, maxlfq, sum)
 - `parsimony`: Shared peptide handling (all_groups, unique_only, razor)
+- `qc_report`: QC report generation (enabled, save_plots, embed_plots, plot selection)
 
 ### batch_correction.py
 Full ComBat implementation with:
@@ -168,6 +197,15 @@ Full ComBat implementation with:
 - `combat_from_long()`: Wrapper for long-format data (PRISM pipeline format)
 - `combat_with_reference_samples()`: Automatic evaluation using reference/pool CVs
 - `evaluate_batch_correction()`: Compare before/after metrics
+
+### visualization.py
+QC visualization functions for normalization assessment:
+- `plot_intensity_distribution()`: Box plots of sample intensity distributions
+- `plot_pca()`, `plot_comparative_pca()`: PCA analysis for batch effects
+- `plot_control_correlation_heatmap()`: Correlation heatmaps for control samples
+- `plot_cv_distribution()`, `plot_comparative_cv()`: CV distributions for precision assessment
+- `plot_rt_correction_comparison()`: Before/after comparison of RT correction showing reference (fitted) vs pool (held-out validation)
+- `plot_rt_correction_per_sample()`: Per-sample RT correction quality assessment
 
 ### pyproject.toml
 Package metadata and dependencies. Contains:
@@ -177,21 +215,33 @@ Package metadata and dependencies. Contains:
 
 ## CLI Commands
 
-The package provides a `prism` CLI with these subcommands:
+The package provides a `prism` CLI. The primary command is `prism run`:
 
 ```bash
-# Merge Skyline reports into unified parquet
+# Run the full PRISM pipeline (recommended)
+prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m metadata.tsv
+```
+
+This produces:
+- `corrected_peptides.parquet` - Peptide-level batch-corrected quantities
+- `corrected_proteins.parquet` - Protein-level batch-corrected quantities
+- `protein_groups.tsv` - Protein group definitions
+- `peptide_residuals.parquet` - Residuals for outlier analysis (if enabled)
+- `qc_report.html` - HTML QC report with embedded diagnostic plots
+- `qc_plots/` - Directory containing PNG plot files (if `save_plots: true`)
+
+Additional utility commands:
+
+```bash
+# Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
-
-# Run normalization pipeline
-prism normalize -i data.parquet -o normalized.parquet -c config.yaml
-
-# Roll up peptides to proteins
-prism rollup -i normalized.parquet -o proteins.parquet -g groups.tsv
 
 # Validate normalization quality
 prism validate --before data.parquet --after normalized.parquet --report qc.html
 ```
+
+Legacy commands (`normalize`, `rollup`) are preserved for backwards compatibility but
+the `run` command is preferred as it executes the complete two-arm pipeline.
 
 ## Common Tasks
 
@@ -222,6 +272,7 @@ The package exports are defined in `skyline_prism/__init__.py`. Key exports incl
 - Batch correction: `combat`, `combat_from_long`, `combat_with_reference_samples`
 - Parsimony: `compute_protein_groups`, `ProteinGroup`
 - Validation: `validate_correction`, `generate_qc_report`
+- Visualization: `plot_intensity_distribution`, `plot_pca`, `plot_cv_distribution`, `plot_rt_correction_comparison`
 
 ## Important Notes
 
@@ -231,6 +282,59 @@ The package exports are defined in `skyline_prism/__init__.py`. Key exports incl
 - **Log scale**: Most operations work on log2-transformed abundances
 - **Median polish is default**: For both transition→peptide and peptide→protein rollups
 - **Two-arm pipeline**: Batch correction happens at the reporting level (peptide or protein), not before rollup
+
+## FASTA-Based Protein Parsimony
+
+The `fasta.py` module provides FASTA parsing for proper protein parsimony:
+
+**Key functions:**
+- `parse_fasta()`: Parse UniProt/NCBI format FASTA files
+- `strip_modifications()`: Remove modifications from peptide sequences for matching
+- `normalize_for_matching()`: Handle I/L ambiguity (MS cannot distinguish)
+- `build_peptide_protein_map_from_fasta()`: Build complete peptide-protein mapping via substring search
+
+**Usage in parsimony:**
+```python
+from skyline_prism.parsimony import build_peptide_protein_map_from_fasta
+
+pep_to_prot, prot_to_pep, prot_names = build_peptide_protein_map_from_fasta(
+    df,
+    fasta_path="/path/to/search.fasta",
+)
+```
+
+**Note:** The module also contains in-silico digestion functions (`digest_protein()`, `digest_fasta()`)
+which are used for iBAQ (to count theoretical peptides per protein). Peptide-protein mapping for
+parsimony uses direct substring search - no enzyme parameters needed.
+
+## iBAQ Support
+
+iBAQ (Intensity-Based Absolute Quantification) is now integrated. It normalizes protein abundances
+by the number of theoretical peptides, enabling cross-protein abundance comparison.
+
+**Key function:**
+- `get_theoretical_peptide_counts()`: Count theoretical peptides per protein for iBAQ
+
+**Usage:**
+```python
+from skyline_prism.fasta import get_theoretical_peptide_counts
+
+counts = get_theoretical_peptide_counts(
+    "/path/to/database.fasta",
+    enzyme="trypsin",
+    missed_cleavages=0,  # Strict for iBAQ
+)
+```
+
+**Configuration:**
+```yaml
+protein_rollup:
+  method: "ibaq"
+  ibaq:
+    fasta_path: "/path/to/database.fasta"
+    enzyme: "trypsin"
+    missed_cleavages: 0
+```
 
 ## Not Yet Implemented
 

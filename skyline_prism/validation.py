@@ -1,44 +1,60 @@
-"""
-Validation module for assessing normalization quality.
+"""Validation module for assessing normalization quality.
 
 Uses the dual-control design:
 - Inter-experiment reference: calibration anchor
 - Intra-experiment pool: validation control
 """
 
-import pandas as pd
-import numpy as np
-from sklearn.decomposition import PCA
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+import base64
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
 
 logger = logging.getLogger(__name__)
+
+# Check for optional visualization dependencies
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")  # Non-interactive backend
+    import matplotlib.pyplot as plt
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+    plt = None
 
 
 @dataclass
 class ValidationMetrics:
     """Metrics for assessing normalization quality."""
-    
+
     # CV metrics
     reference_cv_before: float
     reference_cv_after: float
     pool_cv_before: float
     pool_cv_after: float
-    
+
     # CV improvement
     reference_cv_improvement: float  # (before - after) / before
     pool_cv_improvement: float
     relative_variance_reduction: float  # pool improvement / reference improvement
-    
+
     # PCA metrics
     pca_pool_reference_distance_before: float
     pca_pool_reference_distance_after: float
     pca_distance_ratio: float  # after / before (should be ~1, not << 1)
-    
+
     # Warnings
-    warnings: List[str] = field(default_factory=list)
-    
+    warnings: list[str] = field(default_factory=list)
+
     @property
     def passed(self) -> bool:
         """Check if validation passed basic criteria."""
@@ -56,32 +72,32 @@ def calculate_cv(
     precursor_col: str = 'precursor_id',
     replicate_col: str = 'replicate_name',
 ) -> float:
-    """
-    Calculate median coefficient of variation across peptides.
-    
+    """Calculate median coefficient of variation across peptides.
+
     Args:
         data: DataFrame with peptide data
         sample_mask: Boolean mask for samples to include
         abundance_col: Column with abundance values
         precursor_col: Column with precursor identifiers
         replicate_col: Column with replicate names
-        
+
     Returns:
         Median CV across peptides
+
     """
     subset = data.loc[sample_mask]
-    
+
     # Pivot to wide format
     matrix = subset.pivot_table(
         index=precursor_col,
         columns=replicate_col,
         values=abundance_col,
     )
-    
+
     # Calculate CV per peptide (on linear scale)
     linear = np.power(2, matrix)
     cv_per_peptide = linear.std(axis=1) / linear.mean(axis=1)
-    
+
     return cv_per_peptide.median()
 
 
@@ -94,9 +110,8 @@ def calculate_pca_distance(
     replicate_col: str = 'replicate_name',
     n_components: int = 2,
 ) -> float:
-    """
-    Calculate distance between pool and reference centroids in PCA space.
-    
+    """Calculate distance between pool and reference centroids in PCA space.
+
     Args:
         data: DataFrame with peptide data
         pool_mask: Boolean mask for pool samples
@@ -105,49 +120,50 @@ def calculate_pca_distance(
         precursor_col: Column with precursor identifiers
         replicate_col: Column with replicate names
         n_components: Number of PCA components
-        
+
     Returns:
         Euclidean distance between pool and reference centroids in PC space
+
     """
     # Get pool and reference samples
     control_mask = pool_mask | reference_mask
     subset = data.loc[control_mask]
-    
+
     # Pivot to wide format (samples as rows, peptides as columns)
     matrix = subset.pivot_table(
         index=replicate_col,
         columns=precursor_col,
         values=abundance_col,
     )
-    
+
     # Handle missing values - drop peptides with too many missing
     matrix = matrix.dropna(axis=1, thresh=len(matrix) * 0.5)
     matrix = matrix.fillna(matrix.median())
-    
+
     if matrix.shape[1] < n_components:
         logger.warning(f"Too few peptides for PCA: {matrix.shape[1]}")
         return np.nan
-    
+
     # Fit PCA
     pca = PCA(n_components=n_components)
     scores = pca.fit_transform(matrix.values)
     scores_df = pd.DataFrame(
-        scores, 
+        scores,
         index=matrix.index,
         columns=[f'PC{i+1}' for i in range(n_components)]
     )
-    
+
     # Get sample names for each type
     pool_samples = data.loc[pool_mask, replicate_col].unique()
     ref_samples = data.loc[reference_mask, replicate_col].unique()
-    
+
     # Calculate centroids
     pool_centroid = scores_df.loc[scores_df.index.isin(pool_samples)].mean()
     ref_centroid = scores_df.loc[scores_df.index.isin(ref_samples)].mean()
-    
+
     # Euclidean distance
     distance = np.sqrt(((pool_centroid - ref_centroid) ** 2).sum())
-    
+
     return distance
 
 
@@ -160,13 +176,12 @@ def validate_correction(
     precursor_col: str = 'precursor_id',
     replicate_col: str = 'replicate_name',
 ) -> ValidationMetrics:
-    """
-    Assess whether correction improved data quality without overcorrection.
-    
+    """Assess whether correction improved data quality without overcorrection.
+
     Uses the dual-control design:
     - Reference samples: should show CV improvement (technical variation removed)
     - Pool samples: should show similar CV improvement AND remain distinct from reference
-    
+
     Args:
         data_before: DataFrame with original data
         data_after: DataFrame with normalized data
@@ -175,30 +190,31 @@ def validate_correction(
         abundance_col_after: Abundance column in after data
         precursor_col: Column with precursor identifiers
         replicate_col: Column with replicate names
-        
+
     Returns:
         ValidationMetrics with assessment results
+
     """
     logger.info("Validating normalization quality")
-    
+
     warnings = []
-    
+
     # Create masks for sample types
     pool_mask_before = data_before[sample_type_col] == 'pool'
     ref_mask_before = data_before[sample_type_col] == 'reference'
     pool_mask_after = data_after[sample_type_col] == 'pool'
     ref_mask_after = data_after[sample_type_col] == 'reference'
-    
+
     # Calculate CVs before
     ref_cv_before = calculate_cv(
-        data_before, ref_mask_before, 
+        data_before, ref_mask_before,
         abundance_col_before, precursor_col, replicate_col
     )
     pool_cv_before = calculate_cv(
         data_before, pool_mask_before,
         abundance_col_before, precursor_col, replicate_col
     )
-    
+
     # Calculate CVs after
     ref_cv_after = calculate_cv(
         data_after, ref_mask_after,
@@ -208,14 +224,14 @@ def validate_correction(
         data_after, pool_mask_after,
         abundance_col_after, precursor_col, replicate_col
     )
-    
+
     # CV improvements
     ref_cv_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before if ref_cv_before > 0 else 0
     pool_cv_improvement = (pool_cv_before - pool_cv_after) / pool_cv_before if pool_cv_before > 0 else 0
-    
+
     # Relative variance reduction
     rvr = pool_cv_improvement / ref_cv_improvement if ref_cv_improvement > 0 else np.inf
-    
+
     # Check for warnings
     if pool_cv_improvement < 0:
         warnings.append("Pool CV increased after normalization")
@@ -225,7 +241,7 @@ def validate_correction(
         warnings.append(f"Pool improved much more than reference (RVR={rvr:.2f}) - possible overfitting")
     if rvr < 0.5:
         warnings.append(f"Pool improved much less than reference (RVR={rvr:.2f}) - normalization may not generalize")
-    
+
     # Calculate PCA distances
     pca_dist_before = calculate_pca_distance(
         data_before, pool_mask_before, ref_mask_before,
@@ -235,13 +251,13 @@ def validate_correction(
         data_after, pool_mask_after, ref_mask_after,
         abundance_col_after, precursor_col, replicate_col
     )
-    
+
     pca_ratio = pca_dist_after / pca_dist_before if pca_dist_before > 0 else np.nan
-    
+
     if pca_ratio < 0.5:
         warnings.append(f"Pool-reference PCA distance decreased by {(1-pca_ratio)*100:.1f}% - "
                        "samples may be collapsing together")
-    
+
     metrics = ValidationMetrics(
         reference_cv_before=ref_cv_before,
         reference_cv_after=ref_cv_after,
@@ -255,73 +271,288 @@ def validate_correction(
         pca_distance_ratio=pca_ratio,
         warnings=warnings,
     )
-    
+
     # Log summary
     logger.info(f"Reference CV: {ref_cv_before:.3f} -> {ref_cv_after:.3f} "
                 f"({ref_cv_improvement*100:.1f}% improvement)")
     logger.info(f"Pool CV: {pool_cv_before:.3f} -> {pool_cv_after:.3f} "
                 f"({pool_cv_improvement*100:.1f}% improvement)")
     logger.info(f"PCA distance ratio: {pca_ratio:.2f}")
-    
+
     if warnings:
         for w in warnings:
             logger.warning(w)
-    
+
     if metrics.passed:
         logger.info("Validation PASSED")
     else:
         logger.warning("Validation FAILED - review warnings")
-    
+
     return metrics
 
 
 def generate_qc_report(
     metrics: ValidationMetrics,
-    normalization_log: List[str],
+    normalization_log: list[str],
     output_path: str,
     data_before: Optional[pd.DataFrame] = None,
     data_after: Optional[pd.DataFrame] = None,
-) -> None:
-    """
-    Generate HTML QC report.
-    
+    data_batch_corrected: Optional[pd.DataFrame] = None,
+    reference_stats: Optional[pd.DataFrame] = None,
+    sample_type_col: str = "sample_type",
+    precursor_col: str = "precursor_id",
+    sample_col: str = "replicate_name",
+    abundance_col: str = "abundance",
+    rt_col: str = "retention_time",
+    save_plots: bool = True,
+    embed_plots: bool = True,
+) -> dict[str, str]:
+    """Generate HTML QC report with embedded or linked PNG plots.
+
     Args:
         metrics: ValidationMetrics from validate_correction
         normalization_log: List of processing steps applied
         output_path: Path to save HTML report
         data_before: Optional original data for plots
         data_after: Optional normalized data for plots
+        data_batch_corrected: Optional batch-corrected data for plots
+        reference_stats: Optional reference statistics for RT plots
+        sample_type_col: Column name with sample type
+        precursor_col: Column name with precursor identifiers
+        sample_col: Column name with sample identifiers
+        abundance_col: Column name with abundance values
+        rt_col: Column name with retention times
+        save_plots: Whether to save individual PNG files
+        embed_plots: Whether to embed plots in HTML (base64)
+
+    Returns:
+        Dict mapping plot names to file paths (if save_plots=True)
+
     """
-    # Simple HTML report
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Normalization QC Report</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            h1 {{ color: #333; }}
-            h2 {{ color: #666; border-bottom: 1px solid #ccc; }}
-            .metric {{ margin: 10px 0; }}
-            .metric-name {{ font-weight: bold; }}
-            .metric-value {{ color: #0066cc; }}
-            .warning {{ color: #cc6600; background: #fff3e0; padding: 10px; margin: 5px 0; }}
-            .passed {{ color: #006600; background: #e0ffe0; padding: 10px; }}
-            .failed {{ color: #cc0000; background: #ffe0e0; padding: 10px; }}
-            table {{ border-collapse: collapse; margin: 20px 0; }}
-            th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
-            th {{ background: #f0f0f0; }}
-        </style>
-    </head>
-    <body>
-        <h1>Normalization QC Report</h1>
-        
+    output_path = Path(output_path)
+    plots_dir = output_path.parent / "qc_plots"
+    plot_paths = {}
+
+    # Create plots directory if saving
+    if save_plots:
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate plots if we have data and matplotlib
+    plot_html_sections = []
+
+    if HAS_MATPLOTLIB and data_before is not None:
+        from . import visualization as viz
+
+        # Get sample types mapping
+        sample_types = None
+        if sample_type_col in data_before.columns:
+            sample_types = (
+                data_before.drop_duplicates(sample_col)
+                .set_index(sample_col)[sample_type_col]
+                .to_dict()
+            )
+
+        # 1. Intensity Distribution Comparison
+        if data_after is not None:
+            try:
+                fig = viz.plot_normalization_comparison(
+                    data_before,
+                    data_after,
+                    sample_col=sample_col,
+                    abundance_col_before=abundance_col,
+                    abundance_col_after=abundance_col,
+                    title="Intensity Distribution: Before vs After Normalization",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "intensity_distribution", plots_dir, save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("Intensity Distribution", plot_html))
+                    if plot_path:
+                        plot_paths["intensity_distribution"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate intensity distribution plot: {e}")
+
+        # 2. PCA Comparison
+        try:
+            fig = viz.plot_comparative_pca(
+                data_before,
+                data_after if data_after is not None else data_before,
+                data_batch_corrected,
+                sample_col=sample_col,
+                precursor_col=precursor_col,
+                abundance_col_original=abundance_col,
+                abundance_col_normalized=abundance_col,
+                abundance_col_corrected=abundance_col,
+                sample_groups=sample_types,
+                show_plot=False,
+            )
+            if fig is not None:
+                plot_html, plot_path = _save_and_embed_plot(
+                    fig, "pca_comparison", plots_dir, save_plots, embed_plots
+                )
+                plot_html_sections.append(("PCA Analysis", plot_html))
+                if plot_path:
+                    plot_paths["pca_comparison"] = str(plot_path)
+                plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Failed to generate PCA plot: {e}")
+
+        # 3. Control Sample Correlation
+        try:
+            fig, _ = viz.plot_control_correlation_heatmap(
+                data_after if data_after is not None else data_before,
+                sample_col=sample_col,
+                precursor_col=precursor_col,
+                abundance_col=abundance_col,
+                sample_type_col=sample_type_col,
+                control_types=["reference", "pool"],
+                title="Control Sample Correlation (After Normalization)",
+                show_plot=False,
+            )
+            if fig is not None:
+                plot_html, plot_path = _save_and_embed_plot(
+                    fig, "control_correlation", plots_dir, save_plots, embed_plots
+                )
+                plot_html_sections.append(("Control Sample Correlation", plot_html))
+                if plot_path:
+                    plot_paths["control_correlation"] = str(plot_path)
+                plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Failed to generate correlation heatmap: {e}")
+
+        # 4. CV Distribution Comparison
+        if data_after is not None:
+            try:
+                fig = viz.plot_comparative_cv(
+                    data_before,
+                    data_after,
+                    sample_col=sample_col,
+                    precursor_col=precursor_col,
+                    abundance_col_before=abundance_col,
+                    abundance_col_after=abundance_col,
+                    sample_type_col=sample_type_col,
+                    control_type="reference",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "cv_distribution_reference", plots_dir, save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("CV Distribution (Reference)", plot_html))
+                    if plot_path:
+                        plot_paths["cv_distribution_reference"] = str(plot_path)
+                    plt.close(fig)
+
+                # Pool CV
+                fig = viz.plot_comparative_cv(
+                    data_before,
+                    data_after,
+                    sample_col=sample_col,
+                    precursor_col=precursor_col,
+                    abundance_col_before=abundance_col,
+                    abundance_col_after=abundance_col,
+                    sample_type_col=sample_type_col,
+                    control_type="pool",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "cv_distribution_pool", plots_dir, save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("CV Distribution (Pool/QC)", plot_html))
+                    if plot_path:
+                        plot_paths["cv_distribution_pool"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate CV distribution plot: {e}")
+
+        # 5. RT Correction Plots (if RT data and reference stats available)
+        if (
+            reference_stats is not None
+            and rt_col in data_before.columns
+            and data_after is not None
+        ):
+            try:
+                fig = viz.plot_rt_correction_comparison(
+                    data_before,
+                    data_after,
+                    reference_stats,
+                    sample_col=sample_col,
+                    precursor_col=precursor_col,
+                    abundance_col=abundance_col,
+                    rt_col=rt_col,
+                    sample_type_col=sample_type_col,
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "rt_correction", plots_dir, save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("RT-Dependent Normalization QC", plot_html))
+                    if plot_path:
+                        plot_paths["rt_correction"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate RT correction plot: {e}")
+
+    # Build plots HTML
+    plots_html = ""
+    for title, plot_content in plot_html_sections:
+        plots_html += f"""
+        <div class="plot-section">
+            <h3>{title}</h3>
+            {plot_content}
+        </div>
+        """
+
+    # Generate the HTML report
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>PRISM QC Report</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               margin: 0; padding: 20px; background: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; background: white;
+                     padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }}
+        h2 {{ color: #444; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }}
+        h3 {{ color: #555; }}
+        .metric {{ margin: 10px 0; padding: 8px; background: #f9f9f9; border-radius: 4px; }}
+        .metric-name {{ font-weight: 600; color: #333; }}
+        .metric-value {{ color: #0066cc; font-family: monospace; font-size: 1.1em; }}
+        .warning {{ color: #856404; background: #fff3cd; border: 1px solid #ffc107;
+                   padding: 12px; margin: 8px 0; border-radius: 4px; }}
+        .passed {{ color: #155724; background: #d4edda; border: 1px solid #28a745;
+                  padding: 15px; border-radius: 4px; font-size: 1.1em; }}
+        .failed {{ color: #721c24; background: #f8d7da; border: 1px solid #dc3545;
+                  padding: 15px; border-radius: 4px; font-size: 1.1em; }}
+        table {{ border-collapse: collapse; margin: 20px 0; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+        th {{ background: #f0f0f0; font-weight: 600; }}
+        tr:nth-child(even) {{ background: #f9f9f9; }}
+        .plot-section {{ margin: 20px 0; text-align: center; }}
+        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
+        .timestamp {{ color: #888; font-size: 0.9em; margin-top: 30px; padding-top: 20px;
+                     border-top: 1px solid #ddd; }}
+        ol {{ line-height: 1.8; }}
+        .improvement-positive {{ color: #28a745; }}
+        .improvement-negative {{ color: #dc3545; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 PRISM QC Report</h1>
+
         <h2>Validation Status</h2>
         <div class="{'passed' if metrics.passed else 'failed'}">
-            {'PASSED' if metrics.passed else 'FAILED'} - 
+            <strong>{'✓ PASSED' if metrics.passed else '✗ FAILED'}</strong> —
             {'All validation criteria met' if metrics.passed else 'Review warnings below'}
         </div>
-        
+
         <h2>CV Metrics</h2>
         <table>
             <tr>
@@ -331,53 +562,118 @@ def generate_qc_report(
                 <th>Improvement</th>
             </tr>
             <tr>
-                <td>Reference</td>
+                <td><strong>Reference</strong> (calibration)</td>
                 <td>{metrics.reference_cv_before:.3f}</td>
                 <td>{metrics.reference_cv_after:.3f}</td>
-                <td>{metrics.reference_cv_improvement*100:.1f}%</td>
+                <td class="{'improvement-positive' if metrics.reference_cv_improvement > 0 else 'improvement-negative'}">
+                    {metrics.reference_cv_improvement*100:+.1f}%
+                </td>
             </tr>
             <tr>
-                <td>Pool</td>
+                <td><strong>Pool</strong> (validation)</td>
                 <td>{metrics.pool_cv_before:.3f}</td>
                 <td>{metrics.pool_cv_after:.3f}</td>
-                <td>{metrics.pool_cv_improvement*100:.1f}%</td>
+                <td class="{'improvement-positive' if metrics.pool_cv_improvement > 0 else 'improvement-negative'}">
+                    {metrics.pool_cv_improvement*100:+.1f}%
+                </td>
             </tr>
         </table>
-        
+
         <div class="metric">
-            <span class="metric-name">Relative Variance Reduction:</span>
+            <span class="metric-name">Relative Variance Reduction (RVR):</span>
             <span class="metric-value">{metrics.relative_variance_reduction:.2f}</span>
-            <br><small>(Should be close to 1.0; >>1 suggests overfitting, <<1 suggests poor generalization)</small>
+            <br><small style="color: #666;">Target: ~1.0 | &gt;&gt;1 suggests overfitting | &lt;&lt;1 suggests poor generalization</small>
         </div>
-        
+
         <h2>PCA Metrics</h2>
-        <div class="metric">
-            <span class="metric-name">Pool-Reference Distance Before:</span>
-            <span class="metric-value">{metrics.pca_pool_reference_distance_before:.2f}</span>
-        </div>
-        <div class="metric">
-            <span class="metric-name">Pool-Reference Distance After:</span>
-            <span class="metric-value">{metrics.pca_pool_reference_distance_after:.2f}</span>
-        </div>
-        <div class="metric">
-            <span class="metric-name">Distance Ratio:</span>
-            <span class="metric-value">{metrics.pca_distance_ratio:.2f}</span>
-            <br><small>(Should be close to 1.0; <<1 suggests pool and reference are collapsing together)</small>
-        </div>
-        
+        <table>
+            <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Interpretation</th>
+            </tr>
+            <tr>
+                <td>Pool-Reference Distance (Before)</td>
+                <td>{metrics.pca_pool_reference_distance_before:.2f}</td>
+                <td>Baseline separation</td>
+            </tr>
+            <tr>
+                <td>Pool-Reference Distance (After)</td>
+                <td>{metrics.pca_pool_reference_distance_after:.2f}</td>
+                <td>Post-normalization separation</td>
+            </tr>
+            <tr>
+                <td>Distance Ratio</td>
+                <td><strong>{metrics.pca_distance_ratio:.2f}</strong></td>
+                <td>{'Good - samples remain distinct' if metrics.pca_distance_ratio > 0.5 else '⚠️ Samples may be collapsing'}</td>
+            </tr>
+        </table>
+
         <h2>Warnings</h2>
-        {''.join(f'<div class="warning">{w}</div>' for w in metrics.warnings) if metrics.warnings else '<p>No warnings</p>'}
-        
+        {''.join(f'<div class="warning">⚠️ {w}</div>' for w in metrics.warnings) if metrics.warnings else '<p style="color: #28a745;">✓ No warnings</p>'}
+
+        <h2>QC Plots</h2>
+        {plots_html if plots_html else '<p style="color: #888;">No plots generated (data not provided or matplotlib unavailable)</p>'}
+
         <h2>Processing Steps</h2>
         <ol>
-            {''.join(f'<li>{step}</li>' for step in normalization_log)}
+            {''.join(f'<li>{step}</li>' for step in normalization_log) if normalization_log else '<li>No processing steps recorded</li>'}
         </ol>
-        
-    </body>
-    </html>
-    """
-    
-    with open(output_path, 'w') as f:
+
+        <div class="timestamp">
+            Report generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        </div>
+    </div>
+</body>
+</html>"""
+
+    # Write the HTML file
+    with open(output_path, "w") as f:
         f.write(html)
-    
+
     logger.info(f"QC report saved to {output_path}")
+    if save_plots and plot_paths:
+        logger.info(f"QC plots saved to {plots_dir}")
+
+    return plot_paths
+
+
+def _save_and_embed_plot(
+    fig,
+    name: str,
+    plots_dir: Path,
+    save_plots: bool,
+    embed_plots: bool,
+) -> tuple[str, Optional[Path]]:
+    """Save a matplotlib figure and/or generate HTML for embedding.
+
+    Args:
+        fig: matplotlib Figure object
+        name: Base name for the plot file
+        plots_dir: Directory to save plots
+        save_plots: Whether to save PNG file
+        embed_plots: Whether to embed as base64
+
+    Returns:
+        Tuple of (HTML string for embedding, path if saved)
+
+    """
+    plot_path = None
+    html = ""
+
+    if save_plots:
+        plot_path = plots_dir / f"{name}.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight", facecolor="white")
+
+    if embed_plots:
+        # Convert to base64 for embedding
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        buffer.seek(0)
+        img_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+        html = f'<img src="data:image/png;base64,{img_base64}" alt="{name}" />'
+    elif plot_path:
+        # Link to saved file
+        html = f'<img src="qc_plots/{name}.png" alt="{name}" />'
+
+    return html, plot_path

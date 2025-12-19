@@ -1,5 +1,4 @@
-"""
-Tests for Skyline-PRISM.
+"""Tests for Skyline-PRISM.
 
 PRISM: Proteomics Reference-Integrated Signal Modeling
 """
