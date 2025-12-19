@@ -114,27 +114,53 @@ Result File > Acquired Time
 
 ### Input: Sample Metadata
 
-A separate CSV/TSV file mapping replicate names to experimental metadata:
+A separate CSV/TSV file mapping replicate names to experimental metadata. PRISM supports direct export from Skyline's Replicates report with automatic column name normalization.
 
 | Column | Required | Description |
 |--------|----------|-------------|
-| replicate_name | Yes | Must match Skyline replicate names exactly |
-| sample_type | Yes | One of: `experimental`, `pool`, `reference` |
-| batch | Conditional | Batch identifier. Also accepts `Batch Name` (Skyline convention). If not provided, will be estimated. |
-| run_order | Yes | Acquisition order within batch (integer) |
+| replicate_name | Yes | Must match Skyline replicate names exactly. Also accepts `Replicate Name` or `File Name`. |
+| sample_type | Yes | One of: `experimental`, `pool`, `reference`, `blank`. Also accepts `Sample Type` with Skyline values (see below). |
+| batch | No | Batch identifier. Also accepts `Batch Name` (Skyline convention). If not provided, will be estimated. |
+| run_order | No | Acquisition order (integer). If not provided, calculated from Acquired Time in Skyline report. |
 | subject_id | No | For paired/longitudinal designs |
 | condition | No | Treatment group |
 | timepoint | No | For longitudinal studies |
 | ... | No | Additional annotations as needed |
 
-**Note:** If `batch` (or `Batch Name`) is not provided in metadata, PRISM will automatically estimate batch assignments. If only one batch is detected, batch correction is skipped. See [Batch Estimation](#batch-estimation).
+**Notes:**
+- If `batch` (or `Batch Name`) is not provided in metadata, PRISM will automatically estimate batch assignments. If only one batch is detected, batch correction is skipped. See [Batch Estimation](#batch-estimation).
+- If `run_order` is not provided, it will be calculated automatically from the `Acquired Time` column in the Skyline report.
 
-**Sample types:**
+**Sample types (PRISM):**
 - `reference`: Inter-experiment reference samples for RT correction and parameter learning
 - `pool`: Intra-experiment pooled samples for validation
 - `experimental`: Actual experimental samples
+- `blank`: Solvent/blank samples (excluded from analysis)
 
-Example:
+**Skyline Sample Type mapping:**
+
+When using Skyline's `Sample Type` column, values are automatically mapped:
+
+| Skyline Sample Type | PRISM sample_type | Usage |
+|---------------------|-------------------|-------|
+| Unknown | experimental | Experimental samples |
+| Standard | reference | Inter-experiment reference (e.g., commercial plasma) |
+| Quality Control | pool | Intra-experiment pool for validation |
+| Solvent | blank | Excluded from analysis |
+| Blank | blank | Excluded from analysis |
+| Double Blank | blank | Excluded from analysis |
+
+Example (Skyline Replicates report format):
+```csv
+Replicate Name,Sample Type,Batch Name
+Sample_001,Unknown,batch1
+Sample_002,Unknown,batch1
+Pool_01,Quality Control,batch1
+Reference_01,Standard,batch1
+Sample_003,Unknown,batch1
+```
+
+Example (PRISM format with optional columns):
 ```csv
 replicate_name,sample_type,batch,run_order,condition,subject_id
 Sample_001,experimental,batch1,1,Treatment,P001
@@ -1381,10 +1407,14 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     Load and validate sample metadata file.
     
     Validates:
-        - Required columns present
+        - Required columns present (ReplicateName, SampleType)
         - SampleType values are valid
-        - RunOrder is numeric
+        - RunOrder is numeric (if provided)
         - No duplicate ReplicateNames
+    
+    Notes:
+        - Batch column is optional (will be estimated if missing)
+        - RunOrder is optional (calculated from Acquired Time if missing)
     """
 
 # Column name mapping from common Skyline exports

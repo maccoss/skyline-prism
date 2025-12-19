@@ -82,10 +82,25 @@ REQUIRED_COLUMNS = [
 # At least one of these abundance columns required
 ABUNDANCE_COLUMNS = ['abundance_fragment', 'abundance_ms1']
 
-# Sample metadata required columns (Batch is optional - can be estimated)
-METADATA_REQUIRED = ['ReplicateName', 'SampleType', 'RunOrder']
+# Sample metadata column name alternatives (Skyline conventions)
+# Order matters - first match is used
+METADATA_REPLICATE_COLUMNS = ['ReplicateName', 'Replicate Name', 'File Name']
+METADATA_SAMPLE_TYPE_COLUMNS = ['SampleType', 'Sample Type']
 METADATA_BATCH_COLUMNS = ['Batch', 'Batch Name']  # Skyline uses 'Batch Name'
-VALID_SAMPLE_TYPES = {'experimental', 'pool', 'reference'}
+
+# Skyline Sample Type to PRISM sample_type mapping
+# Skyline options: Unknown, Standard, Quality Control, Solvent, Blank, Double Blank
+SKYLINE_SAMPLE_TYPE_MAP = {
+    'Unknown': 'experimental',
+    'Standard': 'reference',
+    'Quality Control': 'pool',
+    # Others are typically excluded from analysis
+    'Solvent': 'blank',
+    'Blank': 'blank',
+    'Double Blank': 'blank',
+}
+
+VALID_SAMPLE_TYPES = {'experimental', 'pool', 'reference', 'blank'}
 
 
 @dataclass
@@ -249,11 +264,20 @@ def load_skyline_report(
 def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     """Load and validate sample metadata file.
 
+    Supports Skyline metadata exports with automatic column name normalization:
+    - ReplicateName: accepts 'Replicate Name', 'File Name'
+    - SampleType: accepts 'Sample Type' with Skyline values mapped:
+        - Standard → reference
+        - Quality Control → pool
+        - Unknown → experimental
+        - Solvent/Blank/Double Blank → blank
+    - Batch: accepts 'Batch Name'
+
     Args:
         filepath: Path to metadata TSV/CSV
 
     Returns:
-        Validated metadata DataFrame
+        Validated metadata DataFrame with standardized column names
 
     Raises:
         ValueError: If validation fails
@@ -267,6 +291,34 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
 
     meta = pd.read_csv(filepath, sep=sep)
 
+    # Normalize ReplicateName column
+    replicate_col = None
+    for col_name in METADATA_REPLICATE_COLUMNS:
+        if col_name in meta.columns:
+            replicate_col = col_name
+            if col_name != 'ReplicateName':
+                meta = meta.rename(columns={col_name: 'ReplicateName'})
+                logger.info(f"Renamed '{col_name}' column to 'ReplicateName'")
+            break
+    if replicate_col is None:
+        raise ValueError(
+            f"Missing replicate name column. Expected one of: {METADATA_REPLICATE_COLUMNS}"
+        )
+
+    # Normalize SampleType column
+    sample_type_col = None
+    for col_name in METADATA_SAMPLE_TYPE_COLUMNS:
+        if col_name in meta.columns:
+            sample_type_col = col_name
+            if col_name != 'SampleType':
+                meta = meta.rename(columns={col_name: 'SampleType'})
+                logger.info(f"Renamed '{col_name}' column to 'SampleType'")
+            break
+    if sample_type_col is None:
+        raise ValueError(
+            f"Missing sample type column. Expected one of: {METADATA_SAMPLE_TYPE_COLUMNS}"
+        )
+
     # Normalize batch column name (Skyline uses 'Batch Name')
     for batch_col in METADATA_BATCH_COLUMNS:
         if batch_col in meta.columns and batch_col != 'Batch':
@@ -274,10 +326,14 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
             logger.info(f"Renamed '{batch_col}' column to 'Batch'")
             break
 
-    # Check required columns
-    missing = [col for col in METADATA_REQUIRED if col not in meta.columns]
-    if missing:
-        raise ValueError(f"Missing required metadata columns: {missing}")
+    # Map Skyline sample types to PRISM types
+    original_types = meta['SampleType'].unique()
+    skyline_types = set(original_types) & set(SKYLINE_SAMPLE_TYPE_MAP.keys())
+    if skyline_types:
+        logger.info(f"Mapping Skyline sample types: {list(skyline_types)}")
+        meta['SampleType'] = meta['SampleType'].map(
+            lambda x: SKYLINE_SAMPLE_TYPE_MAP.get(x, x)
+        )
 
     # Note if Batch column is missing (will be estimated later)
     if 'Batch' not in meta.columns:
@@ -288,7 +344,8 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     if invalid_types:
         raise ValueError(
             f"Invalid SampleType values: {invalid_types}. "
-            f"Must be one of: {VALID_SAMPLE_TYPES}"
+            f"Must be one of: {VALID_SAMPLE_TYPES} "
+            f"(or Skyline types: {list(SKYLINE_SAMPLE_TYPE_MAP.keys())})"
         )
 
     # Check for duplicate replicate names
@@ -296,10 +353,15 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     if duplicates:
         raise ValueError(f"Duplicate ReplicateName entries: {duplicates}")
 
-    # Ensure RunOrder is numeric
-    meta['RunOrder'] = pd.to_numeric(meta['RunOrder'], errors='coerce')
-    if meta['RunOrder'].isna().any():
-        raise ValueError("RunOrder must be numeric")
+    # Ensure RunOrder is numeric if present
+    if 'RunOrder' in meta.columns:
+        meta['RunOrder'] = pd.to_numeric(meta['RunOrder'], errors='coerce')
+        if meta['RunOrder'].isna().any():
+            raise ValueError("RunOrder must be numeric")
+    else:
+        logger.info(
+            "No RunOrder column in metadata - will be calculated from acquired_time"
+        )
 
     return meta
 
@@ -378,16 +440,38 @@ def merge_skyline_reports(
             )
 
         # Merge
+        merge_cols = ['replicate_name', 'SampleType']
+        rename_map = {'SampleType': 'sample_type'}
+        
+        if 'Batch' in meta.columns:
+            merge_cols.append('Batch')
+            rename_map['Batch'] = 'batch'
+        if 'RunOrder' in meta.columns:
+            merge_cols.append('RunOrder')
+            rename_map['RunOrder'] = 'run_order'
+        
         merged = merged.merge(
-            meta[['replicate_name', 'SampleType', 'Batch', 'RunOrder']],
+            meta[merge_cols],
             on='replicate_name',
             how='left'
         )
-        merged = merged.rename(columns={
-            'SampleType': 'sample_type',
-            'Batch': 'batch',
-            'RunOrder': 'run_order'
-        })
+        merged = merged.rename(columns=rename_map)
+        
+        # Calculate run_order from acquired_time if not provided
+        if 'run_order' not in merged.columns and 'acquired_time' in merged.columns:
+            logger.info("Calculating run_order from acquired_time")
+            # Get unique replicate/acquired_time pairs
+            rep_times = (
+                merged[['replicate_name', 'acquired_time']]
+                .drop_duplicates()
+                .sort_values('acquired_time')
+            )
+            rep_times['run_order'] = range(1, len(rep_times) + 1)
+            merged = merged.merge(
+                rep_times[['replicate_name', 'run_order']],
+                on='replicate_name',
+                how='left'
+            )
 
     # Compute stats
     result.n_rows = len(merged)

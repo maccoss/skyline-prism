@@ -108,6 +108,11 @@ transition_rollup:
 
 ## Development Guidelines
 
+### Style Guidelines
+
+- **No emojis**: Do not use emojis in code, documentation, comments, or output messages. Use plain text instead (e.g., "PASSED" instead of "✓", "WARNING" instead of "⚠️").
+- Unicode arrows (→) for flow diagrams are acceptable.
+
 ### Virtual Environment
 
 The project uses a Python virtual environment in `.venv/`:

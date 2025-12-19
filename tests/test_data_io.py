@@ -142,6 +142,37 @@ class TestLoadSampleMetadata:
         assert 'ReplicateName' in result.columns
         assert 'SampleType' in result.columns
 
+    def test_metadata_without_run_order(self, tmp_path):
+        """Test that metadata without RunOrder is valid (it's optional)."""
+        metadata_file = tmp_path / "metadata_no_runorder.tsv"
+        df = pd.DataFrame({
+            'ReplicateName': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
+            'SampleType': ['experimental', 'experimental', 'pool', 'reference'],
+            'Batch': ['batch1', 'batch1', 'batch1', 'batch1'],
+            # No RunOrder column - it's optional
+        })
+        df.to_csv(metadata_file, index=False, sep='\t')
+
+        result = load_sample_metadata(metadata_file)
+
+        assert len(result) == 4
+        assert 'RunOrder' not in result.columns  # Not added by load_sample_metadata
+
+    def test_metadata_without_batch(self, tmp_path):
+        """Test that metadata without Batch is valid (it's optional)."""
+        metadata_file = tmp_path / "metadata_no_batch.tsv"
+        df = pd.DataFrame({
+            'ReplicateName': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
+            'SampleType': ['experimental', 'experimental', 'pool', 'reference'],
+            # No Batch column - it's optional
+        })
+        df.to_csv(metadata_file, index=False, sep='\t')
+
+        result = load_sample_metadata(metadata_file)
+
+        assert len(result) == 4
+        assert 'Batch' not in result.columns  # Not added by load_sample_metadata
+
     def test_invalid_sample_type(self, tmp_path):
         """Test that invalid sample types raise an error."""
         metadata_file = tmp_path / "bad_metadata.tsv"
@@ -155,6 +186,40 @@ class TestLoadSampleMetadata:
 
         with pytest.raises(ValueError):
             load_sample_metadata(metadata_file)
+
+    def test_skyline_column_names(self, tmp_path):
+        """Test that Skyline column names are properly normalized."""
+        metadata_file = tmp_path / "skyline_metadata.csv"
+        df = pd.DataFrame({
+            'Replicate Name': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
+            'Sample Type': ['Unknown', 'Unknown', 'Quality Control', 'Standard'],
+            'Batch Name': ['batch1', 'batch1', 'batch1', 'batch1'],
+        })
+        df.to_csv(metadata_file, index=False)
+
+        result = load_sample_metadata(metadata_file)
+
+        # Check column names were normalized
+        assert 'ReplicateName' in result.columns
+        assert 'SampleType' in result.columns
+        assert 'Batch' in result.columns
+
+        # Check Skyline sample types were mapped
+        assert set(result['SampleType'].unique()) == {'experimental', 'pool', 'reference'}
+
+    def test_file_name_fallback(self, tmp_path):
+        """Test that File Name is accepted when Replicate Name is not present."""
+        metadata_file = tmp_path / "file_name_metadata.csv"
+        df = pd.DataFrame({
+            'File Name': ['Sample1.raw', 'Sample2.raw', 'Pool1.raw', 'Ref1.raw'],
+            'Sample Type': ['Unknown', 'Unknown', 'Quality Control', 'Standard'],
+        })
+        df.to_csv(metadata_file, index=False)
+
+        result = load_sample_metadata(metadata_file)
+
+        assert 'ReplicateName' in result.columns
+        assert len(result) == 4
 
 
 class TestCreateTestData:
