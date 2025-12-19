@@ -38,18 +38,21 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 
 | Skyline Field | Internal Name | Description |
 |---------------|---------------|-------------|
-| Protein Name | protein_name | Protein identifier(s) |
-| Protein Accession | protein_accession | UniProt accession(s) |
-| Peptide Sequence | peptide_sequence | Unmodified sequence |
-| Peptide Modified Sequence | peptide_modified | Modified sequence (unique peptide ID) |
+| Protein | protein_names | Protein identifier(s) |
+| Protein Accession | protein_ids | UniProt accession(s) |
+| Protein Gene | protein_gene | Gene name(s) |
+| Peptide | peptide_sequence | Unmodified sequence |
+| Peptide Modified Sequence Unimod Ids | peptide_modified | Modified sequence with Unimod IDs (unique peptide ID) |
 | Precursor Charge | precursor_charge | Charge state |
 | Precursor Mz | precursor_mz | Precursor m/z |
-| Fragment Ion | fragment_ion | e.g., y7, b5, precursor |
+| Fragment Ion | fragment_ion | Fragment ion identifier (e.g., y7, b5, precursor) |
 | Product Charge | product_charge | Fragment charge |
 | Product Mz | product_mz | Fragment m/z |
 | Replicate Name | replicate_name | Sample identifier |
 | Area | area | Integrated transition area |
 | Retention Time | retention_time | Apex retention time |
+
+**Note:** If `Fragment Ion` is not available, PRISM also accepts separate `Fragment Ion Type` and `Fragment Ion Ordinal` columns.
 
 #### Required Quality Columns
 
@@ -57,6 +60,7 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 |---------------|---------------|-------------|
 | Shape Correlation | shape_correlation | Correlation with median transition profile (0-1). Low values indicate interference. |
 | Coeluting | coeluting | Boolean: apex within integration boundaries |
+| Detection Q Value | detection_qvalue | mProphet q-value (DIA) - for confidence filtering |
 
 #### Recommended Columns
 
@@ -65,13 +69,10 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 | Start Time | start_time | Integration start |
 | End Time | end_time | Integration end |
 | Fwhm | fwhm | Full width at half max |
-| Background | background | Background/noise estimate |
 | Truncated | truncated | Peak truncation flag |
 | Isotope Dot Product | idotp | MS1 isotope pattern quality (precursor level) |
-| Library Dot Product | library_dotp | Spectral library match |
-| Detection Q Value | detection_qvalue | mProphet q-value (DIA) |
-| Average Mass Error PPM | mass_error_ppm | Mass accuracy |
-| Is Decoy | is_decoy | Decoy flag |
+| File Name | file_name | Source file name |
+| Total Ion Current Area | tic_area | Total ion current for TIC normalization |
 | Acquired Time | acquired_time | Result file acquisition timestamp (for batch estimation) |
 
 #### Skyline Report Configuration
@@ -79,18 +80,19 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 In Skyline's Edit > Report/Results Grid, create a custom report with these fields:
 
 ```
-Proteins > Protein Name
+Proteins > Protein
 Proteins > Protein Accession
-Peptides > Peptide Sequence  
-Peptides > Peptide Modified Sequence
-Precursors > Charge
-Precursors > Mz
+Proteins > Protein Gene
+Peptides > Peptide
+Peptides > Peptide Modified Sequence Unimod Ids
+Precursors > Precursor Charge
+Precursors > Precursor Mz
 Precursors > Isotope Dot Product
+Precursors > Detection Q Value
 Transitions > Fragment Ion
 Transitions > Product Charge
 Transitions > Product Mz
 Transition Results > Area
-Transition Results > Background
 Transition Results > Retention Time
 Transition Results > Start Time
 Transition Results > End Time
@@ -99,6 +101,8 @@ Transition Results > Shape Correlation
 Transition Results > Coeluting
 Transition Results > Truncated
 Replicates > Replicate Name
+Replicates > File Name
+Replicates > Total Ion Current Area
 Result File > Acquired Time
 ```
 

@@ -13,46 +13,51 @@ logger = logging.getLogger(__name__)
 
 # Standard column name mapping from Skyline exports
 SKYLINE_COLUMN_MAP = {
-    # Standard Skyline report columns
+    # PRISM Skyline Report columns (recommended export)
+    'Protein': 'protein_names',                # Proteins > Protein
+    'Protein Accession': 'protein_ids',        # Proteins > Protein Accession
+    'Protein Gene': 'protein_gene',            # Proteins > Protein Gene
+    'Peptide': 'peptide_sequence',             # Peptides > Peptide
+    'Peptide Modified Sequence Unimod Ids': 'peptide_modified',  # Peptides > Peptide Modified Sequence Unimod Ids
+    'Precursor Charge': 'precursor_charge',    # Precursors > Charge
+    'Precursor Mz': 'precursor_mz',            # Precursors > Mz
+    'Isotope Dot Product': 'idotp',            # Precursors > Isotope Dot Product
+    'Detection Q Value': 'detection_qvalue',   # Precursors > Detection Q Value
+    'Fragment Ion': 'fragment_ion',            # Transitions > Fragment Ion (e.g., y7, b5, precursor)
+    'Product Charge': 'product_charge',        # Transitions > Product Charge
+    'Product Mz': 'product_mz',                # Transitions > Product Mz
+    'Area': 'area',                            # Transition Results > Area
+    'Retention Time': 'retention_time',        # Transition Results > Retention Time
+    'Start Time': 'start_time',                # Transition Results > Start Time
+    'End Time': 'end_time',                    # Transition Results > End Time
+    'Fwhm': 'fwhm',                            # Transition Results > Fwhm
+    'Shape Correlation': 'shape_correlation',  # Transition Results > Shape Correlation
+    'Coeluting': 'coeluting',                  # Transition Results > Coeluting
+    'Truncated': 'truncated',                  # Transition Results > Truncated
+    'Replicate Name': 'replicate_name',        # Replicates > Replicate Name
+    'File Name': 'file_name',                  # Replicates > File Name
+    'Total Ion Current Area': 'tic_area',      # Replicates > Total Ion Current Area
+    'Acquired Time': 'acquired_time',          # Result File > Acquired Time
+
+    # Alternative fragment ion columns (if Fragment Ion not present)
+    'Fragment Ion Type': 'fragment_ion_type',  # Transitions > Fragment Ion Type
+    'Fragment Ion Ordinal': 'fragment_ion_ordinal',  # Transitions > Fragment Ion Ordinal
+
+    # Alternative Skyline column names (for backwards compatibility)
     'Protein Name': 'protein_names',
-    'Protein Accession': 'protein_ids',
     'Peptide Sequence': 'peptide_sequence',
     'Peptide Modified Sequence': 'peptide_modified',
-    'Precursor Charge': 'precursor_charge',
-    'Precursor Mz': 'precursor_mz',
     'Best Retention Time': 'retention_time',
     'Total Area Fragment': 'abundance_fragment',
     'Total Area MS1': 'abundance_ms1',
-    'Replicate Name': 'replicate_name',
-    'Isotope Dot Product': 'idotp',
     'Average Mass Error PPM': 'mass_error_ppm',
     'Library Dot Product': 'library_dotp',
-    'Detection Q Value': 'detection_qvalue',
-    'Truncated': 'truncated',
     'Is Decoy': 'is_decoy',
-
-    # Transition-level columns
-    'Fragment Ion': 'fragment_ion',
-    'Fragment Ion Type': 'fragment_ion_type',
-    'Fragment Ion Ordinal': 'fragment_ion_ordinal',
-    'Product Charge': 'product_charge',
-    'Product Mz': 'product_mz',
-    'Area': 'area',
-
-    # Transition quality metrics (Peptides > Precursors > Transition Results)
-    'Shape Correlation': 'shape_correlation',  # Correlation with median transition
-    'Coeluting': 'coeluting',                  # Apex within integration boundaries
-    'Fwhm': 'fwhm',                            # Full width at half max
-    'Start Time': 'start_time',
-    'End Time': 'end_time',
-
-    # Result file metadata (Result File)
-    'Acquired Time': 'acquired_time',          # Acquisition timestamp for batch estimation
 
     # EncyclopeDIA via Skyline
     'Normalized Area': 'abundance_fragment',
 
-    # Alternative naming conventions
+    # Alternative naming conventions (no spaces)
     'ProteinName': 'protein_names',
     'ProteinAccession': 'protein_ids',
     'ModifiedSequence': 'peptide_modified',
