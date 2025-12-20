@@ -114,6 +114,51 @@ def load_config(config_path: Path | None) -> dict:
     return defaults
 
 
+def load_config_from_provenance(provenance_path: Path) -> dict:
+    """Load configuration from a previous pipeline run's provenance JSON.
+
+    This enables reproducibility by allowing users to re-run the pipeline
+    with the exact same parameters as a previous run.
+
+    Args:
+        provenance_path: Path to metadata.json from a previous PRISM run
+
+    Returns:
+        Configuration dictionary compatible with load_config() output
+
+    Raises:
+        ValueError: If the provenance file is missing required fields
+
+    """
+    with open(provenance_path) as f:
+        provenance = json.load(f)
+
+    # Check for required fields
+    if 'processing_parameters' not in provenance:
+        raise ValueError(
+            f"Provenance file {provenance_path} does not contain 'processing_parameters'. "
+            "This may be from an older version of PRISM."
+        )
+
+    # Start with defaults
+    config = load_config(None)
+
+    # Extract processing parameters and merge over defaults
+    params = provenance['processing_parameters']
+
+    # Map provenance sections to config sections
+    for section in ['data', 'transition_rollup', 'rt_correction', 'global_normalization',
+                    'batch_correction', 'protein_rollup', 'parsimony', 'output']:
+        if section in params:
+            config[section] = _deep_merge(config.get(section, {}), params[section])
+
+    logger.info(f"Loaded configuration from provenance: {provenance_path}")
+    logger.info(f"  Original pipeline version: {provenance.get('pipeline_version', 'unknown')}")
+    logger.info(f"  Original processing date: {provenance.get('processing_date', 'unknown')}")
+
+    return config
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """Deep merge override dict into base dict."""
     result = base.copy()
@@ -333,14 +378,16 @@ def generate_pipeline_metadata(
         ),
     }
 
-    # Build processing parameters from config
+    # Build processing parameters from config (includes all settings for reproducibility)
     processing_parameters = {
+        'data': config.get('data', {}),  # Column mappings for reproducibility
         'transition_rollup': config.get('transition_rollup', {}),
         'rt_correction': config.get('rt_correction', {}),
         'global_normalization': config.get('global_normalization', {}),
         'batch_correction': config.get('batch_correction', {}),
         'protein_rollup': config.get('protein_rollup', {}),
         'parsimony': config.get('parsimony', {}),
+        'output': config.get('output', {}),
     }
 
     # Build the metadata dictionary
@@ -383,8 +430,19 @@ def cmd_run(args: argparse.Namespace) -> int:
        a. Peptide arm: Batch correction → peptide output
        b. Protein arm: Rollup → Batch correction → protein output
     """
-    config = load_config(Path(args.config) if args.config else None)
-    method_log = []
+    # Load configuration from provenance, YAML config, or defaults
+    # Priority: --from-provenance > --config > defaults
+    if hasattr(args, 'from_provenance') and args.from_provenance:
+        config = load_config_from_provenance(Path(args.from_provenance))
+        method_log = [f"Configuration loaded from provenance: {args.from_provenance}"]
+        # If --config is also provided, merge it over provenance (allows overrides)
+        if args.config:
+            yaml_config = load_config(Path(args.config))
+            config = _deep_merge(config, yaml_config)
+            method_log.append(f"Configuration overrides from: {args.config}")
+    else:
+        config = load_config(Path(args.config) if args.config else None)
+        method_log = []
 
     # =========================================================================
     # Stage 0: Load input data
@@ -783,9 +841,17 @@ def main() -> int:
                            help='Output directory for results')
     run_parser.add_argument('-c', '--config', help='Configuration YAML file')
     run_parser.add_argument('-m', '--metadata', help='Sample metadata TSV')
+    run_parser.add_argument(
+        '--from-provenance',
+        help='Load configuration from a previous run\'s metadata.json file. '
+             'Enables reproducibility by using the exact same parameters. '
+             'If --config is also provided, it overrides provenance settings.'
+    )
 
     # Merge command - utility for combining reports
-    merge_parser = subparsers.add_parser('merge', help='Merge multiple Skyline reports into one file')
+    merge_parser = subparsers.add_parser(
+        'merge', help='Merge multiple Skyline reports into one file'
+    )
     merge_parser.add_argument('reports', nargs='+', help='Skyline report files')
     merge_parser.add_argument('-o', '--output', required=True, help='Output parquet path')
     merge_parser.add_argument('-m', '--metadata', help='Sample metadata TSV')

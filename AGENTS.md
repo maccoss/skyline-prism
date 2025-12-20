@@ -190,9 +190,9 @@ The authoritative technical specification. Contains:
 ### config_template.yaml
 Comprehensive configuration file with all options documented. Key sections:
 - `transition_rollup`: Transition→peptide rollup (method: median_polish, quality_weighted, sum)
-- `rt_correction`: RT-aware normalization (method: spline)
+- `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
 - `batch_correction`: ComBat settings (method: combat)
-- `protein_rollup`: Peptide→protein rollup (method: median_polish, topn, maxlfq, sum)
+- `protein_rollup`: Peptide→protein rollup (method: median_polish, topn, maxlfq, ibaq, sum)
 - `parsimony`: Shared peptide handling (all_groups, unique_only, razor)
 - `qc_report`: QC report generation (enabled, save_plots, embed_plots, plot selection)
 
@@ -232,8 +232,23 @@ This produces:
 - `corrected_proteins.parquet` - Protein-level batch-corrected quantities
 - `protein_groups.tsv` - Protein group definitions
 - `peptide_residuals.parquet` - Residuals for outlier analysis (if enabled)
+- `metadata.json` - Complete processing parameters for reproducibility
 - `qc_report.html` - HTML QC report with embedded diagnostic plots
 - `qc_plots/` - Directory containing PNG plot files (if `save_plots: true`)
+
+### Reproducibility with --from-provenance
+
+The `metadata.json` output contains all processing parameters, enabling exact re-runs:
+
+```bash
+# Re-run with exact same parameters on new data
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json
+
+# Override specific settings while keeping others from provenance
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json -c overrides.yaml
+```
+
+**Implementation**: `skyline_prism/cli.py` -> `load_config_from_provenance()`
 
 Additional utility commands:
 

@@ -1730,7 +1730,7 @@ preprocessing:
   # VSN available as alternative to log2 + median
 
 rt_correction:
-  enabled: true
+  enabled: false  # Disabled by default (search engine RT calibration may not generalize)
   method: "spline"  # options: spline, loess
   spline_df: 5      # degrees of freedom
   loess_span: 0.3   # span parameter if using loess
@@ -1755,11 +1755,11 @@ parsimony:
 
 # Peptide to protein rollup
 protein_rollup:
-  method: "median_polish"  # options: median_polish, topn, maxlfq
+  method: "median_polish"  # options: median_polish, topn, maxlfq, ibaq, sum
   
   # Method-specific parameters
   topn_n: 3                # for topn method
-  # Note: iBAQ not yet implemented (requires FASTA parsing)
+  # iBAQ requires fasta_path in parsimony section
   
 validation:
   cv_improvement_threshold: 0.05
@@ -1789,89 +1789,106 @@ output:
 
 ## Workflow Summary
 
+The PRISM pipeline uses a **two-arm design**: batch correction is applied at the
+reporting level (peptide or protein), not before protein rollup. This ensures
+that the robust median polish rollup operates on data that has not been
+over-smoothed by batch correction.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         INPUT DATA                              │
-│  - Experimental samples with internal QCs (ENO, PRTC)          │
-│  - Inter-experiment reference replicates (2-4 per batch)       │
-│  - Intra-experiment pool replicates (2-4 per batch)            │
-│  - Batch and run order annotations                             │
+│  - Skyline report (CSV/TSV) with transition-level data         │
+│  - Sample metadata (sample types, batches)                      │
+│  - Reference replicates: inter-experiment QC (for RT model)    │
+│  - Pool replicates: intra-experiment QC (for validation)       │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              STEP 1: LOG TRANSFORM + VARIANCE STABILIZATION     │
-│  - Log2 transform (handle zeros appropriately)                  │
-│  - Check for abundance-dependent variance                       │
-│  - Apply VSN if heteroscedasticity detected                     │
+│         STEP 1: TRANSITION → PEPTIDE ROLLUP (if enabled)       │
+│  - Tukey median polish (default) or quality-weighted sum       │
+│  - Aggregate transitions to peptide-level abundances           │
+│  - Preserve transition residuals for diagnostics               │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              STEP 2: REFERENCE CHARACTERIZATION                 │
-│  - Calculate per-peptide statistics from reference              │
-│  - Identify RT-dependent technical patterns                     │
-│  - Assess batch and run order effects                           │
-│  - Estimate peptide reliability weights                         │
+│      STEP 2: GLOBAL NORMALIZATION + RT CORRECTION (optional)   │
+│  - Log2 transform with median centering                        │
+│  - RT-aware spline correction (DISABLED by default)            │
+│    * If enabled: learns from reference, validates on pool      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│           STEP 3: RT-AWARE CORRECTION (PEPTIDE LEVEL)           │
-│  - Model RT-dependent deviation from reference                  │
-│  - Use spline/LOESS/RUV/ComBat-style approach                  │
-│  - Correction factors derived ONLY from reference               │
-│  - Apply per-batch if batch effects present                     │
+│              STEP 3: PROTEIN PARSIMONY                          │
+│  - Build peptide-protein mappings                               │
+│  - Compute protein groups (minimum set cover)                  │
+│  - Handle shared peptides (all_groups, razor, unique_only)     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+          ┌───────────────────┴───────────────────┐
+          │                                       │
+          ▼                                       ▼
+┌─────────────────────────┐         ┌─────────────────────────────┐
+│   PEPTIDE ARM (4a)      │         │     PROTEIN ARM (4b)        │
+│                         │         │                             │
+│  ComBat batch           │         │  Peptide → Protein rollup   │
+│  correction on          │         │  (Tukey median polish)      │
+│  peptide abundances     │         │           │                 │
+│                         │         │           ▼                 │
+│                         │         │  ComBat batch correction    │
+│                         │         │  on protein abundances      │
+└───────────┬─────────────┘         └─────────────┬───────────────┘
+            │                                     │
+            ▼                                     ▼
+┌─────────────────────────┐         ┌─────────────────────────────┐
+│  corrected_peptides     │         │  corrected_proteins         │
+│  (parquet/csv)          │         │  (parquet/csv)              │
+│                         │         │                             │
+│  peptide_residuals      │         │  protein_groups.tsv         │
+│  (from protein rollup)  │         │                             │
+└─────────────────────────┘         └─────────────────────────────┘
+          │                                       │
+          └───────────────────┬───────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              STEP 5: QC VALIDATION & REPORTING                  │
+│  - CV comparison: before vs after correction                   │
+│  - PCA: check batch effect removal                             │
+│  - Reference vs pool: ensure correction generalizes            │
+│  - Generate HTML QC report with embedded plots                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              STEP 4: GLOBAL NORMALIZATION (PEPTIDE LEVEL)       │
-│  - Median centering or additional VSN                          │
-│  - Address remaining sample loading differences                 │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              STEP 5: BATCH CORRECTION (PEPTIDE LEVEL)           │
-│  - ComBat or limma removeBatchEffect                           │
-│  - Preserve biological covariates                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              STEP 6: VALIDATION (PEPTIDE LEVEL)                 │
-│  - Check: Pool CV decreased?                                    │
-│  - Check: Pool distinct from reference?                         │
-│  - Check: Variance reduction comparable?                        │
-│  - Generate peptide-level QC report                            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              STEP 7: PROTEIN ROLLUP                             │
-│  - Tukey median polish (robust to outlier peptides)            │
-│  - Minimum peptide filter                                       │
-│  - Propagate uncertainty estimates                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              STEP 8: PROTEIN-LEVEL VALIDATION                   │
-│  - Check protein-level CVs                                      │
-│  - Compare to peptide-level results                            │
-│  - Final QC report                                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      OUTPUTS                                    │
-│  - Corrected peptide abundance matrix                          │
-│  - Corrected protein abundance matrix                          │
-│  - QC report with validation metrics                           │
-│  - Diagnostic plots                                            │
+│                         OUTPUTS                                 │
+│  - corrected_peptides.parquet   Batch-corrected peptides       │
+│  - corrected_proteins.parquet   Batch-corrected proteins       │
+│  - protein_groups.tsv           Protein group definitions      │
+│  - peptide_residuals.parquet    Median polish residuals        │
+│  - transition_residuals.parquet (if transition rollup)         │
+│  - qc_report.html               QC metrics and plots           │
+│  - metadata.json                Pipeline provenance            │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Key design decisions:**
+
+1. **RT correction is DISABLED by default**: Search engine RT calibration may
+   not generalize between samples. Enable only if you have evidence of
+   RT-dependent technical variation.
+
+2. **Batch correction at reporting level**: Applied AFTER rollup for proteins,
+   ensuring median polish sees the original (non-smoothed) data.
+
+3. **Tukey median polish as default**: For both transition→peptide and
+   peptide→protein rollups. Robust to outliers without explicit filtering.
+
+4. **Residuals are preserved**: Outlier transitions/peptides may indicate
+   biologically interesting variation (PTMs, proteoforms), not just noise.
 
 ---
 
@@ -1957,11 +1974,16 @@ $$RVR = \frac{CV_{pool}^{after} / CV_{pool}^{before}}{CV_{ref}^{after} / CV_{ref
 2. **Highly variable chromatography**: If RT shifts substantially between runs, alignment needed first
 3. **Matrix-specific suppression**: Reference may not capture sample-specific effects
 
-### Handling missing data
+### No Missing Data in Skyline-Based Workflow
 
-- Peptides missing in reference cannot be corrected this way
-- Consider imputation or falling back to global normalization for these peptides
-- Report fraction of peptides corrected vs. globally normalized
+Unlike traditional proteomics pipelines, the Skyline-based workflow preceding PRISM produces complete data matrices:
+
+- **Skyline imputes RT boundaries**: Using information from replicates where each peptide was detected, Skyline determines integration boundaries for all samples
+- **Actual measurements everywhere**: Even when a peptide is not detected in a sample, Skyline integrates the signal at the imputed RT, producing an actual measured value (which may be zero or near-zero)
+- **No missing value handling needed**: This eliminates the need for imputation strategies that can introduce bias
+- **Zero values are real**: Measured zero intensities reflect actual absence of signal, not missing data
+
+This is a unique advantage of the Skyline-based DIA workflow and a key assumption of PRISM.
 
 ### Multiple batches
 
@@ -1980,11 +2002,6 @@ $$RVR = \frac{CV_{pool}^{after} / CV_{pool}^{before}}{CV_{ref}^{after} / CV_{ref
 - statsmodels (regression, LOESS)
 - plotnine or matplotlib (visualization)
 - pyarrow (efficient I/O)
-
-**R alternative:**
-- limma (for ComBat-style correction)
-- sva (surrogate variable analysis)
-- proBatch (proteomics batch correction)
 
 ---
 
@@ -2006,37 +2023,33 @@ $$RVR = \frac{CV_{pool}^{after} / CV_{pool}^{before}}{CV_{ref}^{after} / CV_{ref
 
 ---
 
-## Open Questions for Discussion
+## Key Design Decisions
 
-### Resolved Questions
+This section documents important design decisions made during PRISM development.
 
-1. **~~Should internal QCs (PRTC) be used in the RT model?~~** *Resolved: No, due to observed variability from suppression and matrix effects. Use full peptide distribution from reference instead.*
+### Data Filtering and Quality Control
 
-2. **~~Protein-level vs peptide-level correction?~~** *Resolved: Always peptide-level first, then robust rollup to protein.*
+1. **No transition-level quality filtering**: Peptides are filtered by DIA-NN q-value prior to import into Skyline. PRISM does not perform additional transition-level filtering. Tukey median polish naturally downweights problematic transitions via residuals.
 
-3. **~~How to handle RT drift between injections?~~** *Resolved: Skyline already handles run-to-run RT alignment for peak boundary imputation. The same peptide signal is aligned between replicates. Raw RTs may differ, but Skyline's aligned RTs should be used.*
+2. **Single-peptide proteins are valid**: Proteins quantified by a single peptide that passed FDR thresholds are reported. No minimum peptide count is enforced - the FDR control happens upstream in DIA-NN.
 
-4. **~~How does this interact with match-between-runs?~~** *Resolved: Skyline integrates signal at the RT determined from other replicates where the peptide was detected. Alignment is already done.*
+3. **No missing data handling needed**: Skyline imputes RT boundaries using detected peptides, producing actual measurements (including zeros) for all peptide-sample combinations. This eliminates the need for imputation.
 
-5. **~~VSN vs log2 + median normalization?~~** *Resolved: Use log2 + median normalization as default, with VSN as a configurable option.*
+### Normalization Approach
 
-6. **~~Per-batch RT models vs global?~~** *Resolved: Expect intra-batch variance < inter-batch variance, so per-batch models are appropriate. Can share information across batches if reference replicates are limited.*
+4. **Peptide-level correction first**: All normalization (RT correction, batch correction) is applied at the peptide level before protein rollup. This addresses biases where they occur.
 
-7. **~~How many peptides minimum for median polish?~~** *Resolved: Require 3+ peptides for robust estimates. Also consider transition-to-peptide rollup using median polish (similar to MSstats approach).*
+5. **Log2 + median centering as default**: Simple and effective. VSN is available as a configurable alternative for heteroscedastic data.
 
-8. **~~Should we model RT × abundance interaction?~~** *Resolved: Backburner for v2. Focus on 1D RT correction first.*
+6. **Per-batch RT models**: Intra-batch variance is expected to be less than inter-batch variance, so separate RT models are fitted per batch.
 
-9. **~~Run order correction: linear vs spline?~~** *Resolved: Use LOESS or spline fit, not linear. Effects are unlikely to be globally linear but may be locally linear.*
+7. **Internal QCs (PRTC) not used for RT model**: Due to observed variability from co-elution suppression and matrix effects, RT correction uses the full peptide distribution from reference samples rather than internal QC peptides.
 
-10. **~~Handling charge states and modifications?~~** *Resolved: Same peptide at different charge states has identical RT - Skyline already merges this into peptide information. Modified forms have different RTs and should be treated as different peptides.*
+### Skyline Integration
 
-### Remaining Open Questions
+8. **Skyline handles RT alignment**: Run-to-run RT drift is already handled by Skyline's peak boundary imputation. PRISM uses Skyline's aligned/imputed RTs.
 
-1. **Transition quality filtering before rollup?** Should we filter transitions by quality metrics (e.g., dotp) before median polish to peptide?
-
-2. **Minimum observations threshold?** What fraction of samples must a peptide be observed in to be included?
-
-3. **How to handle proteins with only 1-2 peptides after filtering?** Report with warning, or exclude?
+9. **Charge states merged by Skyline**: The same peptide at different charge states has identical RT. Skyline already merges this information. Modified forms (different RTs) are treated as different peptides.
 
 ---
 

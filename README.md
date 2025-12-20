@@ -51,6 +51,18 @@ This produces:
 
 See [SPECIFICATION.md](SPECIFICATION.md) for complete column definitions.
 
+### Reproducibility: Re-run from provenance
+
+The `metadata.json` output contains the complete processing configuration, enabling reproducible re-runs:
+
+```bash
+# Re-run with exact same parameters on new data
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json
+
+# Override specific settings while keeping others from provenance
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json -c overrides.yaml
+```
+
 ### Alternative: Step-by-step commands
 
 For more control, you can run individual steps:
