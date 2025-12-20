@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 class MedianPolishResult:
     """Result of Tukey median polish.
 
-    The residuals matrix captures deviations from the additive model:
-        y_ij = μ + α_i + β_j + ε_ij
+    SCALE: All values are on LOG2 SCALE. The additive model on log2 scale
+    corresponds to a multiplicative model on linear scale:
+        log2(Y_ij) = μ + α_i + β_j + ε_ij
+
+    The residuals matrix captures deviations from the additive model.
 
     Large residuals may indicate:
     - Technical outliers (interference, poor peak picking)
@@ -37,12 +40,14 @@ class MedianPolishResult:
 
     Following Plubell et al. 2022 (doi:10.1021/acs.jproteome.1c00894), outlier
     peptides should not be discarded but flagged for potential biological interest.
+
+    To convert col_effects to linear scale: 2 ** col_effects
     """
 
-    overall: float                    # Grand effect (μ)
-    row_effects: pd.Series            # Peptide/transition effects (α)
-    col_effects: pd.Series            # Sample effects (β) - abundance estimates
-    residuals: pd.DataFrame           # Residual matrix (rows × samples)
+    overall: float                    # Grand effect (μ) - log2 scale
+    row_effects: pd.Series            # Peptide/transition effects (α) - log2 scale
+    col_effects: pd.Series            # Sample abundances (μ + β) - log2 scale
+    residuals: pd.DataFrame           # Residual matrix (rows × samples) - log2 scale
     n_iterations: int
     converged: bool
 
@@ -633,22 +638,27 @@ def tukey_median_polish(
 ) -> MedianPolishResult:
     """Apply Tukey's median polish to a peptide × sample matrix.
 
+    SCALE: Input and output are on LOG2 SCALE.
+
     Model: y_ij = μ + α_i + β_j + ε_ij
 
     Where:
         - μ = overall effect (grand median)
-        - α_i = row/peptide effect
-        - β_j = column/sample effect (this is the protein abundance estimate)
+        - α_i = row/peptide effect (relative to grand median)
+        - β_j = column/sample effect (relative to grand median)
         - ε_ij = residual
 
+    The returned col_effects are on the ORIGINAL LOG2 SCALE (μ + β_j),
+    not centered deviations. To get linear-scale abundances: 2 ** col_effects
+
     Args:
-        matrix: DataFrame with peptides as rows, samples as columns
-                Values should be log2 transformed
+        matrix: DataFrame with peptides as rows, samples as columns.
+                Values MUST be log2 transformed.
         max_iter: Maximum number of iterations
         tol: Convergence tolerance (max absolute change in residuals)
 
     Returns:
-        MedianPolishResult with effects and residuals
+        MedianPolishResult with effects and residuals (all log2 scale)
 
     """
     # Work with numpy for speed, but keep track of indices
@@ -690,11 +700,17 @@ def tukey_median_polish(
             converged = True
             break
 
+    # Return col_effects on original scale (overall + sample effects)
+    # This gives actual protein/peptide abundances, not centered deviations.
+    # The additive model is: y_ij = overall + row_effects[i] + col_effects[j] + residuals
+    # For protein abundance per sample, we want: overall + col_effects[j]
+    col_effects_original_scale = col_effects + overall
+
     # Wrap results
     result = MedianPolishResult(
         overall=overall,
         row_effects=pd.Series(row_effects, index=row_idx, name='peptide_effect'),
-        col_effects=pd.Series(col_effects, index=col_idx, name='protein_abundance'),
+        col_effects=pd.Series(col_effects_original_scale, index=col_idx, name='protein_abundance'),
         residuals=pd.DataFrame(residuals, index=row_idx, columns=col_idx),
         n_iterations=iteration + 1,
         converged=converged,

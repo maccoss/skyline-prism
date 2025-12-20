@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import yaml
 
 if TYPE_CHECKING:
@@ -729,31 +730,46 @@ def cmd_run(args: argparse.Namespace) -> int:
         pass
 
     # =========================================================================
-    # Stage 5: Save outputs
+    # Stage 5: Save outputs (back-transform to linear scale)
     # =========================================================================
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_format = config['output'].get('format', 'parquet')
 
+    # Back-transform peptide abundances from log2 to linear scale
+    # The pipeline works internally on log2 scale, but output should be linear
+    peptide_output_data = peptide_data.copy()
+    peptide_output_data[abundance_col] = np.power(2, peptide_output_data[abundance_col])
+    logger.info("Back-transformed peptide abundances to linear scale")
+
     # Save peptide data
     peptide_output = output_dir / f"corrected_peptides.{output_format}"
     if output_format == 'parquet':
-        peptide_data.to_parquet(peptide_output, index=False)
+        peptide_output_data.to_parquet(peptide_output, index=False)
     elif output_format == 'csv':
-        peptide_data.to_csv(peptide_output, index=False)
+        peptide_output_data.to_csv(peptide_output, index=False)
     elif output_format == 'tsv':
-        peptide_data.to_csv(peptide_output, sep='\t', index=False)
+        peptide_output_data.to_csv(peptide_output, sep='\t', index=False)
     logger.info(f"Saved peptides to {peptide_output}")
+
+    # Back-transform protein abundances from log2 to linear scale
+    # The sample columns contain log2 abundances from median polish
+    samples = data[sample_col].unique()
+    protein_output_df = protein_df.copy()
+    sample_cols_in_protein = [c for c in protein_output_df.columns if c in samples]
+    for col in sample_cols_in_protein:
+        protein_output_df[col] = np.power(2, protein_output_df[col])
+    logger.info("Back-transformed protein abundances to linear scale")
 
     # Save protein data
     protein_output = output_dir / f"corrected_proteins.{output_format}"
     if output_format == 'parquet':
-        protein_df.to_parquet(protein_output, index=False)
+        protein_output_df.to_parquet(protein_output, index=False)
     elif output_format == 'csv':
-        protein_df.to_csv(protein_output, index=False)
+        protein_output_df.to_csv(protein_output, index=False)
     elif output_format == 'tsv':
-        protein_df.to_csv(protein_output, sep='\t', index=False)
+        protein_output_df.to_csv(protein_output, sep='\t', index=False)
     logger.info(f"Saved proteins to {protein_output}")
 
     # Save protein groups

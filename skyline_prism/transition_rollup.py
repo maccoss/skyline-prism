@@ -69,14 +69,17 @@ class VarianceModelParams:
 class TransitionRollupResult:
     """Result of transition to peptide rollup.
 
-    When using median_polish method, transition_residuals contains per-peptide
-    dictionaries of MedianPolishResult objects, which include the residual matrix.
+    SCALE: peptide_abundances are on LOG2 SCALE when log_transform=True.
+    To convert to linear scale: 2 ** peptide_abundances
+
+    When using median_polish method, median_polish_results contains per-peptide
+    MedianPolishResult objects, which include the residual matrix.
     Large residuals may indicate transitions with interference or biologically
     interesting variation.
     """
 
-    peptide_abundances: pd.DataFrame  # Peptide × sample matrix
-    peptide_uncertainties: pd.DataFrame  # Uncertainty estimates
+    peptide_abundances: pd.DataFrame  # Peptide × sample matrix (log2 if log_transform)
+    peptide_uncertainties: pd.DataFrame  # Uncertainty estimates (log2 scale)
     transition_weights: pd.DataFrame  # Weights used per transition (quality_weighted)
     n_transitions_used: pd.DataFrame  # Number of transitions per peptide/sample
     variance_model: VarianceModelParams  # Model parameters used
@@ -254,21 +257,28 @@ def rollup_transitions_to_peptides(
 ) -> TransitionRollupResult:
     """Roll up transition-level data to peptide-level quantities.
 
+    SCALE CONVENTIONS:
+    - Input (abundance_col): LINEAR scale (raw areas from Skyline)
+    - Internal processing: LOG2 scale (if log_transform=True)
+    - Output (peptide_abundances): LOG2 scale (if log_transform=True)
+
+    To get linear-scale output: 2 ** result.peptide_abundances
+
     Args:
-        data: DataFrame with transition-level Skyline data
+        data: DataFrame with transition-level Skyline data (LINEAR scale)
         peptide_col: Column identifying peptides
         transition_col: Column identifying transitions
         sample_col: Column identifying samples/replicates
-        abundance_col: Column with transition intensities
+        abundance_col: Column with transition intensities (LINEAR scale)
         shape_corr_col: Column with shape correlation values
         coeluting_col: Column with coelution boolean
         method: Rollup method ('quality_weighted', 'median_polish', 'sum')
         params: Variance model parameters (uses defaults if None)
         min_transitions: Minimum transitions required per peptide
-        log_transform: Whether to log2 transform intensities
+        log_transform: Whether to log2 transform intensities (default: True)
 
     Returns:
-        TransitionRollupResult with peptide abundances and diagnostics
+        TransitionRollupResult with peptide abundances (LOG2 scale if log_transform)
 
     """
     if params is None:

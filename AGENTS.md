@@ -8,11 +8,26 @@ This document provides context and guidelines for AI agents working on the Skyli
 
 ### Key Concepts
 
+- **Transition-level input required**: PRISM expects transition-level data from Skyline (not peptide or protein summaries)
 - **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use median polish by default for robust outlier handling
 - **Reference-anchored ComBat batch correction**: Uses inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality
 - **Dual-control validation**: Uses intra-experiment pool samples to validate corrections without overfitting
 - **Two-arm pipeline**: Pipeline splits at peptide level - batch correction is applied at the reporting level (peptide or protein)
 - **Optional RT correction**: RT-dependent correction is implemented but DISABLED by default (search engine RT calibration may not generalize between samples)
+
+### Scale Conventions
+
+| Stage | Scale | Notes |
+|-------|-------|-------|
+| **Input** | LINEAR | Raw peak areas from Skyline |
+| **Internal** | LOG2 | All rollup/normalization operates on log2 scale |
+| **Output** | LINEAR | Final parquet/CSV files contain linear abundances |
+
+The pipeline automatically handles transforms:
+- Input linear values are log2-transformed for processing
+- Output values are back-transformed to linear (2^x) before writing
+
+When using functions directly via Python API, check docstrings for scale requirements.
 
 ### Processing Pipeline
 

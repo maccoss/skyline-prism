@@ -35,16 +35,20 @@ prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata
 ```
 
 This produces:
+
 - `corrected_peptides.parquet` - Peptide-level quantities (batch-corrected)
 - `corrected_proteins.parquet` - Protein-level quantities (batch-corrected)  
 - `protein_groups.tsv` - Protein group definitions
 - `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
 - `metadata.json` - Processing metadata and provenance
 
+**Scale:** Output files contain **linear-scale** abundances (raw peak area units). The pipeline operates on log2 scale internally but back-transforms to linear before writing output.
+
 **Key output columns** in protein/peptide parquet files:
-- `abundance` - Log2 abundance (normalized, batch-corrected)
-- `abundance_raw` - Log2 abundance before corrections
-- `uncertainty` - Propagated uncertainty (standard error)
+
+- `abundance` - Linear-scale abundance (normalized, batch-corrected)
+- `abundance_raw` - Original linear-scale abundance from Skyline
+- `uncertainty` - Propagated uncertainty (log2 scale, for downstream analysis)
 - `cv_peptides` - CV across peptides (protein-level quality metric)
 - `n_peptides` - Number of peptides used in rollup
 - `qc_flag` - QC warnings (e.g., `low_peptide_count(n)`, `single_peptide_in_sample`)
@@ -85,6 +89,7 @@ prism validate --before unified_data.parquet --after normalized_peptides.parquet
 ```
 
 The QC report includes:
+
 - **Intensity distribution plots**: Before/after normalization comparison
 - **PCA analysis**: Visualize batch effects and sample clustering across processing stages
 - **Control sample correlation**: Heatmaps showing reproducibility of reference and pool samples
@@ -97,7 +102,7 @@ All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML r
 
 The pipeline follows a two-arm design:
 
-```
+```text
 Raw transition abundances
         │
         ▼
@@ -134,14 +139,15 @@ Raw transition abundances
 
 For optimal results, include these controls in each batch:
 
-| Control Type | Description | Replicates/Batch |
-|--------------|-------------|------------------|
-| Inter-experiment reference | Commercial pool (e.g., Golden West CSF) | 1-8 |
-| Intra-experiment pool | Pooled experimental samples | 1-8 |
+| Control Type               | Description                               | Replicates/Batch |
+| -------------------------- | ----------------------------------------- | ---------------- |
+| Inter-experiment reference | Commercial pool (e.g., Golden West CSF)   | 1-8              |
+| Intra-experiment pool      | Pooled experimental samples               | 1-8              |
 
 **Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
 Plus internal QCs in all samples:
+
 - **Protein QC**: Yeast enolase (16 ng/μg sample)
 - **Peptide QC**: PRTC (30-150 fmol/injection)
 
@@ -204,10 +210,10 @@ Both transition→peptide and peptide→protein rollups use Tukey median polish 
 
 **What the row effects represent:**
 
-| Rollup Stage | Row Effects Represent | Column Effects Represent |
-|--------------|----------------------|-------------------------|
+| Rollup Stage         | Row Effects Represent                                                        | Column Effects Represent     |
+| -------------------- | ---------------------------------------------------------------------------- | ---------------------------- |
 | Transition → Peptide | Transition interference (co-eluting analytes affecting specific transitions) | Peptide abundance per sample |
-| Peptide → Protein | Peptide ionization efficiency (some peptides ionize better than others) | Protein abundance per sample |
+| Peptide → Protein    | Peptide ionization efficiency (some peptides ionize better than others)      | Protein abundance per sample |
 
 ### Alternative Rollup Methods
 
@@ -215,21 +221,21 @@ While median polish is recommended, these alternative methods are available:
 
 **Transition → Peptide Rollup** (when using transition-level data):
 
-| Method | Description | Use Case |
-|--------|-------------|-----------|
-| `median_polish` | Tukey median polish (default) | General use, robust to outliers |
-| `quality_weighted` | Variance-model weighted average | When quality metrics (ShapeCorrelation, Coeluting) are available |
-| `sum` | Simple sum of intensities | Fast but sensitive to outliers |
+| Method             | Description                     | Use Case                                                           |
+| ------------------ | ------------------------------- | ------------------------------------------------------------------ |
+| `median_polish`    | Tukey median polish (default)   | General use, robust to outliers                                    |
+| `quality_weighted` | Variance-model weighted average | When quality metrics (ShapeCorrelation, Coeluting) are available   |
+| `sum`              | Simple sum of intensities       | Fast but sensitive to outliers                                     |
 
 **Peptide → Protein Rollup**:
 
-| Method | Description | Use Case |
-|--------|-------------|-----------|
-| `median_polish` | Tukey median polish (default) | General use, robust to outliers |
-| `topn` | Mean of top N most intense peptides | Simple, when top peptides are reliable |
-| `ibaq` | iBAQ (intensity / theoretical peptide count) | Absolute quantification across proteins |
-| `maxlfq` | Maximum LFQ (MaxQuant-style) | When peptide ratios are more reliable than absolute values |
-| `sum` | Simple sum of intensities | Fast but sensitive to outliers |
+| Method          | Description                                  | Use Case                                                   |
+| --------------- | -------------------------------------------- | ---------------------------------------------------------- |
+| `median_polish` | Tukey median polish (default)                | General use, robust to outliers                            |
+| `topn`          | Mean of top N most intense peptides          | Simple, when top peptides are reliable                     |
+| `ibaq`          | iBAQ (intensity / theoretical peptide count) | Absolute quantification across proteins                    |
+| `maxlfq`        | Maximum LFQ (MaxQuant-style)                 | When peptide ratios are more reliable than absolute values |
+| `sum`           | Simple sum of intensities                    | Fast but sensitive to outliers                             |
 
 ### iBAQ (Intensity-Based Absolute Quantification)
 
@@ -297,6 +303,7 @@ result = combat_with_reference_samples(
 ```
 
 **Key features:**
+
 - Parametric and non-parametric prior options
 - Reference batch support (adjust other batches to match reference)
 - Mean-only correction option (for unequal batch sizes)
@@ -527,11 +534,13 @@ fig, axes = plot_rt_correction_per_sample(
 ```
 
 The RT correction plots help assess:
+
 - Whether the spline model captures RT-dependent variation in reference samples
 - Whether corrections generalize to pool samples (held-out validation)
 - Whether any samples have unusually large residuals after correction
 
 All visualization functions support:
+
 - `show_plot=False` to return the figure object for further customization
 - `save_path="/path/to/figure.png"` to save directly to file
 
@@ -539,7 +548,7 @@ All visualization functions support:
 
 If you use Skyline-PRISM, please cite:
 
-Tsantilas KA et al. "A framework for quality control in quantitative proteomics." 
+Tsantilas KA et al. "A framework for quality control in quantitative proteomics."
 J Proteome Res. 2024. DOI: 10.1021/acs.jproteome.4c00363
 
 ## Related Projects

@@ -22,6 +22,38 @@ PRISM is designed to work with data exported from [Skyline](https://skyline.ms),
 
 5. **Optional RT-dependent correction**: RT-dependent spline correction is implemented but **disabled by default**. Modern search engines (e.g., DIA-NN) apply per-file RT calibration that may not generalize between reference and experimental samples, making this correction less reliable. Enable only if RT-dependent technical variation is clearly observed in your data.
 
+### Scale Conventions
+
+PRISM uses different scales at different stages of the pipeline:
+
+| Stage | Scale | Rationale |
+|-------|-------|-----------|
+| **Input** | LINEAR | Skyline exports raw peak areas (linear scale) |
+| **Internal processing** | LOG2 | Additive operations (median polish, ComBat) work on log scale |
+| **Final output** | LINEAR | Output files contain linear-scale abundances |
+
+**Why log2 internally?**
+
+On log scale, multiplicative effects become additive:
+- A 2-fold change = +1 on log2 scale
+- Median polish decomposes: `log2(Y_ij) = μ + α_i + β_j + ε_ij`
+- ComBat batch correction operates on log-transformed data
+
+**Back-transform for output:**
+
+The CLI pipeline automatically back-transforms to linear scale before writing output files:
+```python
+linear_abundance = 2 ** log2_abundance
+```
+
+**Function-level documentation:**
+
+Each function's docstring specifies the expected input and output scale. When using
+the Python API directly, pay attention to scale requirements:
+- `tukey_median_polish()`: Input and output are LOG2 scale
+- `rollup_transitions_to_peptides()`: Input LINEAR, output LOG2 (when log_transform=True)
+- `combat()`: Input and output are LOG2 scale
+
 ---
 
 ## Input and Output Specification

@@ -85,8 +85,28 @@ class TestTukeyMedianPolish:
         result = tukey_median_polish(data)
 
         # With single peptide, sample effects should equal the values
-        # (centered around the median)
+        # (on original scale)
         assert len(result.col_effects) == 3
+        # Single peptide: col_effects should match the input values
+        np.testing.assert_allclose(result.col_effects.values, data.iloc[0].values)
+
+    def test_original_scale_output(self):
+        """Test that col_effects are on original scale, not centered."""
+        # Create matrix with values around 20 (typical log2 intensity)
+        data = pd.DataFrame({
+            'Sample1': [20.0, 22.0, 21.0],
+            'Sample2': [21.0, 23.0, 22.0],
+            'Sample3': [19.0, 21.0, 20.0],
+        }, index=['Pep1', 'Pep2', 'Pep3'])
+
+        result = tukey_median_polish(data)
+
+        # col_effects should be on original scale (around 20)
+        # not centered around 0
+        assert result.col_effects.mean() > 15  # Definitely not centered
+        # Should match column medians for this clean case
+        expected = data.median(axis=0)
+        np.testing.assert_allclose(result.col_effects.values, expected.values)
 
     def test_preserves_relative_quantification(self):
         """Test that relative differences between samples are preserved."""
