@@ -163,11 +163,14 @@ def _process_single_peptide(
     if config.method == "median_polish":
         if len(intensity_matrix) >= config.min_transitions:
             result = tukey_median_polish(intensity_matrix)
-            abundances = result.col_effects.to_dict()
+            n_used = len(intensity_matrix)
+            # Scale col_effects by n_transitions to make comparable to sum
+            # In log2 space: add log2(n) is equivalent to multiply by n in linear
+            scale_factor = np.log2(n_used) if n_used > 0 else 0
+            abundances = {s: v + scale_factor for s, v in result.col_effects.to_dict().items()}
             # Uncertainty from residual variance
             residual_var = result.residuals.var().mean()
             uncertainties = {s: np.sqrt(residual_var) for s in samples}
-            n_used = len(intensity_matrix)
             # Store residuals for output
             residuals = {
                 str(t): result.residuals.loc[t].to_dict() for t in result.residuals.index

@@ -2274,11 +2274,9 @@ def plot_cv_three_stage(
             median_cv = np.median(cv_values)
             mean_cv = np.mean(cv_values)
 
-            # Show median and mean lines (no threshold)
-            ax.axvline(median_cv, color="darkred", linestyle="--", linewidth=2,
-                       label=f"Median: {median_cv:.1f}%")
-            ax.axvline(mean_cv, color="darkblue", linestyle=":", linewidth=2,
-                       label=f"Mean: {mean_cv:.1f}%")
+            # Show median and mean lines (no labels - stats in text box)
+            ax.axvline(median_cv, color="darkred", linestyle="--", linewidth=2)
+            ax.axvline(mean_cv, color="darkblue", linestyle=":", linewidth=2)
 
             ax.text(
                 0.95, 0.95,
@@ -2296,7 +2294,6 @@ def plot_cv_three_stage(
         ax.set_xlabel("Coefficient of Variation (%)", fontsize=11)
         ax.set_ylabel("Number of Features", fontsize=11)
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9, loc="upper right")
 
     fig.suptitle(f"{title} ({control_type.capitalize()} Samples)",
                  fontsize=14, fontweight="bold")
@@ -2417,6 +2414,120 @@ def plot_pca_three_stage(
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
         fig.legend(handles, labels, loc="upper right", fontsize=9,
+                   bbox_to_anchor=(0.99, 0.95))
+
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 0.92, 0.95])
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_boxplot_three_stage(
+    data_rawsum: pd.DataFrame,
+    data_medianpolish: pd.DataFrame,
+    data_normalized: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    title: str = "Intensity Distribution: Processing Stages",
+    figsize: tuple[int, int] = (18, 6),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Compare intensity distributions across 3 processing stages (wide-format data).
+
+    Shows box plots of sample distributions from raw sum -> median polish -> normalized.
+
+    Args:
+        data_rawsum: Wide-format DataFrame with sum-aggregated peptides
+        data_medianpolish: Wide-format DataFrame after Tukey median polish
+        data_normalized: Wide-format DataFrame after normalization + batch correction
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type (for coloring)
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+
+    datasets = [
+        (data_rawsum, "Raw Sum"),
+        (data_medianpolish, "Median Polish"),
+        (data_normalized, "Normalized"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    # Get colors for samples
+    colors, legend = _get_sample_colors(sample_cols, sample_types)
+
+    for ax, (df, stage_label) in zip(axes, datasets):
+        # Prepare data for boxplot
+        box_data = []
+        for sample in sample_cols:
+            if sample in df.columns:
+                sample_data = df[sample].dropna()
+                box_data.append(sample_data.values)
+            else:
+                box_data.append(np.array([]))
+
+        # Create box plot
+        bp = ax.boxplot(
+            box_data,
+            positions=range(len(sample_cols)),
+            widths=0.6,
+            patch_artist=True,
+            showfliers=False,
+        )
+
+        # Color boxes by sample type
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+
+        # Calculate median of sample medians
+        sample_medians = [np.median(d) for d in box_data if len(d) > 0]
+        if sample_medians:
+            median_of_medians = np.median(sample_medians)
+            ax.axhline(median_of_medians, color="darkred", linestyle="--", 
+                       linewidth=1.5, alpha=0.7)
+
+        ax.set_title(stage_label, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Sample", fontsize=11)
+        ax.set_ylabel("Log2 Abundance", fontsize=11)
+        ax.grid(True, alpha=0.3, axis="y")
+
+        # Reduce x-tick labels for readability
+        if len(sample_cols) > 20:
+            n = max(1, len(sample_cols) // 10)
+            ax.set_xticks(range(0, len(sample_cols), n))
+            ax.set_xticklabels(
+                [sample_cols[i][:15] for i in range(0, len(sample_cols), n)],
+                rotation=45, ha="right", fontsize=7,
+            )
+        else:
+            ax.set_xticks(range(len(sample_cols)))
+            ax.set_xticklabels(sample_cols, rotation=45, ha="right", fontsize=7)
+
+    # Add legend outside plots
+    if legend:
+        patches = [
+            mpatches.Patch(color=color, label=label, alpha=0.7)
+            for label, color in legend.items()
+        ]
+        fig.legend(handles=patches, loc="upper right", fontsize=9,
                    bbox_to_anchor=(0.99, 0.95))
 
     fig.suptitle(title, fontsize=14, fontweight="bold")

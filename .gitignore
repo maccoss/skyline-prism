@@ -91,6 +91,7 @@ dmypy.json
 *.parquet
 *.csv
 *.tsv
+*.tmp
 
 # Ignore large data directories
 data/

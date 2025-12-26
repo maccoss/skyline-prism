@@ -795,8 +795,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         peptide_df = peptide_df[valid_mask].reset_index(drop=True)
 
     # Keep copies for QC comparison (rawsum baseline + medianpolish before normalization)
+    # Filter rawsum to same peptides that passed median polish (for fair comparison)
     peptide_rawsum_df = pd.read_parquet(peptide_rawsum_path)
     peptide_medianpolish_df = peptide_df.copy()
+    
+    # Align rawsum with the same peptides that passed median polish filtering
+    # Auto-detect the peptide column (handle both naming conventions)
+    peptide_id_col = None
+    for col_name in ['Peptide Modified Sequence Unimod Ids', 'Peptide Modified Sequence', 'Peptide']:
+        if col_name in peptide_rawsum_df.columns:
+            peptide_id_col = col_name
+            break
+    if peptide_id_col is None:
+        # Fallback to first column
+        peptide_id_col = peptide_rawsum_df.columns[0]
+    
+    rawsum_peptides = set(peptide_rawsum_df[peptide_id_col].values)
+    medpol_peptides = set(peptide_medianpolish_df[peptide_id_col].values)
+    common_peptides = rawsum_peptides & medpol_peptides
+    peptide_rawsum_df = peptide_rawsum_df[
+        peptide_rawsum_df[peptide_id_col].isin(common_peptides)
+    ].reset_index(drop=True)
 
     # Apply global median normalization (on log2 scale)
     # For each sample column, subtract sample median and add global median
@@ -809,10 +828,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         peptide_df[col] = peptide_df[col] - norm_factors[col]
 
     max_pep_shift = norm_factors.abs().max()
+    # Report in linear scale for interpretability
+    linear_global_median = 2 ** global_peptide_median
+    fold_change_shift = 2 ** max_pep_shift
     logger.info(
-        f"  Global median = {global_peptide_median:.3f}, max shift = {max_pep_shift:.3f}"
+        f"  Global median = {linear_global_median:.0f} (linear), "
+        f"max shift = {fold_change_shift:.2f}x"
     )
-    method_log.append(f"Peptide median normalization: max shift = {max_pep_shift:.3f}")
+    method_log.append(f"Peptide median normalization: max shift = {fold_change_shift:.2f}x")
 
     # -------------------------------------------------------------------------
     # Stage 2c: Peptide ComBat Batch Correction
@@ -875,14 +898,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                                  if sample_to_type.get(c) == 'pool']
 
                     if ref_cols and pool_cols:
-                        # Calculate CV improvement
-                        ref_cv = peptide_df[ref_cols].std(axis=1) / \
-                            peptide_df[ref_cols].mean(axis=1).abs()
-                        pool_cv = peptide_df[pool_cols].std(axis=1) / \
-                            peptide_df[pool_cols].mean(axis=1).abs()
+                        # Calculate CV improvement on LINEAR scale (never on log2!)
+                        ref_linear = 2 ** peptide_df[ref_cols]
+                        pool_linear = 2 ** peptide_df[pool_cols]
+                        ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
+                        pool_cv = (pool_linear.std(axis=1) / pool_linear.mean(axis=1)) * 100
                         logger.info(
-                            f"  Reference median CV: {ref_cv.median():.3f}, "
-                            f"Pool median CV: {pool_cv.median():.3f}"
+                            f"  Reference median CV: {ref_cv.median():.1f}%, "
+                            f"Pool median CV: {pool_cv.median():.1f}%"
                         )
         else:
             logger.warning("No batch column in metadata - skipping batch correction")
@@ -989,10 +1012,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         protein_df[col] = protein_df[col] - prot_norm_factors[col]
 
     max_prot_shift = prot_norm_factors.abs().max()
+    # Report in linear scale for interpretability
+    linear_prot_median = 2 ** global_protein_median
+    fold_prot_shift = 2 ** max_prot_shift
     logger.info(
-        f"  Global median = {global_protein_median:.3f}, max shift = {max_prot_shift:.3f}"
+        f"  Global median = {linear_prot_median:.0f} (linear), "
+        f"max shift = {fold_prot_shift:.2f}x"
     )
-    method_log.append(f"Protein median normalization: max shift = {max_prot_shift:.3f}")
+    method_log.append(f"Protein median normalization: max shift = {fold_prot_shift:.2f}x")
 
     # -------------------------------------------------------------------------
     # Stage 4c: Protein ComBat Batch Correction
@@ -1048,13 +1075,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                                  if sample_to_type.get(c) == 'pool']
 
                     if ref_cols and pool_cols:
-                        ref_cv = protein_df[ref_cols].std(axis=1) / \
-                            protein_df[ref_cols].mean(axis=1).abs()
-                        pool_cv = protein_df[pool_cols].std(axis=1) / \
-                            protein_df[pool_cols].mean(axis=1).abs()
+                        # Calculate CV on LINEAR scale (never on log2!)
+                        ref_linear = 2 ** protein_df[ref_cols]
+                        pool_linear = 2 ** protein_df[pool_cols]
+                        ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
+                        pool_cv = (pool_linear.std(axis=1) / pool_linear.mean(axis=1)) * 100
                         logger.info(
-                            f"  Reference median CV: {ref_cv.median():.3f}, "
-                            f"Pool median CV: {pool_cv.median():.3f}"
+                            f"  Reference median CV: {ref_cv.median():.1f}%, "
+                            f"Pool median CV: {pool_cv.median():.1f}%"
                         )
         else:
             logger.warning("No batch column in metadata - skipping batch correction")
