@@ -288,7 +288,7 @@ protein_rollup:
   
   # For median_polish method
   median_polish:
-    max_iterations: 10
+    max_iterations: 20
     convergence_tolerance: 0.0001
 
 # =============================================================================

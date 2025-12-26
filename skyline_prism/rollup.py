@@ -633,7 +633,7 @@ def aggregate_transitions_quality_weighted(
 
 def tukey_median_polish(
     matrix: pd.DataFrame,
-    max_iter: int = 10,
+    max_iter: int = 20,
     tol: float = 1e-4,
 ) -> MedianPolishResult:
     """Apply Tukey's median polish to a peptide × sample matrix.

@@ -518,7 +518,10 @@ def verify_source_fingerprints(
 
 
 def get_parquet_source_fingerprints(parquet_path: Path) -> list[dict] | None:
-    """Read source fingerprints from parquet file metadata.
+    """Read source fingerprints from parquet sidecar file or embedded metadata.
+
+    First checks for a sidecar JSON file (memory-efficient for large files),
+    then falls back to embedded parquet metadata for backwards compatibility.
 
     Args:
         parquet_path: Path to parquet file
@@ -527,6 +530,17 @@ def get_parquet_source_fingerprints(parquet_path: Path) -> list[dict] | None:
         List of fingerprint dicts, or None if not found
 
     """
+    # First check for sidecar JSON file (preferred for large files)
+    sidecar_path = parquet_path.with_suffix('.fingerprints.json')
+    if sidecar_path.exists():
+        try:
+            with open(sidecar_path) as f:
+                data = json.load(f)
+                return data.get('source_fingerprints')
+        except Exception as e:
+            logger.debug(f"Could not read fingerprints from sidecar {sidecar_path}: {e}")
+
+    # Fall back to embedded parquet metadata (backwards compatibility)
     try:
         pf = pq.ParquetFile(parquet_path)
         metadata = pf.schema_arrow.metadata
@@ -676,38 +690,26 @@ def merge_skyline_reports_streaming(
 
 
 def _add_fingerprints_to_parquet(parquet_path: Path, fingerprints: list[dict]) -> None:
-    """Add source fingerprints to parquet file metadata.
+    """Add source fingerprints as a sidecar JSON file.
 
-    This reads the existing parquet file, adds the fingerprints to the schema
-    metadata, and rewrites the file with the new metadata.
+    For large files, embedding metadata in the parquet file requires reading
+    the entire file into memory which is not feasible. Instead, we write the
+    fingerprints to a sidecar JSON file next to the parquet.
 
     Args:
         parquet_path: Path to existing parquet file
         fingerprints: List of fingerprint dictionaries
 
     """
-    # Read existing file
-    table = pq.read_table(parquet_path)
-
-    # Add fingerprints to schema metadata
-    existing_metadata = table.schema.metadata or {}
-    new_metadata = {
-        **existing_metadata,
-        b'prism_source_fingerprints': json.dumps(fingerprints).encode('utf-8'),
-        b'prism_version': b'0.2.0',
+    # Write fingerprints to sidecar JSON file
+    sidecar_path = parquet_path.with_suffix('.fingerprints.json')
+    fingerprint_data = {
+        'prism_version': '0.2.0',
+        'source_fingerprints': fingerprints,
     }
-
-    # Create new schema with updated metadata
-    new_schema = table.schema.with_metadata(new_metadata)
-    new_table = table.cast(new_schema)
-
-    # Rewrite the file with metadata
-    pq.write_table(
-        new_table,
-        parquet_path,
-        compression='zstd',
-        compression_level=3,
-    )
+    with open(sidecar_path, 'w') as f:
+        json.dump(fingerprint_data, f, indent=2)
+    logger.info(f"  Wrote fingerprints to {sidecar_path.name}")
 
 
 def validate_skyline_report(filepath: Path) -> ValidationResult:

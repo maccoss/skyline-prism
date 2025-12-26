@@ -1654,7 +1654,7 @@ def generate_qc_report(validation_results, output_path):
 
 **Functions:**
 ```python
-def tukey_median_polish(peptide_matrix, max_iter=10, tol=1e-4):
+def tukey_median_polish(peptide_matrix, max_iter=20, tol=1e-4):
     """
     Apply Tukey's median polish to peptide × sample matrix.
     

@@ -48,14 +48,43 @@ from .validation import (
 logger = logging.getLogger(__name__)
 
 
-def setup_logging(verbose: bool = False) -> None:
-    """Configure logging."""
+def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
+    """Configure logging.
+
+    Args:
+        verbose: If True, set log level to DEBUG, otherwise INFO.
+        log_file: Optional path to write log output. If provided, logs are
+                  written to both console and file.
+
+    """
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+
+    # Get root logger for skyline_prism
+    root_logger = logging.getLogger('skyline_prism')
+    root_logger.setLevel(level)
+
+    # Clear any existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
     )
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    # File handler (if log_file specified)
+    if log_file is not None:
+        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+        root_logger.info(f"Logging to: {log_file}")
 
 
 def load_config(config_path: Path | None) -> dict:
@@ -97,7 +126,7 @@ def load_config(config_path: Path | None) -> dict:
         'protein_rollup': {
             'method': 'median_polish',
             'topn': {'n': 3, 'selection': 'median_abundance'},
-            'median_polish': {'max_iterations': 10, 'convergence_tolerance': 0.0001},
+            'median_polish': {'max_iterations': 20, 'convergence_tolerance': 0.0001},
         },
         'output': {
             'format': 'parquet',
@@ -484,6 +513,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set up file logging to output directory
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file = output_dir / f'prism_run_{timestamp}.log'
+    verbose = getattr(args, 'verbose', False)
+    setup_logging(verbose=verbose, log_file=log_file)
 
     # Get sample type patterns from args or config
     reference_patterns = None
