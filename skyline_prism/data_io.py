@@ -1,91 +1,96 @@
 """Data I/O module for loading and merging Skyline reports."""
 
+import hashlib
+import json
 import logging
+import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.csv as pa_csv
 import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
 
-# Standard column name mapping from Skyline exports
-SKYLINE_COLUMN_MAP = {
-    # PRISM Skyline Report columns (recommended export)
-    'Protein': 'protein_names',                # Proteins > Protein
-    'Protein Accession': 'protein_ids',        # Proteins > Protein Accession
-    'Protein Gene': 'protein_gene',            # Proteins > Protein Gene
-    'Peptide': 'peptide_sequence',             # Peptides > Peptide
-    'Peptide Modified Sequence Unimod Ids': 'peptide_modified',  # Peptides > Peptide Modified Sequence Unimod Ids
-    'Precursor Charge': 'precursor_charge',    # Precursors > Charge
-    'Precursor Mz': 'precursor_mz',            # Precursors > Mz
-    'Isotope Dot Product': 'idotp',            # Precursors > Isotope Dot Product
-    'Detection Q Value': 'detection_qvalue',   # Precursors > Detection Q Value
-    'Fragment Ion': 'fragment_ion',            # Transitions > Fragment Ion (e.g., y7, b5, precursor)
-    'Product Charge': 'product_charge',        # Transitions > Product Charge
-    'Product Mz': 'product_mz',                # Transitions > Product Mz
-    'Area': 'area',                            # Transition Results > Area
-    'Retention Time': 'retention_time',        # Transition Results > Retention Time
-    'Start Time': 'start_time',                # Transition Results > Start Time
-    'End Time': 'end_time',                    # Transition Results > End Time
-    'Fwhm': 'fwhm',                            # Transition Results > Fwhm
-    'Shape Correlation': 'shape_correlation',  # Transition Results > Shape Correlation
-    'Coeluting': 'coeluting',                  # Transition Results > Coeluting
-    'Truncated': 'truncated',                  # Transition Results > Truncated
-    'Replicate Name': 'replicate_name',        # Replicates > Replicate Name
-    'File Name': 'file_name',                  # Replicates > File Name
-    'Total Ion Current Area': 'tic_area',      # Replicates > Total Ion Current Area
-    'Acquired Time': 'acquired_time',          # Result File > Acquired Time
+# Size threshold for using streaming reader (1 GB)
+LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024
 
-    # Alternative fragment ion columns (if Fragment Ion not present)
-    'Fragment Ion Type': 'fragment_ion_type',  # Transitions > Fragment Ion Type
-    'Fragment Ion Ordinal': 'fragment_ion_ordinal',  # Transitions > Fragment Ion Ordinal
+# Standard Skyline column names (as exported from Skyline reports)
+# These are the exact names as they appear in Skyline report exports.
+# Users can configure different column names in their config file if needed.
+#
+# Key columns and their Skyline sources:
+# - 'Protein' or 'Protein Name': Proteins > Protein
+# - 'Protein Accession': Proteins > Protein Accession  
+# - 'Peptide Modified Sequence': Peptides > Peptide Modified Sequence
+# - 'Precursor Charge': Precursors > Precursor Charge
+# - 'Replicate Name': Replicates > Replicate Name
+# - 'Area': Transition Results > Area
+# - 'Retention Time': Transition Results > Retention Time
+# - 'Fragment Ion': Transitions > Fragment Ion
 
-    # Alternative Skyline column names (for backwards compatibility)
-    'Protein Name': 'protein_names',
-    'Peptide Sequence': 'peptide_sequence',
-    'Peptide Modified Sequence': 'peptide_modified',
-    'Best Retention Time': 'retention_time',
-    'Total Area Fragment': 'abundance_fragment',
-    'Total Area MS1': 'abundance_ms1',
-    'Average Mass Error PPM': 'mass_error_ppm',
-    'Library Dot Product': 'library_dotp',
-    'Is Decoy': 'is_decoy',
-
-    # EncyclopeDIA via Skyline
-    'Normalized Area': 'abundance_fragment',
-
-    # Alternative naming conventions (no spaces)
-    'ProteinName': 'protein_names',
-    'ProteinAccession': 'protein_ids',
-    'ModifiedSequence': 'peptide_modified',
-    'PrecursorCharge': 'precursor_charge',
-    'RetentionTime': 'retention_time',
-    'FragmentArea': 'abundance_fragment',
-    'Ms1Area': 'abundance_ms1',
-    'ReplicateName': 'replicate_name',
-    'FragmentIon': 'fragment_ion',
-    'ShapeCorrelation': 'shape_correlation',
+# Standard column names expected from Skyline exports
+# These match the exact column headers from Skyline report exports
+SKYLINE_STANDARD_COLUMNS = {
+    # Core columns for PRISM processing
+    'protein_name': 'Protein',  # Protein display name
+    'protein_accession': 'Protein Accession',  # Protein accession (UniProt, etc.)
+    'protein_gene': 'Protein Gene',  # Gene name
+    'peptide_sequence': 'Peptide',  # Unmodified sequence
+    'peptide_modified': 'Peptide Modified Sequence',  # With modifications
+    'precursor_charge': 'Precursor Charge',
+    'precursor_mz': 'Precursor Mz',
+    'fragment_ion': 'Fragment Ion',  # y7, b5, precursor, etc.
+    'product_charge': 'Product Charge',
+    'product_mz': 'Product Mz',
+    'area': 'Area',  # Transition peak area
+    'retention_time': 'Retention Time',
+    'replicate_name': 'Replicate Name',
+    'batch_name': 'Batch Name',  # Skyline's batch column
+    # Quality metrics
+    'detection_qvalue': 'Detection Q Value',
+    'idotp': 'Isotope Dot Product',
+    'fwhm': 'Fwhm',
+    'shape_correlation': 'Shape Correlation',
+    'coeluting': 'Coeluting',
+    'truncated': 'Truncated',
+    # File info
+    'file_name': 'File Name',
+    'tic_area': 'Total Ion Current Area',
+    'acquired_time': 'Acquired Time',
 }
 
-# Required columns for processing
+# Default column names - users should use these Skyline names in config
+# or override with their actual column names
+DEFAULT_COLUMNS = {
+    'abundance': 'Area',
+    'rt': 'Retention Time',
+    'peptide': 'Peptide Modified Sequence',
+    'protein': 'Protein Accession',
+    'protein_name': 'Protein',
+    'sample': 'Replicate Name',
+    'transition': 'Fragment Ion',
+    'batch': 'Batch Name',
+}
+
+# Required columns for processing (using Skyline names)
 REQUIRED_COLUMNS = [
-    'protein_ids',
-    'peptide_modified',
-    'precursor_charge',
-    'retention_time',
-    'replicate_name',
+    'Protein Accession',
+    'Peptide Modified Sequence',
+    'Replicate Name',
 ]
 
 # At least one of these abundance columns required
-ABUNDANCE_COLUMNS = ['abundance_fragment', 'abundance_ms1']
+ABUNDANCE_COLUMNS = ['Area', 'Total Area Fragment', 'Total Area MS1']
 
 # Sample metadata column name alternatives (Skyline conventions)
 # Order matters - first match is used
-METADATA_REPLICATE_COLUMNS = ['ReplicateName', 'Replicate Name', 'File Name']
-METADATA_SAMPLE_TYPE_COLUMNS = ['SampleType', 'Sample Type']
+METADATA_REPLICATE_COLUMNS = ['Replicate Name', 'ReplicateName', 'File Name']
+METADATA_SAMPLE_TYPE_COLUMNS = ['Sample Type', 'SampleType']
 METADATA_BATCH_COLUMNS = ['Batch', 'Batch Name']  # Skyline uses 'Batch Name'
 
 # Skyline Sample Type to PRISM sample_type mapping
@@ -101,6 +106,90 @@ SKYLINE_SAMPLE_TYPE_MAP = {
 }
 
 VALID_SAMPLE_TYPES = {'experimental', 'pool', 'reference', 'blank'}
+
+# Default patterns for classifying samples by name
+# These can be overridden in config
+DEFAULT_SAMPLE_TYPE_PATTERNS = {
+    'reference': ['-Pool_', '-Pool', '_Pool_', '_Pool'],  # Inter-experiment reference
+    'pool': ['-Carl_', '-Carl', '_QC_', '_QC', '-QC_', '-QC'],  # Intra-experiment QC
+    # Everything else is experimental
+}
+
+
+def classify_sample_by_name(
+    sample_name: str,
+    reference_patterns: list[str] | None = None,
+    pool_patterns: list[str] | None = None,
+) -> str:
+    """Classify sample type based on naming patterns.
+
+    Args:
+        sample_name: The sample/replicate name to classify
+        reference_patterns: Patterns indicating inter-experiment reference samples
+        pool_patterns: Patterns indicating intra-experiment QC/pool samples
+
+    Returns:
+        Sample type: 'reference', 'pool', or 'experimental'
+
+    """
+    if reference_patterns is None:
+        reference_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['reference']
+    if pool_patterns is None:
+        pool_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['pool']
+
+    for pattern in reference_patterns:
+        if pattern in sample_name:
+            return 'reference'
+
+    for pattern in pool_patterns:
+        if pattern in sample_name:
+            return 'pool'
+
+    return 'experimental'
+
+
+def generate_sample_metadata(
+    samples_by_batch: dict[str, set[str]],
+    reference_patterns: list[str] | None = None,
+    pool_patterns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Generate sample metadata DataFrame from sample names.
+
+    Automatically classifies samples based on naming patterns and assigns
+    batch information.
+
+    Args:
+        samples_by_batch: Dict mapping batch_name -> set of sample names
+        reference_patterns: Patterns for reference samples (default: -Pool_, etc.)
+        pool_patterns: Patterns for pool/QC samples (default: -Carl_, -QC_, etc.)
+
+    Returns:
+        DataFrame with columns: sample, sample_type, batch
+
+    """
+    rows = []
+    for batch_name, sample_names in samples_by_batch.items():
+        for sample_name in sorted(sample_names):
+            sample_type = classify_sample_by_name(
+                sample_name, reference_patterns, pool_patterns
+            )
+            rows.append({
+                'sample': sample_name,
+                'sample_type': sample_type,
+                'batch': batch_name,
+            })
+
+    df = pd.DataFrame(rows)
+
+    # Log summary
+    type_counts = df.groupby('batch')['sample_type'].value_counts()
+    logger.info("Generated sample metadata:")
+    for batch in df['batch'].unique():
+        batch_df = df[df['batch'] == batch]
+        counts = batch_df['sample_type'].value_counts().to_dict()
+        logger.info(f"  {batch}: {counts}")
+
+    return df
 
 
 @dataclass
@@ -142,13 +231,483 @@ class MergeResult:
 
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename columns to standard names using the mapping."""
-    rename_map = {}
-    for orig, standard in SKYLINE_COLUMN_MAP.items():
-        if orig in df.columns:
-            rename_map[orig] = standard
+    """Keep columns as-is - no renaming.
+    
+    Previously this renamed Skyline columns to internal names. Now we preserve
+    the original Skyline column names throughout the pipeline.
+    """
+    # No renaming - keep original Skyline column names
+    return df
 
-    return df.rename(columns=rename_map)
+
+def _is_large_file(filepath: Path) -> bool:
+    """Check if file exceeds the large file threshold."""
+    return filepath.stat().st_size > LARGE_FILE_THRESHOLD_BYTES
+
+
+def convert_skyline_csv_to_parquet(
+    csv_path: Path,
+    output_path: Path,
+    batch_name: str | None = None,
+    block_size_mb: int = 256,
+) -> tuple[Path, set[str], int]:
+    """Convert a large Skyline CSV to Parquet using streaming.
+
+    Uses PyArrow's streaming CSV reader for memory-efficient processing
+    of large files. Writes Parquet with zstd compression.
+
+    Args:
+        csv_path: Path to input CSV file
+        output_path: Path for output Parquet file
+        batch_name: Batch identifier to add as a column (optional)
+        block_size_mb: Block size for streaming reader in MB
+
+    Returns:
+        Tuple of (output_path, set of sample names, row count)
+
+    """
+    csv_path = Path(csv_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    file_size_gb = csv_path.stat().st_size / 1e9
+    logger.info(f"Converting {csv_path.name} ({file_size_gb:.1f} GB) to Parquet...")
+
+    # Detect delimiter
+    suffix = csv_path.suffix.lower()
+    delimiter = '\t' if suffix in ['.tsv', '.txt'] else ','
+
+    # PyArrow CSV read options for streaming
+    read_options = pa_csv.ReadOptions(
+        use_threads=True,
+        block_size=block_size_mb * 1024 * 1024,
+    )
+    parse_options = pa_csv.ParseOptions(
+        delimiter=delimiter,
+    )
+    convert_options = pa_csv.ConvertOptions(
+        strings_can_be_null=True,
+    )
+
+    # Build column rename map for PyArrow
+    # Open streaming reader
+    reader = pa_csv.open_csv(
+        csv_path,
+        read_options=read_options,
+        parse_options=parse_options,
+        convert_options=convert_options,
+    )
+
+    sample_names: set[str] = set()
+    writer: pq.ParquetWriter | None = None
+    total_rows = 0
+    batch_count = 0
+
+    # Use Skyline's standard column name for replicate
+    replicate_col = 'Replicate Name'
+
+    for batch in reader:
+        batch_count += 1
+
+        # Keep original Skyline column names - no renaming
+
+        # Extract unique sample names efficiently using PyArrow
+        if replicate_col in batch.schema.names:
+            rep_col = batch.column(replicate_col)
+            unique_vals = rep_col.unique()
+            for val in unique_vals.to_pylist():
+                if val is not None:
+                    sample_names.add(val)
+
+        # Add batch column if specified (using Skyline's naming convention)
+        if batch_name:
+            batch = batch.append_column(
+                'Batch',
+                pa.array([batch_name] * len(batch), type=pa.string())
+            )
+
+        # Add source_document column
+        batch = batch.append_column(
+            'Source Document',
+            pa.array([csv_path.stem] * len(batch), type=pa.string())
+        )
+
+        # Initialize writer with first batch's schema
+        if writer is None:
+            writer = pq.ParquetWriter(
+                output_path,
+                batch.schema,
+                compression='zstd',
+                compression_level=3,
+            )
+
+        writer.write_batch(batch)
+        total_rows += len(batch)
+
+        if batch_count % 10 == 0:
+            logger.debug(f"  Processed {batch_count} batches, {total_rows:,} rows...")
+
+    if writer:
+        writer.close()
+
+    logger.info(
+        f"  Converted: {total_rows:,} rows, {len(sample_names)} samples -> {output_path.name}"
+    )
+
+    return output_path, sample_names, total_rows
+
+
+# =============================================================================
+# Source File Fingerprinting
+# =============================================================================
+
+
+@dataclass
+class SourceFingerprint:
+    """Fingerprint of a source file for cache validation.
+
+    Stores file metadata that can be used to verify if a cached parquet file
+    was generated from the same source files.
+    """
+
+    path: str
+    filename: str
+    size: int
+    mtime_iso: str
+    md5: str | None = None  # Optional, computed only in strict mode
+
+
+def compute_file_fingerprint(
+    file_path: Path,
+    compute_md5: bool = False,
+) -> SourceFingerprint:
+    """Compute fingerprint for a single source file.
+
+    Args:
+        file_path: Path to the file
+        compute_md5: If True, compute MD5 checksum (slower but more reliable)
+
+    Returns:
+        SourceFingerprint with file metadata
+
+    """
+    file_path = Path(file_path).resolve()
+    stat = file_path.stat()
+
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+
+    md5_hash = None
+    if compute_md5:
+        md5 = hashlib.md5()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192 * 1024), b''):  # 8MB chunks
+                md5.update(chunk)
+        md5_hash = md5.hexdigest()
+
+    return SourceFingerprint(
+        path=str(file_path),
+        filename=file_path.name,
+        size=stat.st_size,
+        mtime_iso=mtime.isoformat(),
+        md5=md5_hash,
+    )
+
+
+def compute_source_fingerprints(
+    file_paths: list[Path],
+    compute_md5: bool = False,
+) -> list[dict]:
+    """Compute fingerprints for multiple source files.
+
+    Args:
+        file_paths: List of paths to source files
+        compute_md5: If True, compute MD5 checksums
+
+    Returns:
+        List of fingerprint dictionaries (JSON-serializable)
+
+    """
+    fingerprints = []
+    for fp in file_paths:
+        fingerprint = compute_file_fingerprint(fp, compute_md5=compute_md5)
+        fingerprints.append({
+            'path': fingerprint.path,
+            'filename': fingerprint.filename,
+            'size': fingerprint.size,
+            'mtime_iso': fingerprint.mtime_iso,
+            'md5': fingerprint.md5,
+        })
+    return fingerprints
+
+
+def verify_source_fingerprints(
+    current_files: list[Path],
+    stored_fingerprints: list[dict],
+    strict: bool = False,
+) -> tuple[bool, list[str]]:
+    """Verify that current source files match stored fingerprints.
+
+    Args:
+        current_files: List of current input file paths
+        stored_fingerprints: Fingerprints from parquet metadata
+        strict: If True, also verify MD5 checksums (requires recomputing)
+
+    Returns:
+        Tuple of (is_valid, list of mismatch reasons)
+
+    """
+    reasons = []
+
+    # Check file count
+    if len(current_files) != len(stored_fingerprints):
+        reasons.append(
+            f"File count mismatch: {len(current_files)} current vs "
+            f"{len(stored_fingerprints)} stored"
+        )
+        return False, reasons
+
+    # Build lookup by filename for matching
+    stored_by_name = {fp['filename']: fp for fp in stored_fingerprints}
+
+    for current_path in current_files:
+        current_path = Path(current_path).resolve()
+        filename = current_path.name
+
+        if filename not in stored_by_name:
+            reasons.append(f"File not in stored fingerprints: {filename}")
+            continue
+
+        stored = stored_by_name[filename]
+
+        # Check file exists
+        if not current_path.exists():
+            reasons.append(f"File no longer exists: {filename}")
+            continue
+
+        # Check size
+        current_size = current_path.stat().st_size
+        if current_size != stored['size']:
+            reasons.append(
+                f"Size mismatch for {filename}: "
+                f"{current_size:,} bytes vs {stored['size']:,} bytes stored"
+            )
+            continue
+
+        # Check mtime
+        current_mtime = datetime.fromtimestamp(
+            current_path.stat().st_mtime, tz=timezone.utc
+        )
+        stored_mtime = datetime.fromisoformat(stored['mtime_iso'])
+        if current_mtime != stored_mtime:
+            reasons.append(
+                f"Modification time mismatch for {filename}: "
+                f"{current_mtime.isoformat()} vs {stored['mtime_iso']} stored"
+            )
+            continue
+
+        # Optional strict MD5 check
+        if strict and stored.get('md5'):
+            current_fp = compute_file_fingerprint(current_path, compute_md5=True)
+            if current_fp.md5 != stored['md5']:
+                reasons.append(
+                    f"MD5 mismatch for {filename}: "
+                    f"{current_fp.md5} vs {stored['md5']} stored"
+                )
+
+    return len(reasons) == 0, reasons
+
+
+def get_parquet_source_fingerprints(parquet_path: Path) -> list[dict] | None:
+    """Read source fingerprints from parquet file metadata.
+
+    Args:
+        parquet_path: Path to parquet file
+
+    Returns:
+        List of fingerprint dicts, or None if not found
+
+    """
+    try:
+        pf = pq.ParquetFile(parquet_path)
+        metadata = pf.schema_arrow.metadata
+        if metadata and b'prism_source_fingerprints' in metadata:
+            fingerprints_json = metadata[b'prism_source_fingerprints'].decode('utf-8')
+            return json.loads(fingerprints_json)
+    except Exception as e:
+        logger.debug(f"Could not read fingerprints from {parquet_path}: {e}")
+
+    return None
+
+
+def merge_skyline_reports_streaming(
+    report_paths: list[Path],
+    output_path: Path,
+    batch_names: list[str] | None = None,
+    block_size_mb: int = 256,
+    compute_fingerprint_md5: bool = False,
+) -> tuple[Path, dict[str, set[str]], int]:
+    """Merge multiple large Skyline CSVs to a single Parquet file using streaming.
+
+    Memory-efficient alternative to merge_skyline_reports for large files.
+    Processes each CSV file in streaming fashion and appends to a single
+    Parquet file.
+
+    Source file fingerprints are embedded in the parquet metadata for cache
+    validation on subsequent runs.
+
+    Args:
+        report_paths: List of paths to Skyline CSV reports
+        output_path: Path for output Parquet file
+        batch_names: Optional list of batch names (one per report).
+                     If None, uses filename stems as batch names.
+        block_size_mb: Block size for streaming reader in MB
+        compute_fingerprint_md5: If True, compute MD5 checksums for fingerprints
+
+    Returns:
+        Tuple of (output_path, dict of batch_name -> sample_names, total_row_count)
+
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if batch_names is None:
+        batch_names = [p.stem for p in report_paths]
+
+    if len(batch_names) != len(report_paths):
+        raise ValueError("batch_names must have same length as report_paths")
+
+    # Compute source file fingerprints for cache validation
+    logger.info("Computing source file fingerprints...")
+    fingerprints = compute_source_fingerprints(
+        report_paths, compute_md5=compute_fingerprint_md5
+    )
+
+    total_size_gb = sum(p.stat().st_size for p in report_paths) / 1e9
+    logger.info(
+        f"Merging {len(report_paths)} reports ({total_size_gb:.1f} GB total) to Parquet..."
+    )
+
+    all_samples: dict[str, set[str]] = {}
+    total_rows = 0
+    writer: pq.ParquetWriter | None = None
+
+    # Use Skyline's standard column name for replicate
+    replicate_col = 'Replicate Name'
+
+    for csv_path, batch_name in zip(report_paths, batch_names):
+        csv_path = Path(csv_path)
+        file_size_gb = csv_path.stat().st_size / 1e9
+        logger.info(f"  Processing {csv_path.name} ({file_size_gb:.1f} GB)...")
+
+        # Detect delimiter
+        suffix = csv_path.suffix.lower()
+        delimiter = '\t' if suffix in ['.tsv', '.txt'] else ','
+
+        read_options = pa_csv.ReadOptions(
+            use_threads=True,
+            block_size=block_size_mb * 1024 * 1024,
+        )
+        parse_options = pa_csv.ParseOptions(delimiter=delimiter)
+        convert_options = pa_csv.ConvertOptions(strings_can_be_null=True)
+
+        reader = pa_csv.open_csv(
+            csv_path,
+            read_options=read_options,
+            parse_options=parse_options,
+            convert_options=convert_options,
+        )
+
+        sample_names: set[str] = set()
+        file_rows = 0
+        batch_count = 0
+
+        for batch in reader:
+            batch_count += 1
+
+            # Keep original Skyline column names - no renaming
+
+            # Extract unique sample names efficiently using PyArrow
+            if replicate_col in batch.schema.names:
+                rep_col = batch.column(replicate_col)
+                # Use PyArrow's unique() for efficiency instead of iterating
+                unique_vals = rep_col.unique()
+                for val in unique_vals.to_pylist():
+                    if val is not None:
+                        sample_names.add(val)
+
+            # Add batch and source columns (using Skyline naming conventions)
+            batch = batch.append_column(
+                'Batch', pa.array([batch_name] * len(batch), type=pa.string())
+            )
+            batch = batch.append_column(
+                'Source Document', pa.array([csv_path.stem] * len(batch), type=pa.string())
+            )
+
+            # Initialize or append to writer
+            if writer is None:
+                writer = pq.ParquetWriter(
+                    output_path,
+                    batch.schema,
+                    compression='zstd',
+                    compression_level=3,
+                )
+
+            writer.write_batch(batch)
+            file_rows += len(batch)
+
+            # Progress logging every 20 batches (~5GB for 256MB blocks)
+            if batch_count % 20 == 0:
+                logger.info(f"    Progress: {file_rows:,} rows processed...")
+
+        all_samples[batch_name] = sample_names
+        total_rows += file_rows
+        logger.info(f"    Completed: {file_rows:,} rows, {len(sample_names)} samples")
+
+    if writer:
+        writer.close()
+
+    # Embed source fingerprints in parquet metadata
+    logger.info("Embedding source fingerprints in parquet metadata...")
+    _add_fingerprints_to_parquet(output_path, fingerprints)
+
+    logger.info(f"Merge complete: {total_rows:,} total rows -> {output_path.name}")
+
+    return output_path, all_samples, total_rows
+
+
+def _add_fingerprints_to_parquet(parquet_path: Path, fingerprints: list[dict]) -> None:
+    """Add source fingerprints to parquet file metadata.
+
+    This reads the existing parquet file, adds the fingerprints to the schema
+    metadata, and rewrites the file with the new metadata.
+
+    Args:
+        parquet_path: Path to existing parquet file
+        fingerprints: List of fingerprint dictionaries
+
+    """
+    # Read existing file
+    table = pq.read_table(parquet_path)
+
+    # Add fingerprints to schema metadata
+    existing_metadata = table.schema.metadata or {}
+    new_metadata = {
+        **existing_metadata,
+        b'prism_source_fingerprints': json.dumps(fingerprints).encode('utf-8'),
+        b'prism_version': b'0.2.0',
+    }
+
+    # Create new schema with updated metadata
+    new_schema = table.schema.with_metadata(new_metadata)
+    new_table = table.cast(new_schema)
+
+    # Rewrite the file with metadata
+    pq.write_table(
+        new_table,
+        parquet_path,
+        compression='zstd',
+        compression_level=3,
+    )
 
 
 def validate_skyline_report(filepath: Path) -> ValidationResult:

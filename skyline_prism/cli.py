@@ -16,19 +16,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 import yaml
 
 if TYPE_CHECKING:
     import pandas as pd
 
-from .batch_correction import combat_from_long
 from .data_io import (
-    apply_batch_estimation,
+    generate_sample_metadata,
+    get_parquet_source_fingerprints,
     load_sample_metadata,
-    load_skyline_report,
     load_unified_data,
     merge_skyline_reports,
+    merge_skyline_reports_streaming,
+    verify_source_fingerprints,
 )
 from .normalization import normalize_pipeline
 from .parsimony import (
@@ -37,13 +37,7 @@ from .parsimony import (
     export_protein_groups,
 )
 from .rollup import (
-    extract_peptide_residuals,
-    extract_transition_residuals,
     rollup_to_proteins,
-)
-from .transition_rollup import (
-    learn_variance_model,
-    rollup_transitions_to_peptides,
 )
 from .validation import generate_qc_report, validate_correction
 
@@ -64,13 +58,15 @@ def load_config(config_path: Path | None) -> dict:
     """Load configuration from YAML file or return defaults."""
     defaults = {
         'data': {
-            'abundance_column': 'TotalAreaFragment',
-            'rt_column': 'BestRetentionTime',
-            'peptide_column': 'PeptideModifiedSequence',
-            'protein_column': 'ProteinAccession',
-            'sample_column': 'ReplicateName',
+            'abundance_column': 'Area',
+            'rt_column': 'Retention Time',
+            'peptide_column': 'Peptide Modified Sequence',
+            'protein_column': 'Protein Accession',
+            'protein_name_column': 'Protein',
+            'sample_column': 'Replicate Name',
             'batch_column': 'Batch',
-            'sample_type_column': 'SampleType',
+            'sample_type_column': 'Sample Type',
+            'transition_column': 'Fragment Ion',
         },
         'transition_rollup': {
             'enabled': False,
@@ -271,9 +267,13 @@ def cmd_rollup(args: argparse.Namespace) -> int:
         peptide_col=config['data'].get('peptide_column', 'peptide_modified'),
         method=config['protein_rollup'].get('method', 'median_polish'),
         min_peptides=config['protein_rollup'].get('min_peptides', 3),
-        shared_peptide_handling=config['parsimony'].get('shared_peptide_handling', 'all_groups'),
+        shared_peptide_handling=config['parsimony'].get(
+            'shared_peptide_handling', 'all_groups'
+        ),
         topn_n=config['protein_rollup'].get('topn', {}).get('n', 3),
-        topn_selection=config['protein_rollup'].get('topn', {}).get('selection', 'median_abundance'),
+        topn_selection=config['protein_rollup'].get('topn', {}).get(
+            'selection', 'median_abundance'
+        ),
     )
 
     # Save protein data
@@ -420,23 +420,48 @@ class PipelineResult:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """Run the full PRISM pipeline.
+    """Run the full PRISM pipeline using streaming processing.
+
+    This is the memory-efficient version that processes data without loading
+    the entire dataset into memory.
 
     Pipeline stages:
-    1. Load and merge input data
-    2. Transition → Peptide rollup (if enabled/needed)
-    3. RT correction (if enabled)
-    4. Global normalization
-    5. Two-arm split:
-       a. Peptide arm: Batch correction → peptide output
-       b. Protein arm: Rollup → Batch correction → protein output
+    1. Merge input CSVs to parquet (streaming)
+    2. Transition -> Peptide rollup
+       2b. Peptide Global normalization
+       2c. Peptide ComBat batch correction
+    3. Protein Parsimony
+    4. Peptide -> Protein rollup
+       4b. Protein Global Normalization
+       4c. Protein ComBat batch correction
+    5. Output generation
+
+    Args:
+        args: Command-line arguments
+
+    Returns:
+        Exit code (0 = success)
+
     """
-    # Load configuration from provenance, YAML config, or defaults
-    # Priority: --from-provenance > --config > defaults
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    from .chunked_processing import (
+        ChunkedRollupConfig,
+        ProteinRollupConfig,
+        rollup_proteins_streaming,
+        rollup_transitions_sorted,
+    )
+    from .parsimony import (
+        build_peptide_protein_map,
+        compute_protein_groups,
+        export_protein_groups,
+    )
+
+    # Load configuration
     if hasattr(args, 'from_provenance') and args.from_provenance:
         config = load_config_from_provenance(Path(args.from_provenance))
         method_log = [f"Configuration loaded from provenance: {args.from_provenance}"]
-        # If --config is also provided, merge it over provenance (allows overrides)
         if args.config:
             yaml_config = load_config(Path(args.config))
             config = _deep_merge(config, yaml_config)
@@ -446,389 +471,550 @@ def cmd_run(args: argparse.Namespace) -> int:
         method_log = []
 
     # =========================================================================
-    # Stage 0: Load input data
+    # Stage 0: Prepare input data
     # =========================================================================
-    input_path = Path(args.input)
-
-    if input_path.suffix in ['.csv', '.tsv', '.txt']:
-        # Single Skyline report
-        data = load_skyline_report(input_path)
-        method_log.append(f"Loaded Skyline report: {input_path}")
+    if isinstance(args.input, list):
+        input_paths = [Path(p) for p in args.input]
     else:
-        # Parquet file (already merged)
-        data = load_unified_data(input_path)
-        method_log.append(f"Loaded data from: {input_path}")
+        input_paths = [Path(args.input)]
 
-    logger.info(f"Loaded {len(data)} rows, {data[config['data']['sample_column']].nunique()} samples")
-
-    # Load metadata if provided
-    metadata_df = None
-    if args.metadata:
-        metadata_df = load_sample_metadata(Path(args.metadata))
-        # Merge metadata with data
-        data = data.merge(
-            metadata_df,
-            left_on=config['data']['sample_column'],
-            right_on=metadata_df.columns[0],  # Assume first column is sample ID
-            how='left'
-        )
-        method_log.append(f"Merged sample metadata from: {args.metadata}")
-
-    # Get column names from config
-    abundance_col = config['data']['abundance_column']
-    peptide_col = config['data']['peptide_column']
-    protein_col = config['data']['protein_column']
-    sample_col = config['data']['sample_column']
-    batch_col = config['data']['batch_column']
-    sample_type_col = config['data'].get('sample_type_column', 'sample_type')
-    rt_col = config['data'].get('rt_column', 'BestRetentionTime')
-
-    # =========================================================================
-    # Batch estimation if batch column is missing
-    # =========================================================================
-    if batch_col not in data.columns or data[batch_col].isna().all():
-        logger.info("Batch column not found - estimating batches...")
-        data, batch_result = apply_batch_estimation(
-            data,
-            metadata=metadata_df,
-            min_samples_per_batch=config.get('batch_estimation', {}).get(
-                'min_samples_per_batch', 12
-            ),
-            max_samples_per_batch=config.get('batch_estimation', {}).get(
-                'max_samples_per_batch', 100
-            ),
-            gap_iqr_multiplier=config.get('batch_estimation', {}).get(
-                'gap_iqr_multiplier', 1.5
-            ),
-            n_batches_fallback=config.get('batch_estimation', {}).get(
-                'n_batches', None
-            ),
-        )
-        method_log.append(
-            f"Batch estimation: {batch_result.n_batches} batches via "
-            f"'{batch_result.method}'"
-        )
-        for warning in batch_result.warnings:
-            logger.warning(warning)
-            method_log.append(f"Warning: {warning}")
-
-    # Preserve raw abundance before any corrections (for output)
-    data['abundance_raw'] = data[abundance_col].copy()
-
-    # =========================================================================
-    # Stage 1: Transition → Peptide rollup (if enabled)
-    # =========================================================================
-    transition_residuals = None
-    learned_variance_params = None
-
-    if config['transition_rollup'].get('enabled', False):
-        logger.info("Running transition → peptide rollup...")
-
-        rollup_method = config['transition_rollup'].get('method', 'median_polish')
-        variance_params = None
-
-        # Learn variance model from reference samples if using quality_weighted
-        if (
-            rollup_method == 'quality_weighted'
-            and config['transition_rollup'].get('learn_variance_model', False)
-        ):
-            # Identify reference samples
-            if sample_type_col in data.columns:
-                reference_samples = data.loc[
-                    data[sample_type_col] == 'reference', sample_col
-                ].unique().tolist()
-            else:
-                # Try to detect from sample names using config patterns
-                import re
-                ref_pattern = config.get('sample_annotations', {}).get(
-                    'reference_pattern', 'Reference|GoldenWest'
-                )
-                reference_samples = [
-                    s for s in data[sample_col].unique()
-                    if re.search(ref_pattern, s, re.IGNORECASE)
-                ]
-
-            if len(reference_samples) >= 2:
-                logger.info(
-                    f"Learning variance model from "
-                    f"{len(reference_samples)} reference samples..."
-                )
-                learned_variance_params = learn_variance_model(
-                    data,
-                    reference_samples=reference_samples,
-                    peptide_col=peptide_col,
-                    sample_col=sample_col,
-                    abundance_col=abundance_col,
-                    shape_corr_col=config['transition_rollup'].get(
-                        'quality_columns', {}
-                    ).get('shape_correlation', 'shape_correlation'),
-                    coeluting_col=config['transition_rollup'].get(
-                        'quality_columns', {}
-                    ).get('coeluting', 'coeluting'),
-                )
-                variance_params = learned_variance_params
-                method_log.append("Learned variance model from reference samples")
-            else:
-                logger.warning(
-                    f"Need ≥2 reference samples to learn variance model, "
-                    f"found {len(reference_samples)}. Using defaults."
-                )
-
-        rollup_result = rollup_transitions_to_peptides(
-            data,
-            abundance_col=abundance_col,
-            peptide_col=peptide_col,
-            sample_col=sample_col,
-            method=rollup_method,
-            min_transitions=config['transition_rollup'].get('min_transitions', 3),
-            params=variance_params,
-        )
-
-        data = rollup_result.peptide_data
-        abundance_col = 'abundance'  # Rollup creates this column
-        method_log.append(f"Transition rollup: {rollup_method}")
-
-        # Extract transition residuals if using median polish
-        if (
-            config['output'].get('include_residuals', True)
-            and rollup_result.median_polish_results
-        ):
-            transition_residuals = extract_transition_residuals(rollup_result)
-            method_log.append("Extracted transition-level residuals")
-
-    # =========================================================================
-    # Stage 2: RT correction (if enabled)
-    # =========================================================================
-    if config['rt_correction'].get('enabled', False):
-        logger.info("Running RT-aware correction...")
-
-        norm_result = normalize_pipeline(
-            data,
-            sample_type_col=sample_type_col,
-            precursor_col=peptide_col,
-            abundance_col=abundance_col,
-            rt_col=rt_col,
-            replicate_col=sample_col,
-            batch_col=batch_col,
-            rt_correction=True,
-            global_method=config['global_normalization'].get('method', 'median'),
-            spline_df=config['rt_correction'].get('spline_df', 5),
-            per_batch=config['rt_correction'].get('per_batch', True),
-            batch_correction=False,  # We do batch correction separately per arm
-        )
-
-        data = norm_result.normalized_data
-        abundance_col = 'abundance_normalized'
-        method_log.extend(norm_result.method_log)
-    else:
-        # Just do global normalization without RT correction
-        logger.info("Running global normalization (RT correction disabled)...")
-
-        norm_result = normalize_pipeline(
-            data,
-            sample_type_col=sample_type_col,
-            precursor_col=peptide_col,
-            abundance_col=abundance_col,
-            rt_col=rt_col,
-            replicate_col=sample_col,
-            batch_col=batch_col,
-            rt_correction=False,
-            global_method=config['global_normalization'].get('method', 'median'),
-            batch_correction=False,
-        )
-
-        data = norm_result.normalized_data
-        abundance_col = 'abundance_normalized'
-        method_log.extend(norm_result.method_log)
-
-    # =========================================================================
-    # Stage 3: Build protein groups (needed for protein rollup)
-    # =========================================================================
-    logger.info("Computing protein groups...")
-
-    pep_to_prot, prot_to_pep, prot_to_name = build_peptide_protein_map(
-        data,
-        peptide_col=peptide_col,
-        protein_col=protein_col,
-    )
-
-    protein_groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
-    method_log.append(f"Computed {len(protein_groups)} protein groups")
-
-    # =========================================================================
-    # Stage 4a: Peptide arm - Batch correction
-    # =========================================================================
-    peptide_data = data.copy()
-
-    if config['batch_correction'].get('enabled', True):
-        logger.info("Applying batch correction to peptides...")
-
-        # Check if we have batch information
-        if batch_col in peptide_data.columns and peptide_data[batch_col].nunique() > 1:
-            peptide_data = combat_from_long(
-                peptide_data,
-                abundance_col=abundance_col,
-                feature_col=peptide_col,
-                sample_col=sample_col,
-                batch_col=batch_col,
-            )
-            method_log.append("Peptide batch correction: ComBat")
-        else:
-            logger.info("Skipping peptide batch correction: single batch detected")
-            method_log.append("Peptide batch correction: skipped (single batch)")
-    else:
-        pass
-
-    # =========================================================================
-    # Stage 4b: Protein arm - Rollup then batch correction
-    # =========================================================================
-    logger.info("Rolling up peptides to proteins...")
-
-    protein_df, polish_results, topn_results = rollup_to_proteins(
-        data,  # Use pre-batch-corrected data for rollup
-        protein_groups,
-        abundance_col=abundance_col,
-        sample_col=sample_col,
-        peptide_col=peptide_col,
-        method=config['protein_rollup'].get('method', 'median_polish'),
-        shared_peptide_handling=config['parsimony'].get('shared_peptide_handling', 'all_groups'),
-        topn_n=config['protein_rollup'].get('topn', {}).get('n', 3),
-        topn_selection=config['protein_rollup'].get('topn', {}).get('selection', 'median_abundance'),
-    )
-
-    method_log.append(f"Protein rollup: {config['protein_rollup']['method']}")
-
-    # Extract peptide residuals from protein rollup if using median polish
-    peptide_residuals = None
-    if (config['output'].get('include_residuals', True) and
-        config['protein_rollup'].get('method') == 'median_polish' and
-        polish_results):
-        peptide_residuals = extract_peptide_residuals(polish_results)
-        method_log.append("Extracted peptide-level residuals from protein rollup")
-
-    # Batch correct proteins
-    if config['batch_correction'].get('enabled', True):
-        logger.info("Applying batch correction to proteins...")
-
-        # Protein data needs batch info - merge from sample metadata
-        sample_batch = data[[sample_col, batch_col]].drop_duplicates()
-        protein_df = protein_df.merge(sample_batch, on=sample_col, how='left')
-
-        if batch_col in protein_df.columns and protein_df[batch_col].nunique() > 1:
-            protein_df = combat_from_long(
-                protein_df,
-                abundance_col='abundance',
-                feature_col='protein_group',
-                sample_col=sample_col,
-                batch_col=batch_col,
-            )
-            method_log.append("Protein batch correction: ComBat")
-        else:
-            logger.info("Skipping protein batch correction: single batch detected")
-            method_log.append("Protein batch correction: skipped (single batch)")
-    else:
-        pass
-
-    # =========================================================================
-    # Stage 5: Save outputs (back-transform to linear scale)
-    # =========================================================================
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_format = config['output'].get('format', 'parquet')
+    # Get sample type patterns from args or config
+    reference_patterns = None
+    pool_patterns = None
+    if hasattr(args, 'reference_pattern') and args.reference_pattern:
+        reference_patterns = args.reference_pattern
+    elif 'sample_annotations' in config:
+        ref_pattern = config['sample_annotations'].get('reference_pattern')
+        if ref_pattern:
+            reference_patterns = (
+                [ref_pattern] if isinstance(ref_pattern, str) else ref_pattern
+            )
 
-    # Back-transform peptide abundances from log2 to linear scale
-    # The pipeline works internally on log2 scale, but output should be linear
-    peptide_output_data = peptide_data.copy()
-    peptide_output_data[abundance_col] = np.power(2, peptide_output_data[abundance_col])
-    logger.info("Back-transformed peptide abundances to linear scale")
+    if hasattr(args, 'pool_pattern') and args.pool_pattern:
+        pool_patterns = args.pool_pattern
+    elif 'sample_annotations' in config:
+        pool_pattern = config['sample_annotations'].get('pool_pattern')
+        if pool_pattern:
+            pool_patterns = (
+                [pool_pattern] if isinstance(pool_pattern, str) else pool_pattern
+            )
 
-    # Save peptide data
-    peptide_output = output_dir / f"corrected_peptides.{output_format}"
-    if output_format == 'parquet':
-        peptide_output_data.to_parquet(peptide_output, index=False)
-    elif output_format == 'csv':
-        peptide_output_data.to_csv(peptide_output, index=False)
-    elif output_format == 'tsv':
-        peptide_output_data.to_csv(peptide_output, sep='\t', index=False)
-    logger.info(f"Saved peptides to {peptide_output}")
+    # Categorize input files
+    csv_inputs = [
+        p for p in input_paths if p.suffix.lower() in ['.csv', '.tsv', '.txt']
+    ]
+    parquet_inputs = [
+        p for p in input_paths if p.suffix.lower() == '.parquet'
+    ]
 
-    # Back-transform protein abundances from log2 to linear scale
-    # The sample columns contain log2 abundances from median polish
-    samples = data[sample_col].unique()
-    protein_output_df = protein_df.copy()
-    sample_cols_in_protein = [c for c in protein_output_df.columns if c in samples]
-    for col in sample_cols_in_protein:
-        protein_output_df[col] = np.power(2, protein_output_df[col])
-    logger.info("Back-transformed protein abundances to linear scale")
+    # Check for --force-reprocess flag
+    force_reprocess = getattr(args, 'force_reprocess', False)
 
-    # Save protein data
-    protein_output = output_dir / f"corrected_proteins.{output_format}"
-    if output_format == 'parquet':
-        protein_output_df.to_parquet(protein_output, index=False)
-    elif output_format == 'csv':
-        protein_output_df.to_csv(protein_output, index=False)
-    elif output_format == 'tsv':
-        protein_output_df.to_csv(protein_output, sep='\t', index=False)
-    logger.info(f"Saved proteins to {protein_output}")
+    # =========================================================================
+    # Stage 1: Merge CSVs / Prepare Input Data
+    # =========================================================================
+    logger.info("=" * 60)
+    logger.info("Stage 1: Merge CSVs / Prepare Input Data")
+    logger.info("=" * 60)
 
-    # Save protein groups
-    groups_output = output_dir / "protein_groups.tsv"
-    export_protein_groups(protein_groups, str(groups_output))
-    logger.info(f"Saved protein groups to {groups_output}")
+    metadata_df = None
+    if len(csv_inputs) >= 1:
+        batch_names = [p.stem for p in csv_inputs]
+        merged_parquet_path = output_dir / 'merged_data.parquet'
 
-    # Save residuals if requested
-    if config['output'].get('include_residuals', True):
-        if peptide_residuals is not None:
-            residuals_output = output_dir / f"peptide_residuals.{output_format}"
-            if output_format == 'parquet':
-                peptide_residuals.to_parquet(residuals_output, index=False)
+        # Check if we can reuse an existing merged parquet
+        use_cached = False
+        if not force_reprocess and merged_parquet_path.exists():
+            logger.info(f"Found existing merged parquet: {merged_parquet_path}")
+            stored_fingerprints = get_parquet_source_fingerprints(merged_parquet_path)
+
+            if stored_fingerprints:
+                is_valid, mismatch_reasons = verify_source_fingerprints(
+                    csv_inputs, stored_fingerprints
+                )
+                if is_valid:
+                    logger.info("  Source files match - using cached parquet")
+                    use_cached = True
+                    transition_parquet = merged_parquet_path
+                    method_log.append(
+                        "Reused cached merged parquet (source files unchanged)"
+                    )
+                else:
+                    logger.info("  Source files changed - reprocessing required:")
+                    for reason in mismatch_reasons:
+                        logger.info(f"    - {reason}")
             else:
-                peptide_residuals.to_csv(residuals_output, sep='\t' if output_format == 'tsv' else ',', index=False)
-            logger.info(f"Saved peptide residuals to {residuals_output}")
+                logger.info(
+                    "  No fingerprints in parquet metadata - reprocessing required"
+                )
 
-        if transition_residuals is not None:
-            residuals_output = output_dir / f"transition_residuals.{output_format}"
-            if output_format == 'parquet':
-                transition_residuals.to_parquet(residuals_output, index=False)
-            else:
-                transition_residuals.to_csv(residuals_output, sep='\t' if output_format == 'tsv' else ',', index=False)
-            logger.info(f"Saved transition residuals to {residuals_output}")
+        if not use_cached:
+            logger.info(f"Merging {len(csv_inputs)} Skyline reports (streaming)...")
+            merged_path, samples_by_batch, total_rows = merge_skyline_reports_streaming(
+                csv_inputs,
+                merged_parquet_path,
+                batch_names=batch_names,
+            )
+            method_log.append(f"Merged {len(csv_inputs)} reports ({total_rows:,} rows)")
+            transition_parquet = merged_path
 
-    # Generate and save metadata JSON
-    input_files = [str(args.input_data)]
+            # Generate metadata if not provided
+            if not args.metadata:
+                logger.info("Generating sample metadata from sample names...")
+                metadata_df = generate_sample_metadata(
+                    samples_by_batch,
+                    reference_patterns=reference_patterns,
+                    pool_patterns=pool_patterns,
+                )
+                metadata_path = output_dir / 'sample_metadata.tsv'
+                metadata_df.to_csv(metadata_path, sep='\t', index=False)
+                method_log.append(f"Generated sample metadata: {metadata_path}")
+
+    elif len(parquet_inputs) >= 1:
+        transition_parquet = parquet_inputs[0]
+        logger.info(f"Using existing parquet: {transition_parquet}")
+        method_log.append(f"Input parquet: {transition_parquet}")
+
+    else:
+        logger.error("No input files provided")
+        return 1
+
+    # Load explicit metadata if provided
     if args.metadata:
-        input_files.append(str(args.metadata))
+        metadata_df = load_sample_metadata(Path(args.metadata))
+        method_log.append(f"Loaded metadata: {args.metadata}")
 
-    metadata = generate_pipeline_metadata(
-        config=config,
-        data=data,
-        protein_groups=protein_groups,
-        method_log=method_log,
-        input_files=input_files,
-        sample_type_col=sample_type_col,
-        sample_col=sample_col,
-        batch_col=batch_col,
+    # -------------------------------------------------------------------------
+    # Stage 1 (continued): Auto-detect column names from data
+    # -------------------------------------------------------------------------
+    pf = pq.ParquetFile(transition_parquet)
+    available_columns = set(pf.schema_arrow.names)
+    logger.info(f"  Available columns: {sorted(available_columns)}")
+
+    # Auto-detect peptide column
+    peptide_col = config['data']['peptide_column']
+    peptide_col_alternatives = [
+        'Peptide Modified Sequence Unimod Ids',
+        'Peptide Modified Sequence',
+        'Peptide',
+    ]
+    if peptide_col not in available_columns:
+        for alt in peptide_col_alternatives:
+            if alt in available_columns:
+                logger.info(f"  Peptide column '{peptide_col}' not found, using '{alt}'")
+                peptide_col = alt
+                break
+        else:
+            logger.error(f"No peptide column found. Available: {sorted(available_columns)}")
+            return 1
+
+    # Get other column names (use config or auto-detect)
+    sample_col = config['data']['sample_column']
+    if sample_col not in available_columns and 'Replicate Name' in available_columns:
+        sample_col = 'Replicate Name'
+
+    abundance_col = config['data']['abundance_column']
+    if abundance_col not in available_columns and 'Area' in available_columns:
+        abundance_col = 'Area'
+
+    transition_col = config['data'].get('transition_column', 'Fragment Ion')
+    if transition_col not in available_columns and 'Fragment Ion' in available_columns:
+        transition_col = 'Fragment Ion'
+
+    protein_col = config['data']['protein_column']
+    if protein_col not in available_columns and 'Protein Accession' in available_columns:
+        protein_col = 'Protein Accession'
+
+    protein_name_col = config['data'].get('protein_name_column', 'Protein')
+    if protein_name_col not in available_columns and 'Protein' in available_columns:
+        protein_name_col = 'Protein'
+
+    logger.info(
+        f"Using columns: peptide={peptide_col}, sample={sample_col}, "
+        f"abundance={abundance_col}"
     )
 
+    # =========================================================================
+    # Stage 2: Transition -> Peptide rollup
+    # =========================================================================
+    logger.info("=" * 60)
+    logger.info("Stage 2: Transition -> Peptide rollup")
+    logger.info("=" * 60)
+
+    transition_config = ChunkedRollupConfig(
+        peptide_col=peptide_col,
+        transition_col=transition_col,
+        sample_col=sample_col,
+        abundance_col=abundance_col,
+        method=config['transition_rollup'].get('method', 'median_polish'),
+        min_transitions=config['transition_rollup'].get('min_transitions', 3),
+        log_transform=True,
+        progress_interval=5000,
+    )
+
+    peptide_path = output_dir / 'peptides_raw.parquet'
+    peptide_result = rollup_transitions_sorted(
+        parquet_path=transition_parquet,
+        output_path=peptide_path,
+        config=transition_config,
+        save_residuals=config['output'].get('include_residuals', True),
+    )
+    samples = peptide_result.samples
+    method_log.append(
+        f"Transition rollup: {peptide_result.n_peptides:,} peptides, "
+        f"{len(samples)} samples"
+    )
+
+    # -------------------------------------------------------------------------
+    # Stage 2b: Peptide Global Normalization
+    # -------------------------------------------------------------------------
+    logger.info("-" * 60)
+    logger.info("Stage 2b: Peptide Global Normalization")
+    logger.info("-" * 60)
+
+    peptide_df = pd.read_parquet(peptide_path)
+
+    # Data is in wide format: peptide_col, n_transitions, mean_rt, sample1, sample2, ...
+    # Get sample columns (all columns after metadata columns)
+    meta_cols = [peptide_col, 'n_transitions', 'mean_rt']
+    meta_cols = [c for c in meta_cols if c in peptide_df.columns]
+    sample_cols = [c for c in peptide_df.columns if c not in meta_cols]
+
+    # Apply global median normalization (on log2 scale)
+    # For each sample column, subtract sample median and add global median
+    sample_medians = peptide_df[sample_cols].median()
+    global_peptide_median = sample_medians.median()
+    norm_factors = sample_medians - global_peptide_median
+
+    # Apply normalization to each sample column
+    for col in sample_cols:
+        peptide_df[col] = peptide_df[col] - norm_factors[col]
+
+    max_pep_shift = norm_factors.abs().max()
+    logger.info(
+        f"  Global median = {global_peptide_median:.3f}, max shift = {max_pep_shift:.3f}"
+    )
+    method_log.append(f"Peptide median normalization: max shift = {max_pep_shift:.3f}")
+
+    # -------------------------------------------------------------------------
+    # Stage 2c: Peptide ComBat Batch Correction
+    # -------------------------------------------------------------------------
+    batch_correction_enabled = config.get('batch_correction', {}).get('enabled', True)
+
+    if batch_correction_enabled and metadata_df is not None:
+        logger.info("-" * 60)
+        logger.info("Stage 2c: Peptide ComBat Batch Correction")
+        logger.info("-" * 60)
+
+        # Get batch info from metadata
+        batch_col = 'batch'
+        sample_type_col = 'sample_type'
+
+        if batch_col in metadata_df.columns:
+            # Build sample -> batch mapping
+            sample_to_batch = dict(
+                zip(metadata_df['replicate_name'], metadata_df[batch_col])
+            )
+
+            # Check if all sample columns have batch info
+            batches = [sample_to_batch.get(s) for s in sample_cols]
+            n_batches = len(set(b for b in batches if b is not None))
+
+            if n_batches < 2:
+                logger.warning(f"Only {n_batches} batch - skipping batch correction")
+            else:
+                from .batch_correction import combat
+
+                # Get sample types for reference-anchored ComBat
+                sample_to_type = {}
+                if sample_type_col in metadata_df.columns:
+                    sample_to_type = dict(
+                        zip(metadata_df['replicate_name'], metadata_df[sample_type_col])
+                    )
+
+                # Prepare data for ComBat (features x samples matrix)
+                data_matrix = peptide_df[sample_cols].values
+                batch_labels = [sample_to_batch.get(s, 'unknown') for s in sample_cols]
+
+                logger.info(f"  Applying ComBat across {n_batches} batches...")
+
+                # Run ComBat - returns corrected matrix directly
+                corrected_matrix = combat(data_matrix, batch_labels)
+
+                # Replace sample columns with corrected values
+                for i, col in enumerate(sample_cols):
+                    peptide_df[col] = corrected_matrix[:, i]
+
+                method_log.append(f"Peptide ComBat: {n_batches} batches corrected")
+
+                # Evaluate using reference and pool samples if available
+                if sample_to_type:
+                    ref_cols = [c for c in sample_cols
+                                if sample_to_type.get(c) == 'reference']
+                    pool_cols = [c for c in sample_cols
+                                 if sample_to_type.get(c) == 'pool']
+
+                    if ref_cols and pool_cols:
+                        # Calculate CV improvement
+                        ref_cv = peptide_df[ref_cols].std(axis=1) / \
+                            peptide_df[ref_cols].mean(axis=1).abs()
+                        pool_cv = peptide_df[pool_cols].std(axis=1) / \
+                            peptide_df[pool_cols].mean(axis=1).abs()
+                        logger.info(
+                            f"  Reference median CV: {ref_cv.median():.3f}, "
+                            f"Pool median CV: {pool_cv.median():.3f}"
+                        )
+        else:
+            logger.warning("No batch column in metadata - skipping batch correction")
+    elif batch_correction_enabled:
+        logger.warning("No metadata available - skipping batch correction")
+    else:
+        logger.info("  Batch correction disabled in config")
+
+    # Save normalized peptides
+    peptide_normalized_path = output_dir / 'peptides_normalized.parquet'
+    peptide_df.to_parquet(peptide_normalized_path, index=False)
+    logger.info(f"  Saved normalized peptides: {peptide_normalized_path}")
+
+    # =========================================================================
+    # Stage 3: Protein Parsimony
+    # =========================================================================
+    logger.info("=" * 60)
+    logger.info("Stage 3: Protein Parsimony")
+    logger.info("=" * 60)
+
+    columns_for_parsimony = [peptide_col, protein_col, protein_name_col]
+    columns_for_parsimony = [c for c in columns_for_parsimony if c in available_columns]
+
+    logger.info("  Reading peptide-protein mappings...")
+    mapping_table = pf.read(columns=columns_for_parsimony)
+    mapping_df = mapping_table.to_pandas().drop_duplicates()
+    logger.info(f"  Found {len(mapping_df):,} unique peptide-protein records")
+
+    pep_to_prot, prot_to_pep, prot_to_name = build_peptide_protein_map(
+        mapping_df,
+        peptide_col=peptide_col,
+        protein_col=protein_col,
+        protein_name_col=protein_name_col,
+    )
+
+    protein_groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+    logger.info(f"  Computed {len(protein_groups)} protein groups")
+
+    groups_output = output_dir / "protein_groups.tsv"
+    export_protein_groups(protein_groups, str(groups_output))
+    method_log.append(f"Protein groups: {len(protein_groups)}")
+
+    # =========================================================================
+    # Stage 4: Peptide -> Protein Rollup
+    # =========================================================================
+    logger.info("=" * 60)
+    logger.info("Stage 4: Peptide -> Protein Rollup")
+    logger.info("=" * 60)
+
+    protein_config = ProteinRollupConfig(
+        peptide_col=peptide_col,
+        sample_col=sample_col,
+        method=config['protein_rollup'].get('method', 'median_polish'),
+        shared_peptide_handling=config['parsimony'].get(
+            'shared_peptide_handling', 'all_groups'
+        ),
+        min_peptides=config['protein_rollup'].get('min_peptides', 3),
+        topn_n=config['protein_rollup'].get('topn', {}).get('n', 3),
+        progress_interval=1000,
+    )
+
+    protein_path = output_dir / 'proteins_raw.parquet'
+    protein_result = rollup_proteins_streaming(
+        peptide_parquet_path=peptide_normalized_path,
+        protein_groups=protein_groups,
+        output_path=protein_path,
+        config=protein_config,
+        samples=samples,
+        save_residuals=config['output'].get('include_residuals', True),
+    )
+    method_log.append(f"Protein rollup: {protein_result.n_proteins:,} proteins")
+
+    # -------------------------------------------------------------------------
+    # Stage 4b: Protein Global Normalization
+    # -------------------------------------------------------------------------
+    logger.info("-" * 60)
+    logger.info("Stage 4b: Protein Global Normalization")
+    logger.info("-" * 60)
+
+    protein_df = pd.read_parquet(protein_path)
+
+    # Data is in wide format: protein_group, n_peptides, sample1, sample2, ...
+    # Get sample columns (all columns after metadata columns)
+    prot_meta_cols = ['protein_group', 'n_peptides']
+    prot_meta_cols = [c for c in prot_meta_cols if c in protein_df.columns]
+    prot_sample_cols = [c for c in protein_df.columns if c not in prot_meta_cols]
+
+    # Apply global median normalization (on log2 scale)
+    prot_sample_medians = protein_df[prot_sample_cols].median()
+    global_protein_median = prot_sample_medians.median()
+    prot_norm_factors = prot_sample_medians - global_protein_median
+
+    # Apply normalization to each sample column
+    for col in prot_sample_cols:
+        protein_df[col] = protein_df[col] - prot_norm_factors[col]
+
+    max_prot_shift = prot_norm_factors.abs().max()
+    logger.info(
+        f"  Global median = {global_protein_median:.3f}, max shift = {max_prot_shift:.3f}"
+    )
+    method_log.append(f"Protein median normalization: max shift = {max_prot_shift:.3f}")
+
+    # -------------------------------------------------------------------------
+    # Stage 4c: Protein ComBat Batch Correction
+    # -------------------------------------------------------------------------
+    if batch_correction_enabled and metadata_df is not None:
+        logger.info("-" * 60)
+        logger.info("Stage 4c: Protein ComBat Batch Correction")
+        logger.info("-" * 60)
+
+        batch_col = 'batch'
+        if batch_col in metadata_df.columns:
+            sample_to_batch = dict(
+                zip(metadata_df['replicate_name'], metadata_df[batch_col])
+            )
+
+            # Check if all sample columns have batch info
+            prot_batches = [sample_to_batch.get(s) for s in prot_sample_cols]
+            n_batches = len(set(b for b in prot_batches if b is not None))
+
+            if n_batches < 2:
+                logger.warning(f"Only {n_batches} batch - skipping batch correction")
+            else:
+                from .batch_correction import combat
+
+                # Prepare data for ComBat (features x samples matrix)
+                prot_data_matrix = protein_df[prot_sample_cols].values
+                prot_batch_labels = [
+                    sample_to_batch.get(s, 'unknown') for s in prot_sample_cols
+                ]
+
+                logger.info(f"  Applying ComBat across {n_batches} batches...")
+
+                # Run ComBat - returns corrected matrix directly
+                prot_corrected = combat(prot_data_matrix, prot_batch_labels)
+
+                # Replace sample columns with corrected values
+                for i, col in enumerate(prot_sample_cols):
+                    protein_df[col] = prot_corrected[:, i]
+
+                method_log.append(f"Protein ComBat: {n_batches} batches corrected")
+
+                # Evaluate using reference and pool samples if available
+                sample_type_col = 'sample_type'
+                if sample_type_col in metadata_df.columns:
+                    sample_to_type = dict(
+                        zip(metadata_df['replicate_name'], metadata_df[sample_type_col])
+                    )
+                    ref_cols = [c for c in prot_sample_cols
+                                if sample_to_type.get(c) == 'reference']
+                    pool_cols = [c for c in prot_sample_cols
+                                 if sample_to_type.get(c) == 'pool']
+
+                    if ref_cols and pool_cols:
+                        ref_cv = protein_df[ref_cols].std(axis=1) / \
+                            protein_df[ref_cols].mean(axis=1).abs()
+                        pool_cv = protein_df[pool_cols].std(axis=1) / \
+                            protein_df[pool_cols].mean(axis=1).abs()
+                        logger.info(
+                            f"  Reference median CV: {ref_cv.median():.3f}, "
+                            f"Pool median CV: {pool_cv.median():.3f}"
+                        )
+        else:
+            logger.warning("No batch column in metadata - skipping batch correction")
+    elif batch_correction_enabled:
+        logger.warning("No metadata available - skipping batch correction")
+    else:
+        logger.info("  Batch correction disabled in config")
+
+    # =========================================================================
+    # Stage 5: Output Generation
+    # =========================================================================
+    logger.info("=" * 60)
+    logger.info("Stage 5: Output Generation")
+    logger.info("=" * 60)
+
+    output_format = config['output'].get('format', 'parquet')
+
+    # Data is in wide format with sample values already normalized/corrected
+    # Save as-is (values are on log2 scale)
+    peptide_output = output_dir / f"corrected_peptides.{output_format}"
+    if output_format == 'parquet':
+        peptide_df.to_parquet(peptide_output, index=False)
+    else:
+        sep = '\t' if output_format == 'tsv' else ','
+        peptide_df.to_csv(peptide_output, sep=sep, index=False)
+    logger.info(f"  Saved peptides: {peptide_output}")
+
+    # Save proteins
+    protein_output = output_dir / f"corrected_proteins.{output_format}"
+    if output_format == 'parquet':
+        protein_df.to_parquet(protein_output, index=False)
+    else:
+        sep = '\t' if output_format == 'tsv' else ','
+        protein_df.to_csv(protein_output, sep=sep, index=False)
+    logger.info(f"  Saved proteins: {protein_output}")
+
+    # Generate pipeline metadata
+    metadata = {
+        'pipeline_version': '0.3.0',
+        'processing_date': datetime.now(timezone.utc).isoformat(),
+        'source_files': [str(p) for p in input_paths],
+        'processing_parameters': {
+            'transition_rollup': {
+                'method': transition_config.method,
+                'min_transitions': transition_config.min_transitions,
+                'exclude_precursor': transition_config.exclude_precursor,
+            },
+            'protein_rollup': {
+                'method': protein_config.method,
+                'shared_peptide_handling': protein_config.shared_peptide_handling,
+                'min_peptides': protein_config.min_peptides,
+            },
+            'batch_correction': {
+                'enabled': batch_correction_enabled,
+                'method': 'combat_reference_anchored',
+            },
+        },
+        'method_log': method_log,
+        'output_files': {
+            'peptides': str(peptide_output),
+            'proteins': str(protein_output),
+            'protein_groups': str(groups_output),
+        },
+        'statistics': {
+            'n_samples': len(samples),
+            'n_peptides': peptide_result.n_peptides,
+            'n_proteins': protein_result.n_proteins,
+            'n_protein_groups': len(protein_groups),
+        },
+    }
     metadata_output = output_dir / "metadata.json"
     with open(metadata_output, 'w') as f:
         json.dump(metadata, f, indent=2, default=str)
-    logger.info(f"Saved pipeline metadata to {metadata_output}")
+    logger.info(f"  Saved metadata: {metadata_output}")
 
-    # Log summary
+    # Summary
     logger.info("=" * 60)
     logger.info("PRISM Pipeline Complete")
     logger.info("=" * 60)
     for step in method_log:
         logger.info(f"  {step}")
-    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"  Output: {output_dir}")
 
     return 0
 
 
 def main() -> int:
-    """Main entry point."""
+    """Provide main entry point for CLI."""
     parser = argparse.ArgumentParser(
         prog='prism',
         description='Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling\n\n'
@@ -851,17 +1037,36 @@ def main() -> int:
         description='Execute the complete PRISM pipeline: normalization, batch correction, '
                     'and protein rollup. Produces both peptide-level and protein-level outputs.'
     )
-    run_parser.add_argument('-i', '--input', required=True,
-                           help='Input file (Skyline report CSV/TSV or merged parquet)')
+    run_parser.add_argument('-i', '--input', nargs='+', required=True,
+                           help='Input file(s): one or more Skyline report CSV/TSV files, '
+                                'or a single merged parquet file. Multiple CSV files are '
+                                'treated as separate batches. If a merged_data.parquet '
+                                'already exists in the output directory and matches the '
+                                'input files, it will be reused (use --force-reprocess to '
+                                'override).')
     run_parser.add_argument('-o', '--output-dir', required=True,
                            help='Output directory for results')
     run_parser.add_argument('-c', '--config', help='Configuration YAML file')
-    run_parser.add_argument('-m', '--metadata', help='Sample metadata TSV')
+    run_parser.add_argument('-m', '--metadata', help='Sample metadata TSV (optional - '
+                           'will auto-generate from sample names if not provided)')
+    run_parser.add_argument('--reference-pattern', nargs='+',
+                           help='Patterns to identify reference samples (e.g., -Pool_). '
+                                'Samples matching these are used for RT correction learning.')
+    run_parser.add_argument('--pool-pattern', nargs='+',
+                           help='Patterns to identify pool/QC samples (e.g., -Carl_). '
+                                'Samples matching these are used for validation.')
     run_parser.add_argument(
         '--from-provenance',
         help='Load configuration from a previous run\'s metadata.json file. '
              'Enables reproducibility by using the exact same parameters. '
              'If --config is also provided, it overrides provenance settings.'
+    )
+    run_parser.add_argument(
+        '--force-reprocess',
+        action='store_true',
+        help='Force reprocessing of input files even if a valid cached parquet '
+             'exists. By default, if a merged_data.parquet file exists and its '
+             'source file fingerprints match the input files, it will be reused.'
     )
 
     # Merge command - utility for combining reports
@@ -880,7 +1085,9 @@ def main() -> int:
     norm_parser.add_argument('-o', '--output', required=True, help='Output parquet')
     norm_parser.add_argument('-c', '--config', help='Configuration YAML')
 
-    rollup_parser = subparsers.add_parser('rollup', help='(Legacy) Roll up peptides to proteins only')
+    rollup_parser = subparsers.add_parser(
+        'rollup', help='(Legacy) Roll up peptides to proteins'
+    )
     rollup_parser.add_argument('-i', '--input', required=True, help='Input peptide parquet')
     rollup_parser.add_argument('-o', '--output', required=True, help='Output protein parquet')
     rollup_parser.add_argument('-g', '--groups-output', help='Output protein groups TSV')

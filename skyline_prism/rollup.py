@@ -716,8 +716,11 @@ def tukey_median_polish(
         converged=converged,
     )
 
+    # Non-convergence is common and acceptable - the algorithm still produces
+    # robust estimates. Large residuals from interfered transitions prevent
+    # convergence, which is expected behavior. Log at debug level.
     if not converged:
-        logger.warning(f"Median polish did not converge after {max_iter} iterations")
+        logger.debug(f"Median polish did not converge after {max_iter} iterations")
 
     return result
 

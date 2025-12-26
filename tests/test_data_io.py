@@ -16,7 +16,7 @@ class TestColumnStandardization:
     """Tests for column name standardization."""
 
     def test_standard_skyline_columns(self):
-        """Test standardization of standard Skyline column names."""
+        """Test that Skyline column names are preserved unchanged."""
         df = pd.DataFrame({
             'Protein Accession': ['P12345'],
             'Peptide Modified Sequence': ['PEPTIDE'],
@@ -28,15 +28,16 @@ class TestColumnStandardization:
 
         result = _standardize_columns(df)
 
-        assert 'protein_ids' in result.columns
-        assert 'peptide_modified' in result.columns
-        assert 'precursor_charge' in result.columns
-        assert 'retention_time' in result.columns
-        assert 'abundance_fragment' in result.columns
-        assert 'replicate_name' in result.columns
+        # Skyline column names should be preserved unchanged
+        assert 'Protein Accession' in result.columns
+        assert 'Peptide Modified Sequence' in result.columns
+        assert 'Precursor Charge' in result.columns
+        assert 'Best Retention Time' in result.columns
+        assert 'Total Area Fragment' in result.columns
+        assert 'Replicate Name' in result.columns
 
     def test_alternative_column_names(self):
-        """Test standardization of alternative column naming conventions."""
+        """Test that alternative column names are also preserved unchanged."""
         df = pd.DataFrame({
             'ProteinAccession': ['P12345'],
             'ModifiedSequence': ['PEPTIDE'],
@@ -47,11 +48,12 @@ class TestColumnStandardization:
 
         result = _standardize_columns(df)
 
-        assert 'protein_ids' in result.columns
-        assert 'peptide_modified' in result.columns
-        assert 'precursor_charge' in result.columns
-        assert 'retention_time' in result.columns
-        assert 'replicate_name' in result.columns
+        # All original column names should be preserved
+        assert 'ProteinAccession' in result.columns
+        assert 'ModifiedSequence' in result.columns
+        assert 'PrecursorCharge' in result.columns
+        assert 'RetentionTime' in result.columns
+        assert 'ReplicateName' in result.columns
 
     def test_unknown_columns_preserved(self):
         """Test that unknown columns are preserved unchanged."""

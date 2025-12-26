@@ -38,16 +38,30 @@ data:
 # Sample Type Detection
 # =============================================================================
 # Patterns to automatically identify sample types from replicate names.
-# Uses regex matching (case-insensitive).
+# These are substring matches (not regex) checked in order.
+# Can be a single pattern string or a list of patterns.
 
 sample_annotations:
-  # Inter-experiment reference (commercial pool for calibration)
-  reference_pattern: "GoldenWest|CommercialPool|InterExpRef|Reference"
+  # Inter-experiment reference (commercial pool for RT model learning)
+  # Samples matching these patterns are used to learn technical variation
+  reference_pattern:
+    - "-Pool_"
+    - "-Pool"
+    - "_Pool_"
+    - "GoldenWest"
+    - "CommercialPool"
+    - "InterExpRef"
   
-  # Intra-experiment pool (pooled experimental samples for validation)
-  pool_pattern: "StudyPool|IntraPool|ExpPool|QCPool"
+  # Intra-experiment pool/QC (pooled experimental samples for validation)
+  # Samples matching these patterns are used to validate corrections
+  pool_pattern:
+    - "-Carl_"
+    - "-QC_"
+    - "_QC_"
+    - "StudyPool"
+    - "IntraPool"
   
-  # Experimental samples (everything else by default)
+  # Experimental samples: everything not matching above patterns
   experimental_pattern: "^(?!.*(Pool|Ref)).*"
 
 # =============================================================================
@@ -198,7 +212,7 @@ batch_correction:
 parsimony:
   # Path to the FASTA database used for the original search
   # REQUIRED for correct peptide-to-protein mapping
-  fasta_path: null  # e.g., "/path/to/uniprot_human_reviewed.fasta"
+  fasta_path: example-files/uniprot_mouse_may2025_contam_yeastENO1.fasta  # e.g., "/path/to/uniprot_human_reviewed.fasta"
   
   # Strategy: all_groups, unique_only, razor
   # 

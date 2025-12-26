@@ -18,12 +18,21 @@ __all__ = [
     "evaluate_batch_correction",
     # data_io
     "BatchEstimationResult",
+    "SourceFingerprint",
     "apply_batch_estimation",
+    "classify_sample_by_name",
+    "compute_file_fingerprint",
+    "compute_source_fingerprints",
+    "convert_skyline_csv_to_parquet",
     "estimate_batches",
+    "generate_sample_metadata",
+    "get_parquet_source_fingerprints",
     "load_sample_metadata",
     "load_skyline_report",
     "merge_skyline_reports",
+    "merge_skyline_reports_streaming",
     "validate_skyline_report",
+    "verify_source_fingerprints",
     # fasta
     "ENZYME_RULES",
     "ProteinEntry",
@@ -94,12 +103,21 @@ from .batch_correction import (
 )
 from .data_io import (
     BatchEstimationResult,
+    SourceFingerprint,
     apply_batch_estimation,
+    classify_sample_by_name,
+    compute_file_fingerprint,
+    compute_source_fingerprints,
+    convert_skyline_csv_to_parquet,
     estimate_batches,
+    generate_sample_metadata,
+    get_parquet_source_fingerprints,
     load_sample_metadata,
     load_skyline_report,
     merge_skyline_reports,
+    merge_skyline_reports_streaming,
     validate_skyline_report,
+    verify_source_fingerprints,
 )
 from .fasta import (
     ENZYME_RULES,
