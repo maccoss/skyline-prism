@@ -77,6 +77,7 @@ __all__ = [
     "learn_variance_model",
     "rollup_transitions_to_peptides",
     # validation
+    "generate_comprehensive_qc_report",
     "generate_qc_report",
     "validate_correction",
     # visualization
@@ -91,6 +92,13 @@ __all__ = [
     "plot_rt_correction_per_sample",
     "plot_rt_residuals",
     "plot_sample_correlation_matrix",
+    # visualization - wide format
+    "plot_comparative_pca_wide",
+    "plot_control_correlation_wide",
+    "plot_cv_comparison_wide",
+    "plot_intensity_distribution_wide",
+    "plot_normalization_comparison_wide",
+    "plot_pca_wide",
 ]
 
 from .batch_correction import (
@@ -170,19 +178,23 @@ from .transition_rollup import (
     rollup_transitions_to_peptides,
 )
 from .validation import (
+    generate_comprehensive_qc_report,
     generate_qc_report,
     validate_correction,
 )
 from .visualization import (
     plot_comparative_cv,
     plot_comparative_pca,
+    plot_comparative_pca_wide,
     plot_control_correlation_heatmap,
+    plot_control_correlation_wide,
+    plot_cv_comparison_wide,
     plot_cv_distribution,
     plot_intensity_distribution,
+    plot_intensity_distribution_wide,
     plot_normalization_comparison,
+    plot_normalization_comparison_wide,
     plot_pca,
-    plot_rt_correction_comparison,
-    plot_rt_correction_per_sample,
-    plot_rt_residuals,
+    plot_pca_wide,
     plot_sample_correlation_matrix,
 )

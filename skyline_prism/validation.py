@@ -677,3 +677,487 @@ def _save_and_embed_plot(
         html = f'<img src="qc_plots/{name}.png" alt="{name}" />'
 
     return html, plot_path
+
+def generate_comprehensive_qc_report(
+    peptide_raw: pd.DataFrame,
+    peptide_corrected: pd.DataFrame,
+    protein_raw: pd.DataFrame,
+    protein_corrected: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str],
+    output_path: str | Path,
+    method_log: list[str],
+    config: dict | None = None,
+    save_plots: bool = True,
+    embed_plots: bool = True,
+) -> dict[str, str]:
+    """Generate comprehensive QC report with before/after plots for peptides and proteins.
+
+    Creates an HTML report with diagnostic plots comparing raw and normalized/batch-corrected
+    data at both the peptide and protein levels.
+
+    Args:
+        peptide_raw: Wide-format DataFrame with raw peptide abundances
+        peptide_corrected: Wide-format DataFrame with corrected peptide abundances
+        protein_raw: Wide-format DataFrame with raw protein abundances
+        protein_corrected: Wide-format DataFrame with corrected protein abundances
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type ('experimental', 'pool', 'reference')
+        output_path: Path to save HTML report
+        method_log: List of processing steps applied
+        config: Optional config dict for QC report settings
+        save_plots: Whether to save individual PNG files
+        embed_plots: Whether to embed plots in HTML (base64)
+
+    Returns:
+        Dict mapping plot names to file paths (if save_plots=True)
+
+    """
+    output_path = Path(output_path)
+    plots_dir = output_path.parent / "qc_plots"
+    plot_paths = {}
+    plot_html_sections = []
+
+    # Create plots directory if saving
+    if save_plots:
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get config settings
+    if config is None:
+        config = {}
+    qc_config = config.get('qc_report', {})
+    plot_settings = qc_config.get('plots', {})
+
+    # Check if matplotlib is available
+    if not HAS_MATPLOTLIB:
+        logger.warning("matplotlib not available - skipping QC plots")
+    else:
+        from . import visualization as viz
+
+        # =====================================================================
+        # PEPTIDE-LEVEL PLOTS
+        # =====================================================================
+        logger.info("Generating peptide-level QC plots...")
+
+        # 1. Peptide Intensity Distribution Comparison
+        if plot_settings.get('intensity_distribution', True):
+            try:
+                fig = viz.plot_normalization_comparison_wide(
+                    peptide_raw,
+                    peptide_corrected,
+                    sample_cols,
+                    title="Peptide Intensity Distribution",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "peptide_intensity_distribution", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(
+                        ("Peptide Intensity Distribution", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["peptide_intensity_distribution"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate peptide intensity plot: {e}")
+
+        # 2. Peptide PCA Comparison
+        if plot_settings.get('pca_comparison', True):
+            try:
+                fig = viz.plot_comparative_pca_wide(
+                    peptide_raw,
+                    peptide_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    title="Peptide PCA: Before vs After Normalization",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "peptide_pca_comparison", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("Peptide PCA Analysis", plot_html))
+                    if plot_path:
+                        plot_paths["peptide_pca_comparison"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate peptide PCA plot: {e}")
+
+        # 3. Peptide CV Distribution - Reference Samples
+        if plot_settings.get('cv_distribution', True):
+            # Check if we have reference samples
+            ref_cols = [c for c in sample_cols if sample_types.get(c) == 'reference']
+            if len(ref_cols) >= 2:
+                try:
+                    fig = viz.plot_cv_comparison_wide(
+                        peptide_raw,
+                        peptide_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        control_type="reference",
+                        title="Peptide CV Distribution (Reference)",
+                        show_plot=False,
+                    )
+                    if fig is not None:
+                        plot_html, plot_path = _save_and_embed_plot(
+                            fig, "peptide_cv_reference", plots_dir,
+                            save_plots, embed_plots
+                        )
+                        plot_html_sections.append(
+                            ("Peptide CV (Reference Samples)", plot_html)
+                        )
+                        if plot_path:
+                            plot_paths["peptide_cv_reference"] = str(plot_path)
+                        plt.close(fig)
+                except Exception as e:
+                    logger.warning(f"Failed to generate peptide CV (ref) plot: {e}")
+
+            # 4. Peptide CV Distribution - Pool Samples
+            pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
+            if len(pool_cols) >= 2:
+                try:
+                    fig = viz.plot_cv_comparison_wide(
+                        peptide_raw,
+                        peptide_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        control_type="pool",
+                        title="Peptide CV Distribution (Pool/QC)",
+                        show_plot=False,
+                    )
+                    if fig is not None:
+                        plot_html, plot_path = _save_and_embed_plot(
+                            fig, "peptide_cv_pool", plots_dir,
+                            save_plots, embed_plots
+                        )
+                        plot_html_sections.append(
+                            ("Peptide CV (Pool/QC Samples)", plot_html)
+                        )
+                        if plot_path:
+                            plot_paths["peptide_cv_pool"] = str(plot_path)
+                        plt.close(fig)
+                except Exception as e:
+                    logger.warning(f"Failed to generate peptide CV (pool) plot: {e}")
+
+        # 5. Peptide Control Correlation
+        if plot_settings.get('control_correlation', True):
+            try:
+                fig, _ = viz.plot_control_correlation_wide(
+                    peptide_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    control_types=["reference", "pool"],
+                    title="Peptide Control Sample Correlation (After Correction)",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "peptide_control_correlation", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(
+                        ("Peptide Control Correlation", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["peptide_control_correlation"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate peptide correlation plot: {e}")
+
+        # =====================================================================
+        # PROTEIN-LEVEL PLOTS
+        # =====================================================================
+        logger.info("Generating protein-level QC plots...")
+
+        # 6. Protein Intensity Distribution Comparison
+        if plot_settings.get('intensity_distribution', True):
+            try:
+                fig = viz.plot_normalization_comparison_wide(
+                    protein_raw,
+                    protein_corrected,
+                    sample_cols,
+                    title="Protein Intensity Distribution",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "protein_intensity_distribution", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(
+                        ("Protein Intensity Distribution", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["protein_intensity_distribution"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate protein intensity plot: {e}")
+
+        # 7. Protein PCA Comparison
+        if plot_settings.get('pca_comparison', True):
+            try:
+                fig = viz.plot_comparative_pca_wide(
+                    protein_raw,
+                    protein_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    title="Protein PCA: Before vs After Normalization",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "protein_pca_comparison", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(("Protein PCA Analysis", plot_html))
+                    if plot_path:
+                        plot_paths["protein_pca_comparison"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate protein PCA plot: {e}")
+
+        # 8. Protein CV Distribution - Reference Samples
+        if plot_settings.get('cv_distribution', True):
+            ref_cols = [c for c in sample_cols if sample_types.get(c) == 'reference']
+            if len(ref_cols) >= 2:
+                try:
+                    fig = viz.plot_cv_comparison_wide(
+                        protein_raw,
+                        protein_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        control_type="reference",
+                        title="Protein CV Distribution (Reference)",
+                        show_plot=False,
+                    )
+                    if fig is not None:
+                        plot_html, plot_path = _save_and_embed_plot(
+                            fig, "protein_cv_reference", plots_dir,
+                            save_plots, embed_plots
+                        )
+                        plot_html_sections.append(
+                            ("Protein CV (Reference Samples)", plot_html)
+                        )
+                        if plot_path:
+                            plot_paths["protein_cv_reference"] = str(plot_path)
+                        plt.close(fig)
+                except Exception as e:
+                    logger.warning(f"Failed to generate protein CV (ref) plot: {e}")
+
+            # 9. Protein CV Distribution - Pool Samples
+            pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
+            if len(pool_cols) >= 2:
+                try:
+                    fig = viz.plot_cv_comparison_wide(
+                        protein_raw,
+                        protein_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        control_type="pool",
+                        title="Protein CV Distribution (Pool/QC)",
+                        show_plot=False,
+                    )
+                    if fig is not None:
+                        plot_html, plot_path = _save_and_embed_plot(
+                            fig, "protein_cv_pool", plots_dir,
+                            save_plots, embed_plots
+                        )
+                        plot_html_sections.append(
+                            ("Protein CV (Pool/QC Samples)", plot_html)
+                        )
+                        if plot_path:
+                            plot_paths["protein_cv_pool"] = str(plot_path)
+                        plt.close(fig)
+                except Exception as e:
+                    logger.warning(f"Failed to generate protein CV (pool) plot: {e}")
+
+        # 10. Protein Control Correlation
+        if plot_settings.get('control_correlation', True):
+            try:
+                fig, _ = viz.plot_control_correlation_wide(
+                    protein_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    control_types=["reference", "pool"],
+                    title="Protein Control Sample Correlation (After Correction)",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "protein_control_correlation", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    plot_html_sections.append(
+                        ("Protein Control Correlation", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["protein_control_correlation"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate protein correlation plot: {e}")
+
+    # =========================================================================
+    # Calculate Summary Metrics
+    # =========================================================================
+    def calc_median_cv(df, cols):
+        """Calculate median CV across features."""
+        linear_data = 2 ** df[cols]
+        cv_values = (linear_data.std(axis=1) / linear_data.mean(axis=1)) * 100
+        return cv_values.median()
+
+    metrics = {}
+    ref_cols = [c for c in sample_cols if sample_types.get(c) == 'reference']
+    pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
+
+    if len(ref_cols) >= 2:
+        metrics['peptide_ref_cv_before'] = calc_median_cv(peptide_raw, ref_cols)
+        metrics['peptide_ref_cv_after'] = calc_median_cv(peptide_corrected, ref_cols)
+        metrics['protein_ref_cv_before'] = calc_median_cv(protein_raw, ref_cols)
+        metrics['protein_ref_cv_after'] = calc_median_cv(protein_corrected, ref_cols)
+
+    if len(pool_cols) >= 2:
+        metrics['peptide_pool_cv_before'] = calc_median_cv(peptide_raw, pool_cols)
+        metrics['peptide_pool_cv_after'] = calc_median_cv(peptide_corrected, pool_cols)
+        metrics['protein_pool_cv_before'] = calc_median_cv(protein_raw, pool_cols)
+        metrics['protein_pool_cv_after'] = calc_median_cv(protein_corrected, pool_cols)
+
+    # =========================================================================
+    # Build plots HTML
+    # =========================================================================
+    plots_html = ""
+    for title, plot_content in plot_html_sections:
+        plots_html += f"""
+        <div class="plot-section">
+            <h3>{title}</h3>
+            {plot_content}
+        </div>
+        """
+
+    # =========================================================================
+    # Build metrics HTML
+    # =========================================================================
+    metrics_html = ""
+    if metrics:
+        metrics_html = """
+        <h2>Summary Metrics</h2>
+        <table>
+            <tr>
+                <th>Level</th>
+                <th>Sample Type</th>
+                <th>CV Before</th>
+                <th>CV After</th>
+                <th>Improvement</th>
+            </tr>
+        """
+        metric_rows = [
+            ('Peptide', 'Reference', 'peptide_ref_cv_before', 'peptide_ref_cv_after'),
+            ('Peptide', 'Pool/QC', 'peptide_pool_cv_before', 'peptide_pool_cv_after'),
+            ('Protein', 'Reference', 'protein_ref_cv_before', 'protein_ref_cv_after'),
+            ('Protein', 'Pool/QC', 'protein_pool_cv_before', 'protein_pool_cv_after'),
+        ]
+        for level, sample_type, before_key, after_key in metric_rows:
+            if before_key in metrics and after_key in metrics:
+                cv_before = metrics[before_key]
+                cv_after = metrics[after_key]
+                improvement = (cv_before - cv_after) / cv_before * 100
+                improvement_class = (
+                    "improvement-positive" if improvement > 0
+                    else "improvement-negative"
+                )
+                metrics_html += f"""
+            <tr>
+                <td><strong>{level}</strong></td>
+                <td>{sample_type}</td>
+                <td>{cv_before:.1f}%</td>
+                <td>{cv_after:.1f}%</td>
+                <td class="{improvement_class}">{improvement:+.1f}%</td>
+            </tr>
+                """
+        metrics_html += "</table>"
+
+    # =========================================================================
+    # Generate the HTML report
+    # =========================================================================
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>PRISM QC Report</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               margin: 0; padding: 20px; background: #f5f5f5; }}
+        .container {{ max-width: 1400px; margin: 0 auto; background: white;
+                     padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }}
+        h2 {{ color: #444; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }}
+        h3 {{ color: #555; }}
+        table {{ border-collapse: collapse; margin: 20px 0; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+        th {{ background: #f0f0f0; font-weight: 600; }}
+        tr:nth-child(even) {{ background: #f9f9f9; }}
+        .plot-section {{ margin: 30px 0; text-align: center; }}
+        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
+        .timestamp {{ color: #888; font-size: 0.9em; margin-top: 30px; padding-top: 20px;
+                     border-top: 1px solid #ddd; }}
+        ol {{ line-height: 1.8; }}
+        .improvement-positive {{ color: #28a745; font-weight: bold; }}
+        .improvement-negative {{ color: #dc3545; font-weight: bold; }}
+        .section-header {{ background: linear-gradient(to right, #0066cc, #0099cc);
+                          color: white; padding: 10px 15px; margin: 30px 0 20px 0;
+                          border-radius: 4px; }}
+        .summary-box {{ background: #e8f4fc; border: 1px solid #b8daff;
+                       padding: 15px; border-radius: 4px; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PRISM QC Report</h1>
+
+        <div class="summary-box">
+            <strong>Pipeline Summary:</strong>
+            <ul>
+                <li>Peptides: {len(peptide_corrected):,} features</li>
+                <li>Proteins: {len(protein_corrected):,} features</li>
+                <li>Samples: {len(sample_cols)}</li>
+                <li>Reference samples: {len([c for c in sample_cols if sample_types.get(c) == 'reference'])}</li>
+                <li>Pool/QC samples: {len([c for c in sample_cols if sample_types.get(c) == 'pool'])}</li>
+            </ul>
+        </div>
+
+        {metrics_html}
+
+        <div class="section-header">
+            <h2 style="margin: 0; color: white;">Peptide-Level QC</h2>
+        </div>
+
+        {plots_html.split('<div class="plot-section"><h3>Protein')[0] if 'Protein' in plots_html else plots_html}
+
+        <div class="section-header">
+            <h2 style="margin: 0; color: white;">Protein-Level QC</h2>
+        </div>
+
+        {'<div class="plot-section"><h3>Protein' + plots_html.split('<div class="plot-section"><h3>Protein', 1)[1] if 'Protein' in plots_html else '<p>No protein-level plots generated.</p>'}
+
+        <h2>Processing Steps</h2>
+        <ol>
+            {''.join(f'<li>{step}</li>' for step in method_log) if method_log else '<li>No processing steps recorded</li>'}
+        </ol>
+
+        <div class="timestamp">
+            Report generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        </div>
+    </div>
+</body>
+</html>"""
+
+    # Write the HTML file
+    with open(output_path, "w") as f:
+        f.write(html)
+
+    logger.info(f"QC report saved to {output_path}")
+    if save_plots and plot_paths:
+        logger.info(f"QC plots saved to {plots_dir}")
+
+    return plot_paths

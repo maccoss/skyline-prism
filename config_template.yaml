@@ -333,10 +333,26 @@ qc_report:
   embed_plots: true
   
   # Plots to include (all enabled by default)
+  # Each plot type is generated for both peptide and protein levels
+  # showing before/after normalization and batch correction comparisons
   plots:
-    intensity_distribution: true    # Before/after intensity distributions
-    pca_comparison: true            # PCA across normalization stages
-    control_correlation: true       # Correlation heatmap for reference/pool samples
-    cv_distribution: true           # CV histograms for control samples
-    rt_correction: true             # RT-dependent residuals (if RT correction enabled)
-
+    # Intensity distribution density plots
+    # Shows sample distribution alignment before/after correction
+    intensity_distribution: true
+    
+    # PCA comparison plots
+    # Shows batch effects and sample grouping before/after correction
+    # Samples are colored by type (experimental, reference, pool)
+    pca_comparison: true
+    
+    # Correlation heatmap for control samples
+    # Shows reproducibility of reference and pool samples after correction
+    control_correlation: true
+    
+    # CV (coefficient of variation) histograms
+    # Shows precision improvement for reference and pool samples
+    # Generated separately for reference and pool sample types
+    cv_distribution: true
+    
+    # RT-dependent residuals (only if RT correction is enabled)
+    rt_correction: true

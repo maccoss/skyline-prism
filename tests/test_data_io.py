@@ -13,10 +13,14 @@ from skyline_prism.data_io import (
 
 
 class TestColumnStandardization:
-    """Tests for column name standardization."""
+    """Tests for column name standardization.
+    
+    Note: _standardize_columns now returns the DataFrame unchanged (no renaming).
+    The pipeline uses original Skyline column names throughout.
+    """
 
     def test_standard_skyline_columns(self):
-        """Test that Skyline column names are preserved unchanged."""
+        """Test that standard Skyline column names are preserved unchanged."""
         df = pd.DataFrame({
             'Protein Accession': ['P12345'],
             'Peptide Modified Sequence': ['PEPTIDE'],
@@ -28,7 +32,7 @@ class TestColumnStandardization:
 
         result = _standardize_columns(df)
 
-        # Skyline column names should be preserved unchanged
+        # Column names are preserved unchanged
         assert 'Protein Accession' in result.columns
         assert 'Peptide Modified Sequence' in result.columns
         assert 'Precursor Charge' in result.columns
@@ -37,7 +41,7 @@ class TestColumnStandardization:
         assert 'Replicate Name' in result.columns
 
     def test_alternative_column_names(self):
-        """Test that alternative column names are also preserved unchanged."""
+        """Test that alternative column naming conventions are preserved unchanged."""
         df = pd.DataFrame({
             'ProteinAccession': ['P12345'],
             'ModifiedSequence': ['PEPTIDE'],
@@ -48,7 +52,7 @@ class TestColumnStandardization:
 
         result = _standardize_columns(df)
 
-        # All original column names should be preserved
+        # Column names are preserved unchanged
         assert 'ProteinAccession' in result.columns
         assert 'ModifiedSequence' in result.columns
         assert 'PrecursorCharge' in result.columns
@@ -141,8 +145,9 @@ class TestLoadSampleMetadata:
         result = load_sample_metadata(metadata_file)
 
         assert len(result) == 4
-        assert 'ReplicateName' in result.columns
-        assert 'SampleType' in result.columns
+        # Function normalizes column names to lowercase
+        assert 'sample' in result.columns
+        assert 'sample_type' in result.columns
 
     def test_metadata_without_run_order(self, tmp_path):
         """Test that metadata without RunOrder is valid (it's optional)."""
@@ -201,13 +206,13 @@ class TestLoadSampleMetadata:
 
         result = load_sample_metadata(metadata_file)
 
-        # Check column names were normalized
-        assert 'ReplicateName' in result.columns
-        assert 'SampleType' in result.columns
-        assert 'Batch' in result.columns
+        # Check column names were normalized to lowercase
+        assert 'sample' in result.columns
+        assert 'sample_type' in result.columns
+        assert 'batch' in result.columns
 
         # Check Skyline sample types were mapped
-        assert set(result['SampleType'].unique()) == {'experimental', 'pool', 'reference'}
+        assert set(result['sample_type'].unique()) == {'experimental', 'pool', 'reference'}
 
     def test_file_name_fallback(self, tmp_path):
         """Test that File Name is accepted when Replicate Name is not present."""
@@ -220,7 +225,8 @@ class TestLoadSampleMetadata:
 
         result = load_sample_metadata(metadata_file)
 
-        assert 'ReplicateName' in result.columns
+        # Function normalizes column names to lowercase
+        assert 'sample' in result.columns
         assert len(result) == 4
 
 

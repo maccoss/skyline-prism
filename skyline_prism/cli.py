@@ -39,7 +39,11 @@ from .parsimony import (
 from .rollup import (
     rollup_to_proteins,
 )
-from .validation import generate_qc_report, validate_correction
+from .validation import (
+    generate_comprehensive_qc_report,
+    generate_qc_report,
+    validate_correction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +546,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                     method_log.append(
                         "Reused cached merged parquet (source files unchanged)"
                     )
+                    # Try to load existing metadata if available
+                    existing_metadata = output_dir / 'sample_metadata.tsv'
+                    if existing_metadata.exists() and not args.metadata:
+                        metadata_df = load_sample_metadata(existing_metadata)
+                        logger.info(f"  Loaded existing metadata: {existing_metadata}")
                 else:
                     logger.info("  Source files changed - reprocessing required:")
                     for reason in mismatch_reasons:
@@ -683,6 +692,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     meta_cols = [c for c in meta_cols if c in peptide_df.columns]
     sample_cols = [c for c in peptide_df.columns if c not in meta_cols]
 
+    # Keep a copy of raw peptide data for QC comparison
+    peptide_raw_df = peptide_df.copy()
+
     # Apply global median normalization (on log2 scale)
     # For each sample column, subtract sample median and add global median
     sample_medians = peptide_df[sample_cols].median()
@@ -712,11 +724,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Get batch info from metadata
         batch_col = 'batch'
         sample_type_col = 'sample_type'
+        # Use 'sample' or 'replicate_name' column for sample names
+        meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
 
         if batch_col in metadata_df.columns:
             # Build sample -> batch mapping
             sample_to_batch = dict(
-                zip(metadata_df['replicate_name'], metadata_df[batch_col])
+                zip(metadata_df[meta_sample_col], metadata_df[batch_col])
             )
 
             # Check if all sample columns have batch info
@@ -732,7 +746,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 sample_to_type = {}
                 if sample_type_col in metadata_df.columns:
                     sample_to_type = dict(
-                        zip(metadata_df['replicate_name'], metadata_df[sample_type_col])
+                        zip(metadata_df[meta_sample_col], metadata_df[sample_type_col])
                     )
 
                 # Prepare data for ComBat (features x samples matrix)
@@ -847,11 +861,20 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     protein_df = pd.read_parquet(protein_path)
 
-    # Data is in wide format: protein_group, n_peptides, sample1, sample2, ...
-    # Get sample columns (all columns after metadata columns)
-    prot_meta_cols = ['protein_group', 'n_peptides']
+    # Data is in wide format: protein_group, leading_protein, etc., sample1, sample2, ...
+    # Get sample columns (numeric columns that aren't metadata)
+    prot_meta_cols = [
+        'protein_group', 'leading_protein', 'leading_name',
+        'n_peptides', 'n_unique_peptides', 'low_confidence'
+    ]
     prot_meta_cols = [c for c in prot_meta_cols if c in protein_df.columns]
-    prot_sample_cols = [c for c in protein_df.columns if c not in prot_meta_cols]
+    prot_sample_cols = [
+        c for c in protein_df.columns
+        if c not in prot_meta_cols and protein_df[c].dtype in ['float64', 'float32', 'int64', 'int32']
+    ]
+
+    # Keep a copy of raw protein data for QC comparison
+    protein_raw_df = protein_df.copy()
 
     # Apply global median normalization (on log2 scale)
     prot_sample_medians = protein_df[prot_sample_cols].median()
@@ -877,9 +900,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info("-" * 60)
 
         batch_col = 'batch'
+        sample_type_col = 'sample_type'
+        meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
+
         if batch_col in metadata_df.columns:
             sample_to_batch = dict(
-                zip(metadata_df['replicate_name'], metadata_df[batch_col])
+                zip(metadata_df[meta_sample_col], metadata_df[batch_col])
             )
 
             # Check if all sample columns have batch info
@@ -909,10 +935,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 method_log.append(f"Protein ComBat: {n_batches} batches corrected")
 
                 # Evaluate using reference and pool samples if available
-                sample_type_col = 'sample_type'
                 if sample_type_col in metadata_df.columns:
                     sample_to_type = dict(
-                        zip(metadata_df['replicate_name'], metadata_df[sample_type_col])
+                        zip(metadata_df[meta_sample_col], metadata_df[sample_type_col])
                     )
                     ref_cols = [c for c in prot_sample_cols
                                 if sample_to_type.get(c) == 'reference']
@@ -1001,6 +1026,44 @@ def cmd_run(args: argparse.Namespace) -> int:
     with open(metadata_output, 'w') as f:
         json.dump(metadata, f, indent=2, default=str)
     logger.info(f"  Saved metadata: {metadata_output}")
+
+    # -------------------------------------------------------------------------
+    # Stage 5b: Generate QC Report
+    # -------------------------------------------------------------------------
+    qc_config = config.get('qc_report', {})
+    if qc_config.get('enabled', True):
+        logger.info("-" * 60)
+        logger.info("Stage 5b: Generating QC Report")
+        logger.info("-" * 60)
+
+        # Build sample types mapping
+        sample_types_map = {}
+        if metadata_df is not None:
+            meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
+            if 'sample_type' in metadata_df.columns:
+                sample_types_map = dict(
+                    zip(metadata_df[meta_sample_col], metadata_df['sample_type'])
+                )
+
+        qc_report_path = output_dir / qc_config.get('filename', 'qc_report.html')
+
+        try:
+            generate_comprehensive_qc_report(
+                peptide_raw=peptide_raw_df,
+                peptide_corrected=peptide_df,
+                protein_raw=protein_raw_df,
+                protein_corrected=protein_df,
+                sample_cols=sample_cols,
+                sample_types=sample_types_map,
+                output_path=qc_report_path,
+                method_log=method_log,
+                config=config,
+                save_plots=qc_config.get('save_plots', True),
+                embed_plots=qc_config.get('embed_plots', True),
+            )
+            method_log.append(f"QC report: {qc_report_path}")
+        except Exception as e:
+            logger.warning(f"Failed to generate QC report: {e}")
 
     # Summary
     logger.info("=" * 60)

@@ -1615,3 +1615,592 @@ def plot_rt_correction_per_sample(
     else:
         return fig
 
+
+# =============================================================================
+# Wide-Format Data Visualization Functions
+# =============================================================================
+# These functions work with wide-format DataFrames where:
+# - Rows are features (peptides or proteins)
+# - Columns are samples (plus optional metadata columns)
+# - Values are log2-transformed abundances
+
+
+def plot_intensity_distribution_wide(
+    data: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    title: str = "Intensity Distribution",
+    figsize: tuple[int, int] = (14, 6),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Create box plot showing intensity distribution across samples (wide-format data).
+
+    Args:
+        data: Wide-format DataFrame (features x samples)
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type for coloring
+        title: Plot title
+        figsize: Figure size (width, height)
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+
+    # Prepare data for boxplot
+    box_data = []
+    for sample in sample_cols:
+        sample_data = data[sample].dropna()
+        box_data.append(sample_data.values)
+
+    # Get colors
+    colors, legend = _get_sample_colors(sample_cols, sample_types)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create box plot
+    bp = ax.boxplot(
+        box_data,
+        positions=range(len(sample_cols)),
+        widths=0.6,
+        patch_artist=True,
+        showfliers=False,
+    )
+
+    # Color boxes
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+
+    # Styling
+    ax.set_xlabel("Sample", fontsize=12)
+    ax.set_ylabel("Log2 Abundance", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+
+    # X-axis labels
+    if len(sample_cols) <= 20:
+        ax.set_xticks(range(len(sample_cols)))
+        ax.set_xticklabels(sample_cols, rotation=45, ha="right", fontsize=8)
+    else:
+        n = max(1, len(sample_cols) // 20)
+        ax.set_xticks(range(0, len(sample_cols), n))
+        ax.set_xticklabels(
+            [sample_cols[i] for i in range(0, len(sample_cols), n)],
+            rotation=45,
+            ha="right",
+            fontsize=8,
+        )
+
+    # Legend
+    if legend:
+        patches = [
+            mpatches.Patch(color=color, label=label, alpha=0.7)
+            for label, color in legend.items()
+        ]
+        ax.legend(handles=patches, loc="upper right")
+
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_normalization_comparison_wide(
+    data_before: pd.DataFrame,
+    data_after: pd.DataFrame,
+    sample_cols: list[str],
+    title: str = "Normalization Comparison",
+    figsize: tuple[int, int] = (16, 6),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Create side-by-side density plots comparing before/after (wide-format data).
+
+    Args:
+        data_before: Wide-format DataFrame before normalization
+        data_after: Wide-format DataFrame after normalization
+        sample_cols: List of column names containing sample abundances
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+    cmap = plt.colormaps.get_cmap("tab20")
+
+    # Before normalization
+    for i, sample in enumerate(sample_cols):
+        values = data_before[sample].dropna().values
+        if len(values) > 0:
+            counts, bins = np.histogram(values, bins=50, density=True)
+            bin_centers = (bins[:-1] + bins[1:]) / 2
+            ax1.plot(bin_centers, counts, alpha=0.6, linewidth=1, color=cmap(i % 20))
+
+    ax1.set_xlabel("Log2 Abundance", fontsize=12)
+    ax1.set_ylabel("Density", fontsize=12)
+    ax1.set_title("Before Normalization", fontsize=14, fontweight="bold")
+    ax1.grid(True, alpha=0.3)
+
+    # After normalization
+    for i, sample in enumerate(sample_cols):
+        values = data_after[sample].dropna().values
+        if len(values) > 0:
+            counts, bins = np.histogram(values, bins=50, density=True)
+            bin_centers = (bins[:-1] + bins[1:]) / 2
+            ax2.plot(bin_centers, counts, alpha=0.6, linewidth=1, color=cmap(i % 20))
+
+    ax2.set_xlabel("Log2 Abundance", fontsize=12)
+    ax2.set_ylabel("Density", fontsize=12)
+    ax2.set_title("After Normalization", fontsize=14, fontweight="bold")
+    ax2.grid(True, alpha=0.3)
+
+    # Calculate and display median range
+    medians_before = data_before[sample_cols].median()
+    medians_after = data_after[sample_cols].median()
+    range_before = medians_before.max() - medians_before.min()
+    range_after = medians_after.max() - medians_after.min()
+    reduction = (range_before - range_after) / range_before * 100 if range_before > 0 else 0
+
+    fig.suptitle(
+        f"{title}\nMedian range: {range_before:.2f} -> {range_after:.2f} "
+        f"({reduction:.1f}% reduction)",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_pca_wide(
+    data: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    title: str = "PCA Analysis",
+    n_components: int = 2,
+    figsize: tuple[int, int] = (10, 8),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> tuple[plt.Figure | None, pd.DataFrame]:
+    """Create PCA plot from wide-format data.
+
+    Args:
+        data: Wide-format DataFrame (features x samples)
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type (for coloring)
+        title: Plot title
+        n_components: Number of PCA components to compute
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        Tuple of (Figure if show_plot is False, PCA results DataFrame)
+
+    """
+    _check_matplotlib()
+    _check_sklearn()
+
+    # Extract sample data and transpose (samples as rows)
+    sample_data = data[sample_cols].copy()
+    sample_data = sample_data.dropna(axis=0, thresh=len(sample_cols) * 0.5)
+    sample_data = sample_data.fillna(sample_data.median())
+
+    if sample_data.shape[0] < n_components:
+        logger.warning(f"Too few features for PCA: {sample_data.shape[0]}")
+        return None, pd.DataFrame()
+
+    # Transpose: samples as rows, features as columns
+    pca_input = sample_data.T
+
+    # Standardize
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(pca_input)
+
+    # PCA
+    n_comp = min(n_components, pca_input.shape[0] - 1, pca_input.shape[1])
+    pca = PCA(n_components=n_comp)
+    scores = pca.fit_transform(scaled_data)
+
+    # Results DataFrame
+    pca_df = pd.DataFrame(
+        scores[:, :2],
+        columns=["PC1", "PC2"],
+        index=pca_input.index,
+    )
+    pca_df["Sample"] = pca_df.index
+
+    # Add grouping info
+    if sample_types:
+        pca_df["Group"] = [sample_types.get(s, "unknown") for s in pca_df.index]
+    else:
+        pca_df["Group"] = "All"
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    unique_groups = pca_df["Group"].unique()
+    cmap = plt.colormaps.get_cmap("Set1")
+    group_colors = {
+        g: cmap(i / max(1, len(unique_groups) - 1)) for i, g in enumerate(unique_groups)
+    }
+
+    for group in unique_groups:
+        group_data = pca_df[pca_df["Group"] == group]
+        ax.scatter(
+            group_data["PC1"],
+            group_data["PC2"],
+            c=[group_colors[group]],
+            label=group,
+            alpha=0.7,
+            s=80,
+            edgecolors="black",
+            linewidth=0.5,
+        )
+
+    ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})", fontsize=12)
+    ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+
+    if len(unique_groups) > 1:
+        ax.legend(fontsize=10)
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None, pca_df
+    else:
+        return fig, pca_df
+
+
+def plot_comparative_pca_wide(
+    data_before: pd.DataFrame,
+    data_after: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    title: str = "PCA Comparison",
+    figsize: tuple[int, int] = (14, 6),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Compare PCA before and after normalization (wide-format data).
+
+    Args:
+        data_before: Wide-format DataFrame before normalization
+        data_after: Wide-format DataFrame after normalization
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type (for coloring)
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+    _check_sklearn()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    def perform_pca_and_plot(df, ax, plot_title):
+        """Perform PCA and plot on given axis."""
+        sample_data = df[sample_cols].copy()
+        sample_data = sample_data.dropna(axis=0, thresh=len(sample_cols) * 0.5)
+        sample_data = sample_data.fillna(sample_data.median())
+
+        if sample_data.shape[0] < 2:
+            ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
+                    transform=ax.transAxes)
+            ax.set_title(plot_title)
+            return
+
+        pca_input = sample_data.T
+        scaler = StandardScaler()
+        scaled_data = scaler.fit_transform(pca_input)
+
+        n_comp = min(2, pca_input.shape[0] - 1, pca_input.shape[1])
+        pca = PCA(n_components=n_comp)
+        scores = pca.fit_transform(scaled_data)
+
+        pca_df = pd.DataFrame(
+            scores[:, :2],
+            columns=["PC1", "PC2"],
+            index=pca_input.index,
+        )
+
+        if sample_types:
+            pca_df["Group"] = [sample_types.get(s, "unknown") for s in pca_df.index]
+        else:
+            pca_df["Group"] = "All"
+
+        unique_groups = pca_df["Group"].unique()
+        cmap = plt.colormaps.get_cmap("Set1")
+        group_colors = {
+            g: cmap(i / max(1, len(unique_groups) - 1))
+            for i, g in enumerate(unique_groups)
+        }
+
+        for group in unique_groups:
+            group_data = pca_df[pca_df["Group"] == group]
+            ax.scatter(
+                group_data["PC1"],
+                group_data["PC2"],
+                c=[group_colors[group]],
+                label=group,
+                alpha=0.7,
+                s=80,
+                edgecolors="black",
+                linewidth=0.5,
+            )
+
+        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})", fontsize=11)
+        ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})", fontsize=11)
+        ax.set_title(plot_title, fontsize=12, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+
+        if len(unique_groups) > 1:
+            ax.legend(fontsize=8)
+
+    perform_pca_and_plot(data_before, ax1, "Before Normalization")
+    perform_pca_and_plot(data_after, ax2, "After Normalization")
+
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_cv_comparison_wide(
+    data_before: pd.DataFrame,
+    data_after: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    control_type: str = "reference",
+    cv_threshold: float = 20.0,
+    title: str = "CV Distribution Comparison",
+    figsize: tuple[int, int] = (12, 5),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Compare CV distributions before and after normalization (wide-format data).
+
+    Args:
+        data_before: Wide-format DataFrame before normalization
+        data_after: Wide-format DataFrame after normalization
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type
+        control_type: Sample type to analyze ('reference' or 'pool')
+        cv_threshold: CV threshold line to display (%)
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+
+    # Get control sample columns
+    if sample_types:
+        control_cols = [c for c in sample_cols if sample_types.get(c) == control_type]
+    else:
+        control_cols = sample_cols
+
+    if len(control_cols) < 2:
+        logger.warning(f"Insufficient {control_type} samples for CV calculation")
+        return None
+
+    def calc_cvs(df):
+        """Calculate CV for each feature across control samples."""
+        control_data = df[control_cols]
+        # Calculate on linear scale (exponentiate from log2)
+        linear_data = 2 ** control_data
+        cv_values = (linear_data.std(axis=1) / linear_data.mean(axis=1)) * 100
+        return cv_values.dropna().values
+
+    cv_before = calc_cvs(data_before)
+    cv_after = calc_cvs(data_after)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    for ax, cv_values, label in [
+        (ax1, cv_before, "Before Normalization"),
+        (ax2, cv_after, "After Normalization"),
+    ]:
+        if len(cv_values) > 0:
+            ax.hist(cv_values, bins=50, alpha=0.7, color="skyblue", edgecolor="black")
+
+            median_cv = np.median(cv_values)
+            pct_under = np.sum(cv_values < cv_threshold) / len(cv_values) * 100
+
+            ax.axvline(median_cv, color="red", linestyle="--", linewidth=2,
+                       label=f"Median: {median_cv:.1f}%")
+            ax.axvline(cv_threshold, color="orange", linestyle=":", linewidth=2,
+                       alpha=0.8, label=f"Threshold: {cv_threshold}%")
+
+            ax.text(
+                0.95, 0.95,
+                f"Median: {median_cv:.1f}%\n{pct_under:.1f}% < {cv_threshold}%",
+                transform=ax.transAxes, fontsize=10, va="top", ha="right",
+                bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+            )
+
+            ax.set_xlim(0, min(100, np.percentile(cv_values, 99)))
+        else:
+            ax.text(0.5, 0.5, "Insufficient data",
+                    transform=ax.transAxes, ha="center", va="center")
+
+        ax.set_title(label, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Coefficient of Variation (%)", fontsize=11)
+        ax.set_ylabel("Number of Features", fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9)
+
+    fig.suptitle(f"{title} ({control_type.capitalize()} Samples)",
+                 fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_control_correlation_wide(
+    data: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    control_types: list[str] | None = None,
+    method: Literal["pearson", "spearman", "kendall"] = "pearson",
+    title: str = "Control Sample Correlation",
+    figsize: tuple[int, int] = (10, 8),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> tuple[plt.Figure | None, pd.DataFrame]:
+    """Create correlation heatmap for control samples (wide-format data).
+
+    Args:
+        data: Wide-format DataFrame (features x samples)
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type
+        control_types: List of sample types to include (default: ['reference', 'pool'])
+        method: Correlation method
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        Tuple of (Figure if show_plot is False, correlation matrix DataFrame)
+
+    """
+    _check_matplotlib()
+    _check_seaborn()
+
+    if control_types is None:
+        control_types = ["reference", "pool"]
+
+    # Get control sample columns
+    if sample_types:
+        control_cols = [c for c in sample_cols if sample_types.get(c) in control_types]
+    else:
+        control_cols = sample_cols
+
+    if len(control_cols) < 2:
+        logger.warning("Insufficient control samples for correlation")
+        return None, pd.DataFrame()
+
+    # Get control data
+    control_data = data[control_cols].dropna(axis=0, thresh=len(control_cols) * 0.5)
+
+    if control_data.shape[0] == 0:
+        logger.warning("No valid data for correlation after filtering")
+        return None, pd.DataFrame()
+
+    # Calculate correlation
+    corr_matrix = control_data.corr(method=method)
+
+    # Create heatmap
+    fig, ax = plt.subplots(figsize=figsize)
+
+    sns.heatmap(
+        corr_matrix,
+        annot=True if len(control_cols) <= 15 else False,
+        fmt=".3f",
+        cmap="RdYlBu_r",
+        center=0.9,
+        vmin=0.5,
+        vmax=1.0,
+        square=True,
+        ax=ax,
+        linewidths=0.5,
+    )
+
+    ax.set_title(title, fontsize=14, fontweight="bold")
+
+    # Rotate labels
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=8)
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None, corr_matrix
+    else:
+        return fig, corr_matrix

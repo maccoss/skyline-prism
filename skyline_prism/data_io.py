@@ -87,11 +87,11 @@ REQUIRED_COLUMNS = [
 # At least one of these abundance columns required
 ABUNDANCE_COLUMNS = ['Area', 'Total Area Fragment', 'Total Area MS1']
 
-# Sample metadata column name alternatives (Skyline conventions)
+# Sample metadata column name alternatives (Skyline conventions + PRISM conventions)
 # Order matters - first match is used
-METADATA_REPLICATE_COLUMNS = ['Replicate Name', 'ReplicateName', 'File Name']
-METADATA_SAMPLE_TYPE_COLUMNS = ['Sample Type', 'SampleType']
-METADATA_BATCH_COLUMNS = ['Batch', 'Batch Name']  # Skyline uses 'Batch Name'
+METADATA_REPLICATE_COLUMNS = ['sample', 'Replicate Name', 'ReplicateName', 'File Name']
+METADATA_SAMPLE_TYPE_COLUMNS = ['sample_type', 'Sample Type', 'SampleType']
+METADATA_BATCH_COLUMNS = ['batch', 'Batch', 'Batch Name']  # Skyline uses 'Batch Name'
 
 # Skyline Sample Type to PRISM sample_type mapping
 # Skyline options: Unknown, Standard, Quality Control, Solvent, Blank, Double Blank
@@ -755,7 +755,14 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
             df_full = pd.read_csv(filepath, sep=sep)
             df_full = _standardize_columns(df_full)
             result.n_rows = len(df_full)
-            result.n_replicates = df_full['replicate_name'].nunique()
+            # Use Skyline column name (standardize_columns no longer renames)
+            replicate_col = 'Replicate Name'
+            if replicate_col in df_full.columns:
+                result.n_replicates = df_full[replicate_col].nunique()
+            elif 'replicate_name' in df_full.columns:
+                result.n_replicates = df_full['replicate_name'].nunique()
+            else:
+                result.n_replicates = 0
 
     except Exception as e:
         result.is_valid = False
@@ -850,67 +857,80 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
 
     meta = pd.read_csv(filepath, sep=sep)
 
-    # Normalize ReplicateName column
+    # Normalize sample name column to 'sample'
     replicate_col = None
     for col_name in METADATA_REPLICATE_COLUMNS:
         if col_name in meta.columns:
             replicate_col = col_name
-            if col_name != 'ReplicateName':
-                meta = meta.rename(columns={col_name: 'ReplicateName'})
-                logger.info(f"Renamed '{col_name}' column to 'ReplicateName'")
+            if col_name != 'sample':
+                meta = meta.rename(columns={col_name: 'sample'})
+                logger.info(f"Renamed '{col_name}' column to 'sample'")
             break
     if replicate_col is None:
         raise ValueError(
             f"Missing replicate name column. Expected one of: {METADATA_REPLICATE_COLUMNS}"
         )
 
-    # Normalize SampleType column
+    # Normalize sample type column to 'sample_type'
     sample_type_col = None
     for col_name in METADATA_SAMPLE_TYPE_COLUMNS:
         if col_name in meta.columns:
             sample_type_col = col_name
-            if col_name != 'SampleType':
-                meta = meta.rename(columns={col_name: 'SampleType'})
-                logger.info(f"Renamed '{col_name}' column to 'SampleType'")
+            if col_name != 'sample_type':
+                meta = meta.rename(columns={col_name: 'sample_type'})
+                logger.info(f"Renamed '{col_name}' column to 'sample_type'")
             break
     if sample_type_col is None:
         raise ValueError(
             f"Missing sample type column. Expected one of: {METADATA_SAMPLE_TYPE_COLUMNS}"
         )
 
-    # Normalize batch column name (Skyline uses 'Batch Name')
+    # Normalize batch column to 'batch' (Skyline uses 'Batch Name')
     for batch_col in METADATA_BATCH_COLUMNS:
-        if batch_col in meta.columns and batch_col != 'Batch':
-            meta = meta.rename(columns={batch_col: 'Batch'})
-            logger.info(f"Renamed '{batch_col}' column to 'Batch'")
+        if batch_col in meta.columns and batch_col != 'batch':
+            meta = meta.rename(columns={batch_col: 'batch'})
+            logger.info(f"Renamed '{batch_col}' column to 'batch'")
             break
 
     # Map Skyline sample types to PRISM types
-    original_types = meta['SampleType'].unique()
+    original_types = meta['sample_type'].unique()
     skyline_types = set(original_types) & set(SKYLINE_SAMPLE_TYPE_MAP.keys())
     if skyline_types:
         logger.info(f"Mapping Skyline sample types: {list(skyline_types)}")
-        meta['SampleType'] = meta['SampleType'].map(
+        meta['sample_type'] = meta['sample_type'].map(
             lambda x: SKYLINE_SAMPLE_TYPE_MAP.get(x, x)
         )
 
-    # Note if Batch column is missing (will be estimated later)
-    if 'Batch' not in meta.columns:
-        logger.info("No Batch column in metadata - batches will be estimated")
+    # Note if batch column is missing (will be estimated later)
+    if 'batch' not in meta.columns:
+        logger.info("No batch column in metadata - batches will be estimated")
 
-    # Validate SampleType values
-    invalid_types = set(meta['SampleType'].unique()) - VALID_SAMPLE_TYPES
+    # Validate sample_type values
+    invalid_types = set(meta['sample_type'].unique()) - VALID_SAMPLE_TYPES
     if invalid_types:
         raise ValueError(
-            f"Invalid SampleType values: {invalid_types}. "
+            f"Invalid sample_type values: {invalid_types}. "
             f"Must be one of: {VALID_SAMPLE_TYPES} "
             f"(or Skyline types: {list(SKYLINE_SAMPLE_TYPE_MAP.keys())})"
         )
 
-    # Check for duplicate replicate names
-    duplicates = meta[meta['ReplicateName'].duplicated()]['ReplicateName'].tolist()
-    if duplicates:
-        raise ValueError(f"Duplicate ReplicateName entries: {duplicates}")
+    # Check for duplicate sample names within the same batch
+    # (duplicates across batches are allowed - e.g., the same reference/pool sample
+    # run in multiple batches)
+    if 'batch' in meta.columns:
+        duplicates = (
+            meta.groupby(['sample', 'batch'])
+            .size()
+            .reset_index(name='count')
+        )
+        duplicates = duplicates[duplicates['count'] > 1]
+        if not duplicates.empty:
+            dup_list = duplicates[['sample', 'batch']].values.tolist()
+            raise ValueError(f"Duplicate sample entries within batch: {dup_list}")
+    else:
+        duplicates = meta[meta['sample'].duplicated()]['sample'].tolist()
+        if duplicates:
+            raise ValueError(f"Duplicate sample entries: {duplicates}")
 
     # Ensure RunOrder is numeric if present
     if 'RunOrder' in meta.columns:
