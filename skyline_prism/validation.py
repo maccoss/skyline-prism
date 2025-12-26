@@ -775,6 +775,32 @@ def generate_comprehensive_qc_report(
             except Exception as e:
                 logger.warning(f"Failed to generate peptide intensity plot: {e}")
 
+        # 1b. Peptide Box Plot Comparison (3-stage if available)
+        if plot_settings.get('boxplot_comparison', True) and has_three_stage:
+            try:
+                fig = viz.plot_boxplot_three_stage(
+                    peptide_rawsum,
+                    peptide_medianpolish,
+                    peptide_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    title="Peptide Intensity: Processing Stages",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "peptide_boxplot_comparison", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    peptide_plot_sections.append(
+                        ("Peptide Box Plot (3 Stages)", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["peptide_boxplot_comparison"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate peptide boxplot: {e}")
+
         # 2. Peptide PCA Comparison (3-stage if available)
         if plot_settings.get('pca_comparison', True):
             try:

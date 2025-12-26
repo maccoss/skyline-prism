@@ -29,6 +29,18 @@ The pipeline automatically handles transforms:
 
 When using functions directly via Python API, check docstrings for scale requirements.
 
+### CV Calculation (CRITICAL)
+
+**CVs must ALWAYS be calculated on LINEAR scale data, NEVER on log-transformed data.**
+
+Correct calculation:
+```python
+linear_data = 2 ** log2_data  # Convert from log2 to linear
+cv = (linear_data.std() / linear_data.mean()) * 100  # CV as percentage
+```
+
+Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2 data would be meaningless - true biological CVs for proteomics control samples typically range from 10-30%.
+
 ### Processing Pipeline
 
 The current implementation follows this stage structure:
