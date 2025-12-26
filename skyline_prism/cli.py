@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import yaml
 
 if TYPE_CHECKING:
@@ -682,6 +683,39 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"abundance={abundance_col}"
     )
 
+    # Report data dimensions before processing
+    logger.info("")
+    logger.info("Input data summary:")
+    pf = pq.ParquetFile(transition_parquet)
+    n_rows = pf.metadata.num_rows
+    logger.info(f"  Total rows: {n_rows:,}")
+    
+    # Get unique peptide and transition counts efficiently
+    try:
+        import duckdb
+        con = duckdb.connect()
+        result = con.execute(f"""
+            SELECT 
+                COUNT(DISTINCT "{peptide_col}") as n_peptides,
+                COUNT(DISTINCT "{peptide_col}" || '|' || "{transition_col}") as n_transitions,
+                COUNT(DISTINCT "{sample_col}") as n_samples
+            FROM read_parquet('{transition_parquet}')
+        """).fetchone()
+        n_peptides, n_transitions, n_samples = result
+        con.close()
+    except Exception:
+        # Fallback: use pyarrow (slower but no external dependency)
+        table = pq.read_table(transition_parquet, columns=[peptide_col, transition_col, sample_col])
+        df = table.to_pandas()
+        n_peptides = df[peptide_col].nunique()
+        n_transitions = df[[peptide_col, transition_col]].drop_duplicates().shape[0]
+        n_samples = df[sample_col].nunique()
+    
+    logger.info(f"  Unique peptides: {n_peptides:,}")
+    logger.info(f"  Unique transitions: {n_transitions:,}")
+    logger.info(f"  Samples: {n_samples:,}")
+    logger.info(f"  Avg transitions per peptide: {n_transitions / n_peptides:.1f}")
+
     # =========================================================================
     # Stage 2: Transition -> Peptide rollup
     # =========================================================================
@@ -689,6 +723,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 2: Transition -> Peptide rollup")
     logger.info("=" * 60)
 
+    # Stage 2.1: Raw sum (for QC baseline comparison)
+    logger.info("  Step 2.1: Raw sum rollup (QC baseline)...")
+    rawsum_config = ChunkedRollupConfig(
+        peptide_col=peptide_col,
+        transition_col=transition_col,
+        sample_col=sample_col,
+        abundance_col=abundance_col,
+        method='sum',
+        min_transitions=config['transition_rollup'].get('min_transitions', 3),
+        log_transform=True,
+        progress_interval=5000,
+    )
+    
+    peptide_rawsum_path = output_dir / 'peptides_rawsum.1.parquet'
+    rawsum_result = rollup_transitions_sorted(
+        parquet_path=transition_parquet,
+        output_path=peptide_rawsum_path,
+        config=rawsum_config,
+        save_residuals=False,
+    )
+    
+    # Stage 2.2: Median polish (main method)
+    logger.info("  Step 2.2: Median polish rollup...")
     transition_config = ChunkedRollupConfig(
         peptide_col=peptide_col,
         transition_col=transition_col,
@@ -700,10 +757,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         progress_interval=5000,
     )
 
-    peptide_path = output_dir / 'peptides_raw.parquet'
+    peptide_medianpolish_path = output_dir / 'peptides_medianpolish.2.parquet'
     peptide_result = rollup_transitions_sorted(
         parquet_path=transition_parquet,
-        output_path=peptide_path,
+        output_path=peptide_medianpolish_path,
         config=transition_config,
         save_residuals=config['output'].get('include_residuals', True),
     )
@@ -720,7 +777,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 2b: Peptide Global Normalization")
     logger.info("-" * 60)
 
-    peptide_df = pd.read_parquet(peptide_path)
+    peptide_df = pd.read_parquet(peptide_medianpolish_path)
 
     # Data is in wide format: peptide_col, n_transitions, mean_rt, sample1, sample2, ...
     # Get sample columns (all columns after metadata columns)
@@ -728,8 +785,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     meta_cols = [c for c in meta_cols if c in peptide_df.columns]
     sample_cols = [c for c in peptide_df.columns if c not in meta_cols]
 
-    # Keep a copy of raw peptide data for QC comparison
-    peptide_raw_df = peptide_df.copy()
+    # Filter out peptides with all NaN (< min_transitions, failed rollup)
+    # These cannot be normalized or batch-corrected
+    data_matrix = peptide_df[sample_cols].values
+    valid_mask = ~np.all(np.isnan(data_matrix), axis=1)
+    n_filtered = (~valid_mask).sum()
+    if n_filtered > 0:
+        logger.info(f"  Filtering {n_filtered} peptides with insufficient transitions (all NaN)")
+        peptide_df = peptide_df[valid_mask].reset_index(drop=True)
+
+    # Keep copies for QC comparison (rawsum baseline + medianpolish before normalization)
+    peptide_rawsum_df = pd.read_parquet(peptide_rawsum_path)
+    peptide_medianpolish_df = peptide_df.copy()
 
     # Apply global median normalization (on log2 scale)
     # For each sample column, subtract sample median and add global median
@@ -825,7 +892,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info("  Batch correction disabled in config")
 
     # Save normalized peptides
-    peptide_normalized_path = output_dir / 'peptides_normalized.parquet'
+    peptide_normalized_path = output_dir / 'peptides_normalized.3.parquet'
     peptide_df.to_parquet(peptide_normalized_path, index=False)
     logger.info(f"  Saved normalized peptides: {peptide_normalized_path}")
 
@@ -1085,7 +1152,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         try:
             generate_comprehensive_qc_report(
-                peptide_raw=peptide_raw_df,
+                peptide_raw=peptide_medianpolish_df,
                 peptide_corrected=peptide_df,
                 protein_raw=protein_raw_df,
                 protein_corrected=protein_df,
@@ -1096,6 +1163,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 config=config,
                 save_plots=qc_config.get('save_plots', True),
                 embed_plots=qc_config.get('embed_plots', True),
+                peptide_rawsum=peptide_rawsum_df,
+                peptide_medianpolish=peptide_medianpolish_df,
             )
             method_log.append(f"QC report: {qc_report_path}")
         except Exception as e:

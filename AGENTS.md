@@ -31,11 +31,42 @@ When using functions directly via Python API, check docstrings for scale require
 
 ### Processing Pipeline
 
+The current implementation follows this stage structure:
+
+```text
+Stage 1: Merge CSVs (streaming, memory-efficient)
+    ↓
+Stage 2: Transition → Peptide rollup (Tukey median polish)
+    ↓
+Stage 2b: Peptide Global Normalization (median or VSN)
+    ↓ [Optional: RT correction - disabled by default]
+Stage 2c: Peptide ComBat Batch Correction
+    ↓
+    ├──────────────────────────────┐
+    ↓                              ↓
+Stage 3: Protein Parsimony    PEPTIDE OUTPUT
+    ↓                         (corrected_peptides.parquet)
+Stage 4: Peptide → Protein Rollup (median polish)
+    ↓
+Stage 4b: Protein Global Normalization (median)
+    ↓
+Stage 4c: Protein ComBat Batch Correction
+    ↓
+Stage 5: Output Generation
+    ↓
+    PROTEIN OUTPUT
+    (corrected_proteins.parquet)
+    ↓
+Stage 5b: QC Report Generation (HTML + plots)
 ```
-Transitions → [Median Polish] → Peptides → [Optional RT Correction] → 
-    ├─→ [Batch Correction] → Normalized Peptides (peptide output)
-    └─→ [Median Polish] → Proteins → [Batch Correction] → Normalized Proteins (protein output)
-```
+
+**Key implementation details:**
+
+- **Streaming processing**: Stage 1 uses DuckDB-based streaming to handle ~47GB datasets
+- **Batch correction applied twice**: Once at peptide level (Stage 2c), once at protein level (Stage 4c)
+- **Independent outputs**: Both peptide and protein files are batch-corrected independently
+- **Log files**: Automatically saved to output directory with timestamp (`prism_run_YYYYMMDD_HHMMSS.log`)
+- **Metadata columns**: Uses `sample`, `sample_type`, `batch` (with automatic normalization from Skyline formats)
 
 ## Project Structure
 
@@ -126,6 +157,7 @@ transition_rollup:
 ### Style Guidelines
 
 - **No emojis**: Do not use emojis in code, documentation, comments, or output messages. Use plain text instead (e.g., "PASSED" instead of "✓", "WARNING" instead of "⚠️").
+- **This is a strict requirement**: All status indicators, section headers, and documentation must use plain ASCII text. Use prefixes like "[WORKING]", "[ISSUE]", "[TODO]" instead of emoji symbols.
 - Unicode arrows (→) for flow diagrams are acceptable.
 
 ### Virtual Environment
@@ -370,6 +402,119 @@ protein_rollup:
     enzyme: "trypsin"
     missed_cleavages: 0
 ```
+
+---
+
+## Current Implementation Status
+
+This section tracks what's currently working, what needs attention, and what's not yet implemented.
+
+### [WORKING] Fully Implemented and Tested (December 2024)
+
+**Core Pipeline:**
+
+- Streaming CSV merge (handles ~47GB datasets)
+- Transition → Peptide rollup (Tukey median polish)
+- Peptide global normalization (median-based)
+- Peptide batch correction (ComBat, empirical Bayes)
+- Protein parsimony (FASTA-based grouping)
+- Peptide → Protein rollup (Tukey median polish)
+- Protein global normalization (median-based)
+- Protein batch correction (ComBat, empirical Bayes)
+- Log file generation (timestamped in output directory)
+- Parquet output with metadata
+- Provenance tracking (metadata.json)
+
+**Data Handling:**
+
+- Automatic column detection (handles different Skyline export formats)
+- Metadata normalization (`sample`/`sample_type`/`batch` from Skyline formats)
+- Sample type pattern matching (reference/pool/experimental detection)
+- Batch estimation from source files or timestamps
+- Duplicate sample validation (allows same sample across batches)
+
+**Testing:**
+
+- 164 tests passing
+- Core algorithms well-tested (median polish, ComBat, parsimony)
+- Real-world validation on 238 samples, 3 batches, ~47GB data
+
+### [ISSUE] Known Issues / Needs Attention
+
+**QC Reporting:**
+
+- **CV calculation bug**: Reference/pool median CV shows NaN - sample type matching not working correctly
+- **Protein NaN values**: Global median/max shift occasionally NaN for proteins - investigate data quality checks
+- **QC report warning**: "list index out of range" during generation in some edge cases
+
+**ComBat Evaluation:**
+
+- **Automatic fallback not implemented**: QC-based decision to revert correction if quality degrades
+- **Reference-anchored evaluation**: Method exists but automatic QC evaluation not active
+- **Current behavior**: Always applies ComBat when enabled; need to add quality checks
+
+### [DISABLED] Implemented but Disabled by Default
+
+**RT Correction:**
+
+- Fully implemented but **disabled by default**
+- Reason: Search engine RT calibration (DIA-NN) may not generalize between samples
+- Can enable via `rt_correction.enabled: true` in config
+- Uses spline-based correction fitted to reference samples
+
+### [TODO] Not Yet Implemented
+
+**Advanced Features:**
+
+- VSN normalization (placeholder in config)
+- Per-batch RT models with cross-validation
+- Quality-weighted protein rollup
+- iBAQ support (code exists but not integrated into pipeline)
+
+**Missing Functionality:**
+
+- Command-line validation report (`prism validate` exists but needs work)
+- Step-by-step commands (`prism normalize`, `prism rollup` - legacy, may remove)
+
+### [PRIORITY] Development Priorities
+
+Based on current usage and known issues:
+
+1. **Fix CV calculation bug** - Critical for QC validation
+2. **Investigate protein NaN values** - May indicate data quality issues
+3. **Implement ComBat quality checks** - Enable automatic fallback
+4. **Improve QC report robustness** - Fix edge cases causing warnings
+5. **Consider removing legacy commands** - Focus on `prism run` as primary interface
+
+### [COVERAGE] Test Coverage Details
+
+**High coverage (>85%):**
+
+- `fasta.py`: 95% - Protein parsimony and FASTA parsing
+- `transition_rollup.py`: 93% - Transition → Peptide aggregation
+- `batch_correction.py`: 89% - ComBat implementation
+- `parsimony.py`: 78% - Protein grouping
+
+**Low coverage (<30%):**
+
+- `cli.py`: 13% - Command-line interface (mainly integration code)
+- `normalization.py`: 12% - RT correction (disabled by default)
+- `data_io.py`: 28% - File I/O (tested via integration)
+- `validation.py`: 10% - QC reporting (needs more unit tests)
+
+**Overall**: 43% coverage, 164 tests passing
+
+### [CHANGELOG] Recent Changes Log
+
+**December 2024:**
+
+- Implemented log file generation with timestamps
+- Fixed metadata column handling (`sample` vs `replicate_name`)
+- Added support for duplicate samples across batches (Pool/reference in multiple plates)
+- Improved protein sample column detection using dtype checks
+- Updated stage naming (1, 2, 2b, 2c, 3, 4, 4b, 4c, 5, 5b)
+- Validated on 238 samples across 3 batches (~47GB total data)
+- Added input data summary logging (transitions, peptides, samples)
 
 ## Not Yet Implemented
 

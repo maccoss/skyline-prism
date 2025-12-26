@@ -132,18 +132,28 @@ def _process_single_peptide(
             intensity_matrix[sample] = np.nan
     intensity_matrix = intensity_matrix.reindex(columns=samples)
 
-    # Replace zeros with a fraction of the 1st percentile of non-zero values
-    # Zero Area means "detected but below LOD", not missing data
-    # Using 1st percentile is more robust than minimum (avoids outlier artifacts)
-    nonzero_values = intensity_matrix.values[intensity_matrix.values > 0]
-    if len(nonzero_values) > 0:
-        p1_value = np.percentile(nonzero_values, 1)
-        impute_value = p1_value * 0.5  # Half the 1st percentile
-        intensity_matrix = intensity_matrix.replace(0, max(impute_value, 1))
+    # Impute missing/invalid values with low abundance quantity
+    # Step 1: Convert negative values to 0 (these are invalid measurements)
+    intensity_matrix = intensity_matrix.clip(lower=0)
 
-    # Log transform
+    # Step 2: Calculate imputation value from valid positive measurements
+    # Use half the 1st percentile of positive values (robust to outliers)
+    positive_values = intensity_matrix.values[intensity_matrix.values > 0]
+    if len(positive_values) > 0:
+        p1_value = np.percentile(positive_values, 1)
+        impute_value = max(p1_value * 0.5, 1.0)  # At least 1.0
+    else:
+        impute_value = 1.0  # Fallback if no positive values
+
+    # Step 3: Replace zeros AND NaN with imputation value
+    # Zero Area means "detected but below LOD", NaN means missing measurement
+    # Both get imputed to a low but non-zero value for downstream analysis
+    intensity_matrix = intensity_matrix.fillna(impute_value)
+    intensity_matrix = intensity_matrix.replace(0, impute_value)
+
+    # Log transform (all values now guaranteed positive)
     if config.log_transform:
-        intensity_matrix = np.log2(intensity_matrix.clip(lower=1))
+        intensity_matrix = np.log2(intensity_matrix)
 
     # Get mean RT if available
     mean_rt = None
@@ -362,6 +372,7 @@ def rollup_transitions_streaming(
     peptide_rows = []
     residual_rows = []
     n_peptides = 0
+    n_filtered = 0
 
     # Determine number of workers
     n_workers = config.n_workers if config.n_workers > 0 else mp.cpu_count()
@@ -373,6 +384,11 @@ def rollup_transitions_streaming(
             results = _process_peptide_batch(batch, samples, config)
 
             for result in results:
+                # Skip peptides with insufficient transitions
+                if result.n_transitions < config.min_transitions:
+                    n_filtered += 1
+                    continue
+
                 # Build peptide row
                 row = {
                     config.peptide_col: result.peptide,
@@ -408,6 +424,8 @@ def rollup_transitions_streaming(
         )
 
     logger.info(f"  Completed: {n_peptides:,} peptides processed")
+    if n_filtered > 0:
+        logger.info(f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions")
 
     # Write peptide output
     peptide_df = pd.DataFrame(peptide_rows)

@@ -2085,6 +2085,93 @@ This section documents important design decisions made during PRISM development.
 
 ---
 
+## Implementation Status
+
+This section documents the current implementation status of PRISM features as of December 2024.
+
+### [WORKING] Fully Implemented and Tested
+
+**Data Processing:**
+
+- **Streaming CSV merge**: Memory-efficient merging of multiple Skyline reports (~47GB datasets tested)
+- **Automatic column detection**: Handles different Skyline export formats with column name normalization
+- **Metadata handling**: Support for both PRISM format (`sample`, `sample_type`, `batch`) and Skyline format (`Replicate Name`, `Sample Type`, `Batch Name`)
+- **Sample type detection**: Pattern-based automatic assignment of reference/pool/experimental samples
+- **Batch estimation**: Automatic batch detection from source files or acquisition timestamps
+
+**Peptide Quantification:**
+
+- **Transition → Peptide rollup**: Tukey median polish implementation with residual preservation
+- **Quality-weighted aggregation**: Alternative rollup method with learned variance models
+- **Global normalization**: Median-based normalization (default) applied at peptide level
+- **Peptide batch correction**: Full ComBat implementation with empirical Bayes shrinkage
+
+**Protein Quantification:**
+
+- **Protein parsimony**: FASTA-based protein grouping with shared peptide handling
+- **Peptide → Protein rollup**: Tukey median polish with multiple peptide handling strategies
+- **Protein global normalization**: Median-based normalization applied at protein level
+- **Protein batch correction**: Full ComBat implementation applied after protein rollup
+
+**Output and Logging:**
+
+- **Parquet output**: Efficient storage with metadata preservation
+- **Log file generation**: Timestamped log files with all processing steps and timings
+- **Provenance tracking**: Complete processing metadata in JSON format for reproducibility
+- **Residual preservation**: Both peptide and transition residuals saved for downstream analysis
+
+### [DISABLED] Implemented but Disabled by Default
+
+**RT Correction:**
+
+- **Status**: Fully implemented but **disabled by default**
+- **Rationale**: Modern search engines (DIA-NN) apply per-file RT calibration that may not generalize between reference and experimental samples
+- **Configuration**: Can be enabled via `rt_correction.enabled: true` in config
+- **Methods**: Spline-based correction with reference sample fitting
+
+### [ISSUE] Partially Implemented / Known Issues
+
+**QC Reporting:**
+
+- **QC plot generation**: Implemented (intensity distributions, PCA, correlation heatmaps)
+- **HTML report generation**: Implemented with embedded plots
+- **Known issues**:
+  - CV calculation for reference/pool samples not matching sample types correctly (shows NaN)
+  - Global median calculations occasionally show NaN for protein data
+  - QC report generation warning: "list index out of range" in some edge cases
+
+**ComBat Evaluation:**
+
+- **Traditional ComBat**: Fully implemented and tested
+- **Reference-anchored ComBat**: Method implemented but automatic QC-based evaluation not yet active
+- **Current behavior**: Always applies ComBat when enabled; fallback logic needs implementation
+
+### [TODO] Not Yet Implemented
+
+**Advanced Features:**
+
+- **VSN normalization**: Placeholder in config but not yet implemented
+- **Per-batch RT models with cross-validation**: RT correction uses all data; per-batch fitting needs implementation
+- **Automatic ComBat fallback**: QC-based decision to revert correction if quality degrades
+- **Missing data imputation**: Not needed for Skyline data (uses boundary imputation)
+
+### [COVERAGE] Test Coverage
+
+- **Overall coverage**: 43% (164 tests passing)
+- **High coverage modules**:
+  - `fasta.py`: 95% (protein parsimony)
+  - `transition_rollup.py`: 93% (peptide aggregation)
+  - `batch_correction.py`: 89% (ComBat implementation)
+  - `parsimony.py`: 78% (protein grouping)
+- **Low coverage modules**:
+  - `cli.py`: 13% (command-line interface - mainly integration code)
+  - `normalization.py`: 12% (RT correction - disabled by default)
+  - `data_io.py`: 28% (file I/O - tested via integration)
+
+**Testing philosophy**: Core algorithms (median polish, ComBat, parsimony) have extensive unit tests. Integration code (CLI, file I/O) is tested via real-world usage on large datasets.
+
+---
+
 ## References
 
 1. Tsantilas KA et al. "A framework for quality control in quantitative proteomics." J Proteome Res. 2024. DOI: 10.1021/acs.jproteome.4c00363

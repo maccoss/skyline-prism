@@ -2204,3 +2204,230 @@ def plot_control_correlation_wide(
         return None, corr_matrix
     else:
         return fig, corr_matrix
+
+def plot_cv_three_stage(
+    data_rawsum: pd.DataFrame,
+    data_medianpolish: pd.DataFrame,
+    data_normalized: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    control_type: str = "reference",
+    title: str = "CV Distribution: Processing Stages",
+    figsize: tuple[int, int] = (15, 5),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Compare CV distributions across 3 processing stages (wide-format data).
+
+    Shows how CV improves from raw sum -> median polish -> normalized.
+
+    Args:
+        data_rawsum: Wide-format DataFrame with sum-aggregated peptides
+        data_medianpolish: Wide-format DataFrame after Tukey median polish
+        data_normalized: Wide-format DataFrame after normalization + batch correction
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type
+        control_type: Sample type to analyze ('reference' or 'pool')
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+
+    # Get control sample columns
+    if sample_types:
+        control_cols = [c for c in sample_cols if sample_types.get(c) == control_type]
+    else:
+        control_cols = sample_cols
+
+    if len(control_cols) < 2:
+        logger.warning(f"Insufficient {control_type} samples for CV calculation")
+        return None
+
+    def calc_cvs(df):
+        """Calculate CV for each feature across control samples."""
+        control_data = df[control_cols]
+        # Calculate on linear scale (exponentiate from log2)
+        linear_data = 2 ** control_data
+        cv_values = (linear_data.std(axis=1) / linear_data.mean(axis=1)) * 100
+        return cv_values.dropna().values
+
+    datasets = [
+        (data_rawsum, "Raw Sum", "#ff6b6b"),
+        (data_medianpolish, "Median Polish", "#4ecdc4"),
+        (data_normalized, "Normalized", "#45b7d1"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    for ax, (df, label, color) in zip(axes, datasets):
+        cv_values = calc_cvs(df)
+
+        if len(cv_values) > 0:
+            ax.hist(cv_values, bins=50, alpha=0.7, color=color, edgecolor="black")
+
+            median_cv = np.median(cv_values)
+            mean_cv = np.mean(cv_values)
+
+            # Show median and mean lines (no threshold)
+            ax.axvline(median_cv, color="darkred", linestyle="--", linewidth=2,
+                       label=f"Median: {median_cv:.1f}%")
+            ax.axvline(mean_cv, color="darkblue", linestyle=":", linewidth=2,
+                       label=f"Mean: {mean_cv:.1f}%")
+
+            ax.text(
+                0.95, 0.95,
+                f"Median: {median_cv:.1f}%\nMean: {mean_cv:.1f}%\nN={len(cv_values):,}",
+                transform=ax.transAxes, fontsize=10, va="top", ha="right",
+                bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+            )
+
+            ax.set_xlim(0, min(100, np.percentile(cv_values, 99)))
+        else:
+            ax.text(0.5, 0.5, "Insufficient data",
+                    transform=ax.transAxes, ha="center", va="center")
+
+        ax.set_title(label, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Coefficient of Variation (%)", fontsize=11)
+        ax.set_ylabel("Number of Features", fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9, loc="upper right")
+
+    fig.suptitle(f"{title} ({control_type.capitalize()} Samples)",
+                 fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig
+
+
+def plot_pca_three_stage(
+    data_rawsum: pd.DataFrame,
+    data_medianpolish: pd.DataFrame,
+    data_normalized: pd.DataFrame,
+    sample_cols: list[str],
+    sample_types: dict[str, str] | None = None,
+    title: str = "PCA: Processing Stages",
+    figsize: tuple[int, int] = (18, 5),
+    show_plot: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure | None:
+    """Compare PCA across 3 processing stages (wide-format data).
+
+    Shows how sample clustering changes from raw sum -> median polish -> normalized.
+
+    Args:
+        data_rawsum: Wide-format DataFrame with sum-aggregated peptides
+        data_medianpolish: Wide-format DataFrame after Tukey median polish
+        data_normalized: Wide-format DataFrame after normalization + batch correction
+        sample_cols: List of column names containing sample abundances
+        sample_types: Dict mapping sample name to type (for coloring)
+        title: Plot title
+        figsize: Figure size
+        show_plot: Whether to display the plot
+        save_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure if show_plot is False, else None
+
+    """
+    _check_matplotlib()
+    _check_sklearn()
+
+    datasets = [
+        (data_rawsum, "Raw Sum"),
+        (data_medianpolish, "Median Polish"),
+        (data_normalized, "Normalized"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    def perform_pca_and_plot(df, ax, plot_title):
+        """Perform PCA and plot on given axis."""
+        sample_data = df[sample_cols].copy()
+        sample_data = sample_data.dropna(axis=0, thresh=len(sample_cols) * 0.5)
+        sample_data = sample_data.fillna(sample_data.median())
+
+        if sample_data.shape[0] < 2:
+            ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
+                    transform=ax.transAxes)
+            ax.set_title(plot_title)
+            return
+
+        pca_input = sample_data.T
+        scaler = StandardScaler()
+        scaled_data = scaler.fit_transform(pca_input)
+
+        n_comp = min(2, pca_input.shape[0] - 1, pca_input.shape[1])
+        pca = PCA(n_components=n_comp)
+        scores = pca.fit_transform(scaled_data)
+
+        pca_df = pd.DataFrame(
+            scores[:, :2],
+            columns=["PC1", "PC2"],
+            index=pca_input.index,
+        )
+
+        if sample_types:
+            pca_df["Group"] = [sample_types.get(s, "unknown") for s in pca_df.index]
+        else:
+            pca_df["Group"] = "All"
+
+        unique_groups = pca_df["Group"].unique()
+        cmap = plt.colormaps.get_cmap("Set1")
+        group_colors = {
+            g: cmap(i / max(1, len(unique_groups) - 1))
+            for i, g in enumerate(unique_groups)
+        }
+
+        for group in unique_groups:
+            group_data = pca_df[pca_df["Group"] == group]
+            ax.scatter(
+                group_data["PC1"],
+                group_data["PC2"],
+                c=[group_colors[group]],
+                label=group,
+                alpha=0.7,
+                s=80,
+                edgecolors="black",
+                linewidth=0.5,
+            )
+
+        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})", fontsize=11)
+        ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})", fontsize=11)
+        ax.set_title(plot_title, fontsize=12, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+
+    for ax, (df, label) in zip(axes, datasets):
+        perform_pca_and_plot(df, ax, label)
+
+    # Add a single legend outside the plots
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", fontsize=9,
+                   bbox_to_anchor=(0.99, 0.95))
+
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 0.92, 0.95])
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved plot to {save_path}")
+
+    if show_plot:
+        plt.show()
+        return None
+    else:
+        return fig

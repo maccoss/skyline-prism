@@ -41,6 +41,8 @@ This produces:
 - `protein_groups.tsv` - Protein group definitions
 - `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
 - `metadata.json` - Processing metadata and provenance
+- `prism_run_YYYYMMDD_HHMMSS.log` - Detailed log file with all processing steps and timings
+- `qc_plots/` - Directory with QC plots (if QC reporting enabled)
 
 **Scale:** Output files contain **linear-scale** abundances (raw peak area units). The pipeline operates on log2 scale internally but back-transforms to linear before writing output.
 
@@ -100,40 +102,52 @@ All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML r
 
 ## Processing Pipeline
 
-The pipeline follows a two-arm design:
+The pipeline follows a two-arm design with batch correction applied at the reporting level:
 
 ```text
-Raw transition abundances
+Stage 1: Merge CSVs (streaming)
         │
         ▼
-┌─────────────────────────────────────┐
-│  Transition → Peptide rollup        │
-│  (Tukey median polish - default)    │
-└─────────────────────────────────────┘
+Stage 2: Transition → Peptide rollup (Tukey median polish)
         │
         ▼
-┌─────────────────────────────────────┐
-│  Global normalization               │
-│  (median - default, or VSN)         │
-│  + [Optional] RT-aware correction   │
-└─────────────────────────────────────┘
+Stage 2b: Peptide Global Normalization (median or VSN)
+        │  [Optional: RT-aware correction - disabled by default]
+        ▼
+Stage 2c: Peptide ComBat Batch Correction
         │
-        ├──────────────────────────────────┐
-        │                                  │
-        ▼                                  ▼
-┌─────────────────────┐      ┌─────────────────────────┐
-│  PEPTIDE OUTPUT     │      │  PROTEIN OUTPUT         │
-│  Batch correction   │      │  Peptide → Protein      │
-│  (ComBat)           │      │  rollup (median polish) │
-│         │           │      │           │             │
-│         ▼           │      │           ▼             │
-│  Normalized         │      │  Batch correction       │
-│  peptides           │      │  (ComBat)               │
-└─────────────────────┘      │           │             │
-                             │           ▼             │
-                             │  Normalized proteins    │
-                             └─────────────────────────┘
+        ├─────────────────────────────────┐
+        │                                 │
+        ▼                                 ▼
+Stage 3: Protein Parsimony      PEPTIDE OUTPUT ARM
+        │                       (corrected_peptides.parquet)
+        ▼
+Stage 4: Peptide → Protein Rollup (median polish)
+        │
+        ▼
+Stage 4b: Protein Global Normalization (median)
+        │
+        ▼
+Stage 4c: Protein ComBat Batch Correction
+        │
+        ▼
+Stage 5: Output Generation
+        │
+        ▼
+    PROTEIN OUTPUT ARM
+(corrected_proteins.parquet)
+        │
+        ▼
+Stage 5b: QC Report Generation (HTML + plots)
 ```
+
+**Key Implementation Notes:**
+
+- **Streaming CSV merge** handles large datasets (~47GB tested) without loading into memory
+- **Both peptide and protein outputs** receive independent batch correction
+- **Automatic log files** saved to output directory with timestamp for reproducibility
+- **RT correction disabled by default** - search engine calibration may not generalize between samples
+- **Protein parsimony** applied before protein rollup to avoid double-counting shared peptides
 
 ## Experimental Design Requirements
 
@@ -156,6 +170,16 @@ Plus internal QCs in all samples:
 See `config_template.yaml` for all options. Key settings:
 
 ```yaml
+# Sample type detection patterns (for automatic sample type assignment)
+sample_annotations:
+  reference_pattern:  # Inter-experiment reference (e.g., commercial pools)
+    - "-Pool_"
+    - "-Pool"
+  pool_pattern:       # Intra-experiment QC (e.g., pooled experimental samples)
+    - "-Carl_"
+    - "-Carl"
+  # Everything else is treated as experimental
+
 # Transition to peptide rollup (if using transition-level data)
 transition_rollup:
   enabled: true
@@ -163,30 +187,37 @@ transition_rollup:
   min_transitions: 3
   learn_variance_model: false  # Set true for quality_weighted method
 
-# Global normalization (always applied after peptide rollup)
+# Global normalization (applied after peptide rollup)
 global_normalization:
   method: "median"  # median (recommended) or vsn
 
 # RT correction (optional, applied together with global normalization)
 rt_correction:
-  enabled: false  # Disabled by default - search engine RT calibration may not generalize
+  enabled: false  # DISABLED BY DEFAULT - search engine RT calibration may not generalize
   method: "spline"
   spline_df: 5
   per_batch: true
 
-# Batch correction (applied at reporting level)
+# Batch correction (applied at both peptide and protein levels)
 batch_correction:
   enabled: true
-  method: "combat"
+  method: "combat"  # Full empirical Bayes implementation
 
-# Protein rollup
+# Protein parsimony (applied before protein rollup)
+parsimony:
+  enabled: true
+  fasta_path: "/path/to/database.fasta"  # FASTA used in search
+  shared_peptide_handling: "all_groups"  # recommended
+
+# Protein rollup (peptide → protein aggregation)
 protein_rollup:
   method: "median_polish"  # default, recommended
 
-# Shared peptide handling (requires FASTA path for protein parsimony)
-parsimony:
-  fasta_path: "/path/to/database.fasta"  # FASTA used in search
-  shared_peptide_handling: "all_groups"  # recommended
+# QC report generation
+qc_report:
+  enabled: true
+  save_plots: true    # Save individual PNG files
+  embed_plots: true   # Embed plots in HTML report
 ```
 
 ## Automatic Batch Estimation
