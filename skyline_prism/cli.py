@@ -106,7 +106,7 @@ def load_config(config_path: Path | None) -> dict:
             'enabled': False,
             'method': 'median_polish',
             'min_transitions': 3,
-            'learn_variance_model': False,  # Learn from reference samples
+            'learn_weights': False,  # Learn from reference samples
         },
         'rt_correction': {
             'enabled': False,  # Disabled by default per SPECIFICATION
@@ -393,7 +393,7 @@ def generate_pipeline_metadata(
     sample_metadata = {
         'n_samples': len(samples_df),
         'n_reference': sample_counts.get('reference', 0),
-        'n_pool': sample_counts.get('pool', 0),
+        'n_qc': sample_counts.get('qc', 0),
         'n_experimental': sample_counts.get('experimental', 0),
         'samples': samples_df[sample_col].tolist(),
     }
@@ -486,6 +486,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         rollup_proteins_streaming,
         rollup_transitions_sorted,
     )
+    from .transition_rollup import (
+        QualityWeightParams,
+    )
     from .parsimony import (
         build_peptide_protein_map,
         compute_protein_groups,
@@ -524,7 +527,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Get sample type patterns from args or config
     reference_patterns = None
-    pool_patterns = None
+    qc_patterns = None
     if hasattr(args, 'reference_pattern') and args.reference_pattern:
         reference_patterns = args.reference_pattern
     elif 'sample_annotations' in config:
@@ -534,13 +537,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 [ref_pattern] if isinstance(ref_pattern, str) else ref_pattern
             )
 
-    if hasattr(args, 'pool_pattern') and args.pool_pattern:
-        pool_patterns = args.pool_pattern
+    if hasattr(args, 'qc_pattern') and args.qc_pattern:
+        qc_patterns = args.qc_pattern
     elif 'sample_annotations' in config:
-        pool_pattern = config['sample_annotations'].get('pool_pattern')
-        if pool_pattern:
-            pool_patterns = (
-                [pool_pattern] if isinstance(pool_pattern, str) else pool_pattern
+        qc_pattern = config['sample_annotations'].get('qc_pattern')
+        if qc_pattern:
+            qc_patterns = (
+                [qc_pattern] if isinstance(qc_pattern, str) else qc_pattern
             )
 
     # Categorize input files
@@ -613,7 +616,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 metadata_df = generate_sample_metadata(
                     samples_by_batch,
                     reference_patterns=reference_patterns,
-                    pool_patterns=pool_patterns,
+                    qc_patterns=qc_patterns,
                 )
                 metadata_path = output_dir / 'sample_metadata.tsv'
                 metadata_df.to_csv(metadata_path, sep='\t', index=False)
@@ -723,50 +726,131 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 2: Transition -> Peptide rollup")
     logger.info("=" * 60)
 
-    # Stage 2.1: Raw sum (for QC baseline comparison)
-    logger.info("  Step 2.1: Raw sum rollup (QC baseline)...")
-    rawsum_config = ChunkedRollupConfig(
-        peptide_col=peptide_col,
-        transition_col=transition_col,
-        sample_col=sample_col,
-        abundance_col=abundance_col,
-        method='sum',
-        min_transitions=config['transition_rollup'].get('min_transitions', 3),
-        log_transform=True,
-        progress_interval=5000,
-    )
-    
-    peptide_rawsum_path = output_dir / 'peptides_rawsum.1.parquet'
-    rawsum_result = rollup_transitions_sorted(
-        parquet_path=transition_parquet,
-        output_path=peptide_rawsum_path,
-        config=rawsum_config,
-        save_residuals=False,
-    )
-    
-    # Stage 2.2: Median polish (main method)
-    logger.info("  Step 2.2: Median polish rollup...")
+    # Get rollup configuration
+    rollup_method = config['transition_rollup'].get('method', 'sum')
+    use_ms1 = config['transition_rollup'].get('use_ms1', False)
+    min_transitions = config['transition_rollup'].get('min_transitions', 3)
+    learn_weights = config['transition_rollup'].get('learn_weights', False)
+
+    logger.info(f"  Rollup method: {rollup_method}")
+    logger.info(f"  Include MS1 precursors: {use_ms1}")
+    logger.info(f"  Min transitions: {min_transitions}")
+
+    # Initialize quality weight params (None for non-quality_weighted methods)
+    quality_weight_params = None
+
+    if rollup_method == "quality_weighted":
+        # Check for explicit parameters in config
+        qw_config = config['transition_rollup'].get('quality_weight_params', {})
+        quality_weight_params = QualityWeightParams(
+            alpha=qw_config.get('alpha', 0.5),
+            beta=qw_config.get('beta', 1.0),
+            gamma=qw_config.get('gamma', 1.0),
+            delta=qw_config.get('delta', 0.5),
+            shape_corr_agg=qw_config.get('shape_corr_agg', 'median'),
+            min_improvement_pct=qw_config.get('min_improvement_pct', 5.0),
+        )
+
+        # Learn weights from reference/pool samples if enabled
+        if learn_weights:
+            from .transition_rollup import learn_quality_weights
+
+            # Extract sample types from metadata
+            sample_types = dict(
+                zip(metadata_df['sample'], metadata_df['sample_type'])
+            )
+            ref_samples = [
+                s for s, t in sample_types.items() if t == 'reference'
+            ]
+            pool_samples = [
+                s for s, t in sample_types.items() if t == 'qc'
+            ]
+
+            if len(ref_samples) >= 2:
+                logger.info("  Learning quality weight parameters...")
+                logger.info(f"    Reference samples: {len(ref_samples)}")
+                logger.info(f"    Pool (QC) samples: {len(pool_samples)}")
+
+                # Load transition data for learning (sample of data)
+                import duckdb
+                learn_con = duckdb.connect()
+                sample_list_sql = ','.join(f"'{s}'" for s in ref_samples + pool_samples)
+                learn_df = learn_con.execute(f"""
+                    SELECT *
+                    FROM read_parquet('{transition_parquet}')
+                    WHERE "{sample_col}" IN ({sample_list_sql})
+                """).fetchdf()
+
+                # Data is already in LINEAR scale from merged parquet
+                # (log transform happens in rollup, not in merge)
+
+                learn_result = learn_quality_weights(
+                    learn_df,
+                    reference_samples=ref_samples,
+                    pool_samples=pool_samples,
+                    peptide_col=peptide_col,
+                    transition_col=transition_col,
+                    sample_col=sample_col,
+                    abundance_col=abundance_col,
+                    shape_corr_col='Shape Correlation',
+                    n_iterations=100,
+                    initial_params=quality_weight_params,
+                )
+
+                if learn_result.use_quality_weights:
+                    quality_weight_params = learn_result.params
+                    logger.info("  Using learned parameters")
+                else:
+                    logger.warning(f"  {learn_result.fallback_reason}")
+                    logger.warning("  Using default parameters")
+            else:
+                logger.warning(
+                    f"  Not enough reference samples for learning ({len(ref_samples)})"
+                )
+
+        logger.info(
+            f"  Using parameters: alpha={quality_weight_params.alpha:.2f}, "
+            f"beta={quality_weight_params.beta:.2f}, "
+            f"gamma={quality_weight_params.gamma:.2f}, "
+            f"delta={quality_weight_params.delta:.2f}"
+        )
+
+    # Get topn method parameters
+    topn_count = config['transition_rollup'].get('topn_count', 3)
+    topn_selection = config['transition_rollup'].get('topn_selection', 'correlation')
+    topn_weighting = config['transition_rollup'].get('topn_weighting', 'sqrt')
+
+    if rollup_method == "topn":
+        logger.info(f"  Top-N count: {topn_count}")
+        logger.info(f"  Selection method: {topn_selection}")
+        logger.info(f"  Weighting: {topn_weighting}")
+
     transition_config = ChunkedRollupConfig(
         peptide_col=peptide_col,
         transition_col=transition_col,
         sample_col=sample_col,
         abundance_col=abundance_col,
-        method=config['transition_rollup'].get('method', 'median_polish'),
-        min_transitions=config['transition_rollup'].get('min_transitions', 3),
+        method=rollup_method,
+        min_transitions=min_transitions,
         log_transform=True,
+        exclude_precursor=not use_ms1,  # exclude_precursor is inverse of use_ms1
         progress_interval=5000,
+        quality_weight_params=quality_weight_params,
+        topn_count=topn_count,
+        topn_selection=topn_selection,
+        topn_weighting=topn_weighting,
     )
 
-    peptide_medianpolish_path = output_dir / 'peptides_medianpolish.2.parquet'
+    peptide_rollup_path = output_dir / 'peptides_rollup.2.parquet'
     peptide_result = rollup_transitions_sorted(
         parquet_path=transition_parquet,
-        output_path=peptide_medianpolish_path,
+        output_path=peptide_rollup_path,
         config=transition_config,
-        save_residuals=config['output'].get('include_residuals', True),
+        save_residuals=config['output'].get('include_residuals', True) and rollup_method == 'median_polish',
     )
     samples = peptide_result.samples
     method_log.append(
-        f"Transition rollup: {peptide_result.n_peptides:,} peptides, "
+        f"Transition rollup ({rollup_method}): {peptide_result.n_peptides:,} peptides, "
         f"{len(samples)} samples"
     )
 
@@ -777,7 +861,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 2b: Peptide Global Normalization")
     logger.info("-" * 60)
 
-    peptide_df = pd.read_parquet(peptide_medianpolish_path)
+    peptide_df = pd.read_parquet(peptide_rollup_path)
 
     # Data is in wide format: peptide_col, n_transitions, mean_rt, sample1, sample2, ...
     # Get sample columns (all columns after metadata columns)
@@ -794,28 +878,97 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info(f"  Filtering {n_filtered} peptides with insufficient transitions (all NaN)")
         peptide_df = peptide_df[valid_mask].reset_index(drop=True)
 
-    # Keep copies for QC comparison (rawsum baseline + medianpolish before normalization)
-    # Filter rawsum to same peptides that passed median polish (for fair comparison)
-    peptide_rawsum_df = pd.read_parquet(peptide_rawsum_path)
-    peptide_medianpolish_df = peptide_df.copy()
+    # Keep copy for QC comparison (before normalization)
+    peptide_pre_norm_df = peptide_df.copy()
+
+    # -------------------------------------------------------------------------
+    # Sample Outlier Detection (one-sided, low signal only)
+    # -------------------------------------------------------------------------
+    outlier_config = config.get('sample_outlier_detection', {})
+    outlier_detection_enabled = outlier_config.get('enabled', True)
+    outlier_samples = []
     
-    # Align rawsum with the same peptides that passed median polish filtering
-    # Auto-detect the peptide column (handle both naming conventions)
-    peptide_id_col = None
-    for col_name in ['Peptide Modified Sequence Unimod Ids', 'Peptide Modified Sequence', 'Peptide']:
-        if col_name in peptide_rawsum_df.columns:
-            peptide_id_col = col_name
-            break
-    if peptide_id_col is None:
-        # Fallback to first column
-        peptide_id_col = peptide_rawsum_df.columns[0]
-    
-    rawsum_peptides = set(peptide_rawsum_df[peptide_id_col].values)
-    medpol_peptides = set(peptide_medianpolish_df[peptide_id_col].values)
-    common_peptides = rawsum_peptides & medpol_peptides
-    peptide_rawsum_df = peptide_rawsum_df[
-        peptide_rawsum_df[peptide_id_col].isin(common_peptides)
-    ].reset_index(drop=True)
+    if outlier_detection_enabled:
+        outlier_action = outlier_config.get('action', 'report')
+        outlier_method = outlier_config.get('method', 'iqr')
+        
+        # Calculate sample medians on LINEAR scale (not log2!)
+        # Data is in log2, so we need to convert to linear for proper statistics
+        linear_medians = {}
+        for col in sample_cols:
+            # Convert log2 to linear, then get median
+            linear_values = 2 ** peptide_df[col].dropna()
+            linear_medians[col] = linear_values.median()
+        
+        linear_medians_series = pd.Series(linear_medians)
+        overall_median = linear_medians_series.median()
+        
+        if outlier_method == 'iqr':
+            # IQR-based detection on linear scale (one-sided, low only)
+            iqr_mult = outlier_config.get('iqr_multiplier', 1.5)
+            q1 = linear_medians_series.quantile(0.25)
+            q3 = linear_medians_series.quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - iqr_mult * iqr
+            
+            outlier_samples = [
+                s for s, m in linear_medians.items() if m < lower_bound
+            ]
+            
+            if outlier_samples:
+                logger.warning(f"Sample outlier detection (IQR method, linear scale):")
+                logger.warning(f"  Q1={q1:.0f}, Q3={q3:.0f}, IQR={iqr:.0f}")
+                logger.warning(f"  Lower bound: {lower_bound:.0f} (Q1 - {iqr_mult}*IQR)")
+                logger.warning(f"  Overall median: {overall_median:.0f}")
+                for s in outlier_samples:
+                    fold_below = linear_medians[s] / overall_median
+                    logger.warning(
+                        f"  OUTLIER: {s} - median={linear_medians[s]:.0f} "
+                        f"({fold_below:.1%} of overall median)"
+                    )
+        else:  # fold_median method
+            fold_thresh = outlier_config.get('fold_threshold', 0.1)
+            threshold = fold_thresh * overall_median
+            
+            outlier_samples = [
+                s for s, m in linear_medians.items() if m < threshold
+            ]
+            
+            if outlier_samples:
+                logger.warning(f"Sample outlier detection (fold-median method, linear scale):")
+                logger.warning(f"  Overall median: {overall_median:.0f}")
+                logger.warning(f"  Threshold: {threshold:.0f} ({fold_thresh:.0%} of median)")
+                for s in outlier_samples:
+                    fold_below = linear_medians[s] / overall_median
+                    logger.warning(
+                        f"  OUTLIER: {s} - median={linear_medians[s]:.0f} "
+                        f"({fold_below:.1%} of overall median)"
+                    )
+        
+        if outlier_samples:
+            method_log.append(
+                f"Outlier detection: {len(outlier_samples)} samples flagged as low-signal outliers"
+            )
+            
+            if outlier_action == 'exclude':
+                logger.warning(
+                    f"  Excluding {len(outlier_samples)} outlier samples from analysis"
+                )
+                sample_cols = [c for c in sample_cols if c not in outlier_samples]
+                # Update DataFrames to remove outlier columns
+                # Keep metadata columns plus remaining sample columns
+                keep_cols = [c for c in peptide_df.columns if c not in outlier_samples]
+                peptide_df = peptide_df[keep_cols]
+                peptide_pre_norm_df = peptide_pre_norm_df[keep_cols]
+                method_log.append(
+                    f"  Excluded samples: {', '.join(outlier_samples)}"
+                )
+            else:
+                logger.warning(
+                    f"  Action='report' - outliers will be included in analysis"
+                )
+        else:
+            logger.info("  No sample outliers detected")
 
     # Apply global median normalization (on log2 scale)
     # For each sample column, subtract sample median and add global median
@@ -890,22 +1043,22 @@ def cmd_run(args: argparse.Namespace) -> int:
 
                 method_log.append(f"Peptide ComBat: {n_batches} batches corrected")
 
-                # Evaluate using reference and pool samples if available
+                # Evaluate using reference and QC samples if available
                 if sample_to_type:
                     ref_cols = [c for c in sample_cols
                                 if sample_to_type.get(c) == 'reference']
-                    pool_cols = [c for c in sample_cols
-                                 if sample_to_type.get(c) == 'pool']
+                    qc_cols = [c for c in sample_cols
+                                 if sample_to_type.get(c) == 'qc']
 
-                    if ref_cols and pool_cols:
+                    if ref_cols and qc_cols:
                         # Calculate CV improvement on LINEAR scale (never on log2!)
                         ref_linear = 2 ** peptide_df[ref_cols]
-                        pool_linear = 2 ** peptide_df[pool_cols]
+                        qc_linear = 2 ** peptide_df[qc_cols]
                         ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
-                        pool_cv = (pool_linear.std(axis=1) / pool_linear.mean(axis=1)) * 100
+                        qc_cv = (qc_linear.std(axis=1) / qc_linear.mean(axis=1)) * 100
                         logger.info(
                             f"  Reference median CV: {ref_cv.median():.1f}%, "
-                            f"Pool median CV: {pool_cv.median():.1f}%"
+                            f"QC median CV: {qc_cv.median():.1f}%"
                         )
         else:
             logger.warning("No batch column in metadata - skipping batch correction")
@@ -1064,25 +1217,25 @@ def cmd_run(args: argparse.Namespace) -> int:
 
                 method_log.append(f"Protein ComBat: {n_batches} batches corrected")
 
-                # Evaluate using reference and pool samples if available
+                # Evaluate using reference and QC samples if available
                 if sample_type_col in metadata_df.columns:
                     sample_to_type = dict(
                         zip(metadata_df[meta_sample_col], metadata_df[sample_type_col])
                     )
                     ref_cols = [c for c in prot_sample_cols
                                 if sample_to_type.get(c) == 'reference']
-                    pool_cols = [c for c in prot_sample_cols
-                                 if sample_to_type.get(c) == 'pool']
+                    qc_cols = [c for c in prot_sample_cols
+                                 if sample_to_type.get(c) == 'qc']
 
-                    if ref_cols and pool_cols:
+                    if ref_cols and qc_cols:
                         # Calculate CV on LINEAR scale (never on log2!)
                         ref_linear = 2 ** protein_df[ref_cols]
-                        pool_linear = 2 ** protein_df[pool_cols]
+                        qc_linear = 2 ** protein_df[qc_cols]
                         ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
-                        pool_cv = (pool_linear.std(axis=1) / pool_linear.mean(axis=1)) * 100
+                        qc_cv = (qc_linear.std(axis=1) / qc_linear.mean(axis=1)) * 100
                         logger.info(
                             f"  Reference median CV: {ref_cv.median():.1f}%, "
-                            f"Pool median CV: {pool_cv.median():.1f}%"
+                            f"QC median CV: {qc_cv.median():.1f}%"
                         )
         else:
             logger.warning("No batch column in metadata - skipping batch correction")
@@ -1128,7 +1281,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             'transition_rollup': {
                 'method': transition_config.method,
                 'min_transitions': transition_config.min_transitions,
-                'exclude_precursor': transition_config.exclude_precursor,
+                'use_ms1': not transition_config.exclude_precursor,
             },
             'protein_rollup': {
                 'method': protein_config.method,
@@ -1180,7 +1333,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         try:
             generate_comprehensive_qc_report(
-                peptide_raw=peptide_medianpolish_df,
+                peptide_raw=peptide_pre_norm_df,
                 peptide_corrected=peptide_df,
                 protein_raw=protein_raw_df,
                 protein_corrected=protein_df,
@@ -1191,8 +1344,6 @@ def cmd_run(args: argparse.Namespace) -> int:
                 config=config,
                 save_plots=qc_config.get('save_plots', True),
                 embed_plots=qc_config.get('embed_plots', True),
-                peptide_rawsum=peptide_rawsum_df,
-                peptide_medianpolish=peptide_medianpolish_df,
             )
             method_log.append(f"QC report: {qc_report_path}")
         except Exception as e:
@@ -1205,6 +1356,111 @@ def cmd_run(args: argparse.Namespace) -> int:
     for step in method_log:
         logger.info(f"  {step}")
     logger.info(f"  Output: {output_dir}")
+
+    return 0
+
+
+def cmd_qc(args: argparse.Namespace) -> int:
+    """Regenerate QC report from existing PRISM output directory.
+
+    This command reads the processed parquet files from a previous PRISM run
+    and regenerates the QC report with current visualization code. Useful for
+    updating reports after visualization improvements without reprocessing data.
+
+    Expected files in the output directory:
+    - peptides_rollup.2.parquet OR peptides_normalized.3.parquet (raw peptides)
+    - corrected_peptides.parquet (corrected peptides)
+    - proteins_raw.parquet (raw proteins)
+    - corrected_proteins.parquet (corrected proteins)
+    - sample_metadata.tsv (sample types)
+    """
+    import pandas as pd
+
+    output_dir = Path(args.dir)
+
+    if not output_dir.exists():
+        logger.error(f"Output directory not found: {output_dir}")
+        return 1
+
+    logger.info("=" * 60)
+    logger.info("PRISM QC Report Regeneration")
+    logger.info("=" * 60)
+    logger.info(f"  Directory: {output_dir}")
+
+    # Find peptide raw data (try multiple names for compatibility)
+    peptide_raw_path = None
+    for name in ['peptides_rollup.2.parquet', 'peptides_normalized.3.parquet',
+                 'peptides_rawsum.1.parquet', 'peptides_medianpolish.2.parquet']:
+        path = output_dir / name
+        if path.exists():
+            peptide_raw_path = path
+            break
+
+    if peptide_raw_path is None:
+        logger.error("Could not find peptide raw data file")
+        return 1
+
+    # Load data files
+    required_files = {
+        'peptide_raw': peptide_raw_path,
+        'peptide_corrected': output_dir / 'corrected_peptides.parquet',
+        'protein_raw': output_dir / 'proteins_raw.parquet',
+        'protein_corrected': output_dir / 'corrected_proteins.parquet',
+    }
+
+    for name, path in required_files.items():
+        if not path.exists():
+            logger.error(f"Required file not found: {path}")
+            return 1
+
+    logger.info("Loading processed data...")
+    peptide_raw = pd.read_parquet(required_files['peptide_raw'])
+    peptide_corrected = pd.read_parquet(required_files['peptide_corrected'])
+    protein_raw = pd.read_parquet(required_files['protein_raw'])
+    protein_corrected = pd.read_parquet(required_files['protein_corrected'])
+
+    logger.info(f"  Peptides: {len(peptide_corrected):,}")
+    logger.info(f"  Proteins: {len(protein_corrected):,}")
+
+    # Load sample metadata for sample types
+    sample_types = {}
+    metadata_path = output_dir / 'sample_metadata.tsv'
+    if metadata_path.exists():
+        metadata_df = pd.read_csv(metadata_path, sep='\t')
+        if 'sample' in metadata_df.columns and 'sample_type' in metadata_df.columns:
+            sample_types = dict(zip(metadata_df['sample'], metadata_df['sample_type']))
+            logger.info(f"  Sample types loaded: {len(sample_types)}")
+    else:
+        logger.warning("sample_metadata.tsv not found, sample types will not be colored")
+
+    # Determine sample columns (exclude metadata columns)
+    meta_cols = ['Peptide Modified Sequence Unimod Ids', 'Peptide Modified Sequence',
+                 'Peptide', 'n_transitions', 'mean_rt', 'protein', 'n_peptides']
+    sample_cols = [c for c in peptide_corrected.columns if c not in meta_cols]
+    logger.info(f"  Samples: {len(sample_cols)}")
+
+    # Generate QC report
+    report_path = output_dir / args.output
+    logger.info(f"Generating QC report: {report_path}")
+
+    try:
+        generate_comprehensive_qc_report(
+            peptide_raw=peptide_raw,
+            peptide_corrected=peptide_corrected,
+            protein_raw=protein_raw,
+            protein_corrected=protein_corrected,
+            sample_cols=sample_cols,
+            sample_types=sample_types,
+            output_path=report_path,
+            method_log=["QC report regenerated from existing data"],
+            config={},
+            save_plots=not args.no_save_plots,
+            embed_plots=not args.no_embed,
+        )
+        logger.info("QC report generated successfully")
+    except Exception as e:
+        logger.error(f"Failed to generate QC report: {e}")
+        return 1
 
     return 0
 
@@ -1248,8 +1504,8 @@ def main() -> int:
     run_parser.add_argument('--reference-pattern', nargs='+',
                            help='Patterns to identify reference samples (e.g., -Pool_). '
                                 'Samples matching these are used for RT correction learning.')
-    run_parser.add_argument('--pool-pattern', nargs='+',
-                           help='Patterns to identify pool/QC samples (e.g., -Carl_). '
+    run_parser.add_argument('--qc-pattern', nargs='+',
+                           help='Patterns to identify QC samples (e.g., -Carl_). '
                                 'Samples matching these are used for validation.')
     run_parser.add_argument(
         '--from-provenance',
@@ -1298,6 +1554,27 @@ def main() -> int:
     val_parser.add_argument('--abundance-before', default='abundance')
     val_parser.add_argument('--abundance-after', default='abundance_normalized')
 
+    # QC report command - regenerate QC report from existing output
+    qc_parser = subparsers.add_parser(
+        'qc', help='Regenerate QC report from existing PRISM output'
+    )
+    qc_parser.add_argument(
+        '-d', '--dir', required=True,
+        help='PRISM output directory containing processed parquet files'
+    )
+    qc_parser.add_argument(
+        '-o', '--output', default='qc_report.html',
+        help='Output HTML report filename (default: qc_report.html)'
+    )
+    qc_parser.add_argument(
+        '--no-save-plots', action='store_true',
+        help='Do not save individual plot PNG files'
+    )
+    qc_parser.add_argument(
+        '--no-embed', action='store_true',
+        help='Do not embed plots in HTML (link to files instead)'
+    )
+
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -1312,6 +1589,8 @@ def main() -> int:
         return cmd_rollup(args)
     elif args.command == 'validate':
         return cmd_validate(args)
+    elif args.command == 'qc':
+        return cmd_qc(args)
     else:
         parser.print_help()
         return 1

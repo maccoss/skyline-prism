@@ -59,7 +59,7 @@ def sample_long_data():
                     "sample_type": (
                         "reference"
                         if samp_idx < 2
-                        else ("pool" if samp_idx < 4 else "experimental")
+                        else ("qc" if samp_idx < 4 else "experimental")
                     ),
                 }
             )
@@ -215,12 +215,12 @@ class TestCorrelationHeatmap:
         fig, corr_matrix = plot_control_correlation_heatmap(
             sample_long_data,
             sample_type_col="sample_type",
-            control_types=["reference", "pool"],
+            control_types=["reference", "qc"],
             show_plot=False,
         )
 
         assert fig is not None
-        # Should have 4 control samples (2 reference + 2 pool)
+        # Should have 4 control samples (2 reference + 2 qc)
         assert corr_matrix.shape == (4, 4)
         # Diagonal should be 1.0
         np.testing.assert_array_almost_equal(
@@ -257,15 +257,15 @@ class TestCVDistribution:
         fig, cv_data = plot_cv_distribution(
             sample_long_data,
             sample_type_col="sample_type",
-            control_types=["reference", "pool"],
+            control_types=["reference", "qc"],
             show_plot=False,
         )
 
         assert fig is not None
         assert "reference" in cv_data
-        assert "pool" in cv_data
+        assert "qc" in cv_data
         assert len(cv_data["reference"]) > 0
-        assert len(cv_data["pool"]) > 0
+        assert len(cv_data["qc"]) > 0
         plt.close(fig)
 
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
@@ -408,7 +408,7 @@ def sample_data_with_rt():
                     "sample_type": (
                         "reference"
                         if samp_idx < 2
-                        else ("pool" if samp_idx < 4 else "experimental")
+                        else ("qc" if samp_idx < 4 else "experimental")
                     ),
                 }
             )

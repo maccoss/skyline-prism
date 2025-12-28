@@ -1665,7 +1665,7 @@ class ProteinBatchCorrectionResult:
 
     Attributes:
         corrected_data: DataFrame with batch-corrected protein abundances
-        evaluation: BatchCorrectionEvaluation metrics (if reference/pool available)
+        evaluation: BatchCorrectionEvaluation metrics (if reference/QC available)
         used_fallback: Whether fallback to uncorrected data was used
         method_log: List of processing steps
 
@@ -1684,7 +1684,7 @@ def batch_correct_proteins(
     batch_col: str = 'batch',
     sample_type_col: str = 'sample_type',
     reference_type: str = 'reference',
-    pool_type: str = 'pool',
+    qc_type: str = 'qc',
     par_prior: bool = True,
     mean_only: bool = False,
     evaluate: bool = True,
@@ -1696,7 +1696,7 @@ def batch_correct_proteins(
     at the protein level AFTER peptide→protein rollup.
 
     The protein-level batch correction operates on the protein × sample matrix
-    produced by rollup_to_proteins(). It uses reference and pool samples for
+    produced by rollup_to_proteins(). It uses reference and QC samples for
     QC evaluation, with automatic fallback if correction degrades data quality.
 
     Args:
@@ -1707,10 +1707,10 @@ def batch_correct_proteins(
         batch_col: Column in metadata with batch labels
         sample_type_col: Column in metadata with sample types
         reference_type: Value indicating reference samples
-        pool_type: Value indicating pool samples
+        qc_type: Value indicating QC samples
         par_prior: Use parametric empirical Bayes (recommended)
         mean_only: Only correct location effects, not scale
-        evaluate: Whether to evaluate correction using reference/pool
+        evaluate: Whether to evaluate correction using reference/QC
         fallback_on_failure: If True, revert to uncorrected data on QC failure
 
     Returns:
@@ -1791,7 +1791,7 @@ def batch_correct_proteins(
             method_log=method_log,
         )
 
-    # Evaluate using reference and pool samples
+    # Evaluate using reference and QC samples
     evaluation = None
     used_fallback = False
 
@@ -1804,10 +1804,10 @@ def batch_correct_proteins(
 
         reference_cols = [s for s in sample_cols
                          if sample_to_type.get(s) == reference_type]
-        pool_cols = [s for s in sample_cols
-                    if sample_to_type.get(s) == pool_type]
+        qc_cols = [s for s in sample_cols
+                    if sample_to_type.get(s) == qc_type]
 
-        if len(reference_cols) >= 2 and len(pool_cols) >= 2:
+        if len(reference_cols) >= 2 and len(qc_cols) >= 2:
             # Calculate CVs before and after
             def calc_cv(df, cols):
                 subset = df[cols]
@@ -1817,14 +1817,14 @@ def batch_correct_proteins(
 
             ref_cv_before = calc_cv(abundance_matrix, reference_cols)
             ref_cv_after = calc_cv(corrected_df, reference_cols)
-            pool_cv_before = calc_cv(abundance_matrix, pool_cols)
-            pool_cv_after = calc_cv(corrected_df, pool_cols)
+            qc_cv_before = calc_cv(abundance_matrix, qc_cols)
+            qc_cv_after = calc_cv(corrected_df, qc_cols)
 
             ref_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before
-            pool_improvement = (pool_cv_before - pool_cv_after) / pool_cv_before
+            qc_improvement = (qc_cv_before - qc_cv_after) / qc_cv_before
 
-            if pool_improvement > 0:
-                overfitting_ratio = ref_improvement / pool_improvement
+            if qc_improvement > 0:
+                overfitting_ratio = ref_improvement / qc_improvement
             elif ref_improvement > 0:
                 overfitting_ratio = float('inf')
             else:
@@ -1842,26 +1842,26 @@ def batch_correct_proteins(
             warnings = []
             passed = True
 
-            if pool_cv_after > pool_cv_before * 1.1:
+            if qc_cv_after > qc_cv_before * 1.1:
                 passed = False
                 warnings.append(
-                    f"Pool CV increased: {pool_cv_before:.3f} -> {pool_cv_after:.3f}"
+                    f"QC CV increased: {qc_cv_before:.3f} -> {qc_cv_after:.3f}"
                 )
 
             if overfitting_ratio > 2.0:
                 passed = False
                 warnings.append(
                     f"Possible overfitting: ref improved {ref_improvement:.1%}, "
-                    f"pool only {pool_improvement:.1%}"
+                    f"QC only {qc_improvement:.1%}"
                 )
 
             evaluation = BatchCorrectionEvaluation(
                 reference_cv_before=ref_cv_before,
                 reference_cv_after=ref_cv_after,
-                pool_cv_before=pool_cv_before,
-                pool_cv_after=pool_cv_after,
+                qc_cv_before=qc_cv_before,
+                qc_cv_after=qc_cv_after,
                 reference_improvement=ref_improvement,
-                pool_improvement=pool_improvement,
+                qc_improvement=qc_improvement,
                 overfitting_ratio=overfitting_ratio,
                 batch_variance_before=batch_var_before,
                 batch_variance_after=batch_var_after,
@@ -1871,7 +1871,7 @@ def batch_correct_proteins(
 
             method_log.append(
                 f"Evaluation: ref CV {ref_cv_before:.3f} -> {ref_cv_after:.3f}, "
-                f"pool CV {pool_cv_before:.3f} -> {pool_cv_after:.3f}"
+                f"QC CV {qc_cv_before:.3f} -> {qc_cv_after:.3f}"
             )
 
             # Handle fallback
@@ -1896,10 +1896,10 @@ def batch_correct_proteins(
                 method_log.append("QC FAILED (keeping corrected data)")
         else:
             logger.warning(
-                f"Cannot evaluate: {len(reference_cols)} reference, {len(pool_cols)} pool samples"
+                f"Cannot evaluate: {len(reference_cols)} reference, {len(qc_cols)} QC samples"
             )
             method_log.append(
-                "Evaluation skipped: need >=2 reference and pool samples"
+                "Evaluation skipped: need >=2 reference and QC samples"
             )
 
     # Reconstruct full DataFrame with metadata
@@ -1944,7 +1944,7 @@ def protein_output_pipeline(
         sample_col: Column with sample identifiers
         peptide_col: Column with peptide identifiers
         batch_col: Column with batch labels
-        sample_type_col: Column with sample types (reference/pool/experimental)
+        sample_type_col: Column with sample types (reference/QC/experimental)
         rollup_method: Method for peptide→protein rollup
         shared_peptide_handling: How to handle shared peptides
         batch_correction: Whether to apply protein-level batch correction

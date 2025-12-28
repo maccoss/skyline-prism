@@ -6,7 +6,7 @@
 
 ### Overview
 
-This document specifies the PRISM approach to retention time (RT)-aware normalization that borrows ideas from batch correction methods (SVA, ComBat, RUV) while using the dual-control experimental design from the MacCoss lab QC framework. The key insight is to use the **inter-experiment reference** (e.g., commercial plasma/CSF pool) as the calibration standard for deriving normalization factors, and the **intra-experiment pool** (pooled experimental samples) as validation to assess whether the normalization worked without overfitting.
+This document specifies the PRISM approach to retention time (RT)-aware normalization that borrows ideas from batch correction methods (SVA, ComBat, RUV) while using the dual-control experimental design from the MacCoss lab QC framework. The key insight is to use the **inter-experiment reference** (e.g., commercial plasma/CSF pool) as the calibration standard for deriving normalization factors, and the **intra-experiment QC** (pooled experimental samples) as validation to assess whether the normalization worked without overfitting.
 
 PRISM is designed to work with data exported from [Skyline](https://skyline.ms), the widely-used targeted mass spectrometry environment.
 
@@ -16,7 +16,7 @@ PRISM is designed to work with data exported from [Skyline](https://skyline.ms),
 
 2. **Reference-anchored ComBat batch correction**: Use inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality.
 
-3. **Validation with held-out control**: Use the intra-experiment pool to validate that corrections improved data quality without overfitting.
+3. **Validation with held-out control**: Use the intra-experiment QC to validate that corrections improved data quality without overfitting.
 
 4. **Proper protein inference**: Handle protein parsimony before peptide-to-protein rollup to avoid double-counting shared peptides.
 
@@ -151,7 +151,7 @@ A separate CSV/TSV file mapping replicate names to experimental metadata. PRISM 
 | Column | Required | Description |
 |--------|----------|-------------|
 | replicate_name | Yes | Must match Skyline replicate names exactly. Also accepts `Replicate Name` or `File Name`. |
-| sample_type | Yes | One of: `experimental`, `pool`, `reference`, `blank`. Also accepts `Sample Type` with Skyline values (see below). |
+| sample_type | Yes | One of: `experimental`, `qc`, `reference`, `blank`. Also accepts `Sample Type` with Skyline values (see below). |
 | batch | No | Batch identifier. Also accepts `Batch Name` (Skyline convention). If not provided, will be estimated. |
 | run_order | No | Acquisition order (integer). If not provided, calculated from Acquired Time in Skyline report. |
 | subject_id | No | For paired/longitudinal designs |
@@ -165,7 +165,7 @@ A separate CSV/TSV file mapping replicate names to experimental metadata. PRISM 
 
 **Sample types (PRISM):**
 - `reference`: Inter-experiment reference samples for RT correction and parameter learning
-- `pool`: Intra-experiment pooled samples for validation
+- `qc`: Intra-experiment QC (pooled samples for validation
 - `experimental`: Actual experimental samples
 - `blank`: Solvent/blank samples (excluded from analysis)
 
@@ -177,7 +177,7 @@ When using Skyline's `Sample Type` column, values are automatically mapped:
 |---------------------|-------------------|-------|
 | Unknown | experimental | Experimental samples |
 | Standard | reference | Inter-experiment reference (e.g., commercial plasma) |
-| Quality Control | pool | Intra-experiment pool for validation |
+| Quality Control | qc | Intra-experiment QC for validation |
 | Solvent | blank | Excluded from analysis |
 | Blank | blank | Excluded from analysis |
 | Double Blank | blank | Excluded from analysis |
@@ -197,7 +197,7 @@ Example (PRISM format with optional columns):
 replicate_name,sample_type,batch,run_order,condition,subject_id
 Sample_001,experimental,batch1,1,Treatment,P001
 Sample_002,experimental,batch1,2,Control,P002
-Pool_01,pool,batch1,3,,
+Pool_01,qc,batch1,3,,
 Reference_01,reference,batch1,4,,
 Sample_003,experimental,batch1,5,Treatment,P003
 ```
@@ -220,7 +220,7 @@ The main output for downstream analysis. Contains normalized, batch-corrected pr
 | gene_names | string | Gene names if available (semicolon-separated) |
 | description | string | Protein description |
 | replicate_name | string | Sample identifier |
-| sample_type | string | experimental/pool/reference |
+| sample_type | string | experimental/qc/reference |
 | batch | string | Batch identifier |
 | run_order | int | Acquisition order |
 | abundance | float | Log2 abundance (normalized, batch-corrected) |
@@ -259,7 +259,7 @@ For drilling down into protein quantification or peptide-level analysis.
 | is_shared | bool | Maps to multiple protein groups |
 | is_razor | bool | Assigned via razor logic (if applicable) |
 | replicate_name | string | Sample identifier |
-| sample_type | string | experimental/pool/reference |
+| sample_type | string | experimental/qc/reference |
 | batch | string | Batch identifier |
 | run_order | int | Acquisition order |
 | abundance | float | Log2 abundance (normalized) |
@@ -307,7 +307,7 @@ Complete provenance and parameters for reproducibility.
   "sample_metadata": {
     "n_samples": 48,
     "n_reference": 6,
-    "n_pool": 6,
+    "n_qc": 6,
     "n_experimental": 36,
     "batches": ["batch1", "batch2"],
     "samples": [...]
@@ -358,8 +358,8 @@ Complete provenance and parameters for reproducibility.
   "validation_metrics": {
     "reference_cv_before": 0.15,
     "reference_cv_after": 0.08,
-    "pool_cv_before": 0.18,
-    "pool_cv_after": 0.10,
+    "qc_cv_before": 0.18,
+    "qc_cv_after": 0.10,
     "relative_variance_reduction": 1.12,
     "pca_distance_ratio": 0.85,
     "passed_validation": true
@@ -377,9 +377,9 @@ An HTML report summarizing normalization quality with embedded or linked diagnos
 - **Header**: Processing summary with timestamp, sample counts, batch information
 - **Intensity Distribution**: Box plots showing abundance distributions per sample
 - **PCA Analysis**: Principal component analysis before/after normalization to visualize batch effects
-- **Control Correlation**: Correlation heatmaps for reference and pool samples
+- **Control Correlation**: Correlation heatmaps for reference and QC samples
 - **CV Distribution**: Coefficient of variation histograms for precision assessment
-- **RT Correction**: Before/after comparison showing residuals for reference (fitted) vs pool (held-out validation)
+- **RT Correction**: Before/after comparison showing residuals for reference (fitted) vs QC (held-out validation)
 
 **Configuration:**
 ```yaml
@@ -699,7 +699,7 @@ Use the inter-experiment reference to **learn** what RT-dependent technical vari
 1. **Inter-experiment reference replicates should be identical** - any variation is technical by definition
 2. **Reference is matrix-matched** but biologically independent of experimental conditions
 3. **Enables expressing quantities relative to a stable anchor** across experiments
-4. **Intra-experiment pool validates** that correction didn't collapse biological differences
+4. **Intra-experiment QC validates** that correction didn't collapse biological differences
 
 ---
 
@@ -710,7 +710,7 @@ Use the inter-experiment reference to **learn** what RT-dependent technical vari
 | Control Type | Composition | Purpose | Replicates per Batch |
 |--------------|-------------|---------|---------------------|
 | Inter-experiment reference | Commercial pool (e.g., Golden West CSF, pooled plasma) | Calibration anchor, RT correction derivation | 1-8 |
-| Intra-experiment pool | Pool of experimental samples from current study | Validation, assess prep consistency | 1-8 |
+| Intra-experiment QC | Pool of experimental samples from current study | Validation, assess prep consistency | 1-8 |
 
 **Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
@@ -1265,17 +1265,17 @@ For each experimental sample s:
 
 **Success criteria:**
 
-1. **Pool variance decreases:** CV of intra-experiment pool replicates should decrease after correction
+1. **QC variance decreases:** CV of intra-experiment QC replicates should decrease after correction
 2. **Pool remains distinct from reference:** Pool and reference should not collapse together in PCA
 3. **Biological signal preserved:** Known biological differences (if any between conditions) should remain
-4. **Comparable variance reduction:** Variance reduction in pool should be similar to reference (not much less)
+4. **Comparable variance reduction:** Variance reduction in QC should be similar to reference (not much less)
 
 ```
 Validation metrics:
-    - CV_pool_before vs CV_pool_after (should decrease)
+    - CV_qc_before vs CV_qc_after (should decrease)
     - CV_reference_before vs CV_reference_after (should decrease)
     - Ratio of variance reductions (should be similar)
-    - PCA: pool and reference should remain separated
+    - PCA: QC and reference should remain separated
     - If known positives: fold changes should be preserved
 ```
 
@@ -1321,7 +1321,7 @@ corrected_df = combat_from_long(
 corrected_df, eval_result = combat_with_reference_samples(
     df,
     reference_samples=["Ref1", "Ref2"],
-    pool_samples=["Pool1", "Pool2"],
+    qc_samples=["Pool1", "Pool2"],
     fallback_on_failure=True  # Revert if correction degrades quality
 )
 ```
@@ -1634,7 +1634,7 @@ def normalize_to_reference(data, reference_samples, method='median_ratio'):
 
 **Functions:**
 ```python
-def validate_correction(data_before, data_after, pool_samples, reference_samples):
+def validate_correction(data_before, data_after, qc_samples, reference_samples):
     """
     Assess whether correction improved data quality without overcorrection.
     
@@ -1703,7 +1703,7 @@ def flag_outlier_peptides(residuals, threshold=3):
 - Heatmap of RT-dependent correction factors by sample
 
 *Variance assessment:*
-- CV distributions before/after (pool, reference, experimental)
+- CV distributions before/after (QC, reference, experimental)
 - MA plot: CV vs mean abundance (check for heteroscedasticity)
 - Peptide-level CV vs abundance (check abundance-dependence)
 
@@ -1718,8 +1718,8 @@ def flag_outlier_peptides(residuals, threshold=3):
 - Peptide count distribution
 
 *Validation summary:*
-- Side-by-side: pool vs reference CV improvement
-- PCA before/after showing pool-reference separation maintained
+- Side-by-side: QC vs reference CV improvement
+- PCA before/after showing QC-reference separation maintained
 
 ---
 
@@ -1740,7 +1740,7 @@ data:
 
 sample_annotations:
   reference_pattern: "GoldenWest|CommercialPool|InterExpRef"
-  pool_pattern: "StudyPool|IntraPool|ExpPool"
+  qc_pattern: "StudyPool|IntraPool|ExpPool"
   experimental_pattern: "^(?!.*(Pool|Ref)).*"
 
 # Stage 0: Transition to peptide rollup (if needed)
@@ -1753,6 +1753,16 @@ transition_rollup:
   # For quality_weighted method - Skyline column names
   shape_correlation_col: "ShapeCorrelation"  # Correlation with median transition
   coeluting_col: "Coeluting"  # Boolean: apex within integration boundaries
+
+# Sample outlier detection (one-sided, low signal only)
+# Detects samples with abnormally low signal (failed injections, degradation)
+# Detection uses LINEAR scale to avoid log scale compression
+sample_outlier_detection:
+  enabled: true
+  action: "report"  # options: report, exclude
+  method: "iqr"     # options: iqr, fold_median
+  iqr_multiplier: 1.5  # for IQR method: flag if median < Q1 - 1.5*IQR
+  fold_threshold: 0.1  # for fold_median: flag if median < 10% of overall
 
 preprocessing:
   log_transform: true
@@ -1848,7 +1858,7 @@ over-smoothed by batch correction.
 │      STEP 2: GLOBAL NORMALIZATION + RT CORRECTION (optional)   │
 │  - Log2 transform with median centering                        │
 │  - RT-aware spline correction (DISABLED by default)            │
-│    * If enabled: learns from reference, validates on pool      │
+│    * If enabled: learns from reference, validates on QC      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -1890,7 +1900,7 @@ over-smoothed by batch correction.
 │              STEP 5: QC VALIDATION & REPORTING                  │
 │  - CV comparison: before vs after correction                   │
 │  - PCA: check batch effect removal                             │
-│  - Reference vs pool: ensure correction generalizes            │
+│  - Reference vs QC: ensure correction generalizes            │
 │  - Generate HTML QC report with embedded plots                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -1990,11 +2000,11 @@ Given negative control samples (reference replicates) that should show no variat
 
 ### Validation Metric: Relative Variance Reduction
 
-$$RVR = \frac{CV_{pool}^{after} / CV_{pool}^{before}}{CV_{ref}^{after} / CV_{ref}^{before}}$$
+$$RVR = \frac{CV_{qc}^{after} / CV_{qc}^{before}}{CV_{ref}^{after} / CV_{ref}^{before}}$$
 
-- $RVR \approx 1$: Good - similar improvement in pool and reference
-- $RVR >> 1$: Warning - pool improved less than reference (possible undercorrection)
-- $RVR << 1$: Warning - pool improved more than reference (possible overcorrection/overfitting)
+- $RVR \approx 1$: Good - similar improvement in QC and reference
+- $RVR >> 1$: Warning - QC improved less than reference (possible undercorrection)
+- $RVR << 1$: Warning - QC improved more than reference (possible overcorrection/overfitting)
 
 ---
 
@@ -2096,7 +2106,7 @@ This section documents the current implementation status of PRISM features as of
 - **Streaming CSV merge**: Memory-efficient merging of multiple Skyline reports (~47GB datasets tested)
 - **Automatic column detection**: Handles different Skyline export formats with column name normalization
 - **Metadata handling**: Support for both PRISM format (`sample`, `sample_type`, `batch`) and Skyline format (`Replicate Name`, `Sample Type`, `Batch Name`)
-- **Sample type detection**: Pattern-based automatic assignment of reference/pool/experimental samples
+- **Sample type detection**: Pattern-based automatic assignment of reference/qc/experimental samples
 - **Batch estimation**: Automatic batch detection from source files or acquisition timestamps
 
 **Peptide Quantification:**
@@ -2136,7 +2146,7 @@ This section documents the current implementation status of PRISM features as of
 - **QC plot generation**: Implemented (intensity distributions, PCA, correlation heatmaps)
 - **HTML report generation**: Implemented with embedded plots
 - **Known issues**:
-  - CV calculation for reference/pool samples not matching sample types correctly (shows NaN)
+  - CV calculation for reference/QC samples not matching sample types correctly (shows NaN)
   - Global median calculations occasionally show NaN for protein data
   - QC report generation warning: "list index out of range" in some edge cases
 

@@ -98,20 +98,20 @@ METADATA_BATCH_COLUMNS = ['batch', 'Batch', 'Batch Name']  # Skyline uses 'Batch
 SKYLINE_SAMPLE_TYPE_MAP = {
     'Unknown': 'experimental',
     'Standard': 'reference',
-    'Quality Control': 'pool',
+    'Quality Control': 'qc',
     # Others are typically excluded from analysis
     'Solvent': 'blank',
     'Blank': 'blank',
     'Double Blank': 'blank',
 }
 
-VALID_SAMPLE_TYPES = {'experimental', 'pool', 'reference', 'blank'}
+VALID_SAMPLE_TYPES = {'experimental', 'qc', 'reference', 'blank'}
 
 # Default patterns for classifying samples by name
 # These can be overridden in config
 DEFAULT_SAMPLE_TYPE_PATTERNS = {
     'reference': ['-Pool_', '-Pool', '_Pool_', '_Pool'],  # Inter-experiment reference
-    'pool': ['-Carl_', '-Carl', '_QC_', '_QC', '-QC_', '-QC'],  # Intra-experiment QC
+    'qc': ['-Carl_', '-Carl', '_QC_', '_QC', '-QC_', '-QC'],  # Intra-experiment QC
     # Everything else is experimental
 }
 
@@ -119,31 +119,31 @@ DEFAULT_SAMPLE_TYPE_PATTERNS = {
 def classify_sample_by_name(
     sample_name: str,
     reference_patterns: list[str] | None = None,
-    pool_patterns: list[str] | None = None,
+    qc_patterns: list[str] | None = None,
 ) -> str:
     """Classify sample type based on naming patterns.
 
     Args:
         sample_name: The sample/replicate name to classify
         reference_patterns: Patterns indicating inter-experiment reference samples
-        pool_patterns: Patterns indicating intra-experiment QC/pool samples
+        qc_patterns: Patterns indicating intra-experiment QC samples
 
     Returns:
-        Sample type: 'reference', 'pool', or 'experimental'
+        Sample type: 'reference', 'qc', or 'experimental'
 
     """
     if reference_patterns is None:
         reference_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['reference']
-    if pool_patterns is None:
-        pool_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['pool']
+    if qc_patterns is None:
+        qc_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['qc']
 
     for pattern in reference_patterns:
         if pattern in sample_name:
             return 'reference'
 
-    for pattern in pool_patterns:
+    for pattern in qc_patterns:
         if pattern in sample_name:
-            return 'pool'
+            return 'qc'
 
     return 'experimental'
 
@@ -151,7 +151,7 @@ def classify_sample_by_name(
 def generate_sample_metadata(
     samples_by_batch: dict[str, set[str]],
     reference_patterns: list[str] | None = None,
-    pool_patterns: list[str] | None = None,
+    qc_patterns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Generate sample metadata DataFrame from sample names.
 
@@ -161,7 +161,7 @@ def generate_sample_metadata(
     Args:
         samples_by_batch: Dict mapping batch_name -> set of sample names
         reference_patterns: Patterns for reference samples (default: -Pool_, etc.)
-        pool_patterns: Patterns for pool/QC samples (default: -Carl_, -QC_, etc.)
+        qc_patterns: Patterns for QC samples (default: -Carl_, -QC_, etc.)
 
     Returns:
         DataFrame with columns: sample, sample_type, batch
@@ -171,7 +171,7 @@ def generate_sample_metadata(
     for batch_name, sample_names in samples_by_batch.items():
         for sample_name in sorted(sample_names):
             sample_type = classify_sample_by_name(
-                sample_name, reference_patterns, pool_patterns
+                sample_name, reference_patterns, qc_patterns
             )
             rows.append({
                 'sample': sample_name,
@@ -836,7 +836,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     - ReplicateName: accepts 'Replicate Name', 'File Name'
     - SampleType: accepts 'Sample Type' with Skyline values mapped:
         - Standard → reference
-        - Quality Control → pool
+        - Quality Control → qc
         - Unknown → experimental
         - Solvent/Blank/Double Blank → blank
     - Batch: accepts 'Batch Name'
@@ -917,7 +917,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
         )
 
     # Check for duplicate sample names within the same batch
-    # (duplicates across batches are allowed - e.g., the same reference/pool sample
+    # (duplicates across batches are allowed - e.g., the same reference/QC sample
     # run in multiple batches)
     if 'batch' in meta.columns:
         duplicates = (

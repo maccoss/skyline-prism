@@ -5,8 +5,9 @@
 ## Key Features
 
 - **Robust quantification with Tukey median polish**: Default method for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
-- **Reference-anchored ComBat batch correction**: Full implementation of empirical Bayes batch correction with automatic QC evaluation using reference/pool samples
-- **Dual-control validation**: Uses intra-experiment pool samples to validate that corrections work without overfitting
+- **Reference-anchored ComBat batch correction**: Full implementation of empirical Bayes batch correction with automatic QC evaluation using reference/QC samples
+- **Dual-control validation**: Uses intra-experiment QC samples to validate that corrections work without overfitting
+- **Sample outlier detection**: Automatic detection of samples with abnormally low signal (failed injections, degradation) with optional exclusion
 - **Flexible protein inference**: Multiple strategies for handling shared peptides (all_groups, unique_only, razor)
 - **Two-arm normalization pipeline**: Separate paths for peptide-level and protein-level output, with batch correction applied at the appropriate level
 - **Optional RT correction**: Reference-anchored RT correction is available but disabled by default (search engine RT calibration may not generalize between samples)
@@ -69,6 +70,16 @@ prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json
 prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json -c overrides.yaml
 ```
 
+### Regenerate QC reports
+
+To regenerate QC reports from an existing PRISM output directory (useful after visualization updates):
+
+```bash
+prism qc -d output_dir/
+```
+
+This reads the processed parquet files and regenerates the QC report without re-running the full pipeline.
+
 ### Alternative: Step-by-step commands
 
 For more control, you can run individual steps:
@@ -94,9 +105,9 @@ The QC report includes:
 
 - **Intensity distribution plots**: Before/after normalization comparison
 - **PCA analysis**: Visualize batch effects and sample clustering across processing stages
-- **Control sample correlation**: Heatmaps showing reproducibility of reference and pool samples
+- **Control sample correlation**: Heatmaps showing reproducibility of reference and QC samples
 - **CV distributions**: Technical variation in control samples before/after normalization
-- **RT correction QC**: If RT-dependent normalization is enabled, shows residuals for reference (fitted) and pool (held-out validation) samples
+- **RT correction QC**: If RT-dependent normalization is enabled, shows residuals for reference (fitted) and QC (held-out validation) samples
 
 All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML report.
 
@@ -156,7 +167,7 @@ For optimal results, include these controls in each batch:
 | Control Type               | Description                               | Replicates/Batch |
 | -------------------------- | ----------------------------------------- | ---------------- |
 | Inter-experiment reference | Commercial pool (e.g., Golden West CSF)   | 1-8              |
-| Intra-experiment pool      | Pooled experimental samples               | 1-8              |
+| Intra-experiment QC      | Pooled experimental samples               | 1-8              |
 
 **Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
@@ -175,7 +186,7 @@ sample_annotations:
   reference_pattern:  # Inter-experiment reference (e.g., commercial pools)
     - "-Pool_"
     - "-Pool"
-  pool_pattern:       # Intra-experiment QC (e.g., pooled experimental samples)
+  qc_pattern:       # Intra-experiment QC (e.g., pooled experimental samples)
     - "-Carl_"
     - "-Carl"
   # Everything else is treated as experimental
@@ -186,6 +197,13 @@ transition_rollup:
   method: "median_polish"  # default, recommended
   min_transitions: 3
   learn_variance_model: false  # Set true for quality_weighted method
+
+# Sample outlier detection (one-sided, low signal only)
+sample_outlier_detection:
+  enabled: true
+  action: "report"  # "report" to log only, "exclude" to remove from analysis
+  method: "iqr"     # IQR-based on LINEAR scale (not log)
+  iqr_multiplier: 1.5
 
 # Global normalization (applied after peptide rollup)
 global_normalization:
@@ -229,6 +247,41 @@ If batch information is not provided in the metadata file, PRISM will automatica
 3. **Equal division**: Samples are divided into approximately equal batches
 
 To enable time-based batch estimation, include `Result File > Acquired Time` in your Skyline report. See [SPECIFICATION.md](SPECIFICATION.md#batch-estimation) for details.
+
+## Sample Outlier Detection
+
+PRISM automatically detects samples with abnormally low signal intensity, which may indicate:
+
+- Failed injections
+- Sample degradation
+- Instrument issues
+- Empty wells
+
+**Key features:**
+
+- **One-sided detection**: Only flags samples with too *little* signal (not high outliers)
+- **Linear scale statistics**: Detection uses linear scale (not log2) to avoid scale compression
+- **Two detection methods**:
+  - `iqr`: Flag samples below Q1 - 1.5×IQR (default)
+  - `fold_median`: Flag samples with median < X% of overall median
+- **Configurable action**: Report only or exclude from analysis
+
+```yaml
+sample_outlier_detection:
+  enabled: true
+  action: "report"     # "report" or "exclude"
+  method: "iqr"        # "iqr" or "fold_median"
+  iqr_multiplier: 1.5  # Samples below Q1 - 1.5*IQR flagged
+```
+
+Example log output:
+```
+Sample outlier detection (IQR method, linear scale):
+  Q1=1234567, Q3=2345678, IQR=1111111
+  Lower bound: 567890 (Q1 - 1.5*IQR)
+  Overall median: 1789012
+  OUTLIER: Sample_042 - median=24 (0.0% of overall median)
+```
 
 ## Tukey Median Polish (Default Rollup Method)
 
@@ -325,7 +378,7 @@ corrected_df = combat_from_long(
     abundance_col='abundance'
 )
 
-# With automatic evaluation using reference/pool samples
+# With automatic evaluation using reference/QC samples
 result = combat_with_reference_samples(
     data,
     sample_type_col='sample_type',
@@ -338,7 +391,7 @@ result = combat_with_reference_samples(
 - Parametric and non-parametric prior options
 - Reference batch support (adjust other batches to match reference)
 - Mean-only correction option (for unequal batch sizes)
-- Automatic evaluation using reference and pool sample CVs
+- Automatic evaluation using reference and QC sample CVs
 
 ## Residual Analysis for Proteoform Discovery
 
@@ -455,7 +508,7 @@ from skyline_prism import plot_intensity_distribution, plot_normalization_compar
 # Box plot of intensity distributions
 plot_intensity_distribution(
     data,
-    sample_types={"Sample_1": "reference", "Sample_2": "pool", ...},
+    sample_types={"Sample_1": "reference", "Sample_2": "qc", ...},
     title="Intensity Distribution"
 )
 
@@ -497,11 +550,11 @@ Assess reproducibility using correlation heatmaps for control samples:
 ```python
 from skyline_prism import plot_control_correlation_heatmap, plot_sample_correlation_matrix
 
-# Correlation heatmap for reference and pool samples only
+# Correlation heatmap for reference and QC samples only
 fig, corr_matrix = plot_control_correlation_heatmap(
     data,
     sample_type_col="sample_type",
-    control_types=["reference", "pool"],
+    control_types=["reference", "qc"],
     method="pearson"
 )
 
@@ -523,7 +576,7 @@ from skyline_prism import plot_cv_distribution, plot_comparative_cv
 fig, cv_data = plot_cv_distribution(
     data,
     sample_type_col="sample_type",
-    control_types=["reference", "pool"],
+    control_types=["reference", "qc"],
     cv_threshold=20.0
 )
 
@@ -538,12 +591,12 @@ plot_comparative_cv(
 
 ### RT Correction Quality Assessment
 
-Visualize RT-dependent correction effectiveness. This is critical for validating that corrections learned from reference samples generalize to held-out pool samples:
+Visualize RT-dependent correction effectiveness. This is critical for validating that corrections learned from reference samples generalize to held-out QC samples:
 
 ```python
 from skyline_prism import plot_rt_correction_comparison, plot_rt_correction_per_sample
 
-# 2×2 comparison showing reference (fitted) vs pool (held-out validation)
+# 2×2 comparison showing reference (fitted) vs QC (held-out validation)
 # before and after RT correction
 fig, axes = plot_rt_correction_comparison(
     data_before=data_before_correction,
@@ -567,7 +620,7 @@ fig, axes = plot_rt_correction_per_sample(
 The RT correction plots help assess:
 
 - Whether the spline model captures RT-dependent variation in reference samples
-- Whether corrections generalize to pool samples (held-out validation)
+- Whether corrections generalize to QC samples (held-out validation)
 - Whether any samples have unusually large residuals after correction
 
 All visualization functions support:

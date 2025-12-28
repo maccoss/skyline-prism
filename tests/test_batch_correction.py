@@ -455,20 +455,20 @@ class TestReferenceValues:
 
 
 class TestBatchCorrectionEvaluation:
-    """Tests for batch correction evaluation with reference/pool samples."""
+    """Tests for batch correction evaluation with reference/QC samples."""
 
     @pytest.fixture
     def evaluation_data(self):
-        """Create test data with reference, pool, and experimental samples."""
+        """Create test data with reference, QC, and experimental samples."""
         np.random.seed(42)
 
         n_features = 100
         samples = []
 
         # Create data with batch effects
-        # Batch 1: 3 experimental + 1 reference + 1 pool
-        # Batch 2: 3 experimental + 1 reference + 1 pool
-        # Batch 3: 3 experimental + 1 reference + 1 pool
+        # Batch 1: 3 experimental + 1 reference + 1 qc
+        # Batch 2: 3 experimental + 1 reference + 1 qc
+        # Batch 3: 3 experimental + 1 reference + 1 qc
 
         for batch_id in [1, 2, 3]:
             # Batch-specific offset
@@ -498,16 +498,16 @@ class TestBatchCorrectionEvaluation:
                     'abundance': 10 + batch_offset + np.random.randn() * 0.05  # Low noise
                 })
 
-            # Pool sample (same pool material per batch, different between batches)
-            pool_name = f'pool_b{batch_id}'
-            pool_offset = np.random.randn() * 0.1  # Small pool-specific variation
+            # QC sample (same QC material per batch, different between batches)
+            qc_name = f'qc_b{batch_id}'
+            qc_offset = np.random.randn() * 0.1  # Small QC-specific variation
             for feat_idx in range(n_features):
                 samples.append({
                     'precursor_id': f'peptide_{feat_idx}',
-                    'replicate_name': pool_name,
+                    'replicate_name': qc_name,
                     'batch': batch_id,
-                    'sample_type': 'pool',
-                    'abundance': 10 + batch_offset + pool_offset + np.random.randn() * 0.05
+                    'sample_type': 'qc',
+                    'abundance': 10 + batch_offset + qc_offset + np.random.randn() * 0.05
                 })
 
         return pd.DataFrame(samples)
@@ -541,8 +541,8 @@ class TestBatchCorrectionEvaluation:
             f"Reference CV should improve, got {evaluation.reference_improvement:.3f}"
 
         # Pool CV should not get dramatically worse
-        assert evaluation.pool_cv_after <= evaluation.pool_cv_before * 1.5, \
-            f"Pool CV increased too much: {evaluation.pool_cv_before:.3f} -> {evaluation.pool_cv_after:.3f}"
+        assert evaluation.qc_cv_after <= evaluation.qc_cv_before * 1.5, \
+            f"Pool CV increased too much: {evaluation.qc_cv_before:.3f} -> {evaluation.qc_cv_after:.3f}"
 
     def test_combat_with_reference_samples(self, evaluation_data):
         """Test the combined combat + evaluation function."""
@@ -561,7 +561,7 @@ class TestBatchCorrectionEvaluation:
         assert evaluation is not None
         assert hasattr(evaluation, 'passed')
         assert hasattr(evaluation, 'reference_cv_before')
-        assert hasattr(evaluation, 'pool_cv_before')
+        assert hasattr(evaluation, 'qc_cv_before')
 
     def test_evaluation_detects_overfitting(self):
         """Test that evaluation flags potential overfitting."""
@@ -571,7 +571,7 @@ class TestBatchCorrectionEvaluation:
 
         np.random.seed(123)
 
-        # Create artificial data where reference improves but pool gets worse
+        # Create artificial data where reference improves but QC gets worse
         # This simulates overfitting to reference samples
         n_features = 50
         samples = []
@@ -597,9 +597,9 @@ class TestBatchCorrectionEvaluation:
                     original = 10 + batch_offset + np.random.randn() * 0.1
                     samples.append({
                         'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'pool_b{batch_id}_{rep}',
+                        'replicate_name': f'qc_b{batch_id}_{rep}',
                         'batch': batch_id,
-                        'sample_type': 'pool',
+                        'sample_type': 'qc',
                         'abundance': original,
                         'abundance_batch_corrected': original + np.random.randn() * 0.5,  # More noise
                     })
@@ -612,18 +612,18 @@ class TestBatchCorrectionEvaluation:
             abundance_after='abundance_batch_corrected',
         )
 
-        # Should detect that pool got worse
-        assert evaluation.pool_improvement < 0 or len(evaluation.warnings) > 0
+        # Should detect that QC got worse
+        assert evaluation.qc_improvement < 0 or len(evaluation.warnings) > 0
 
     def test_evaluation_without_samples_gracefully_handles(self, evaluation_data):
         """Test evaluation handles missing sample types gracefully."""
         from skyline_prism.batch_correction import combat_with_reference_samples
 
-        # Remove pool samples
-        data_no_pool = evaluation_data[evaluation_data['sample_type'] != 'pool'].copy()
+        # Remove QC samples
+        data_no_qc = evaluation_data[evaluation_data['sample_type'] != 'qc'].copy()
 
         corrected, evaluation = combat_with_reference_samples(
-            data_no_pool,
+            data_no_qc,
             abundance_col='abundance',
             sample_type_col='sample_type',
         )
@@ -639,10 +639,10 @@ class TestBatchCorrectionEvaluation:
         evaluation = BatchCorrectionEvaluation(
             reference_cv_before=0.15,
             reference_cv_after=0.08,
-            pool_cv_before=0.12,
-            pool_cv_after=0.10,
+            qc_cv_before=0.12,
+            qc_cv_after=0.10,
             reference_improvement=0.47,
-            pool_improvement=0.17,
+            qc_improvement=0.17,
             overfitting_ratio=2.8,
             batch_variance_before=0.25,
             batch_variance_after=0.05,
@@ -661,7 +661,7 @@ class TestBatchCorrectionEvaluation:
         np.random.seed(999)
 
         # Create data where batch correction will make things worse
-        # Pool samples get artificially worse after "correction"
+        # QC samples get artificially worse after "correction"
         n_features = 30
         samples = []
 
@@ -679,14 +679,14 @@ class TestBatchCorrectionEvaluation:
                         'abundance': 10 + batch_offset + np.random.randn() * 0.05,
                     })
 
-            # Pool samples - very consistent within batch
+            # QC samples - very consistent within batch
             for rep in range(3):
                 for feat_idx in range(n_features):
                     samples.append({
                         'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'pool_b{batch_id}_{rep}',
+                        'replicate_name': f'qc_b{batch_id}_{rep}',
                         'batch': batch_id,
-                        'sample_type': 'pool',
+                        'sample_type': 'qc',
                         'abundance': 10 + batch_offset + np.random.randn() * 0.02,
                     })
 
@@ -736,9 +736,9 @@ class TestBatchCorrectionEvaluation:
                 for feat_idx in range(n_features):
                     samples.append({
                         'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'pool_b{batch_id}_{rep}',
+                        'replicate_name': f'qc_b{batch_id}_{rep}',
                         'batch': batch_id,
-                        'sample_type': 'pool',
+                        'sample_type': 'qc',
                         'abundance': 10 + batch_offset + np.random.randn() * 0.05,
                     })
 

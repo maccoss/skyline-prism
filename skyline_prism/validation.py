@@ -2,7 +2,7 @@
 
 Uses the dual-control design:
 - Inter-experiment reference: calibration anchor
-- Intra-experiment pool: validation control
+- Intra-experiment QC: validation control
 """
 
 import base64
@@ -39,17 +39,17 @@ class ValidationMetrics:
     # CV metrics
     reference_cv_before: float
     reference_cv_after: float
-    pool_cv_before: float
-    pool_cv_after: float
+    qc_cv_before: float
+    qc_cv_after: float
 
     # CV improvement
     reference_cv_improvement: float  # (before - after) / before
-    pool_cv_improvement: float
-    relative_variance_reduction: float  # pool improvement / reference improvement
+    qc_cv_improvement: float
+    relative_variance_reduction: float  # qc improvement / reference improvement
 
     # PCA metrics
-    pca_pool_reference_distance_before: float
-    pca_pool_reference_distance_after: float
+    pca_qc_reference_distance_before: float
+    pca_qc_reference_distance_after: float
     pca_distance_ratio: float  # after / before (should be ~1, not << 1)
 
     # Warnings
@@ -59,8 +59,8 @@ class ValidationMetrics:
     def passed(self) -> bool:
         """Check if validation passed basic criteria."""
         return (
-            self.pool_cv_improvement > 0 and  # Pool CV improved
-            self.pca_distance_ratio > 0.5 and  # Didn't collapse pool into reference
+            self.qc_cv_improvement > 0 and  # QC CV improved
+            self.pca_distance_ratio > 0.5 and  # Didn't collapse QC into reference
             self.relative_variance_reduction < 2.0  # Didn't overfit to reference
         )
 
@@ -103,18 +103,18 @@ def calculate_cv(
 
 def calculate_pca_distance(
     data: pd.DataFrame,
-    pool_mask: pd.Series,
+    qc_mask: pd.Series,
     reference_mask: pd.Series,
     abundance_col: str = 'abundance',
     precursor_col: str = 'precursor_id',
     replicate_col: str = 'replicate_name',
     n_components: int = 2,
 ) -> float:
-    """Calculate distance between pool and reference centroids in PCA space.
+    """Calculate distance between QC and reference centroids in PCA space.
 
     Args:
         data: DataFrame with peptide data
-        pool_mask: Boolean mask for pool samples
+        qc_mask: Boolean mask for QC samples
         reference_mask: Boolean mask for reference samples
         abundance_col: Column with abundance values
         precursor_col: Column with precursor identifiers
@@ -122,11 +122,11 @@ def calculate_pca_distance(
         n_components: Number of PCA components
 
     Returns:
-        Euclidean distance between pool and reference centroids in PC space
+        Euclidean distance between QC and reference centroids in PC space
 
     """
-    # Get pool and reference samples
-    control_mask = pool_mask | reference_mask
+    # Get QC and reference samples
+    control_mask = qc_mask | reference_mask
     subset = data.loc[control_mask]
 
     # Pivot to wide format (samples as rows, peptides as columns)
@@ -154,15 +154,15 @@ def calculate_pca_distance(
     )
 
     # Get sample names for each type
-    pool_samples = data.loc[pool_mask, replicate_col].unique()
+    qc_samples = data.loc[qc_mask, replicate_col].unique()
     ref_samples = data.loc[reference_mask, replicate_col].unique()
 
     # Calculate centroids
-    pool_centroid = scores_df.loc[scores_df.index.isin(pool_samples)].mean()
+    qc_centroid = scores_df.loc[scores_df.index.isin(qc_samples)].mean()
     ref_centroid = scores_df.loc[scores_df.index.isin(ref_samples)].mean()
 
     # Euclidean distance
-    distance = np.sqrt(((pool_centroid - ref_centroid) ** 2).sum())
+    distance = np.sqrt(((qc_centroid - ref_centroid) ** 2).sum())
 
     return distance
 
@@ -180,7 +180,7 @@ def validate_correction(
 
     Uses the dual-control design:
     - Reference samples: should show CV improvement (technical variation removed)
-    - Pool samples: should show similar CV improvement AND remain distinct from reference
+    - QC samples: should show similar CV improvement AND remain distinct from reference
 
     Args:
         data_before: DataFrame with original data
@@ -200,9 +200,9 @@ def validate_correction(
     warnings = []
 
     # Create masks for sample types
-    pool_mask_before = data_before[sample_type_col] == 'pool'
+    qc_mask_before = data_before[sample_type_col] == 'qc'
     ref_mask_before = data_before[sample_type_col] == 'reference'
-    pool_mask_after = data_after[sample_type_col] == 'pool'
+    qc_mask_after = data_after[sample_type_col] == 'qc'
     ref_mask_after = data_after[sample_type_col] == 'reference'
 
     # Calculate CVs before
@@ -210,8 +210,8 @@ def validate_correction(
         data_before, ref_mask_before,
         abundance_col_before, precursor_col, replicate_col
     )
-    pool_cv_before = calculate_cv(
-        data_before, pool_mask_before,
+    qc_cv_before = calculate_cv(
+        data_before, qc_mask_before,
         abundance_col_before, precursor_col, replicate_col
     )
 
@@ -220,54 +220,54 @@ def validate_correction(
         data_after, ref_mask_after,
         abundance_col_after, precursor_col, replicate_col
     )
-    pool_cv_after = calculate_cv(
-        data_after, pool_mask_after,
+    qc_cv_after = calculate_cv(
+        data_after, qc_mask_after,
         abundance_col_after, precursor_col, replicate_col
     )
 
     # CV improvements
     ref_cv_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before if ref_cv_before > 0 else 0
-    pool_cv_improvement = (pool_cv_before - pool_cv_after) / pool_cv_before if pool_cv_before > 0 else 0
+    qc_cv_improvement = (qc_cv_before - qc_cv_after) / qc_cv_before if qc_cv_before > 0 else 0
 
     # Relative variance reduction
-    rvr = pool_cv_improvement / ref_cv_improvement if ref_cv_improvement > 0 else np.inf
+    rvr = qc_cv_improvement / ref_cv_improvement if ref_cv_improvement > 0 else np.inf
 
     # Check for warnings
-    if pool_cv_improvement < 0:
-        warnings.append("Pool CV increased after normalization")
+    if qc_cv_improvement < 0:
+        warnings.append("QC CV increased after normalization")
     if ref_cv_improvement < 0:
         warnings.append("Reference CV increased after normalization")
     if rvr > 2.0:
-        warnings.append(f"Pool improved much more than reference (RVR={rvr:.2f}) - possible overfitting")
+        warnings.append(f"QC improved much more than reference (RVR={rvr:.2f}) - possible overfitting")
     if rvr < 0.5:
-        warnings.append(f"Pool improved much less than reference (RVR={rvr:.2f}) - normalization may not generalize")
+        warnings.append(f"QC improved much less than reference (RVR={rvr:.2f}) - normalization may not generalize")
 
     # Calculate PCA distances
     pca_dist_before = calculate_pca_distance(
-        data_before, pool_mask_before, ref_mask_before,
+        data_before, qc_mask_before, ref_mask_before,
         abundance_col_before, precursor_col, replicate_col
     )
     pca_dist_after = calculate_pca_distance(
-        data_after, pool_mask_after, ref_mask_after,
+        data_after, qc_mask_after, ref_mask_after,
         abundance_col_after, precursor_col, replicate_col
     )
 
     pca_ratio = pca_dist_after / pca_dist_before if pca_dist_before > 0 else np.nan
 
     if pca_ratio < 0.5:
-        warnings.append(f"Pool-reference PCA distance decreased by {(1-pca_ratio)*100:.1f}% - "
+        warnings.append(f"QC-reference PCA distance decreased by {(1-pca_ratio)*100:.1f}% - "
                        "samples may be collapsing together")
 
     metrics = ValidationMetrics(
         reference_cv_before=ref_cv_before,
         reference_cv_after=ref_cv_after,
-        pool_cv_before=pool_cv_before,
-        pool_cv_after=pool_cv_after,
+        qc_cv_before=qc_cv_before,
+        qc_cv_after=qc_cv_after,
         reference_cv_improvement=ref_cv_improvement,
-        pool_cv_improvement=pool_cv_improvement,
+        qc_cv_improvement=qc_cv_improvement,
         relative_variance_reduction=rvr,
-        pca_pool_reference_distance_before=pca_dist_before,
-        pca_pool_reference_distance_after=pca_dist_after,
+        pca_qc_reference_distance_before=pca_dist_before,
+        pca_qc_reference_distance_after=pca_dist_after,
         pca_distance_ratio=pca_ratio,
         warnings=warnings,
     )
@@ -275,8 +275,8 @@ def validate_correction(
     # Log summary
     logger.info(f"Reference CV: {ref_cv_before:.3f} -> {ref_cv_after:.3f} "
                 f"({ref_cv_improvement*100:.1f}% improvement)")
-    logger.info(f"Pool CV: {pool_cv_before:.3f} -> {pool_cv_after:.3f} "
-                f"({pool_cv_improvement*100:.1f}% improvement)")
+    logger.info(f"QC CV: {qc_cv_before:.3f} -> {qc_cv_after:.3f} "
+                f"({qc_cv_improvement*100:.1f}% improvement)")
     logger.info(f"PCA distance ratio: {pca_ratio:.2f}")
 
     if warnings:
@@ -408,7 +408,7 @@ def generate_qc_report(
                 precursor_col=precursor_col,
                 abundance_col=abundance_col,
                 sample_type_col=sample_type_col,
-                control_types=["reference", "pool"],
+                control_types=["reference", "qc"],
                 title="Control Sample Correlation (After Normalization)",
                 show_plot=False,
             )
@@ -446,7 +446,7 @@ def generate_qc_report(
                         plot_paths["cv_distribution_reference"] = str(plot_path)
                     plt.close(fig)
 
-                # Pool CV
+                # QC CV
                 fig = viz.plot_comparative_cv(
                     data_before,
                     data_after,
@@ -455,16 +455,16 @@ def generate_qc_report(
                     abundance_col_before=abundance_col,
                     abundance_col_after=abundance_col,
                     sample_type_col=sample_type_col,
-                    control_type="pool",
+                    control_type="qc",
                     show_plot=False,
                 )
                 if fig is not None:
                     plot_html, plot_path = _save_and_embed_plot(
-                        fig, "cv_distribution_pool", plots_dir, save_plots, embed_plots
+                        fig, "cv_distribution_qc", plots_dir, save_plots, embed_plots
                     )
-                    plot_html_sections.append(("CV Distribution (Pool/QC)", plot_html))
+                    plot_html_sections.append(("CV Distribution (QC)", plot_html))
                     if plot_path:
-                        plot_paths["cv_distribution_pool"] = str(plot_path)
+                        plot_paths["cv_distribution_qc"] = str(plot_path)
                     plt.close(fig)
             except Exception as e:
                 logger.warning(f"Failed to generate CV distribution plot: {e}")
@@ -570,11 +570,11 @@ def generate_qc_report(
                 </td>
             </tr>
             <tr>
-                <td><strong>Pool</strong> (validation)</td>
-                <td>{metrics.pool_cv_before:.3f}</td>
-                <td>{metrics.pool_cv_after:.3f}</td>
-                <td class="{'improvement-positive' if metrics.pool_cv_improvement > 0 else 'improvement-negative'}">
-                    {metrics.pool_cv_improvement*100:+.1f}%
+                <td><strong>QC</strong> (validation)</td>
+                <td>{metrics.qc_cv_before:.3f}</td>
+                <td>{metrics.qc_cv_after:.3f}</td>
+                <td class="{'improvement-positive' if metrics.qc_cv_improvement > 0 else 'improvement-negative'}">
+                    {metrics.qc_cv_improvement*100:+.1f}%
                 </td>
             </tr>
         </table>
@@ -593,19 +593,19 @@ def generate_qc_report(
                 <th>Interpretation</th>
             </tr>
             <tr>
-                <td>Pool-Reference Distance (Before)</td>
-                <td>{metrics.pca_pool_reference_distance_before:.2f}</td>
+                <td>QC-Reference Distance (Before)</td>
+                <td>{metrics.pca_qc_reference_distance_before:.2f}</td>
                 <td>Baseline separation</td>
             </tr>
             <tr>
-                <td>Pool-Reference Distance (After)</td>
-                <td>{metrics.pca_pool_reference_distance_after:.2f}</td>
+                <td>QC-Reference Distance (After)</td>
+                <td>{metrics.pca_qc_reference_distance_after:.2f}</td>
                 <td>Post-normalization separation</td>
             </tr>
             <tr>
                 <td>Distance Ratio</td>
                 <td><strong>{metrics.pca_distance_ratio:.2f}</strong></td>
-                <td>{'Good - samples remain distinct' if metrics.pca_distance_ratio > 0.5 else '⚠️ Samples may be collapsing'}</td>
+                <td>{'Good - samples remain distinct' if metrics.pca_distance_ratio > 0.5 else 'WARNING - Samples may be collapsing'}</td>
             </tr>
         </table>
 
@@ -706,7 +706,7 @@ def generate_comprehensive_qc_report(
         protein_raw: Wide-format DataFrame with raw protein abundances
         protein_corrected: Wide-format DataFrame with corrected protein abundances
         sample_cols: List of column names containing sample abundances
-        sample_types: Dict mapping sample name to type ('experimental', 'pool', 'reference')
+        sample_types: Dict mapping sample name to type ('experimental', 'qc', 'reference')
         output_path: Path to save HTML report
         method_log: List of processing steps applied
         config: Optional config dict for QC report settings
@@ -775,25 +775,39 @@ def generate_comprehensive_qc_report(
             except Exception as e:
                 logger.warning(f"Failed to generate peptide intensity plot: {e}")
 
-        # 1b. Peptide Box Plot Comparison (3-stage if available)
-        if plot_settings.get('boxplot_comparison', True) and has_three_stage:
+        # 1b. Peptide Box Plot Comparison (3-stage if available, 2-stage otherwise)
+        if plot_settings.get('boxplot_comparison', True):
             try:
-                fig = viz.plot_boxplot_three_stage(
-                    peptide_rawsum,
-                    peptide_medianpolish,
-                    peptide_corrected,
-                    sample_cols,
-                    sample_types=sample_types,
-                    title="Peptide Intensity: Processing Stages",
-                    show_plot=False,
-                )
+                if has_three_stage:
+                    fig = viz.plot_boxplot_three_stage(
+                        peptide_rawsum,
+                        peptide_medianpolish,
+                        peptide_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        title="Peptide Intensity: Processing Stages",
+                        show_plot=False,
+                    )
+                    plot_title = "Peptide Box Plot (3 Stages)"
+                else:
+                    fig = viz.plot_boxplot_two_stage(
+                        peptide_raw,
+                        peptide_corrected,
+                        sample_cols,
+                        sample_types=sample_types,
+                        before_label="Raw (Sum Rollup)",
+                        after_label="Normalized + Corrected",
+                        title="Peptide Intensity: Before vs After",
+                        show_plot=False,
+                    )
+                    plot_title = "Peptide Box Plot Comparison"
                 if fig is not None:
                     plot_html, plot_path = _save_and_embed_plot(
                         fig, "peptide_boxplot_comparison", plots_dir,
                         save_plots, embed_plots
                     )
                     peptide_plot_sections.append(
-                        ("Peptide Box Plot (3 Stages)", plot_html)
+                        (plot_title, plot_html)
                     )
                     if plot_path:
                         plot_paths["peptide_boxplot_comparison"] = str(plot_path)
@@ -876,9 +890,9 @@ def generate_comprehensive_qc_report(
                 except Exception as e:
                     logger.warning(f"Failed to generate peptide CV (ref) plot: {e}")
 
-            # 4. Peptide CV Distribution - Pool Samples (3-stage if available)
-            pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
-            if len(pool_cols) >= 2:
+            # 4. Peptide CV Distribution - QC Samples (3-stage if available)
+            qc_cols = [c for c in sample_cols if sample_types.get(c) == 'qc']
+            if len(qc_cols) >= 2:
                 try:
                     if has_three_stage:
                         fig = viz.plot_cv_three_stage(
@@ -887,8 +901,8 @@ def generate_comprehensive_qc_report(
                             peptide_corrected,
                             sample_cols,
                             sample_types=sample_types,
-                            control_type="pool",
-                            title="Peptide CV Distribution (Pool/QC)",
+                            control_type="qc",
+                            title="Peptide CV Distribution (QC)",
                             show_plot=False,
                         )
                     else:
@@ -897,23 +911,23 @@ def generate_comprehensive_qc_report(
                             peptide_corrected,
                             sample_cols,
                             sample_types=sample_types,
-                            control_type="pool",
-                            title="Peptide CV Distribution (Pool/QC)",
+                            control_type="qc",
+                            title="Peptide CV Distribution (QC)",
                             show_plot=False,
                         )
                     if fig is not None:
                         plot_html, plot_path = _save_and_embed_plot(
-                            fig, "peptide_cv_pool", plots_dir,
+                            fig, "peptide_cv_qc", plots_dir,
                             save_plots, embed_plots
                         )
                         peptide_plot_sections.append(
-                            ("Peptide CV (Pool/QC Samples)", plot_html)
+                            ("Peptide CV (QC Samples)", plot_html)
                         )
                         if plot_path:
-                            plot_paths["peptide_cv_pool"] = str(plot_path)
+                            plot_paths["peptide_cv_qc"] = str(plot_path)
                         plt.close(fig)
                 except Exception as e:
-                    logger.warning(f"Failed to generate peptide CV (pool) plot: {e}")
+                    logger.warning(f"Failed to generate peptide CV (qc) plot: {e}")
 
         # 5. Peptide Control Correlation
         if plot_settings.get('control_correlation', True):
@@ -922,7 +936,7 @@ def generate_comprehensive_qc_report(
                     peptide_corrected,
                     sample_cols,
                     sample_types=sample_types,
-                    control_types=["reference", "pool"],
+                    control_types=["reference", "qc"],
                     title="Peptide Control Sample Correlation (After Correction)",
                     show_plot=False,
                 )
@@ -968,6 +982,33 @@ def generate_comprehensive_qc_report(
                     plt.close(fig)
             except Exception as e:
                 logger.warning(f"Failed to generate protein intensity plot: {e}")
+
+        # 6b. Protein Box Plot Comparison
+        if plot_settings.get('boxplot_comparison', True):
+            try:
+                fig = viz.plot_boxplot_two_stage(
+                    protein_raw,
+                    protein_corrected,
+                    sample_cols,
+                    sample_types=sample_types,
+                    before_label="Raw (Median Polish Rollup)",
+                    after_label="Normalized + Corrected",
+                    title="Protein Intensity: Before vs After",
+                    show_plot=False,
+                )
+                if fig is not None:
+                    plot_html, plot_path = _save_and_embed_plot(
+                        fig, "protein_boxplot_comparison", plots_dir,
+                        save_plots, embed_plots
+                    )
+                    protein_plot_sections.append(
+                        ("Protein Box Plot Comparison", plot_html)
+                    )
+                    if plot_path:
+                        plot_paths["protein_boxplot_comparison"] = str(plot_path)
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate protein boxplot: {e}")
 
         # 7. Protein PCA Comparison
         if plot_settings.get('pca_comparison', True):
@@ -1020,32 +1061,32 @@ def generate_comprehensive_qc_report(
                 except Exception as e:
                     logger.warning(f"Failed to generate protein CV (ref) plot: {e}")
 
-            # 9. Protein CV Distribution - Pool Samples
-            pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
-            if len(pool_cols) >= 2:
+            # 9. Protein CV Distribution - QC Samples
+            qc_cols = [c for c in sample_cols if sample_types.get(c) == 'qc']
+            if len(qc_cols) >= 2:
                 try:
                     fig = viz.plot_cv_comparison_wide(
                         protein_raw,
                         protein_corrected,
                         sample_cols,
                         sample_types=sample_types,
-                        control_type="pool",
-                        title="Protein CV Distribution (Pool/QC)",
+                        control_type="qc",
+                        title="Protein CV Distribution (QC)",
                         show_plot=False,
                     )
                     if fig is not None:
                         plot_html, plot_path = _save_and_embed_plot(
-                            fig, "protein_cv_pool", plots_dir,
+                            fig, "protein_cv_qc", plots_dir,
                             save_plots, embed_plots
                         )
                         protein_plot_sections.append(
-                            ("Protein CV (Pool/QC Samples)", plot_html)
+                            ("Protein CV (QC Samples)", plot_html)
                         )
                         if plot_path:
-                            plot_paths["protein_cv_pool"] = str(plot_path)
+                            plot_paths["protein_cv_qc"] = str(plot_path)
                         plt.close(fig)
                 except Exception as e:
-                    logger.warning(f"Failed to generate protein CV (pool) plot: {e}")
+                    logger.warning(f"Failed to generate protein CV (qc) plot: {e}")
 
         # 10. Protein Control Correlation
         if plot_settings.get('control_correlation', True):
@@ -1054,7 +1095,7 @@ def generate_comprehensive_qc_report(
                     protein_corrected,
                     sample_cols,
                     sample_types=sample_types,
-                    control_types=["reference", "pool"],
+                    control_types=["reference", "qc"],
                     title="Protein Control Sample Correlation (After Correction)",
                     show_plot=False,
                 )
@@ -1083,7 +1124,7 @@ def generate_comprehensive_qc_report(
 
     metrics = {}
     ref_cols = [c for c in sample_cols if sample_types.get(c) == 'reference']
-    pool_cols = [c for c in sample_cols if sample_types.get(c) == 'pool']
+    qc_cols = [c for c in sample_cols if sample_types.get(c) == 'qc']
 
     # Use 3-stage data if available
     peptide_raw_for_metrics = peptide_rawsum if has_three_stage else peptide_raw
@@ -1097,13 +1138,13 @@ def generate_comprehensive_qc_report(
         metrics['protein_ref_cv_before'] = calc_median_cv(protein_raw, ref_cols)
         metrics['protein_ref_cv_after'] = calc_median_cv(protein_corrected, ref_cols)
 
-    if len(pool_cols) >= 2:
-        metrics['peptide_pool_cv_rawsum'] = calc_median_cv(peptide_raw_for_metrics, pool_cols)
+    if len(qc_cols) >= 2:
+        metrics['peptide_qc_cv_rawsum'] = calc_median_cv(peptide_raw_for_metrics, qc_cols)
         if peptide_mid_for_metrics is not None:
-            metrics['peptide_pool_cv_medpol'] = calc_median_cv(peptide_mid_for_metrics, pool_cols)
-        metrics['peptide_pool_cv_normalized'] = calc_median_cv(peptide_corrected, pool_cols)
-        metrics['protein_pool_cv_before'] = calc_median_cv(protein_raw, pool_cols)
-        metrics['protein_pool_cv_after'] = calc_median_cv(protein_corrected, pool_cols)
+            metrics['peptide_qc_cv_medpol'] = calc_median_cv(peptide_mid_for_metrics, qc_cols)
+        metrics['peptide_qc_cv_normalized'] = calc_median_cv(peptide_corrected, qc_cols)
+        metrics['protein_qc_cv_before'] = calc_median_cv(protein_raw, qc_cols)
+        metrics['protein_qc_cv_after'] = calc_median_cv(protein_corrected, qc_cols)
 
     # =========================================================================
     # Build peptide plots HTML
@@ -1150,7 +1191,7 @@ def generate_comprehensive_qc_report(
                 <th>Total Improvement</th>
             </tr>
             """
-            for sample_type, type_key in [('Reference', 'ref'), ('Pool/QC', 'pool')]:
+            for sample_type, type_key in [('Reference', 'ref'), ('QC', 'qc')]:
                 rawsum_key = f'peptide_{type_key}_cv_rawsum'
                 medpol_key = f'peptide_{type_key}_cv_medpol'
                 norm_key = f'peptide_{type_key}_cv_normalized'
@@ -1182,7 +1223,7 @@ def generate_comprehensive_qc_report(
                 <th>Improvement</th>
             </tr>
             """
-            for sample_type, type_key in [('Reference', 'ref'), ('Pool/QC', 'pool')]:
+            for sample_type, type_key in [('Reference', 'ref'), ('QC', 'qc')]:
                 before_key = f'peptide_{type_key}_cv_rawsum'
                 after_key = f'peptide_{type_key}_cv_normalized'
                 if before_key in metrics and after_key in metrics:
@@ -1211,7 +1252,7 @@ def generate_comprehensive_qc_report(
                 <th>Improvement</th>
             </tr>
         """
-        for sample_type, type_key in [('Reference', 'ref'), ('Pool/QC', 'pool')]:
+        for sample_type, type_key in [('Reference', 'ref'), ('QC', 'qc')]:
             before_key = f'protein_{type_key}_cv_before'
             after_key = f'protein_{type_key}_cv_after'
             if before_key in metrics and after_key in metrics:
@@ -1273,7 +1314,7 @@ def generate_comprehensive_qc_report(
                 <li>Proteins: {len(protein_corrected):,} features</li>
                 <li>Samples: {len(sample_cols)}</li>
                 <li>Reference samples: {len([c for c in sample_cols if sample_types.get(c) == 'reference'])}</li>
-                <li>Pool/QC samples: {len([c for c in sample_cols if sample_types.get(c) == 'pool'])}</li>
+                <li>QC samples: {len([c for c in sample_cols if sample_types.get(c) == 'qc'])}</li>
             </ul>
         </div>
 

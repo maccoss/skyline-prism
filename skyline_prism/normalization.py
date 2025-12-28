@@ -548,7 +548,7 @@ def normalize_pipeline(
 
     Args:
         data: DataFrame with peptide data
-        sample_type_col: Column indicating sample type (experimental, pool, reference)
+        sample_type_col: Column indicating sample type (experimental, qc, reference)
         precursor_col: Column with precursor identifiers
         abundance_col: Column with abundance values
         rt_col: Column with retention times
@@ -693,15 +693,15 @@ def normalize_pipeline(
                                 f"Applied ComBat batch correction "
                                 f"(ref CV: {evaluation.reference_cv_before:.3f} -> "
                                 f"{evaluation.reference_cv_after:.3f}, "
-                                f"pool CV: {evaluation.pool_cv_before:.3f} -> "
-                                f"{evaluation.pool_cv_after:.3f})"
+                                f"QC CV: {evaluation.qc_cv_before:.3f} -> "
+                                f"{evaluation.qc_cv_after:.3f})"
                             )
                         else:
                             if fallback_on_failure:
                                 method_log.append(
                                     f"ComBat batch correction FAILED QC - using uncorrected data "
                                     f"(ref CV improvement: {evaluation.reference_improvement:.1%}, "
-                                    f"pool CV improvement: {evaluation.pool_improvement:.1%})"
+                                    f"QC CV improvement: {evaluation.qc_improvement:.1%})"
                                 )
                             else:
                                 method_log.append(

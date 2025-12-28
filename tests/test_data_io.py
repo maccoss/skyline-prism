@@ -136,7 +136,7 @@ class TestLoadSampleMetadata:
         metadata_file = tmp_path / "metadata.tsv"
         df = pd.DataFrame({
             'ReplicateName': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
-            'SampleType': ['experimental', 'experimental', 'pool', 'reference'],
+            'SampleType': ['experimental', 'experimental', 'qc', 'reference'],
             'Batch': ['batch1', 'batch1', 'batch1', 'batch1'],
             'RunOrder': [1, 2, 3, 4],
         })
@@ -154,7 +154,7 @@ class TestLoadSampleMetadata:
         metadata_file = tmp_path / "metadata_no_runorder.tsv"
         df = pd.DataFrame({
             'ReplicateName': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
-            'SampleType': ['experimental', 'experimental', 'pool', 'reference'],
+            'SampleType': ['experimental', 'experimental', 'qc', 'reference'],
             'Batch': ['batch1', 'batch1', 'batch1', 'batch1'],
             # No RunOrder column - it's optional
         })
@@ -170,7 +170,7 @@ class TestLoadSampleMetadata:
         metadata_file = tmp_path / "metadata_no_batch.tsv"
         df = pd.DataFrame({
             'ReplicateName': ['Sample1', 'Sample2', 'Pool1', 'Ref1'],
-            'SampleType': ['experimental', 'experimental', 'pool', 'reference'],
+            'SampleType': ['experimental', 'experimental', 'qc', 'reference'],
             # No Batch column - it's optional
         })
         df.to_csv(metadata_file, index=False, sep='\t')
@@ -212,7 +212,7 @@ class TestLoadSampleMetadata:
         assert 'batch' in result.columns
 
         # Check Skyline sample types were mapped
-        assert set(result['sample_type'].unique()) == {'experimental', 'pool', 'reference'}
+        assert set(result['sample_type'].unique()) == {'experimental', 'qc', 'reference'}
 
     def test_file_name_fallback(self, tmp_path):
         """Test that File Name is accepted when Replicate Name is not present."""
@@ -239,7 +239,7 @@ class TestCreateTestData:
         n_peptides_per_protein: int = 5,
         n_replicates: int = 6,
         include_reference: bool = True,
-        include_pool: bool = True,
+        include_qc: bool = True,
     ) -> pd.DataFrame:
         """Create a synthetic Skyline report for testing."""
         rows = []
@@ -256,7 +256,7 @@ class TestCreateTestData:
                     # Determine sample type
                     if include_reference and rep_idx < 2:
                         replicate = f"Reference_{rep_idx + 1}"
-                    elif include_pool and rep_idx < 4:
+                    elif include_qc and rep_idx < 4:
                         replicate = f"Pool_{rep_idx - 1}"
                     else:
                         replicate = f"Sample_{rep_idx + 1}"

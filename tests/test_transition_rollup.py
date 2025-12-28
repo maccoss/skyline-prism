@@ -399,3 +399,343 @@ class TestLearnVarianceModel:
         # Learned CV should not be dramatically worse
         # (may not always improve due to optimization stochasticity)
         assert learned_median_cv < default_median_cv * 1.5
+
+
+# =============================================================================
+# Tests for new quality-weighted rollup (v2)
+# =============================================================================
+
+from skyline_prism.transition_rollup import (
+    QualityWeightParams,
+    QualityWeightResult,
+    TransitionQualityMetrics,
+    compute_quality_weights,
+    compute_transition_quality_metrics,
+    compute_transition_residuals,
+    learn_quality_weights,
+    rollup_peptide_quality_weighted,
+)
+
+
+class TestQualityWeightParams:
+    """Test QualityWeightParams dataclass."""
+
+    def test_default_values(self):
+        """Test default parameter values."""
+        params = QualityWeightParams()
+        assert params.alpha == 0.5  # sqrt weighting
+        assert params.beta == 1.0
+        assert params.gamma == 1.0
+        assert params.delta == 0.5
+        assert params.shape_corr_agg == "median"
+        assert params.fallback_method == "sum"
+        assert params.min_improvement_pct == 5.0
+
+    def test_custom_values(self):
+        """Test custom parameter initialization."""
+        params = QualityWeightParams(
+            alpha=1.0,
+            beta=2.0,
+            gamma=0.5,
+            delta=0.0,
+            shape_corr_agg="mean",
+            fallback_method="median_polish",
+            min_improvement_pct=10.0,
+        )
+        assert params.alpha == 1.0
+        assert params.beta == 2.0
+        assert params.gamma == 0.5
+        assert params.delta == 0.0
+        assert params.shape_corr_agg == "mean"
+        assert params.fallback_method == "median_polish"
+        assert params.min_improvement_pct == 10.0
+
+
+class TestComputeTransitionQualityMetrics:
+    """Test quality metric computation."""
+
+    def test_mean_intensity(self):
+        """Mean intensity is computed correctly."""
+        intensity = pd.DataFrame(
+            {"S1": [100.0, 200.0], "S2": [150.0, 250.0]},
+            index=["T1", "T2"],
+        )
+        shape_corr = pd.DataFrame(
+            {"S1": [0.9, 0.8], "S2": [0.95, 0.85]},
+            index=["T1", "T2"],
+        )
+
+        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
+
+        np.testing.assert_array_almost_equal(
+            metrics.mean_intensity.values, [125.0, 225.0]
+        )
+
+    def test_shape_corr_median(self):
+        """Median shape correlation is computed correctly."""
+        intensity = pd.DataFrame(
+            {"S1": [100.0, 100.0], "S2": [100.0, 100.0], "S3": [100.0, 100.0]},
+            index=["T1", "T2"],
+        )
+        shape_corr = pd.DataFrame(
+            {"S1": [0.9, 0.5], "S2": [0.8, 0.6], "S3": [0.7, 0.7]},
+            index=["T1", "T2"],
+        )
+
+        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
+
+        np.testing.assert_array_almost_equal(
+            metrics.shape_corr.values, [0.8, 0.6]
+        )
+
+    def test_shape_corr_cv(self):
+        """CV of shape correlation is computed correctly."""
+        intensity = pd.DataFrame(
+            {"S1": [100.0, 100.0], "S2": [100.0, 100.0]},
+            index=["T1", "T2"],
+        )
+        # T1 has low CV, T2 has high CV
+        shape_corr = pd.DataFrame(
+            {"S1": [0.9, 0.5], "S2": [0.9, 0.9]},
+            index=["T1", "T2"],
+        )
+
+        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
+
+        # T1 has low CV (consistent), T2 has higher CV (variable)
+        assert metrics.shape_corr_cv["T1"] < metrics.shape_corr_cv["T2"]
+
+
+class TestComputeTransitionResiduals:
+    """Test residual computation via median polish."""
+
+    def test_returns_zero_for_single_transition(self):
+        """Single transition should return zero residual."""
+        intensity = pd.DataFrame(
+            {"S1": [15.0], "S2": [16.0]},  # log2 scale
+            index=["T1"],
+        )
+
+        residuals_mad = compute_transition_residuals(intensity)
+
+        assert len(residuals_mad) == 1
+        assert residuals_mad["T1"] == 0.0
+
+    def test_outlier_has_larger_residual(self):
+        """Transition with outlier value should have larger residual MAD."""
+        # T1-T3 have consistent pattern across samples (perfect additive model)
+        # T4 has outliers in S1 and S2 (much higher than expected from pattern)
+        intensity = pd.DataFrame(
+            {
+                "S1": [15.0, 14.0, 13.0, 25.0],  # T4 is anomalously high
+                "S2": [16.0, 15.0, 14.0, 26.0],  # T4 is anomalously high
+                "S3": [17.0, 16.0, 15.0, 14.0],  # T4 is normal
+                "S4": [18.0, 17.0, 16.0, 15.0],  # T4 is normal
+            },
+            index=["T1", "T2", "T3", "T4"],
+        )
+
+        residuals_mad = compute_transition_residuals(intensity)
+
+        # T4 should have higher residual MAD due to the outliers
+        # T1-T3 follow perfect additive model, so have zero residuals
+        assert residuals_mad["T4"] > 0
+        assert residuals_mad["T4"] > residuals_mad["T1"]
+
+
+class TestComputeQualityWeights:
+    """Test quality weight computation."""
+
+    def test_higher_intensity_higher_weight(self):
+        """Higher intensity transitions should have higher weight (alpha > 0)."""
+        metrics = TransitionQualityMetrics(
+            mean_intensity=pd.Series([100.0, 1000.0, 10000.0], index=["T1", "T2", "T3"]),
+            shape_corr=pd.Series([1.0, 1.0, 1.0], index=["T1", "T2", "T3"]),
+            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+        )
+        residuals_mad = pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"])
+        params = QualityWeightParams(alpha=0.5, beta=0.0, gamma=0.0, delta=0.0)
+
+        weights = compute_quality_weights(metrics, residuals_mad, params)
+
+        # Higher intensity = higher weight (sqrt relationship)
+        assert weights["T3"] > weights["T2"] > weights["T1"]
+
+    def test_higher_shape_corr_higher_weight(self):
+        """Higher shape correlation should have higher weight."""
+        metrics = TransitionQualityMetrics(
+            mean_intensity=pd.Series([1000.0, 1000.0, 1000.0], index=["T1", "T2", "T3"]),
+            shape_corr=pd.Series([0.5, 0.8, 1.0], index=["T1", "T2", "T3"]),
+            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+        )
+        residuals_mad = pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"])
+        params = QualityWeightParams(alpha=0.0, beta=1.0, gamma=0.0, delta=0.0)
+
+        weights = compute_quality_weights(metrics, residuals_mad, params)
+
+        assert weights["T3"] > weights["T2"] > weights["T1"]
+
+    def test_larger_residual_lower_weight(self):
+        """Larger residuals should result in lower weight."""
+        metrics = TransitionQualityMetrics(
+            mean_intensity=pd.Series([1000.0, 1000.0, 1000.0], index=["T1", "T2", "T3"]),
+            shape_corr=pd.Series([1.0, 1.0, 1.0], index=["T1", "T2", "T3"]),
+            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+        )
+        residuals_mad = pd.Series([0.0, 0.5, 1.0], index=["T1", "T2", "T3"])
+        params = QualityWeightParams(alpha=0.0, beta=0.0, gamma=1.0, delta=0.0)
+
+        weights = compute_quality_weights(metrics, residuals_mad, params)
+
+        # Larger residual = lower weight (exponential decay)
+        assert weights["T1"] > weights["T2"] > weights["T3"]
+
+
+class TestRollupPeptideQualityWeighted:
+    """Test full quality-weighted rollup for a single peptide."""
+
+    def test_basic_rollup(self):
+        """Basic rollup produces expected outputs."""
+        intensity = pd.DataFrame(
+            {"S1": [15.0, 14.0, 13.0], "S2": [16.0, 15.0, 14.0]},  # log2 scale
+            index=["T1", "T2", "T3"],
+        )
+        shape_corr = pd.DataFrame(
+            {"S1": [1.0, 0.9, 0.8], "S2": [0.95, 0.85, 0.75]},
+            index=["T1", "T2", "T3"],
+        )
+        params = QualityWeightParams()
+
+        abundances, uncertainties, weights, n_used = rollup_peptide_quality_weighted(
+            intensity, shape_corr, params, min_transitions=2
+        )
+
+        assert len(abundances) == 2  # Two samples
+        assert len(weights) == 3  # Three transitions
+        assert n_used == 3
+        assert not abundances.isna().any()
+
+    def test_min_transitions_not_met(self):
+        """Returns NaN when minimum transitions not met."""
+        intensity = pd.DataFrame(
+            {"S1": [15.0, 14.0], "S2": [16.0, 15.0]},
+            index=["T1", "T2"],
+        )
+        shape_corr = pd.DataFrame(
+            {"S1": [1.0, 0.9], "S2": [0.95, 0.85]},
+            index=["T1", "T2"],
+        )
+        params = QualityWeightParams()
+
+        abundances, uncertainties, weights, n_used = rollup_peptide_quality_weighted(
+            intensity, shape_corr, params, min_transitions=3
+        )
+
+        assert abundances.isna().all()
+        assert n_used == 0
+
+
+class TestLearnQualityWeights:
+    """Test quality weight parameter learning."""
+
+    @pytest.fixture
+    def sample_data(self):
+        """Create sample transition data with reference and QC samples."""
+        np.random.seed(42)
+        n_peptides = 20
+        n_transitions = 5
+        n_ref = 4
+        n_qc = 3
+
+        rows = []
+        for pep_idx in range(n_peptides):
+            peptide = f"PEP{pep_idx}"
+            base_intensity = 10 ** np.random.uniform(3, 6)  # Vary peptide intensity
+
+            for trans_idx in range(n_transitions):
+                transition = f"T{trans_idx}"
+                trans_factor = np.random.uniform(0.5, 1.5)  # Transition effect
+                # Quality varies by transition
+                base_quality = 0.7 + 0.3 * (1 - trans_idx / n_transitions)
+
+                for rep_idx in range(n_ref):
+                    sample = f"Ref{rep_idx + 1}"
+                    noise = np.random.normal(1.0, 0.15)  # 15% CV
+                    intensity = base_intensity * trans_factor * noise
+                    shape_corr = base_quality + np.random.normal(0, 0.05)
+
+                    rows.append({
+                        "peptide_modified": peptide,
+                        "fragment_ion": transition,
+                        "replicate_name": sample,
+                        "area": max(intensity, 1),
+                        "shape_correlation": np.clip(shape_corr, 0, 1),
+                    })
+
+                for rep_idx in range(n_qc):
+                    sample = f"QC{rep_idx + 1}"
+                    noise = np.random.normal(1.0, 0.15)
+                    intensity = base_intensity * trans_factor * noise
+                    shape_corr = base_quality + np.random.normal(0, 0.05)
+
+                    rows.append({
+                        "peptide_modified": peptide,
+                        "fragment_ion": transition,
+                        "replicate_name": sample,
+                        "area": max(intensity, 1),
+                        "shape_correlation": np.clip(shape_corr, 0, 1),
+                    })
+
+        return pd.DataFrame(rows)
+
+    def test_returns_result(self, sample_data):
+        """Learning returns QualityWeightResult."""
+        reference_samples = ["Ref1", "Ref2", "Ref3", "Ref4"]
+        pool_samples = ["QC1", "QC2", "QC3"]
+
+        result = learn_quality_weights(
+            sample_data,
+            reference_samples=reference_samples,
+            pool_samples=pool_samples,
+            n_iterations=5,
+        )
+
+        assert isinstance(result, QualityWeightResult)
+        assert isinstance(result.params, QualityWeightParams)
+        assert np.isfinite(result.reference_cv_before)
+        assert np.isfinite(result.reference_cv_after)
+        assert np.isfinite(result.pool_cv_before)
+        assert np.isfinite(result.pool_cv_after)
+
+    def test_insufficient_reference_samples(self, sample_data):
+        """Returns fallback when insufficient reference samples."""
+        reference_samples = ["Ref1"]  # Only one sample
+        pool_samples = ["QC1", "QC2"]
+
+        result = learn_quality_weights(
+            sample_data,
+            reference_samples=reference_samples,
+            pool_samples=pool_samples,
+        )
+
+        assert result.use_quality_weights is False
+        assert "Insufficient reference samples" in result.fallback_reason
+
+    def test_learning_improves_reference_cv(self, sample_data):
+        """Learned parameters should improve or maintain CV on reference."""
+        reference_samples = ["Ref1", "Ref2", "Ref3", "Ref4"]
+        pool_samples = ["QC1", "QC2", "QC3"]
+
+        result = learn_quality_weights(
+            sample_data,
+            reference_samples=reference_samples,
+            pool_samples=pool_samples,
+            n_iterations=20,
+        )
+
+        # Reference CV should improve (or not worsen much)
+        # Allow small degradation due to optimization stochasticity
+        assert result.reference_cv_after <= result.reference_cv_before * 1.1

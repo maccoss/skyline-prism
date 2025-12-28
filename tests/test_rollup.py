@@ -605,10 +605,10 @@ class TestProteinLevelBatchCorrection:
                 'sample_type': 'reference',
                 'batch': batch_id,
             })
-            # 1 pool per batch
+            # 1 qc per batch
             samples.append({
-                'replicate_name': f'pool_b{batch_id}',
-                'sample_type': 'pool',
+                'replicate_name': f'qc_b{batch_id}',
+                'sample_type': 'qc',
                 'batch': batch_id,
             })
 
@@ -695,7 +695,7 @@ class TestProteinLevelBatchCorrection:
 
         assert result.evaluation is not None
         assert hasattr(result.evaluation, 'reference_cv_before')
-        assert hasattr(result.evaluation, 'pool_cv_before')
+        assert hasattr(result.evaluation, 'qc_cv_before')
         assert hasattr(result.evaluation, 'passed')
 
     def test_batch_correct_proteins_fallback(self, protein_batch_data):

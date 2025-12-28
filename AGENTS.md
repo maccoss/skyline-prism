@@ -11,7 +11,8 @@ This document provides context and guidelines for AI agents working on the Skyli
 - **Transition-level input required**: PRISM expects transition-level data from Skyline (not peptide or protein summaries)
 - **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use median polish by default for robust outlier handling
 - **Reference-anchored ComBat batch correction**: Uses inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality
-- **Dual-control validation**: Uses intra-experiment pool samples to validate corrections without overfitting
+- **Dual-control validation**: Uses intra-experiment QC samples to validate corrections without overfitting
+- **Sample outlier detection**: Automatic detection of samples with abnormally low signal (one-sided, on LINEAR scale). Can report or exclude outliers.
 - **Two-arm pipeline**: Pipeline splits at peptide level - batch correction is applied at the reporting level (peptide or protein)
 - **Optional RT correction**: RT-dependent correction is implemented but DISABLED by default (search engine RT calibration may not generalize between samples)
 
@@ -150,18 +151,49 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 
 ### Variance Model Learning (Quality-Weighted Rollup)
 
-For quality-weighted transition→peptide aggregation, variance model parameters (α, β, γ, δ) 
-can be learned from reference samples by minimizing median CV across peptides.
+For quality-weighted transition→peptide aggregation, there are two approaches:
 
-Variance model: `var(signal) = α·signal + β·signal² + γ + δ·quality_penalty`
+**Legacy Variance Model** (`VarianceModelParams`):
+Uses a variance model: `var(signal) = alpha*signal + beta*signal^2 + gamma + delta*quality_penalty`
+Implementation: `skyline_prism/transition_rollup.py` → `learn_variance_model()`
 
-**Implementation**: `skyline_prism/transition_rollup.py` → `learn_variance_model()`
+**New Quality Weight Model** (`QualityWeightParams`):
+Uses multiple quality signals to weight transitions:
+```
+w_t = intensity^alpha * shape_corr^beta * cv_penalty^delta * exp(-gamma * residual^2)
+```
+
+Where:
+- `intensity`: Mean intensity of transition (sqrt weighting by default, alpha=0.5)
+- `shape_corr`: Median shape correlation across samples (beta=1.0)
+- `cv_penalty`: Penalty for high CV of shape correlation (delta=0.5)
+- `residual`: Residual from preliminary median polish (gamma=1.0)
+
+Key features:
+- Parameters learned on reference samples by minimizing CV
+- Validated on QC samples to ensure generalization
+- Automatic fallback to raw sum if quality-weighted doesn't improve QC CV
+
+**Implementation**:
+- `skyline_prism/transition_rollup.py` → `learn_quality_weights()` - learns parameters
+- `skyline_prism/transition_rollup.py` → `rollup_peptide_quality_weighted()` - applies weights
+- `skyline_prism/transition_rollup.py` → `compute_transition_residuals()` - gets residuals from median polish
+- `skyline_prism/transition_rollup.py` → `compute_transition_quality_metrics()` - computes quality metrics
 
 **Configuration:**
 ```yaml
 transition_rollup:
   method: "quality_weighted"
   learn_variance_model: true  # Learn from reference samples
+  # New quality weight parameters (optional)
+  quality_weight_params:
+    alpha: 0.5      # intensity exponent (sqrt)
+    beta: 1.0       # shape_corr exponent
+    gamma: 1.0      # residual penalty
+    delta: 0.5      # shape_corr_cv penalty
+    shape_corr_agg: "median"
+    fallback_method: "sum"
+    min_improvement_pct: 5.0
 ```
 
 ## Development Guidelines
@@ -249,6 +281,7 @@ The authoritative technical specification. Contains:
 ### config_template.yaml
 Comprehensive configuration file with all options documented. Key sections:
 - `transition_rollup`: Transition→peptide rollup (method: median_polish, quality_weighted, sum)
+- `sample_outlier_detection`: Detect low-signal samples (method: iqr or fold_median, action: report or exclude)
 - `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
 - `batch_correction`: ComBat settings (method: combat)
 - `protein_rollup`: Peptide→protein rollup (method: median_polish, topn, maxlfq, ibaq, sum)
@@ -259,7 +292,7 @@ Comprehensive configuration file with all options documented. Key sections:
 Full ComBat implementation with:
 - `combat()`: Main function for wide-format data
 - `combat_from_long()`: Wrapper for long-format data (PRISM pipeline format)
-- `combat_with_reference_samples()`: Automatic evaluation using reference/pool CVs
+- `combat_with_reference_samples()`: Automatic evaluation using reference/QC CVs
 - `evaluate_batch_correction()`: Compare before/after metrics
 
 ### visualization.py
@@ -268,7 +301,7 @@ QC visualization functions for normalization assessment:
 - `plot_pca()`, `plot_comparative_pca()`: PCA analysis for batch effects
 - `plot_control_correlation_heatmap()`: Correlation heatmaps for control samples
 - `plot_cv_distribution()`, `plot_comparative_cv()`: CV distributions for precision assessment
-- `plot_rt_correction_comparison()`: Before/after comparison of RT correction showing reference (fitted) vs pool (held-out validation)
+- `plot_rt_correction_comparison()`: Before/after comparison of RT correction showing reference (fitted) vs QC (held-out validation)
 - `plot_rt_correction_per_sample()`: Per-sample RT correction quality assessment
 
 ### pyproject.toml
@@ -315,6 +348,9 @@ Additional utility commands:
 # Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 
+# Regenerate QC report from existing output (without reprocessing)
+prism qc -d output_dir/
+
 # Validate normalization quality
 prism validate --before data.parquet --after normalized.parquet --report qc.html
 ```
@@ -356,7 +392,7 @@ The package exports are defined in `skyline_prism/__init__.py`. Key exports incl
 ## Important Notes
 
 - **Skyline** is an external tool (https://skyline.ms) - we process its exports, we don't modify Skyline itself
-- **Sample types**: `experimental`, `pool`, `reference` - these have specific meanings in the normalization workflow
+- **Sample types**: `experimental`, `qc`, `reference` - these have specific meanings in the normalization workflow
 - **Column naming**: Internal column names differ from Skyline export names - see `SKYLINE_COLUMN_MAP` in data_io.py
 - **Log scale**: Most operations work on log2-transformed abundances
 - **Median polish is default**: For both transition→peptide and peptide→protein rollups
@@ -441,7 +477,7 @@ This section tracks what's currently working, what needs attention, and what's n
 
 - Automatic column detection (handles different Skyline export formats)
 - Metadata normalization (`sample`/`sample_type`/`batch` from Skyline formats)
-- Sample type pattern matching (reference/pool/experimental detection)
+- Sample type pattern matching (reference/QC/experimental detection)
 - Batch estimation from source files or timestamps
 - Duplicate sample validation (allows same sample across batches)
 
@@ -455,7 +491,7 @@ This section tracks what's currently working, what needs attention, and what's n
 
 **QC Reporting:**
 
-- **CV calculation bug**: Reference/pool median CV shows NaN - sample type matching not working correctly
+- **CV calculation bug**: Reference/QC median CV shows NaN - sample type matching not working correctly
 - **Protein NaN values**: Global median/max shift occasionally NaN for proteins - investigate data quality checks
 - **QC report warning**: "list index out of range" during generation in some edge cases
 

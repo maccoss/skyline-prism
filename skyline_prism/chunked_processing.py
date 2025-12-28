@@ -29,9 +29,9 @@ import pyarrow.parquet as pq
 from .parsimony import ProteinGroup
 from .rollup import tukey_median_polish
 from .transition_rollup import (
-    VarianceModelParams,
-    aggregate_transitions_weighted,
-    compute_transition_weights,
+    QualityWeightParams,
+    rollup_peptide_quality_weighted,
+    rollup_peptide_topn,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,8 +58,13 @@ class ChunkedRollupConfig:
     method: str = "median_polish"
     min_transitions: int = 3
     log_transform: bool = True
-    variance_params: VarianceModelParams | None = None
+    quality_weight_params: QualityWeightParams | None = None
     exclude_precursor: bool = True  # Exclude MS1 precursor ions from rollup
+
+    # Top-N method parameters
+    topn_count: int = 3  # Number of transitions to select
+    topn_selection: str = "correlation"  # "correlation" or "intensity"
+    topn_weighting: str = "sqrt"  # "sum" or "sqrt"
 
     # Processing parameters
     n_workers: int = 1  # Number of parallel workers (0 = all CPUs)
@@ -182,9 +187,9 @@ def _process_single_peptide(
             residuals = None
 
     elif config.method == "quality_weighted":
-        params = config.variance_params or VarianceModelParams()
+        params = config.quality_weight_params or QualityWeightParams()
 
-        # Get quality metrics
+        # Get shape correlation matrix
         if config.shape_corr_col in pep_data.columns:
             shape_corr_matrix = pep_data.pivot_table(
                 index=config.transition_col,
@@ -192,34 +197,21 @@ def _process_single_peptide(
                 values=config.shape_corr_col,
                 aggfunc="first",
             )
-            shape_corr_matrix = shape_corr_matrix.reindex(columns=samples).fillna(1.0)
+            # Align with intensity_matrix (same rows and columns)
+            shape_corr_matrix = shape_corr_matrix.reindex(
+                index=intensity_matrix.index, columns=samples
+            ).fillna(1.0)
         else:
             shape_corr_matrix = pd.DataFrame(
                 1.0, index=intensity_matrix.index, columns=samples
             )
 
-        if config.coeluting_col in pep_data.columns:
-            coeluting_matrix = pep_data.pivot_table(
-                index=config.transition_col,
-                columns=config.sample_col,
-                values=config.coeluting_col,
-                aggfunc="first",
-            )
-            coeluting_matrix = coeluting_matrix.reindex(columns=samples).fillna(True)
-        else:
-            coeluting_matrix = pd.DataFrame(True, index=intensity_matrix.index, columns=samples)
-
-        # Compute weights
-        weights = compute_transition_weights(
-            2**intensity_matrix if config.log_transform else intensity_matrix,
+        # Use the new quality-weighted rollup
+        abund_series, uncert_series, weights, n_used = rollup_peptide_quality_weighted(
+            intensity_matrix,
             shape_corr_matrix,
-            coeluting_matrix,
             params,
-        )
-
-        # Aggregate
-        abund_series, uncert_series, n_used = aggregate_transitions_weighted(
-            intensity_matrix, weights, config.min_transitions
+            config.min_transitions,
         )
         abundances = abund_series.to_dict()
         uncertainties = uncert_series.to_dict()
@@ -234,6 +226,35 @@ def _process_single_peptide(
             abundances = summed.to_dict()
         uncertainties = {s: np.nan for s in samples}
         n_used = (~intensity_matrix.isna()).sum().min()
+        residuals = None
+
+    elif config.method == "topn":
+        # Top-N selection by correlation or intensity
+        if config.shape_corr_col in pep_data.columns:
+            shape_corr_matrix = pep_data.pivot_table(
+                index=config.transition_col,
+                columns=config.sample_col,
+                values=config.shape_corr_col,
+                aggfunc="first",
+            )
+            shape_corr_matrix = shape_corr_matrix.reindex(
+                index=intensity_matrix.index, columns=samples
+            ).fillna(0.0)  # Missing = low correlation
+        else:
+            shape_corr_matrix = pd.DataFrame(
+                1.0, index=intensity_matrix.index, columns=samples
+            )
+
+        abund_series, uncert_series, _, n_used = rollup_peptide_topn(
+            intensity_matrix,
+            shape_corr_matrix,
+            n_transitions=config.topn_count,
+            selection_method=config.topn_selection,
+            weighting=config.topn_weighting,
+            min_transitions=config.min_transitions,
+        )
+        abundances = abund_series.to_dict()
+        uncertainties = uncert_series.to_dict()
         residuals = None
 
     else:
@@ -730,14 +751,26 @@ def _process_single_protein(
 
     residuals = None
 
+    # Helper function to compute sum in linear space
+    def sum_linear(mat: pd.DataFrame) -> dict:
+        """Sum peptides in linear space, return log2 result."""
+        linear = 2**mat
+        summed = linear.sum(axis=0)
+        return np.log2(summed.clip(lower=1)).to_dict()
+
     if n_peptides == 1:
-        # Single peptide - use directly
+        # Single peptide - use directly (same for all methods)
         abundances = matrix.iloc[0].to_dict()
     elif n_peptides == 2:
-        # Two peptides - use mean
-        abundances = matrix.mean(axis=0).to_dict()
+        # Two peptides - method-dependent handling
+        if config.method in ("sum", "topn"):
+            # Sum methods: sum in linear space
+            abundances = sum_linear(matrix)
+        else:
+            # median_polish with <3 peptides: fall back to mean (geometric mean in log space)
+            abundances = matrix.mean(axis=0).to_dict()
     elif config.method == "median_polish":
-        # Median polish for robust rollup
+        # Median polish for robust rollup (requires 3+ peptides)
         result = tukey_median_polish(matrix)
         abundances = result.col_effects.to_dict()
         # Store residuals
@@ -745,16 +778,13 @@ def _process_single_protein(
             str(p): result.residuals.loc[p].to_dict() for p in result.residuals.index
         }
     elif config.method == "topn":
-        # Top N by median abundance
+        # Top N by median abundance, then sum in linear space
         median_per_peptide = matrix.median(axis=1)
         top_peptides = median_per_peptide.nlargest(config.topn_n).index.tolist()
-        abundances = matrix.loc[top_peptides].mean(axis=0).to_dict()
+        abundances = sum_linear(matrix.loc[top_peptides])
     elif config.method == "sum":
-        # Simple sum (on log scale, this is like geometric mean)
-        # More commonly: convert to linear, sum, back to log
-        linear = 2**matrix
-        summed = linear.sum(axis=0)
-        abundances = np.log2(summed.clip(lower=1)).to_dict()
+        # Sum all peptides in linear space
+        abundances = sum_linear(matrix)
     else:
         # Fallback to mean
         abundances = matrix.mean(axis=0).to_dict()

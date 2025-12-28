@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VarianceModelParams:
-    """Parameters for the signal variance model.
+    """Parameters for the signal variance model (legacy).
 
     Variance model based on mass spectrometry noise sources:
         var(signal) = α·signal + β·signal² + γ + δ·quality_penalty
@@ -44,6 +44,9 @@ class VarianceModelParams:
 
     For high-intensity signals, β dominates (constant CV).
     For low-intensity signals, α/signal dominates (CV increases).
+
+    NOTE: This is the legacy variance model. For the new quality-weighted rollup,
+    use QualityWeightParams instead.
     """
 
     # Shot noise coefficient (Poisson): var ∝ signal
@@ -63,6 +66,57 @@ class VarianceModelParams:
 
     # Coelution penalty (added to variance when not coeluting)
     coelution_penalty: float = 10.0
+
+
+@dataclass
+class QualityWeightParams:
+    """Parameters for quality-weighted transition aggregation.
+
+    Weight model based on three quality signals:
+        w_t = (intensity_t)^α × (shape_corr_t)^β × (1/shape_corr_cv_t)^δ × exp(-γ × residual_t²)
+
+    Where:
+    - intensity_t: Mean intensity of transition across samples (sqrt for default)
+    - shape_corr_t: Mean or median shape correlation across samples
+    - shape_corr_cv_t: CV of shape correlation (high CV = unreliable)
+    - residual_t: Residual from preliminary median polish (large = outlier)
+
+    The exponents control how much each factor influences the weight:
+    - α = 0.5: sqrt(intensity) weighting (default)
+    - β > 0: Higher shape correlation = higher weight
+    - δ > 0: Lower CV of shape correlation = higher weight
+    - γ > 0: Larger residuals = lower weight (exponential decay)
+
+    Parameters are learned from reference samples by minimizing CV.
+    Validated on pool samples to ensure generalization.
+    Falls back to raw sum if quality-weighted rollup doesn't improve.
+    """
+
+    # Intensity exponent: w ∝ intensity^alpha
+    # 0.5 = sqrt weighting (default), 0 = ignore intensity, 1 = linear
+    alpha: float = 0.5
+
+    # Shape correlation exponent: w ∝ shape_corr^beta
+    # Higher = more weight on high-correlation transitions
+    beta: float = 1.0
+
+    # Residual penalty: w ∝ exp(-gamma * residual^2)
+    # Higher = more penalty for outlier transitions
+    gamma: float = 1.0
+
+    # Shape correlation CV exponent: w ∝ (1/shape_corr_cv)^delta
+    # Higher = more penalty for variable shape correlation
+    delta: float = 0.5
+
+    # Aggregation method for shape correlation: 'mean' or 'median'
+    shape_corr_agg: str = "median"
+
+    # Fallback method if quality-weighted doesn't improve: 'sum' or 'median_polish'
+    fallback_method: str = "sum"
+
+    # Minimum improvement in pool CV required to use learned weights (percent)
+    # If improvement < this threshold, fall back to fallback_method
+    min_improvement_pct: float = 5.0
 
 
 @dataclass
@@ -177,6 +231,410 @@ def compute_transition_weights(
     return pd.Series(weights, index=intensities.index, name="weight")
 
 
+# ============================================================================
+# New Quality-Weighted Rollup (v2) - uses intensity, shape_corr, and residuals
+# ============================================================================
+
+@dataclass
+class TransitionQualityMetrics:
+    """Per-transition quality metrics for weight calculation.
+
+    Computed once per peptide, then used for weight calculation.
+    """
+
+    # Mean intensity across samples (linear scale)
+    mean_intensity: pd.Series
+
+    # Shape correlation aggregated across samples (mean or median)
+    shape_corr: pd.Series
+
+    # CV of shape correlation across samples (higher = less reliable)
+    shape_corr_cv: pd.Series
+
+    # Residuals from preliminary median polish (large = outlier)
+    residuals_mad: pd.Series  # Median absolute deviation of residuals per transition
+
+
+def compute_transition_quality_metrics(
+    intensity_matrix: pd.DataFrame,
+    shape_corr_matrix: pd.DataFrame,
+    shape_corr_agg: str = "median",
+) -> TransitionQualityMetrics:
+    """Compute quality metrics for each transition in a peptide.
+
+    Args:
+        intensity_matrix: Transition x sample intensity matrix (LINEAR scale)
+        shape_corr_matrix: Transition x sample shape correlation matrix (0-1)
+        shape_corr_agg: How to aggregate shape correlation ('mean' or 'median')
+
+    Returns:
+        TransitionQualityMetrics with per-transition quality measures
+    """
+    # Mean intensity per transition (linear scale)
+    mean_intensity = intensity_matrix.mean(axis=1)
+
+    # Shape correlation aggregated across samples
+    if shape_corr_agg == "median":
+        shape_corr = shape_corr_matrix.median(axis=1)
+    else:
+        shape_corr = shape_corr_matrix.mean(axis=1)
+
+    # CV of shape correlation (std/mean)
+    # High CV = shape correlation varies across samples = unreliable
+    shape_corr_mean = shape_corr_matrix.mean(axis=1)
+    shape_corr_std = shape_corr_matrix.std(axis=1)
+    # Avoid division by zero; if mean is 0, CV is 0
+    shape_corr_cv = np.where(
+        shape_corr_mean.abs() > 0.001,
+        shape_corr_std / shape_corr_mean.abs(),
+        0.0
+    )
+    shape_corr_cv = pd.Series(shape_corr_cv, index=intensity_matrix.index)
+
+    # Residuals will be computed separately after median polish
+    # Initialize with zeros (will be updated after median polish)
+    residuals_mad = pd.Series(0.0, index=intensity_matrix.index)
+
+    return TransitionQualityMetrics(
+        mean_intensity=mean_intensity,
+        shape_corr=shape_corr,
+        shape_corr_cv=shape_corr_cv,
+        residuals_mad=residuals_mad,
+    )
+
+
+def compute_transition_residuals(
+    intensity_matrix: pd.DataFrame,
+) -> pd.Series:
+    """Compute transition residuals using median polish.
+
+    Runs a single median polish on the transition x sample matrix
+    and returns the median absolute deviation (MAD) of residuals
+    per transition. Large MAD = outlier transition to downweight.
+
+    Args:
+        intensity_matrix: Transition x sample matrix (LOG2 scale)
+
+    Returns:
+        Series with MAD of residuals per transition
+    """
+    from .rollup import tukey_median_polish
+
+    if len(intensity_matrix) < 2:
+        return pd.Series(0.0, index=intensity_matrix.index)
+
+    try:
+        result = tukey_median_polish(intensity_matrix)
+        # Compute MAD of residuals per transition (across samples)
+        residuals_mad = result.residuals.abs().median(axis=1)
+        return residuals_mad
+    except Exception:
+        # If median polish fails, return zeros (no penalty)
+        return pd.Series(0.0, index=intensity_matrix.index)
+
+
+def compute_quality_weights(
+    metrics: TransitionQualityMetrics,
+    residuals_mad: pd.Series,
+    params: QualityWeightParams,
+) -> pd.Series:
+    """Compute quality-based weights for transitions.
+
+    Weight formula:
+        w_t = intensity^alpha * shape_corr^beta * cv_penalty^delta * exp(-gamma * residual^2)
+
+    Args:
+        metrics: Quality metrics per transition
+        residuals_mad: MAD of residuals from median polish
+        params: Weight model parameters
+
+    Returns:
+        Series of weights per transition (not normalized)
+    """
+    # Intensity contribution: intensity^alpha
+    # Use max(intensity, 1) to avoid zero weights
+    intensity_contrib = np.power(
+        np.maximum(metrics.mean_intensity.values, 1.0),
+        params.alpha
+    )
+
+    # Shape correlation contribution: shape_corr^beta
+    # Clip to [0, 1] range
+    shape_corr_contrib = np.power(
+        np.clip(metrics.shape_corr.values, 0.001, 1.0),
+        params.beta
+    )
+
+    # Shape correlation CV penalty: (1/(1+cv))^delta
+    # Higher CV = lower weight
+    cv_penalty = np.power(
+        1.0 / (1.0 + metrics.shape_corr_cv.values),
+        params.delta
+    )
+
+    # Residual penalty: exp(-gamma * residual_mad^2)
+    # Large residuals = exponential decay of weight
+    residual_penalty = np.exp(-params.gamma * np.power(residuals_mad.values, 2))
+
+    # Combined weight
+    weights = intensity_contrib * shape_corr_contrib * cv_penalty * residual_penalty
+
+    return pd.Series(weights, index=metrics.mean_intensity.index, name="quality_weight")
+
+
+def aggregate_transitions_quality_weighted(
+    intensity_matrix: pd.DataFrame,
+    weights: pd.Series,
+    min_transitions: int = 3,
+) -> tuple[pd.Series, pd.Series, int]:
+    """Aggregate transition intensities using quality-weighted sum.
+
+    Performs a WEIGHTED SUM in linear space (like sum method), not a weighted mean.
+    The weights modulate each transition's contribution to the total signal.
+
+    Algorithm:
+    1. Convert log2 intensities to linear
+    2. Multiply each transition's intensity by its weight
+    3. Sum weighted intensities
+    4. Convert back to log2
+
+    This is equivalent to: log2(sum(w_i * 2^x_i))
+    where w_i are quality weights and x_i are log2 intensities.
+
+    Args:
+        intensity_matrix: Transition x sample matrix (LOG2 scale)
+        weights: Per-transition quality weights (NOT normalized)
+        min_transitions: Minimum transitions required
+
+    Returns:
+        Tuple of (peptide abundances in LOG2, uncertainties, n_transitions_used)
+    """
+    n_transitions = len(intensity_matrix)
+
+    if n_transitions < min_transitions:
+        return (
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            0,
+        )
+
+    # Normalize weights to sum to n_transitions
+    # This preserves the sum behavior: if all weights equal, result = sum
+    weight_sum = weights.sum()
+    if weight_sum <= 0:
+        # All weights are zero - fall back to equal weights
+        normalized_weights = pd.Series(1.0, index=weights.index)
+    else:
+        # Scale so weights sum to n_transitions (preserves sum magnitude)
+        normalized_weights = weights * (n_transitions / weight_sum)
+
+    # Convert to linear space
+    linear_matrix = 2 ** intensity_matrix
+
+    abundances = pd.Series(index=intensity_matrix.columns, dtype=float)
+    uncertainties = pd.Series(index=intensity_matrix.columns, dtype=float)
+
+    for sample in intensity_matrix.columns:
+        linear_values = linear_matrix[sample]
+        valid = ~linear_values.isna()
+
+        if valid.sum() < min_transitions:
+            abundances[sample] = np.nan
+            uncertainties[sample] = np.nan
+            continue
+
+        valid_weights = normalized_weights[valid]
+        valid_linear = linear_values[valid]
+
+        # Weighted sum in linear space
+        weighted_sum = (valid_weights * valid_linear).sum()
+
+        # Convert back to log2 (clip to avoid log(0))
+        abundances[sample] = np.log2(max(weighted_sum, 1.0))
+
+        # Uncertainty: use CV of weighted contributions
+        contributions = valid_weights * valid_linear
+        if len(contributions) > 1 and contributions.sum() > 0:
+            cv = contributions.std() / contributions.mean()
+            uncertainties[sample] = cv
+        else:
+            uncertainties[sample] = np.nan
+
+    return abundances, uncertainties, n_transitions
+
+
+def rollup_peptide_quality_weighted(
+    intensity_matrix: pd.DataFrame,
+    shape_corr_matrix: pd.DataFrame,
+    params: QualityWeightParams,
+    min_transitions: int = 3,
+) -> tuple[pd.Series, pd.Series, pd.Series, int]:
+    """Roll up transitions to peptide using quality weights.
+
+    This is the complete quality-weighted rollup for a single peptide.
+    Steps:
+    1. Compute quality metrics (intensity, shape_corr, shape_corr_cv)
+    2. If gamma > 0, run median polish to get residuals (expensive)
+    3. Compute quality weights
+    4. Aggregate transitions with weights
+
+    Args:
+        intensity_matrix: Transition x sample matrix (LOG2 scale)
+        shape_corr_matrix: Transition x sample shape correlation (0-1)
+        params: Quality weight parameters
+        min_transitions: Minimum transitions required
+
+    Returns:
+        Tuple of (abundances, uncertainties, weights, n_transitions_used)
+    """
+    n_transitions = len(intensity_matrix)
+
+    if n_transitions < min_transitions:
+        return (
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(dtype=float),
+            0,
+        )
+
+    # Step 1: Compute quality metrics using LINEAR intensities
+    linear_intensity = 2 ** intensity_matrix  # Convert back to linear
+    metrics = compute_transition_quality_metrics(
+        linear_intensity,
+        shape_corr_matrix,
+        shape_corr_agg=params.shape_corr_agg,
+    )
+
+    # Step 2: Compute residuals from median polish (only if gamma > 0)
+    # This is the expensive step - skip if not needed
+    if params.gamma > 0:
+        residuals_mad = compute_transition_residuals(intensity_matrix)
+    else:
+        # No residual penalty - use zeros
+        residuals_mad = pd.Series(0.0, index=intensity_matrix.index)
+
+    # Step 3: Compute quality weights
+    weights = compute_quality_weights(metrics, residuals_mad, params)
+
+    # Step 4: Aggregate with weights
+    abundances, uncertainties, n_used = aggregate_transitions_quality_weighted(
+        intensity_matrix, weights, min_transitions
+    )
+
+    return abundances, uncertainties, weights, n_used
+
+
+def rollup_peptide_topn(
+    intensity_matrix: pd.DataFrame,
+    shape_corr_matrix: pd.DataFrame,
+    n_transitions: int = 3,
+    selection_method: str = "correlation",
+    weighting: str = "sqrt",
+    min_transitions: int = 3,
+) -> tuple[pd.Series, pd.Series, pd.Series, int]:
+    """Roll up transitions using Top-N selection.
+
+    Selects the same N transitions for ALL replicates based on either:
+    - correlation: transitions with highest median shape correlation
+    - intensity: transitions with highest mean intensity
+
+    Then aggregates using either:
+    - sum: simple sum of selected transitions
+    - sqrt: sqrt(intensity)-weighted sum
+
+    Args:
+        intensity_matrix: Transition x sample matrix (LOG2 scale)
+        shape_corr_matrix: Transition x sample shape correlation (0-1)
+        n_transitions: Number of transitions to select (default: 3)
+        selection_method: How to select transitions - "correlation" or "intensity"
+        weighting: How to weight selected transitions - "sum" or "sqrt"
+        min_transitions: Minimum transitions required
+
+    Returns:
+        Tuple of (abundances, uncertainties, weights, n_transitions_used)
+    """
+    n_available = len(intensity_matrix)
+
+    if n_available < min_transitions:
+        return (
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(dtype=float),
+            0,
+        )
+
+    # Convert to linear for intensity calculations
+    linear_intensity = 2 ** intensity_matrix
+
+    # Step 1: Score and rank transitions
+    if selection_method == "correlation":
+        # Score by median shape correlation across samples
+        scores = shape_corr_matrix.median(axis=1)
+    else:  # intensity
+        # Score by mean intensity across samples
+        scores = linear_intensity.mean(axis=1)
+
+    # Step 2: Select top N transitions (same for ALL samples)
+    n_select = min(n_transitions, n_available)
+    selected_transitions = scores.nlargest(n_select).index.tolist()
+
+    # Subset to selected transitions only
+    selected_intensity = intensity_matrix.loc[selected_transitions]
+    selected_linear = linear_intensity.loc[selected_transitions]
+
+    # Step 3: Compute weights
+    if weighting == "sum":
+        # Equal weights = simple sum
+        weights = pd.Series(1.0, index=selected_transitions)
+    else:  # sqrt
+        # Weight by sqrt of mean intensity
+        mean_intensity = selected_linear.mean(axis=1)
+        weights = np.sqrt(np.maximum(mean_intensity.values, 1.0))
+        weights = pd.Series(weights, index=selected_transitions)
+
+    # Step 4: Aggregate - weighted sum in linear space
+    # Normalize weights to sum to n_select (preserve sum magnitude)
+    weight_sum = weights.sum()
+    if weight_sum > 0:
+        normalized_weights = weights * (n_select / weight_sum)
+    else:
+        normalized_weights = pd.Series(1.0, index=selected_transitions)
+
+    abundances = pd.Series(index=intensity_matrix.columns, dtype=float)
+    uncertainties = pd.Series(index=intensity_matrix.columns, dtype=float)
+
+    for sample in intensity_matrix.columns:
+        linear_values = selected_linear[sample]
+        valid = ~linear_values.isna()
+
+        if valid.sum() < min_transitions:
+            abundances[sample] = np.nan
+            uncertainties[sample] = np.nan
+            continue
+
+        valid_weights = normalized_weights[valid]
+        valid_linear = linear_values[valid]
+
+        # Weighted sum in linear space
+        weighted_sum = (valid_weights * valid_linear).sum()
+
+        # Convert back to log2
+        abundances[sample] = np.log2(max(weighted_sum, 1.0))
+
+        # Uncertainty: CV of contributions
+        contributions = valid_weights * valid_linear
+        if len(contributions) > 1 and contributions.sum() > 0:
+            uncertainties[sample] = contributions.std() / contributions.mean()
+        else:
+            uncertainties[sample] = np.nan
+
+    # Return full weight vector (zeros for non-selected)
+    full_weights = pd.Series(0.0, index=intensity_matrix.index)
+    full_weights.loc[selected_transitions] = weights.values
+
+    return abundances, uncertainties, full_weights, n_select
+
+
 def aggregate_transitions_weighted(
     intensities: pd.DataFrame,
     weights: pd.Series,
@@ -185,7 +643,7 @@ def aggregate_transitions_weighted(
     """Aggregate transition intensities using quality-based weights.
 
     Args:
-        intensities: Transition × replicate matrix (log2 scale)
+        intensities: Transition x replicate matrix (log2 scale)
         weights: Per-transition weights
         min_transitions: Minimum transitions required
 
@@ -575,3 +1033,560 @@ def learn_variance_model(
     logger.info(f"  Median CV: {initial_cv:.4f} → {final_cv:.4f}")
 
     return optimized
+
+
+# ============================================================================
+# New Quality Weight Learning (v2)
+# ============================================================================
+
+@dataclass
+class QualityWeightResult:
+    """Result of quality weight learning and validation.
+
+    Contains learned parameters, CV metrics, and decision on whether to use
+    quality-weighted rollup or fall back.
+    """
+
+    params: QualityWeightParams
+    reference_cv_before: float  # CV with equal weights (sum)
+    reference_cv_after: float   # CV with learned weights
+    pool_cv_before: float       # Validation CV with sum
+    pool_cv_after: float        # Validation CV with learned weights
+    use_quality_weights: bool   # Whether to use quality weights or fall back
+    fallback_reason: str | None  # Reason for fallback if not using quality weights
+
+
+def _compute_median_cv_linear(
+    abundances: pd.DataFrame,
+) -> float:
+    """Compute median CV across features (peptides/proteins) on LINEAR scale.
+
+    CRITICAL: CVs must always be calculated on linear scale data.
+    Input is on LOG2 scale, so we convert to linear first.
+
+    Args:
+        abundances: Feature x sample matrix (LOG2 scale)
+
+    Returns:
+        Median CV as a decimal (not percentage)
+    """
+    # Convert to linear scale
+    linear = 2 ** abundances
+
+    # Calculate CV per feature (across samples)
+    means = linear.mean(axis=1)
+    stds = linear.std(axis=1)
+
+    # Filter out features with near-zero mean
+    valid = means > 1.0  # At least 1 in linear scale
+    if valid.sum() == 0:
+        return np.nan
+
+    cvs = stds[valid] / means[valid]
+    return cvs.median()
+
+
+@dataclass
+class _PrecomputedPeptideMetrics:
+    """Pre-computed metrics for a single peptide for fast weight learning."""
+    # Intensity matrix (log2 scale): n_transitions x n_samples
+    intensity_log2: np.ndarray
+    # Mean intensity per transition (linear scale): n_transitions
+    mean_intensity_linear: np.ndarray
+    # Shape correlation per transition (aggregated): n_transitions
+    shape_corr: np.ndarray
+    # CV of shape correlation per transition: n_transitions
+    shape_corr_cv: np.ndarray
+    # Residual MAD per transition: n_transitions
+    residuals_mad: np.ndarray
+    # Number of valid transitions
+    n_transitions: int
+
+
+def _precompute_peptide_metrics(
+    data: pd.DataFrame,
+    sample_list: list[str],
+    peptide_col: str,
+    transition_col: str,
+    sample_col: str,
+    abundance_col: str,
+    shape_corr_col: str,
+    shape_corr_agg: str = "median",
+    min_transitions: int = 3,
+) -> dict[str, _PrecomputedPeptideMetrics]:
+    """Pre-compute quality metrics for all peptides (one-time cost).
+
+    This enables fast weight learning by computing expensive operations once.
+
+    Args:
+        data: Transition-level DataFrame (LINEAR scale intensities)
+        sample_list: Samples to include
+        peptide_col, transition_col, sample_col, abundance_col, shape_corr_col: Column names
+        shape_corr_agg: How to aggregate shape correlation ('mean' or 'median')
+        min_transitions: Minimum transitions required
+
+    Returns:
+        Dict mapping peptide name to pre-computed metrics
+    """
+    # Filter to specified samples
+    filtered = data[data[sample_col].isin(sample_list)].copy()
+    peptides = filtered[peptide_col].unique()
+
+    results = {}
+
+    for peptide in peptides:
+        pep_data = filtered[filtered[peptide_col] == peptide]
+
+        # Pivot to transition x sample (intensity)
+        intensity_pivot = pep_data.pivot_table(
+            index=transition_col, columns=sample_col, values=abundance_col, aggfunc="first"
+        )
+
+        # Fill missing samples
+        for s in sample_list:
+            if s not in intensity_pivot.columns:
+                intensity_pivot[s] = np.nan
+        intensity_pivot = intensity_pivot[sample_list]
+
+        n_trans = len(intensity_pivot)
+        if n_trans < min_transitions:
+            continue
+
+        # Log2 transform
+        intensity_log2 = np.log2(np.maximum(intensity_pivot.values, 1.0))
+
+        # Mean intensity per transition (linear scale)
+        linear_intensity = intensity_pivot.values
+        mean_intensity_linear = np.nanmean(linear_intensity, axis=1)
+
+        # Shape correlation
+        if shape_corr_col in pep_data.columns:
+            shape_pivot = pep_data.pivot_table(
+                index=transition_col, columns=sample_col, values=shape_corr_col, aggfunc="first"
+            )
+            shape_pivot = shape_pivot.reindex(
+                index=intensity_pivot.index, columns=sample_list
+            ).fillna(1.0)
+            shape_vals = shape_pivot.values
+
+            if shape_corr_agg == "median":
+                shape_corr = np.nanmedian(shape_vals, axis=1)
+            else:
+                shape_corr = np.nanmean(shape_vals, axis=1)
+
+            # CV of shape correlation
+            shape_std = np.nanstd(shape_vals, axis=1)
+            shape_mean = np.nanmean(shape_vals, axis=1)
+            shape_corr_cv = np.divide(
+                shape_std, shape_mean,
+                out=np.zeros_like(shape_std),
+                where=shape_mean > 0.01
+            )
+        else:
+            shape_corr = np.ones(n_trans)
+            shape_corr_cv = np.zeros(n_trans)
+
+        # Compute residuals from median polish
+        try:
+            from .rollup import tukey_median_polish
+            polish_result = tukey_median_polish(
+                pd.DataFrame(intensity_log2, columns=sample_list)
+            )
+            # MAD of residuals per transition (row)
+            residuals_mad = np.median(np.abs(polish_result.residuals.values), axis=1)
+        except Exception:
+            residuals_mad = np.zeros(n_trans)
+
+        results[peptide] = _PrecomputedPeptideMetrics(
+            intensity_log2=intensity_log2,
+            mean_intensity_linear=mean_intensity_linear,
+            shape_corr=np.clip(shape_corr, 0.001, 1.0),
+            shape_corr_cv=shape_corr_cv,
+            residuals_mad=residuals_mad,
+            n_transitions=n_trans,
+        )
+
+    return results
+
+
+def _rollup_with_params_fast(
+    precomputed: dict[str, _PrecomputedPeptideMetrics],
+    params: QualityWeightParams,
+) -> pd.DataFrame:
+    """Fast rollup using pre-computed metrics.
+
+    Only recomputes weights and aggregation - no pivoting or median polish.
+
+    Args:
+        precomputed: Pre-computed metrics for each peptide
+        params: Quality weight parameters
+
+    Returns:
+        Peptide x sample matrix of abundances (LOG2 scale)
+    """
+    if not precomputed:
+        return pd.DataFrame()
+
+    # Get sample count from first peptide
+    first = next(iter(precomputed.values()))
+    n_samples = first.intensity_log2.shape[1]
+
+    results = {}
+
+    for peptide, metrics in precomputed.items():
+        # Compute weights from pre-computed metrics
+        intensity_contrib = np.power(
+            np.maximum(metrics.mean_intensity_linear, 1.0),
+            params.alpha
+        )
+        shape_corr_contrib = np.power(metrics.shape_corr, params.beta)
+        cv_penalty = np.power(1.0 / (1.0 + metrics.shape_corr_cv), params.delta)
+        residual_penalty = np.exp(-params.gamma * np.power(metrics.residuals_mad, 2))
+
+        weights = intensity_contrib * shape_corr_contrib * cv_penalty * residual_penalty
+
+        # Normalize weights to sum to n_transitions (preserves sum magnitude)
+        weight_sum = weights.sum()
+        if weight_sum <= 0:
+            normalized_weights = np.ones_like(weights)
+        else:
+            normalized_weights = weights * (metrics.n_transitions / weight_sum)
+
+        # Weighted sum in linear space for each sample
+        linear_matrix = 2 ** metrics.intensity_log2
+        abundances = np.zeros(n_samples)
+
+        for i in range(n_samples):
+            col = linear_matrix[:, i]
+            valid = ~np.isnan(col)
+            if valid.sum() >= 3:
+                weighted_sum = (normalized_weights[valid] * col[valid]).sum()
+                abundances[i] = np.log2(max(weighted_sum, 1.0))
+            else:
+                abundances[i] = np.nan
+
+        results[peptide] = abundances
+
+    return pd.DataFrame.from_dict(results, orient='index')
+
+
+def _rollup_all_peptides_quality_weighted(
+    data: pd.DataFrame,
+    sample_list: list[str],
+    params: QualityWeightParams,
+    peptide_col: str = "peptide_modified",
+    transition_col: str = "fragment_ion",
+    sample_col: str = "replicate_name",
+    abundance_col: str = "area",
+    shape_corr_col: str = "shape_correlation",
+    min_transitions: int = 3,
+) -> pd.DataFrame:
+    """Roll up all peptides using quality weights.
+
+    Args:
+        data: Transition-level DataFrame (LINEAR scale intensities)
+        sample_list: List of samples to include
+        params: Quality weight parameters
+        peptide_col, transition_col, sample_col, abundance_col, shape_corr_col: Column names
+        min_transitions: Minimum transitions per peptide
+
+    Returns:
+        Peptide x sample matrix of abundances (LOG2 scale)
+    """
+    # Filter to specified samples
+    filtered_data = data[data[sample_col].isin(sample_list)].copy()
+
+    peptides = filtered_data[peptide_col].unique()
+    peptide_abundances = pd.DataFrame(index=peptides, columns=sample_list, dtype=float)
+
+    for peptide in peptides:
+        pep_data = filtered_data[filtered_data[peptide_col] == peptide]
+
+        # Pivot to transition x sample
+        intensity_matrix = pep_data.pivot_table(
+            index=transition_col, columns=sample_col, values=abundance_col, aggfunc="first"
+        )
+
+        # Fill missing samples
+        for sample in sample_list:
+            if sample not in intensity_matrix.columns:
+                intensity_matrix[sample] = np.nan
+        intensity_matrix = intensity_matrix[sample_list]
+
+        # Log transform
+        intensity_matrix = np.log2(intensity_matrix.clip(lower=1))
+
+        # Shape correlation matrix
+        if shape_corr_col in pep_data.columns:
+            shape_corr_matrix = pep_data.pivot_table(
+                index=transition_col, columns=sample_col, values=shape_corr_col, aggfunc="first"
+            )
+            # Align with intensity_matrix (same rows and columns)
+            shape_corr_matrix = shape_corr_matrix.reindex(
+                index=intensity_matrix.index, columns=sample_list
+            ).fillna(1.0)
+        else:
+            shape_corr_matrix = pd.DataFrame(
+                1.0, index=intensity_matrix.index, columns=intensity_matrix.columns
+            )
+
+        # Roll up with quality weights
+        abundances, _, _, _ = rollup_peptide_quality_weighted(
+            intensity_matrix, shape_corr_matrix, params, min_transitions
+        )
+        peptide_abundances.loc[peptide] = abundances
+
+    return peptide_abundances
+
+
+def _rollup_all_peptides_sum(
+    data: pd.DataFrame,
+    sample_list: list[str],
+    peptide_col: str = "peptide_modified",
+    transition_col: str = "fragment_ion",
+    sample_col: str = "replicate_name",
+    abundance_col: str = "area",
+    min_transitions: int = 3,
+) -> pd.DataFrame:
+    """Roll up all peptides using simple sum (vectorized).
+
+    Args:
+        data: Transition-level DataFrame (LINEAR scale intensities)
+        sample_list: List of samples to include
+        peptide_col, transition_col, sample_col, abundance_col: Column names
+        min_transitions: Minimum transitions per peptide
+
+    Returns:
+        Peptide x sample matrix of abundances (LOG2 scale)
+
+    """
+    # Filter to specified samples
+    filtered_data = data[data[sample_col].isin(sample_list)].copy()
+
+    # Vectorized: sum by peptide and sample
+    summed = filtered_data.groupby([peptide_col, sample_col])[abundance_col].sum()
+
+    # Count transitions per peptide-sample
+    n_trans = filtered_data.groupby([peptide_col, sample_col])[transition_col].count()
+
+    # Pivot to peptide x sample matrix
+    peptide_abundances = summed.unstack(level=sample_col)
+
+    # Ensure all samples are present
+    for sample in sample_list:
+        if sample not in peptide_abundances.columns:
+            peptide_abundances[sample] = np.nan
+    peptide_abundances = peptide_abundances[sample_list]
+
+    # Apply minimum transitions filter
+    n_trans_matrix = n_trans.unstack(level=sample_col).reindex(
+        index=peptide_abundances.index, columns=sample_list
+    ).fillna(0)
+    peptide_abundances = peptide_abundances.where(n_trans_matrix >= min_transitions)
+
+    # Convert to log2 scale
+    peptide_abundances = np.log2(peptide_abundances.clip(lower=1))
+
+    return peptide_abundances
+
+
+def learn_quality_weights(
+    data: pd.DataFrame,
+    reference_samples: list[str],
+    pool_samples: list[str],
+    peptide_col: str = "peptide_modified",
+    transition_col: str = "fragment_ion",
+    sample_col: str = "replicate_name",
+    abundance_col: str = "area",
+    shape_corr_col: str = "shape_correlation",
+    n_iterations: int = 100,
+    initial_params: QualityWeightParams | None = None,
+) -> QualityWeightResult:
+    """Learn quality weight parameters from reference samples, validate on pool.
+
+    EFFICIENT IMPLEMENTATION: Pre-computes quality metrics once, then uses
+    fast vectorized rollup during optimization.
+
+    Uses reference samples (technical replicates) to optimize weight parameters
+    by minimizing CV. Then validates on pool samples (independent technical
+    replicates) to ensure generalization.
+
+    If improvement on pool samples is less than min_improvement_pct, falls back
+    to the fallback_method (default: sum).
+
+    Args:
+        data: Transition-level DataFrame (LINEAR scale intensities)
+        reference_samples: List of reference sample names (for learning)
+        pool_samples: List of pool sample names (for validation)
+        peptide_col, transition_col, sample_col, abundance_col, shape_corr_col: Column names
+        n_iterations: Maximum optimization iterations
+        initial_params: Starting parameters (uses defaults if None)
+
+    Returns:
+        QualityWeightResult with learned params and validation metrics
+    """
+    from scipy.optimize import minimize
+
+    logger.info("Learning quality weight parameters (efficient)")
+    logger.info(f"  Reference samples: {len(reference_samples)}")
+    logger.info(f"  Pool samples: {len(pool_samples)}")
+
+    if initial_params is None:
+        initial_params = QualityWeightParams()
+
+    if len(reference_samples) < 2:
+        logger.warning(
+            f"Need at least 2 reference samples, got {len(reference_samples)}. "
+            "Using default parameters."
+        )
+        return QualityWeightResult(
+            params=initial_params,
+            reference_cv_before=np.nan,
+            reference_cv_after=np.nan,
+            pool_cv_before=np.nan,
+            pool_cv_after=np.nan,
+            use_quality_weights=False,
+            fallback_reason="Insufficient reference samples",
+        )
+
+    # Calculate baseline CV using sum (fallback method)
+    logger.info("  Computing baseline CV (sum method)...")
+    ref_abundances_sum = _rollup_all_peptides_sum(
+        data, reference_samples, peptide_col, transition_col, sample_col, abundance_col
+    )
+    reference_cv_before = _compute_median_cv_linear(ref_abundances_sum)
+    logger.info(f"  Reference CV (sum): {reference_cv_before:.4f}")
+
+    pool_cv_before = np.nan
+    if len(pool_samples) >= 2:
+        pool_abundances_sum = _rollup_all_peptides_sum(
+            data, pool_samples, peptide_col, transition_col, sample_col, abundance_col
+        )
+        pool_cv_before = _compute_median_cv_linear(pool_abundances_sum)
+        logger.info(f"  Pool CV (sum): {pool_cv_before:.4f}")
+
+    # PRE-COMPUTE metrics for reference samples (one-time cost)
+    logger.info("  Pre-computing quality metrics for reference samples...")
+    ref_metrics = _precompute_peptide_metrics(
+        data, reference_samples, peptide_col, transition_col,
+        sample_col, abundance_col, shape_corr_col,
+        shape_corr_agg=initial_params.shape_corr_agg,
+    )
+    logger.info(f"  Pre-computed metrics for {len(ref_metrics)} peptides")
+
+    # Track optimization progress
+    iteration_count = [0]
+
+    def objective(params_array):
+        """Objective: minimize median CV on reference samples."""
+        params = QualityWeightParams(
+            alpha=max(0.0, min(2.0, params_array[0])),
+            beta=max(0.0, min(5.0, params_array[1])),
+            gamma=max(0.0, min(10.0, params_array[2])),
+            delta=max(0.0, min(5.0, params_array[3])),
+            shape_corr_agg=initial_params.shape_corr_agg,
+            fallback_method=initial_params.fallback_method,
+            min_improvement_pct=initial_params.min_improvement_pct,
+        )
+
+        try:
+            # FAST rollup using pre-computed metrics
+            abundances = _rollup_with_params_fast(ref_metrics, params)
+            cv = _compute_median_cv_linear(abundances)
+            iteration_count[0] += 1
+            return cv if np.isfinite(cv) else 1.0
+        except Exception:
+            return 1.0
+
+    # Initial parameters
+    x0 = [initial_params.alpha, initial_params.beta, initial_params.gamma, initial_params.delta]
+
+    # Bounds
+    bounds = [
+        (0.0, 2.0),   # alpha (intensity exponent)
+        (0.0, 5.0),   # beta (shape_corr exponent)
+        (0.0, 10.0),  # gamma (residual penalty)
+        (0.0, 5.0),   # delta (shape_corr_cv penalty)
+    ]
+
+    logger.info("  Optimizing quality weight parameters...")
+    result = minimize(
+        objective,
+        x0,
+        method="L-BFGS-B",
+        bounds=bounds,
+        options={"maxiter": n_iterations},
+    )
+    logger.info(f"  Optimization completed in {iteration_count[0]} evaluations")
+
+    # Extract optimized parameters
+    opt = result.x
+    optimized_params = QualityWeightParams(
+        alpha=max(0.0, min(2.0, opt[0])),
+        beta=max(0.0, min(5.0, opt[1])),
+        gamma=max(0.0, min(10.0, opt[2])),
+        delta=max(0.0, min(5.0, opt[3])),
+        shape_corr_agg=initial_params.shape_corr_agg,
+        fallback_method=initial_params.fallback_method,
+        min_improvement_pct=initial_params.min_improvement_pct,
+    )
+
+    # Calculate final CV on reference (use fast rollup)
+    ref_abundances_qw = _rollup_with_params_fast(ref_metrics, optimized_params)
+    reference_cv_after = _compute_median_cv_linear(ref_abundances_qw)
+
+    logger.info("  Optimized parameters:")
+    logger.info(f"    alpha (intensity): {optimized_params.alpha:.3f}")
+    logger.info(f"    beta (shape_corr): {optimized_params.beta:.3f}")
+    logger.info(f"    gamma (residual): {optimized_params.gamma:.3f}")
+    logger.info(f"    delta (shape_corr_cv): {optimized_params.delta:.3f}")
+    logger.info(f"  Reference CV: {reference_cv_before:.4f} -> {reference_cv_after:.4f}")
+
+    # Validate on pool samples
+    pool_cv_after = np.nan
+    use_quality_weights = True
+    fallback_reason = None
+
+    if len(pool_samples) >= 2:
+        # Pre-compute metrics for pool samples
+        pool_metrics = _precompute_peptide_metrics(
+            data, pool_samples, peptide_col, transition_col,
+            sample_col, abundance_col, shape_corr_col,
+            shape_corr_agg=initial_params.shape_corr_agg,
+        )
+        pool_abundances_qw = _rollup_with_params_fast(pool_metrics, optimized_params)
+        pool_cv_after = _compute_median_cv_linear(pool_abundances_qw)
+        logger.info(f"  Pool CV: {pool_cv_before:.4f} -> {pool_cv_after:.4f}")
+
+        # Check if improvement is sufficient
+        if pool_cv_before > 0 and pool_cv_after > 0:
+            improvement_pct = (pool_cv_before - pool_cv_after) / pool_cv_before * 100
+            logger.info(f"  Pool improvement: {improvement_pct:.1f}%")
+
+            if improvement_pct < optimized_params.min_improvement_pct:
+                use_quality_weights = False
+                fallback_reason = (
+                    f"Pool improvement ({improvement_pct:.1f}%) below threshold "
+                    f"({optimized_params.min_improvement_pct}%)"
+                )
+                logger.warning(f"  {fallback_reason}")
+                logger.warning(f"  Falling back to: {optimized_params.fallback_method}")
+        elif pool_cv_after >= pool_cv_before:
+            use_quality_weights = False
+            fallback_reason = "Quality-weighted rollup did not improve pool CV"
+            logger.warning(f"  {fallback_reason}")
+    else:
+        logger.warning(
+            "  Not enough pool samples for validation - proceeding without validation"
+        )
+
+    return QualityWeightResult(
+        params=optimized_params,
+        reference_cv_before=reference_cv_before,
+        reference_cv_after=reference_cv_after,
+        pool_cv_before=pool_cv_before,
+        pool_cv_after=pool_cv_after,
+        use_quality_weights=use_quality_weights,
+        fallback_reason=fallback_reason,
+    )
+

@@ -72,9 +72,17 @@ __all__ = [
     "rollup_top_n",
     "tukey_median_polish",
     # transition_rollup
+    "QualityWeightParams",
+    "QualityWeightResult",
+    "TransitionQualityMetrics",
     "TransitionRollupResult",
     "VarianceModelParams",
+    "compute_quality_weights",
+    "compute_transition_quality_metrics",
+    "compute_transition_residuals",
+    "learn_quality_weights",
     "learn_variance_model",
+    "rollup_peptide_quality_weighted",
     "rollup_transitions_to_peptides",
     # validation
     "generate_comprehensive_qc_report",
@@ -172,9 +180,17 @@ from .rollup import (
     tukey_median_polish,
 )
 from .transition_rollup import (
+    QualityWeightParams,
+    QualityWeightResult,
+    TransitionQualityMetrics,
     TransitionRollupResult,
     VarianceModelParams,
+    compute_quality_weights,
+    compute_transition_quality_metrics,
+    compute_transition_residuals,
+    learn_quality_weights,
     learn_variance_model,
+    rollup_peptide_quality_weighted,
     rollup_transitions_to_peptides,
 )
 from .validation import (

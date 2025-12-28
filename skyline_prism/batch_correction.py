@@ -828,17 +828,17 @@ def combat_from_long(
 class BatchCorrectionEvaluation:
     """Evaluation metrics for batch correction quality.
 
-    Uses reference samples (inter-batch QC) and pool samples (intra-batch QC)
+    Uses reference samples (inter-batch QC) and QC samples (intra-batch QC)
     to assess whether batch correction improves data quality without overfitting.
 
     Attributes:
         reference_cv_before: Median CV of reference samples before correction
         reference_cv_after: Median CV of reference samples after correction
-        pool_cv_before: Median CV of pool samples before correction
-        pool_cv_after: Median CV of pool samples after correction
+        qc_cv_before: Median CV of QC samples before correction
+        qc_cv_after: Median CV of QC samples after correction
         reference_improvement: Fractional reduction in reference CV
-        pool_improvement: Fractional reduction in pool CV
-        overfitting_ratio: Ratio of reference to pool improvement (should be ~1)
+        qc_improvement: Fractional reduction in QC CV
+        overfitting_ratio: Ratio of reference to QC improvement (should be ~1)
         batch_variance_before: Variance of batch means before correction
         batch_variance_after: Variance of batch means after correction
         passed: Whether correction meets quality thresholds
@@ -848,10 +848,10 @@ class BatchCorrectionEvaluation:
 
     reference_cv_before: float
     reference_cv_after: float
-    pool_cv_before: float
-    pool_cv_after: float
+    qc_cv_before: float
+    qc_cv_after: float
     reference_improvement: float
-    pool_improvement: float
+    qc_improvement: float
     overfitting_ratio: float
     batch_variance_before: float
     batch_variance_after: float
@@ -933,19 +933,19 @@ def evaluate_batch_correction(
     sample_col: str = 'replicate_name',
     batch_col: str = 'batch',
     reference_type: str = 'reference',
-    pool_type: str = 'pool',
+    qc_type: str = 'qc',
     max_overfitting_ratio: float = 2.0,
-    min_pool_improvement: float = 0.0,
+    min_qc_improvement: float = 0.0,
 ) -> BatchCorrectionEvaluation:
-    """Evaluate batch correction quality using reference and pool samples.
+    """Evaluate batch correction quality using reference and QC samples.
 
     This function compares the coefficient of variation (CV) of reference
-    and pool samples before and after batch correction. A good batch
+    and QC samples before and after batch correction. A good batch
     correction should:
 
     1. Reduce CV of reference samples (they're the same material across batches)
-    2. Reduce or maintain CV of pool samples (independent QC)
-    3. Not improve reference much more than pool (would indicate overfitting)
+    2. Reduce or maintain CV of QC samples (independent QC)
+    3. Not improve reference much more than QC (would indicate overfitting)
 
     Args:
         data: Long-format DataFrame with before and after abundances
@@ -956,9 +956,9 @@ def evaluate_batch_correction(
         sample_col: Column with sample identifiers
         batch_col: Column with batch labels
         reference_type: Value in sample_type_col for reference samples
-        pool_type: Value in sample_type_col for pool samples
-        max_overfitting_ratio: Maximum allowed ratio of reference/pool improvement
-        min_pool_improvement: Minimum required improvement in pool CV
+        qc_type: Value in sample_type_col for QC samples
+        max_overfitting_ratio: Maximum allowed ratio of reference/QC improvement
+        min_qc_improvement: Minimum required improvement in QC CV
 
     Returns:
         BatchCorrectionEvaluation with metrics and pass/fail status
@@ -978,18 +978,18 @@ def evaluate_batch_correction(
 
     # Create masks for sample types
     reference_mask = data[sample_type_col] == reference_type
-    pool_mask = data[sample_type_col] == pool_type
+    qc_mask = data[sample_type_col] == qc_type
 
     n_reference = data.loc[reference_mask, sample_col].nunique()
-    n_pool = data.loc[pool_mask, sample_col].nunique()
+    n_qc = data.loc[qc_mask, sample_col].nunique()
 
     logger.info(f"Evaluating batch correction with {n_reference} reference "
-                f"and {n_pool} pool samples")
+                f"and {n_qc} QC samples")
 
     if n_reference < 2:
         warnings.append(f"Only {n_reference} reference samples - cannot calculate CV")
-    if n_pool < 2:
-        warnings.append(f"Only {n_pool} pool samples - cannot calculate CV")
+    if n_qc < 2:
+        warnings.append(f"Only {n_qc} QC samples - cannot calculate CV")
 
     # Calculate CVs before and after
     ref_cv_before = _calculate_sample_cv(
@@ -998,23 +998,23 @@ def evaluate_batch_correction(
     ref_cv_after = _calculate_sample_cv(
         data, reference_mask, abundance_after, feature_col, sample_col
     )
-    pool_cv_before = _calculate_sample_cv(
-        data, pool_mask, abundance_before, feature_col, sample_col
+    qc_cv_before = _calculate_sample_cv(
+        data, qc_mask, abundance_before, feature_col, sample_col
     )
-    pool_cv_after = _calculate_sample_cv(
-        data, pool_mask, abundance_after, feature_col, sample_col
+    qc_cv_after = _calculate_sample_cv(
+        data, qc_mask, abundance_after, feature_col, sample_col
     )
 
     # Calculate improvements (positive = better)
     ref_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before if ref_cv_before > 0 else 0
-    pool_improvement = (pool_cv_before - pool_cv_after) / pool_cv_before if pool_cv_before > 0 else 0
+    qc_improvement = (qc_cv_before - qc_cv_after) / qc_cv_before if qc_cv_before > 0 else 0
 
     # Calculate overfitting ratio
-    if pool_improvement > 0:
-        overfitting_ratio = ref_improvement / pool_improvement
+    if qc_improvement > 0:
+        overfitting_ratio = ref_improvement / qc_improvement
     elif ref_improvement > 0:
-        overfitting_ratio = np.inf  # Reference improved but pool didn't
-        warnings.append("Reference CV improved but pool CV did not - possible overfitting")
+        overfitting_ratio = np.inf  # Reference improved but QC didn't
+        warnings.append("Reference CV improved but QC CV did not - possible overfitting")
     else:
         overfitting_ratio = 1.0  # Neither improved
 
@@ -1025,40 +1025,40 @@ def evaluate_batch_correction(
     # Determine pass/fail
     passed = True
 
-    if pool_improvement < min_pool_improvement:
+    if qc_improvement < min_qc_improvement:
         passed = False
         warnings.append(
-            f"Pool CV did not improve ({pool_improvement:.1%} vs "
-            f"required {min_pool_improvement:.1%})"
+            f"QC CV did not improve ({qc_improvement:.1%} vs "
+            f"required {min_qc_improvement:.1%})"
         )
 
     if np.isfinite(overfitting_ratio) and overfitting_ratio > max_overfitting_ratio:
         passed = False
         warnings.append(
             f"Possible overfitting: reference improved {ref_improvement:.1%} "
-            f"but pool only {pool_improvement:.1%} (ratio {overfitting_ratio:.1f})"
+            f"but QC only {qc_improvement:.1%} (ratio {overfitting_ratio:.1f})"
         )
 
-    if pool_cv_after > pool_cv_before * 1.1:  # Pool got worse by >10%
+    if qc_cv_after > qc_cv_before * 1.1:  # Pool got worse by >10%
         passed = False
         warnings.append(
-            f"Pool CV increased from {pool_cv_before:.3f} to {pool_cv_after:.3f}"
+            f"QC CV increased from {qc_cv_before:.3f} to {qc_cv_after:.3f}"
         )
 
     logger.info(f"Reference CV: {ref_cv_before:.3f} -> {ref_cv_after:.3f} "
                 f"({ref_improvement:+.1%})")
-    logger.info(f"Pool CV: {pool_cv_before:.3f} -> {pool_cv_after:.3f} "
-                f"({pool_improvement:+.1%})")
+    logger.info(f"QC CV: {qc_cv_before:.3f} -> {qc_cv_after:.3f} "
+                f"({qc_improvement:+.1%})")
     logger.info(f"Batch variance: {batch_var_before:.4f} -> {batch_var_after:.4f}")
     logger.info(f"Evaluation {'PASSED' if passed else 'FAILED'}")
 
     return BatchCorrectionEvaluation(
         reference_cv_before=ref_cv_before,
         reference_cv_after=ref_cv_after,
-        pool_cv_before=pool_cv_before,
-        pool_cv_after=pool_cv_after,
+        qc_cv_before=qc_cv_before,
+        qc_cv_after=qc_cv_after,
         reference_improvement=ref_improvement,
-        pool_improvement=pool_improvement,
+        qc_improvement=qc_improvement,
         overfitting_ratio=overfitting_ratio,
         batch_variance_before=batch_var_before,
         batch_variance_after=batch_var_after,
@@ -1075,24 +1075,24 @@ def combat_with_reference_samples(
     batch_col: str = 'batch',
     sample_type_col: str = 'sample_type',
     reference_type: str = 'reference',
-    pool_type: str = 'pool',
+    qc_type: str = 'qc',
     par_prior: bool = True,
     mean_only: bool = False,
     evaluate: bool = True,
     fallback_on_failure: bool = True,
 ) -> tuple[pd.DataFrame, Optional[BatchCorrectionEvaluation]]:
-    """Apply ComBat with automatic evaluation using reference/pool samples.
+    """Apply ComBat with automatic evaluation using reference/QC samples.
 
     This is the recommended entry point for batch correction in PRISM workflows.
     It applies ComBat and automatically evaluates the results using reference
-    samples (inter-batch QC) and pool samples (intra-batch QC).
+    samples (inter-batch QC) and QC samples (intra-batch QC).
 
     The dual-control evaluation ensures:
     - Reference samples (same material across batches) show reduced variance
-    - Pool samples (independent QC) also benefit, not just references
+    - QC samples (independent QC) also benefit, not just references
     - No overfitting to reference samples
 
-    If evaluation fails (overfitting detected or pool CV increases), the function
+    If evaluation fails (overfitting detected or QC CV increases), the function
     will fall back to using the original uncorrected abundances (when
     fallback_on_failure=True).
 
@@ -1104,10 +1104,10 @@ def combat_with_reference_samples(
         batch_col: Column with batch labels
         sample_type_col: Column indicating sample type
         reference_type: Value for inter-batch reference samples
-        pool_type: Value for intra-batch pool samples
+        qc_type: Value for intra-batch QC samples
         par_prior: Use parametric empirical Bayes (recommended)
         mean_only: Only correct location effects, not scale
-        evaluate: Whether to run evaluation (requires reference and pool samples)
+        evaluate: Whether to run evaluation (requires reference and QC samples)
         fallback_on_failure: If True and evaluation fails, use uncorrected data
 
     Returns:
@@ -1139,11 +1139,11 @@ def combat_with_reference_samples(
 
     evaluation = None
     if evaluate:
-        # Check if we have reference and pool samples
+        # Check if we have reference and QC samples
         has_reference = (corrected[sample_type_col] == reference_type).any()
-        has_pool = (corrected[sample_type_col] == pool_type).any()
+        has_qc = (corrected[sample_type_col] == qc_type).any()
 
-        if has_reference and has_pool:
+        if has_reference and has_qc:
             evaluation = evaluate_batch_correction(
                 corrected,
                 abundance_before=abundance_col,
@@ -1153,7 +1153,7 @@ def combat_with_reference_samples(
                 sample_col=sample_col,
                 batch_col=batch_col,
                 reference_type=reference_type,
-                pool_type=pool_type,
+                qc_type=qc_type,
             )
         else:
             if not has_reference:
@@ -1161,9 +1161,9 @@ def combat_with_reference_samples(
                     f"No samples with {sample_type_col}='{reference_type}' found - "
                     "skipping evaluation"
                 )
-            if not has_pool:
+            if not has_qc:
                 logger.warning(
-                    f"No samples with {sample_type_col}='{pool_type}' found - "
+                    f"No samples with {sample_type_col}='{qc_type}' found - "
                     "skipping evaluation"
                 )
 

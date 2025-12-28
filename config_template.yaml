@@ -52,9 +52,9 @@ sample_annotations:
     - "CommercialPool"
     - "InterExpRef"
   
-  # Intra-experiment pool/QC (pooled experimental samples for validation)
+  # Intra-experiment QC (pooled experimental samples for validation)
   # Samples matching these patterns are used to validate corrections
-  pool_pattern:
+  qc_pattern:
     - "-Carl_"
     - "-QC_"
     - "_QC_"
@@ -90,44 +90,112 @@ batch_estimation:
   n_batches: null
 
 # =============================================================================
+# Sample Outlier Detection
+# =============================================================================
+# Automatically detect and optionally exclude samples with abnormally low signal.
+# This identifies samples with potential failed injections, degradation, or other
+# technical issues that would compromise downstream analysis.
+#
+# Detection is performed on LINEAR scale (not log) to avoid scale compression.
+# Only LOW outliers are flagged (one-sided) - high signal samples are not excluded.
+
+sample_outlier_detection:
+  enabled: true  # Enable outlier detection
+  
+  # Action to take when outliers are detected:
+  # - "report": Log outliers but include them in analysis (default)
+  # - "exclude": Exclude outliers from analysis
+  action: "report"
+  
+  # Detection method: "iqr" or "fold_median"
+  # - iqr: Samples below Q1 - (multiplier * IQR) on linear scale
+  # - fold_median: Samples with median intensity < threshold * overall median
+  method: "iqr"
+  
+  # IQR multiplier for outlier threshold (used if method: iqr)
+  # Lower values = more aggressive outlier detection
+  iqr_multiplier: 1.5
+  
+  # Fold-change threshold (used if method: fold_median)
+  # Sample is outlier if: sample_median < (fold_threshold * overall_median)
+  # E.g., 0.1 means samples with <10% of overall median are flagged
+  fold_threshold: 0.1
+
+# =============================================================================
 # Stage 0: Transition to Peptide Rollup
 # =============================================================================
 # Only used if input is transition-level data from Skyline.
 
 transition_rollup:
-  enabled: false  # Set true if input has individual transitions
+  enabled: true  # Set true if input has individual transitions
   
-  # Rollup method: median_polish, sum, quality_weighted
-  method: "median_polish"
+  # Rollup method: sum, median_polish, quality_weighted, topn
+  # - sum: Simple sum of all fragment intensities (default, robust)
+  # - median_polish: Tukey median polish (robust to interference)
+  # - quality_weighted: Weight by intensity and shape correlation consistency
+  # - topn: Select top N transitions by correlation consistency, weight by sqrt(intensity)
+  #
+  # Note: Sum is recommended for most datasets. Quality_weighted and topn
+  # may improve CV for high-quality data with good shape correlation.
+  method: "sum"
   
-  # Whether to include MS1 signal in quantification
-  use_ms1: false  # Fragment-based is typically more specific
+  # Whether to include MS1 precursor signal in quantification
+  # - false: Use only MS2 fragment ions (recommended, more specific)
+  # - true: Include MS1 precursor isotopes
+  use_ms1: false
   
   # Minimum transitions required per peptide
   min_transitions: 3
   
-  # Learn variance model from reference samples (only for quality_weighted)
-  # When true, optimizes variance model parameters (alpha, beta, gamma, delta)
-  # by minimizing median CV across peptides in reference samples.
-  # Requires at least 2 reference samples.
-  learn_variance_model: false
+  # -------------------------------------------------------------------------
+  # Top-N Method Parameters (only used if method: topn)
+  # -------------------------------------------------------------------------
+  # Number of transitions to select per peptide (same transitions for all samples)
+  topn_count: 3
   
-  # For quality_weighted method - explicit variance model parameters
-  # Only used if learn_variance_model is false. If neither is specified,
+  # Selection method: how to choose which transitions to use
+  # - correlation: select transitions with highest median shape correlation
+  # - intensity: select transitions with highest mean intensity
+  topn_selection: "correlation"
+  
+  # Weighting method: how to combine selected transitions
+  # - sum: simple sum of selected transitions (equal weights)
+  # - sqrt: weight by sqrt(intensity) before summing
+  topn_weighting: "sqrt"
+  
+  # -------------------------------------------------------------------------
+  # Quality-Weighted Method Parameters (only used if method: quality_weighted)
+  # -------------------------------------------------------------------------
+  # Learn variance model from reference samples (only for quality_weighted)
+  # When true, optimizes quality weight parameters (alpha, beta, gamma, delta)
+  # by minimizing median CV across peptides in reference samples.
+  # Validated on pool samples to ensure generalization.
+  # Requires at least 2 reference samples.
+  learn_weights: false  # Learn parameters from reference samples
+  
+  # For quality_weighted method - explicit weight parameters
+  # Only used if learn_weights is false. If neither is specified,
   # sensible defaults are used.
   # 
-  # variance_model:
-  #   alpha: 1.0        # Shot noise coefficient (Poisson)
-  #   beta: 0.01        # Multiplicative noise coefficient
-  #   gamma: 100.0      # Additive noise floor
-  #   delta: 2.0        # Quality penalty coefficient
-  #   shape_corr_exponent: 2.0  # Exponent for shape correlation penalty
-  #   coelution_penalty: 0.5    # Penalty for non-coeluting transitions
-  
-  # Skyline quality columns to use (if available)
-  quality_columns:
-    shape_correlation: "ShapeCorrelation"
-    coeluting: "Coeluting"
+  # Weight formula: w_t = intensity^alpha * shape_corr^beta * cv_penalty^delta * exp(-gamma * residual^2)
+  # Set gamma: 0 to disable residual penalty (much faster, skips median polish)
+  # 
+  # quality_weight_params:
+  #   alpha: 0.5        # Intensity exponent (sqrt weighting)
+  #   beta: 1.0         # Shape correlation exponent
+  #   gamma: 1.0        # Residual penalty (from median polish)
+  #   delta: 0.5        # Shape correlation CV penalty
+  #   shape_corr_agg: "median"  # How to aggregate shape correlation
+  #   min_improvement_pct: 5.0  # Minimum improvement over sum to use quality weights
+    
+  # New quality weight parameters (used as initial values for learning)
+  quality_weight_params:
+    alpha: 0.5      # intensity exponent (sqrt)
+    beta: 1.0       # shape_corr exponent
+    gamma: 0      # residual penalty
+    delta: 0.5      # shape_corr_cv penalty
+    shape_corr_agg: "median"
+    min_improvement_pct: 5.0
 
 # =============================================================================
 # Stage 1: RT-Aware Normalization (DISABLED BY DEFAULT)
