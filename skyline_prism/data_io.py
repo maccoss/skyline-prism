@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024
 #
 # Key columns and their Skyline sources:
 # - 'Protein' or 'Protein Name': Proteins > Protein
-# - 'Protein Accession': Proteins > Protein Accession
+# - 'Protein Accession': Proteins > Protein Accession  
 # - 'Peptide Modified Sequence': Peptides > Peptide Modified Sequence
 # - 'Precursor Charge': Precursors > Precursor Charge
 # - 'Replicate Name': Replicates > Replicate Name
@@ -238,7 +239,7 @@ class MergeResult:
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Keep columns as-is - no renaming.
-
+    
     Previously this renamed Skyline columns to internal names. Now we preserve
     the original Skyline column names throughout the pipeline.
     """
@@ -677,6 +678,26 @@ def merge_skyline_reports_streaming(
                     'Sample ID', pa.array(sample_ids, type=pa.string())
                 )
 
+            # Normalize schema: cast timestamp columns to string for consistency
+            # Different CSV files may parse date/time columns differently
+            # (e.g., "Acquired Time" may be timestamp in one file, string in another)
+            normalized_columns = []
+            for i, fld in enumerate(batch.schema):
+                col = batch.column(i)
+                if pa.types.is_timestamp(fld.type):
+                    # Cast timestamp to string for consistency across files
+                    col = col.cast(pa.string())
+                    fld = pa.field(fld.name, pa.string())
+                normalized_columns.append((fld, col))
+            
+            if any(pa.types.is_timestamp(f.type) for f in batch.schema):
+                # Rebuild batch with normalized schema
+                new_schema = pa.schema([f for f, _ in normalized_columns])
+                batch = pa.RecordBatch.from_arrays(
+                    [col for _, col in normalized_columns],
+                    schema=new_schema
+                )
+
             # Initialize or append to writer
             if writer is None:
                 writer = pq.ParquetWriter(
@@ -1043,21 +1064,21 @@ def merge_skyline_reports(
         # Merge
         merge_cols = ['replicate_name', 'SampleType']
         rename_map = {'SampleType': 'sample_type'}
-
+        
         if 'Batch' in meta.columns:
             merge_cols.append('Batch')
             rename_map['Batch'] = 'batch'
         if 'RunOrder' in meta.columns:
             merge_cols.append('RunOrder')
             rename_map['RunOrder'] = 'run_order'
-
+        
         merged = merged.merge(
             meta[merge_cols],
             on='replicate_name',
             how='left'
         )
         merged = merged.rename(columns=rename_map)
-
+        
         # Calculate run_order from acquired_time if not provided
         if 'run_order' not in merged.columns and 'acquired_time' in merged.columns:
             logger.info("Calculating run_order from acquired_time")
