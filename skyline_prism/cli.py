@@ -487,13 +487,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         rollup_proteins_streaming,
         rollup_transitions_sorted,
     )
-    from .transition_rollup import (
-        AdaptiveRollupParams,
-    )
     from .parsimony import (
         build_peptide_protein_map,
         compute_protein_groups,
         export_protein_groups,
+    )
+    from .transition_rollup import (
+        AdaptiveRollupParams,
     )
 
     # Load configuration
@@ -701,13 +701,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     pf = pq.ParquetFile(transition_parquet)
     n_rows = pf.metadata.num_rows
     logger.info(f"  Total rows: {n_rows:,}")
-    
+
     # Get unique peptide and transition counts efficiently
     try:
         import duckdb
         con = duckdb.connect()
         result = con.execute(f"""
-            SELECT 
+            SELECT
                 COUNT(DISTINCT "{peptide_col}") as n_peptides,
                 COUNT(DISTINCT "{peptide_col}" || '|' || "{transition_col}") as n_transitions,
                 COUNT(DISTINCT "{sample_col}") as n_samples
@@ -722,7 +722,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         n_peptides = df[peptide_col].nunique()
         n_transitions = df[[peptide_col, transition_col]].drop_duplicates().shape[0]
         n_samples = df[sample_col].nunique()
-    
+
     logger.info(f"  Unique peptides: {n_peptides:,}")
     logger.info(f"  Unique transitions: {n_transitions:,}")
     logger.info(f"  Samples: {n_samples:,}")
@@ -767,7 +767,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             log_intensity_center=ar_config.get('log_intensity_center', 15.0),
             sqrt_intensity_center=ar_config.get('sqrt_intensity_center', 100.0),
             sqrt_intensity_scale=ar_config.get('sqrt_intensity_scale', 100.0),
-            shape_corr_outlier_threshold=ar_config.get('shape_corr_outlier_threshold', 0.5),
+            shape_corr_low_threshold=ar_config.get('shape_corr_low_threshold', 0.5),
             min_improvement_pct=ar_config.get('min_improvement_pct', 5.0),
         )
 
@@ -930,11 +930,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     outlier_config = config.get('sample_outlier_detection', {})
     outlier_detection_enabled = outlier_config.get('enabled', True)
     outlier_samples = []
-    
+
     if outlier_detection_enabled:
         outlier_action = outlier_config.get('action', 'report')
         outlier_method = outlier_config.get('method', 'iqr')
-        
+
         # Calculate sample medians on LINEAR scale (not log2!)
         # Data is in log2, so we need to convert to linear for proper statistics
         linear_medians = {}
@@ -942,10 +942,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             # Convert log2 to linear, then get median
             linear_values = 2 ** peptide_df[col].dropna()
             linear_medians[col] = linear_values.median()
-        
+
         linear_medians_series = pd.Series(linear_medians)
         overall_median = linear_medians_series.median()
-        
+
         if outlier_method == 'iqr':
             # IQR-based detection on linear scale (one-sided, low only)
             iqr_mult = outlier_config.get('iqr_multiplier', 1.5)
@@ -953,13 +953,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             q3 = linear_medians_series.quantile(0.75)
             iqr = q3 - q1
             lower_bound = q1 - iqr_mult * iqr
-            
+
             outlier_samples = [
                 s for s, m in linear_medians.items() if m < lower_bound
             ]
-            
+
             if outlier_samples:
-                logger.warning(f"Sample outlier detection (IQR method, linear scale):")
+                logger.warning("Sample outlier detection (IQR method, linear scale):")
                 logger.warning(f"  Q1={q1:.0f}, Q3={q3:.0f}, IQR={iqr:.0f}")
                 logger.warning(f"  Lower bound: {lower_bound:.0f} (Q1 - {iqr_mult}*IQR)")
                 logger.warning(f"  Overall median: {overall_median:.0f}")
@@ -972,13 +972,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         else:  # fold_median method
             fold_thresh = outlier_config.get('fold_threshold', 0.1)
             threshold = fold_thresh * overall_median
-            
+
             outlier_samples = [
                 s for s, m in linear_medians.items() if m < threshold
             ]
-            
+
             if outlier_samples:
-                logger.warning(f"Sample outlier detection (fold-median method, linear scale):")
+                logger.warning("Sample outlier detection (fold-median method, linear scale):")
                 logger.warning(f"  Overall median: {overall_median:.0f}")
                 logger.warning(f"  Threshold: {threshold:.0f} ({fold_thresh:.0%} of median)")
                 for s in outlier_samples:
@@ -987,12 +987,12 @@ def cmd_run(args: argparse.Namespace) -> int:
                         f"  OUTLIER: {s} - median={linear_medians[s]:.0f} "
                         f"({fold_below:.1%} of overall median)"
                     )
-        
+
         if outlier_samples:
             method_log.append(
                 f"Outlier detection: {len(outlier_samples)} samples flagged as low-signal outliers"
             )
-            
+
             if outlier_action == 'exclude':
                 logger.warning(
                     f"  Excluding {len(outlier_samples)} outlier samples from analysis"
@@ -1008,7 +1008,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
             else:
                 logger.warning(
-                    f"  Action='report' - outliers will be included in analysis"
+                    "  Action='report' - outliers will be included in analysis"
                 )
         else:
             logger.info("  No sample outliers detected")

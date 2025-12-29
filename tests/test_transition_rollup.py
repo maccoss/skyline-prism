@@ -128,7 +128,7 @@ class TestAdaptiveRollupParams:
         assert params.mz_max == 2000.0
         assert params.log_intensity_center == 15.0
         assert params.fallback_to_sum is True
-        assert params.min_improvement_pct == 5.0
+        assert params.min_improvement_pct == 0.1  # Low threshold since optimization can't go negative
 
     def test_custom_values(self):
         """Test custom parameter initialization."""

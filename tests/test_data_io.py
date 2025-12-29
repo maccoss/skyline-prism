@@ -14,7 +14,7 @@ from skyline_prism.data_io import (
 
 class TestColumnStandardization:
     """Tests for column name standardization.
-    
+
     Note: _standardize_columns now returns the DataFrame unchanged (no renaming).
     The pipeline uses original Skyline column names throughout.
     """

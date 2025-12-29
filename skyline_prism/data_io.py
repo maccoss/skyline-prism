@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +24,7 @@ LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024
 #
 # Key columns and their Skyline sources:
 # - 'Protein' or 'Protein Name': Proteins > Protein
-# - 'Protein Accession': Proteins > Protein Accession  
+# - 'Protein Accession': Proteins > Protein Accession
 # - 'Peptide Modified Sequence': Peptides > Peptide Modified Sequence
 # - 'Precursor Charge': Precursors > Precursor Charge
 # - 'Replicate Name': Replicates > Replicate Name
@@ -239,7 +238,7 @@ class MergeResult:
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Keep columns as-is - no renaming.
-    
+
     Previously this renamed Skyline columns to internal names. Now we preserve
     the original Skyline column names throughout the pipeline.
     """
@@ -1044,21 +1043,21 @@ def merge_skyline_reports(
         # Merge
         merge_cols = ['replicate_name', 'SampleType']
         rename_map = {'SampleType': 'sample_type'}
-        
+
         if 'Batch' in meta.columns:
             merge_cols.append('Batch')
             rename_map['Batch'] = 'batch'
         if 'RunOrder' in meta.columns:
             merge_cols.append('RunOrder')
             rename_map['RunOrder'] = 'run_order'
-        
+
         merged = merged.merge(
             meta[merge_cols],
             on='replicate_name',
             how='left'
         )
         merged = merged.rename(columns=rename_map)
-        
+
         # Calculate run_order from acquired_time if not provided
         if 'run_order' not in merged.columns and 'acquired_time' in merged.columns:
             logger.info("Calculating run_order from acquired_time")

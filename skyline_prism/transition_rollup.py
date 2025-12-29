@@ -63,19 +63,21 @@ class AdaptiveRollupParams:
         log(w_t) = beta_sqrt_intensity * (sqrt(intensity) - sqrt_center) / sqrt_scale
                  + beta_mz * normalized_mz
                  + beta_shape_corr * median_shape_corr
-                 + beta_shape_corr_max * max_shape_corr
-                 + beta_shape_corr_outlier * outlier_fraction
+                 + beta_shape_corr_outlier * low_fraction
 
         w = exp(log(w))
 
     Key insight: When all beta = 0, all weights are 1, giving simple sum (baseline).
 
-    Features (5 total):
+    Features (4 optimized):
     - sqrt(intensity): Mean sqrt intensity, centered and scaled (less compression than log2)
     - mz: Product m/z, normalized to [0, 1] range
     - shape_corr: Median shape correlation across samples (0-1)
-    - shape_corr_max: Maximum shape correlation across samples (0-1)
-    - shape_corr_outlier: Fraction of samples with outlier (low) shape correlation
+    - shape_corr_low_frac: Fraction of samples with shape correlation below threshold
+                           (configurable via shape_corr_low_threshold, default 0.5)
+
+    Not optimized (reserved for future use):
+    - beta_shape_corr_max: Max shape correlation - kept at 0.0
 
     Constraints:
     - beta_sqrt_intensity >= 0 (higher intensity transitions should not be penalized)
@@ -106,10 +108,11 @@ class AdaptiveRollupParams:
     # Default 0.0: no max shape correlation weighting
     beta_shape_corr_max: float = 0.0
 
-    # Coefficient for shape correlation outlier fraction
+    # Coefficient for low shape correlation fraction
+    # Counts fraction of samples with shape_corr < shape_corr_low_threshold
     # Unconstrained: can be positive or negative
-    # Negative values penalize transitions with more outliers
-    # Default 0.0: no outlier weighting
+    # Negative values penalize transitions with more low-correlation samples
+    # Default 0.0: no low-fraction weighting
     beta_shape_corr_outlier: float = 0.0
 
     # Feature normalization parameters (learned from data)
@@ -119,12 +122,14 @@ class AdaptiveRollupParams:
     sqrt_intensity_center: float = 100.0  # Centering value for sqrt(intensity)
     sqrt_intensity_scale: float = 100.0   # Scale for sqrt(intensity) normalization
 
-    # Global shape correlation outlier threshold (Q1 - 1.5*IQR)
-    shape_corr_outlier_threshold: float = 0.5  # Learned from data
+    # Fixed threshold for counting "low" shape correlations
+    # Fraction of samples with shape_corr < this threshold is used as a feature
+    # Default 0.5: transitions with many samples below 0.5 may have interference
+    shape_corr_low_threshold: float = 0.5
 
     # Fallback settings
     fallback_to_sum: bool = True      # Fall back to sum if no improvement
-    min_improvement_pct: float = 5.0  # Minimum CV improvement required
+    min_improvement_pct: float = 0.1  # Minimum CV improvement required
 
 
 @dataclass
@@ -221,6 +226,10 @@ def compute_adaptive_weights(
         + params.beta_shape_corr_outlier * shape_corr_outlier_frac
     )
 
+    # Clamp log_weight to prevent overflow in exp()
+    # exp(700) is close to float64 max, exp(-700) is close to 0
+    log_weight = np.clip(log_weight, -50, 50)
+
     # Exponentiate to get weights (exp(0) = 1 when all betas = 0)
     weights = np.exp(log_weight)
 
@@ -274,7 +283,8 @@ def rollup_peptide_adaptive(
 
     # Normalize weights to sum to n_transitions (preserves sum magnitude)
     weight_sum = weights.sum()
-    if weight_sum <= 0:
+    if not np.isfinite(weight_sum) or weight_sum <= 0:
+        # Fallback to equal weights if sum is invalid
         normalized_weights = np.ones(n_transitions)
     else:
         normalized_weights = weights * (n_transitions / weight_sum)
@@ -320,8 +330,9 @@ def rollup_peptide_adaptive(
 class _AdaptivePrecomputedPeptide:
     """Pre-computed data for a single peptide for fast adaptive weight learning."""
 
-    # Intensity matrix (log2 scale): n_transitions x n_samples
-    intensity_log2: np.ndarray
+    # Intensity matrix (LINEAR scale): n_transitions x n_samples
+    # Zeros are preserved as zeros (not clipped to 1)
+    intensity_linear: np.ndarray
     # Mean log2 intensity per transition: n_transitions
     mean_log_intensity: np.ndarray
     # Mean sqrt intensity per transition: n_transitions
@@ -349,7 +360,7 @@ class _AdaptiveNormalizationParams:
     log_intensity_center: float
     sqrt_intensity_center: float
     sqrt_intensity_scale: float
-    shape_corr_outlier_threshold: float
+    shape_corr_low_threshold: float  # Fixed threshold for "low" shape correlation
 
 
 def _precompute_adaptive_metrics(
@@ -364,6 +375,7 @@ def _precompute_adaptive_metrics(
     min_transitions: int = 3,
     exclude_precursor: bool = True,
     batch_col: str | None = "Batch",
+    shape_corr_low_threshold: float = 0.5,
 ) -> tuple[dict[str, _AdaptivePrecomputedPeptide], _AdaptiveNormalizationParams]:
     """Pre-compute metrics for all peptides for adaptive weight learning.
 
@@ -382,10 +394,11 @@ def _precompute_adaptive_metrics(
     - mz_values: Product m/z
     - median_shape_corr: Median shape correlation across samples
     - max_shape_corr: Maximum shape correlation across samples
-    - shape_corr_outlier_frac: Fraction of samples with outlier (low) shape corr
+    - shape_corr_low_frac: Fraction of samples with shape corr < threshold
 
-    The shape correlation outlier threshold is computed globally using IQR:
-    threshold = Q1 - 1.5 * IQR, where Q1 and IQR are from all shape correlations.
+    The fraction of "low" shape correlation samples is computed using a
+    fixed threshold (shape_corr_low_threshold, default 0.5). Transitions
+    where many samples have low shape correlation may have interference.
 
     Args:
         data: Transition-level DataFrame (LINEAR scale intensities)
@@ -399,6 +412,7 @@ def _precompute_adaptive_metrics(
         min_transitions: Minimum transitions required
         exclude_precursor: If True, filter out MS1 precursor ions
         batch_col: Column name for batch identifier (to handle duplicate names)
+        shape_corr_low_threshold: Threshold for "low" shape correlation (default 0.5)
 
     Returns:
         Tuple of (precomputed_dict, normalization_params)
@@ -434,21 +448,9 @@ def _precompute_adaptive_metrics(
         composite_col = sample_col
         unique_sample_batches = list(dict.fromkeys(sample_list))
 
-    n_samples = len(unique_sample_batches)
-
-    # Compute global shape correlation outlier threshold using IQR
+    # Use the fixed threshold for "low" shape correlation
+    # Transitions with many samples below this threshold may have interference
     has_shape_corr = shape_corr_col in filtered.columns
-    if has_shape_corr:
-        all_shape_corr = filtered[shape_corr_col].dropna().values
-        if len(all_shape_corr) > 0:
-            q1 = np.percentile(all_shape_corr, 25)
-            q3 = np.percentile(all_shape_corr, 75)
-            iqr = q3 - q1
-            shape_corr_outlier_threshold = float(q1 - 1.5 * iqr)
-        else:
-            shape_corr_outlier_threshold = 0.5
-    else:
-        shape_corr_outlier_threshold = 0.5
 
     has_mz = mz_col in filtered.columns
 
@@ -456,17 +458,44 @@ def _precompute_adaptive_metrics(
     # VECTORIZED APPROACH: Compute all per-transition metrics via groupby
     # ========================================================================
 
+    # Create unique transition identifier including precursor and product charge
+    # A transition is defined by precursor m/z -> product m/z combination
+    # y19+2 from precursor 3+ and y19+2 from precursor 4+ are DIFFERENT transitions
+    product_charge_col = 'Product Charge'
+    precursor_charge_col = 'Precursor Charge'
+    if product_charge_col in filtered.columns and precursor_charge_col in filtered.columns:
+        # Full transition ID: FragmentIon_ProductCharge_PrecursorCharge
+        filtered['_transition_id'] = (
+            filtered[transition_col].astype(str) + '_' +
+            filtered[product_charge_col].astype(str) + '_' +
+            filtered[precursor_charge_col].astype(str)
+        )
+        trans_id_col = '_transition_id'
+    elif product_charge_col in filtered.columns:
+        filtered['_transition_id'] = (
+            filtered[transition_col].astype(str) + '_' +
+            filtered[product_charge_col].astype(str)
+        )
+        trans_id_col = '_transition_id'
+    else:
+        trans_id_col = transition_col
+
     # Precompute transformed values once
-    filtered['_log2_intensity'] = np.log2(np.maximum(filtered[abundance_col].values, 1.0))
-    filtered['_sqrt_intensity'] = np.sqrt(np.maximum(filtered[abundance_col].values, 0.0))
+    # Store log2 of intensity (zeros become -inf, but that's ok for NaN detection)
+    # We'll handle zeros properly in the weighted sum calculation
+    intensity_vals = filtered[abundance_col].values.astype(float)
+    # Clip to 1 for log2 calculation (for means/metrics), but mark zeros
+    filtered['_intensity_is_zero'] = intensity_vals <= 0
+    filtered['_log2_intensity'] = np.log2(np.maximum(intensity_vals, 1.0))
+    filtered['_sqrt_intensity'] = np.sqrt(np.maximum(intensity_vals, 0.0))
 
     if has_shape_corr:
-        filtered['_shape_outlier'] = (
-            filtered[shape_corr_col].fillna(1.0) < shape_corr_outlier_threshold
+        filtered['_shape_low'] = (
+            filtered[shape_corr_col].fillna(1.0) < shape_corr_low_threshold
         ).astype(float)
 
-    # Group by peptide + transition to compute per-transition statistics
-    group_cols = [peptide_col, transition_col]
+    # Group by peptide + unique transition (including charge) for per-transition statistics
+    group_cols = [peptide_col, trans_id_col]
 
     # Build aggregation dict - compute all metrics in ONE groupby
     agg_dict = {
@@ -477,7 +506,7 @@ def _precompute_adaptive_metrics(
         agg_dict[mz_col] = 'first'  # m/z is constant per transition
     if has_shape_corr:
         agg_dict[shape_corr_col] = ['median', 'max']
-        agg_dict['_shape_outlier'] = 'mean'  # Mean of 0/1 = fraction
+        agg_dict['_shape_low'] = 'mean'  # Mean of 0/1 = fraction below threshold
 
     # Aggregate per transition (across all samples)
     trans_stats = filtered.groupby(group_cols, sort=False).agg(agg_dict)
@@ -523,7 +552,7 @@ def _precompute_adaptive_metrics(
         log_intensity_center=log_intensity_center,
         sqrt_intensity_center=sqrt_intensity_center,
         sqrt_intensity_scale=sqrt_intensity_scale,
-        shape_corr_outlier_threshold=shape_corr_outlier_threshold,
+        shape_corr_low_threshold=shape_corr_low_threshold,
     )
 
     # ========================================================================
@@ -533,10 +562,13 @@ def _precompute_adaptive_metrics(
 
     # Pivot intensity to get peptide -> (transition x sample) matrices
     # Use multi-index pivot for efficiency
+    # Store RAW linear intensity to avoid 2^log2(0-clipped) = 1 issue
+    # Use trans_id_col (includes precursor and product charge) for unique transitions
+    # Each (peptide, transition_id, sample) combination should now be unique
     intensity_pivot = filtered.pivot_table(
-        index=[peptide_col, transition_col],
+        index=[peptide_col, trans_id_col],
         columns=composite_col,
-        values='_log2_intensity',
+        values=abundance_col,  # Raw linear values, not log2
         aggfunc='first',
     )
 
@@ -556,7 +588,8 @@ def _precompute_adaptive_metrics(
     # Define column names for extraction
     shape_med_col = f'{shape_corr_col}_median' if has_shape_corr else None
     shape_max_col = f'{shape_corr_col}_max' if has_shape_corr else None
-    shape_out_col = 'shape_outlier_mean' if has_shape_corr else None
+    shape_low_col = 'shape_low_mean' if has_shape_corr else None
+
 
     results = {}
 
@@ -570,15 +603,15 @@ def _precompute_adaptive_metrics(
 
         n_trans = len(pep_stats)
 
-        # Get intensity matrix for this peptide
+        # Get intensity matrix for this peptide (LINEAR scale)
         try:
-            intensity_log2 = intensity_pivot.loc[peptide].values
+            intensity_linear = intensity_pivot.loc[peptide].values.astype(float)
         except KeyError:
             continue
 
         # Handle case where only one transition (returns Series not DataFrame)
-        if intensity_log2.ndim == 1:
-            intensity_log2 = intensity_log2.reshape(1, -1)
+        if intensity_linear.ndim == 1:
+            intensity_linear = intensity_linear.reshape(1, -1)
 
         # Extract pre-computed metrics (using .values for speed)
         mean_log_intensity = pep_stats[log_int_col].values
@@ -592,20 +625,20 @@ def _precompute_adaptive_metrics(
         if has_shape_corr:
             median_shape_corr = pep_stats[shape_med_col].fillna(1.0).values
             max_shape_corr = pep_stats[shape_max_col].fillna(1.0).values
-            shape_corr_outlier_frac = pep_stats[shape_out_col].fillna(0.0).values
+            shape_corr_low_frac = pep_stats[shape_low_col].fillna(0.0).values
         else:
             median_shape_corr = np.ones(n_trans)
             max_shape_corr = np.ones(n_trans)
-            shape_corr_outlier_frac = np.zeros(n_trans)
+            shape_corr_low_frac = np.zeros(n_trans)
 
         results[peptide] = _AdaptivePrecomputedPeptide(
-            intensity_log2=intensity_log2,
+            intensity_linear=intensity_linear,
             mean_log_intensity=mean_log_intensity,
             mean_sqrt_intensity=mean_sqrt_intensity,
             mz_values=mz_values,
             median_shape_corr=median_shape_corr,
             max_shape_corr=max_shape_corr,
-            shape_corr_outlier_frac=shape_corr_outlier_frac,
+            shape_corr_outlier_frac=shape_corr_low_frac,
             n_transitions=n_trans,
             sample_names=unique_sample_batches,
         )
@@ -655,18 +688,21 @@ def _rollup_with_adaptive_params(
 
         # Normalize weights
         weight_sum = weights.sum()
-        if weight_sum <= 0:
+        if not np.isfinite(weight_sum) or weight_sum <= 0:
+            # Fallback to equal weights if sum is invalid
             normalized_weights = np.ones(metrics.n_transitions)
         else:
             normalized_weights = weights * (metrics.n_transitions / weight_sum)
 
         # Weighted sum in linear space for each sample
-        linear_matrix = 2 ** metrics.intensity_log2
+        # Use raw linear values (zeros stay zero, no 2^0=1 issue)
+        linear_matrix = metrics.intensity_linear
         abundances = np.zeros(len(sample_names))
 
         for i in range(len(sample_names)):
             col = linear_matrix[:, i]
-            valid = ~np.isnan(col)
+            # Valid means not NaN and not negative
+            valid = np.isfinite(col) & (col >= 0)
             if valid.sum() >= min_transitions:
                 weighted_sum = (normalized_weights[valid] * col[valid]).sum()
                 abundances[i] = np.log2(max(weighted_sum, 1.0))
@@ -812,7 +848,7 @@ def learn_adaptive_weights(
     abundance_col: str = "area",
     mz_col: str = "Product Mz",
     shape_corr_col: str = "Shape Correlation",
-    n_iterations: int = 100,
+    n_iterations: int = 500,
     initial_params: AdaptiveRollupParams | None = None,
 ) -> AdaptiveRollupResult:
     """Learn adaptive rollup weights from reference samples.
@@ -901,61 +937,62 @@ def learn_adaptive_weights(
     logger.info(f"  Log2 intensity center: {norm_params.log_intensity_center:.2f}")
     logger.info(f"  Sqrt intensity: center={norm_params.sqrt_intensity_center:.1f}, "
                 f"scale={norm_params.sqrt_intensity_scale:.1f}")
-    logger.info(f"  Shape corr outlier threshold: {norm_params.shape_corr_outlier_threshold:.3f}")
+    logger.info(f"  Shape corr low threshold: {norm_params.shape_corr_low_threshold:.3f}")
 
-    # Track optimization
+    # Track optimization - keep the BEST parameters found, not just where optimizer stops
     iteration_count = [0]
     best_cv = [reference_cv_sum]
+    best_params = [np.array([0.0, 0.0, 0.0, 0.0])]  # Start with zeros (sum baseline)
 
     def objective(beta_array):
         """Objective: minimize median CV on reference samples."""
-        # Optimizing 5 parameters (beta_log_intensity is deprecated, always 0)
+        # Optimizing 4 parameters (beta_log_intensity and beta_shape_corr_max are not optimized)
         # Constraint: beta_sqrt_intensity >= 0
         params = AdaptiveRollupParams(
             beta_log_intensity=0.0,  # Deprecated, not optimized
             beta_sqrt_intensity=max(0.0, beta_array[0]),
             beta_mz=beta_array[1],
             beta_shape_corr=beta_array[2],
-            beta_shape_corr_max=beta_array[3],
-            beta_shape_corr_outlier=beta_array[4],  # Unconstrained
+            beta_shape_corr_max=0.0,  # Not optimized - kept for future binary feature
+            beta_shape_corr_outlier=beta_array[3],
             mz_min=norm_params.mz_min,
             mz_max=norm_params.mz_max,
             log_intensity_center=norm_params.log_intensity_center,
             sqrt_intensity_center=norm_params.sqrt_intensity_center,
             sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
-            shape_corr_outlier_threshold=norm_params.shape_corr_outlier_threshold,
+            shape_corr_low_threshold=norm_params.shape_corr_low_threshold,
         )
 
         try:
             abundances = _rollup_with_adaptive_params(ref_metrics, params)
             cv = _compute_median_cv_for_adaptive(abundances)
             iteration_count[0] += 1
+            # Track the BEST parameters found during optimization
             if np.isfinite(cv) and cv < best_cv[0]:
                 best_cv[0] = cv
+                best_params[0] = np.array(beta_array).copy()
             return cv if np.isfinite(cv) else 1.0
         except Exception:
             return 1.0
 
     # Initial parameters: all zeros (simple sum baseline)
-    # Note: beta_log_intensity is deprecated and not optimized
+    # Note: beta_log_intensity and beta_shape_corr_max are not optimized
     x0 = [
         initial_params.beta_sqrt_intensity,
         initial_params.beta_mz,
         initial_params.beta_shape_corr,
-        initial_params.beta_shape_corr_max,
         initial_params.beta_shape_corr_outlier,
     ]
 
-    # Bounds for 5 parameters (beta_log_intensity deprecated)
+    # Bounds for 4 parameters
     bounds = [
-        (0.0, 5.0),     # beta_sqrt_intensity (must be non-negative)
-        (-5.0, 5.0),    # beta_mz (can be negative or positive)
-        (-5.0, 5.0),    # beta_shape_corr (median, can be negative or positive)
-        (-5.0, 5.0),    # beta_shape_corr_max (can be negative or positive)
-        (-5.0, 5.0),    # beta_shape_corr_outlier (unconstrained)
+        (0.0, 1.0),     # beta_sqrt_intensity (must be non-negative)
+        (0.0, 1.0),    # beta_mz (can be negative or positive)
+        (0.0, 1.0),    # beta_shape_corr (median, can be negative or positive)
+        (-1.0, 0.0),    # beta_shape_corr_outlier (fraction of low samples)
     ]
 
-    logger.info("  Optimizing 5 beta coefficients...")
+    logger.info("  Optimizing 4 beta coefficients...")
     result = minimize(
         objective,
         x0,
@@ -963,36 +1000,44 @@ def learn_adaptive_weights(
         bounds=bounds,
         options={"maxiter": n_iterations, "ftol": 1e-6},
     )
-    logger.info(f"  Optimization completed in {iteration_count[0]} evaluations")
+    
+    # Log convergence status
+    if result.success:
+        logger.info(f"  Optimization CONVERGED in {iteration_count[0]} evaluations")
+    else:
+        logger.warning(f"  Optimization did NOT converge: {result.message}")
+        logger.warning(f"    ({iteration_count[0]} evaluations, maxiter={n_iterations})")
 
-    # Extract optimized parameters (5 betas, log_intensity deprecated)
-    opt = result.x
+    # Use BEST parameters found during optimization, not where optimizer stopped
+    # This guarantees we never return worse than the starting point (zeros = sum)
+    opt = best_params[0]
+    logger.info(f"  Best CV found: {best_cv[0]:.4f} (baseline: {reference_cv_sum:.4f})")
+    
     learned_params = AdaptiveRollupParams(
         beta_log_intensity=0.0,  # Deprecated, not optimized
         beta_sqrt_intensity=max(0.0, opt[0]),
         beta_mz=opt[1],
         beta_shape_corr=opt[2],
-        beta_shape_corr_max=opt[3],
-        beta_shape_corr_outlier=opt[4],  # Unconstrained
+        beta_shape_corr_max=0.0,  # Not optimized
+        beta_shape_corr_outlier=opt[3],
         mz_min=norm_params.mz_min,
         mz_max=norm_params.mz_max,
         log_intensity_center=norm_params.log_intensity_center,
         sqrt_intensity_center=norm_params.sqrt_intensity_center,
         sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
-        shape_corr_outlier_threshold=norm_params.shape_corr_outlier_threshold,
+        shape_corr_low_threshold=norm_params.shape_corr_low_threshold,
         fallback_to_sum=initial_params.fallback_to_sum,
         min_improvement_pct=initial_params.min_improvement_pct,
     )
 
-    # Compute final CV on reference
+    # Compute final CV on reference (should match best_cv[0])
     ref_abundances_adaptive = _rollup_with_adaptive_params(ref_metrics, learned_params)
     reference_cv_adaptive = _compute_median_cv_for_adaptive(ref_abundances_adaptive)
 
-    logger.info("  Learned parameters (5 features):")
+    logger.info("  Learned parameters (4 features):")
     logger.info(f"    beta_sqrt_intensity: {learned_params.beta_sqrt_intensity:.4f}")
     logger.info(f"    beta_mz: {learned_params.beta_mz:.4f}")
     logger.info(f"    beta_shape_corr (median): {learned_params.beta_shape_corr:.4f}")
-    logger.info(f"    beta_shape_corr_max: {learned_params.beta_shape_corr_max:.4f}")
     logger.info(f"    beta_shape_corr_outlier: {learned_params.beta_shape_corr_outlier:.4f}")
     logger.info(f"  Reference CV: {reference_cv_sum:.4f} -> {reference_cv_adaptive:.4f}")
 
@@ -1072,7 +1117,7 @@ def rollup_peptide_topn(
     shape_corr_matrix: pd.DataFrame,
     n_transitions: int = 3,
     selection_method: str = "correlation",
-    weighting: str = "sqrt",
+    weighting: str = "sum",
     min_transitions: int = 3,
 ) -> tuple[pd.Series, pd.Series, pd.Series, int]:
     """Roll up transitions using Top-N selection.
@@ -1138,7 +1183,7 @@ def rollup_peptide_topn(
     # Step 4: Aggregate - weighted sum in linear space
     # Normalize weights to sum to n_select (preserve sum magnitude)
     weight_sum = weights.sum()
-    if weight_sum > 0:
+    if np.isfinite(weight_sum) and weight_sum > 0:
         normalized_weights = weights * (n_select / weight_sum)
     else:
         normalized_weights = pd.Series(1.0, index=selected_transitions)

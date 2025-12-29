@@ -1,0 +1,116 @@
+2025-12-28 22:12:24 - skyline_prism - INFO - Logging to: example-files/out_subset_adaptive_4param/prism_run_20251228_221224.log
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - Stage 1: Merge CSVs / Prepare Input Data
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - Found existing merged parquet: example-files/out_subset_adaptive_4param/merged_data.parquet
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Source files match - using cached parquet
+2025-12-28 22:12:24 - skyline_prism.data_io - INFO - No RunOrder column in metadata - will be calculated from acquired_time
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Loaded existing metadata: example-files/out_subset_adaptive_4param/sample_metadata.tsv
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Available columns: ['Acquired Time', 'Area', 'Batch', 'Coeluting', 'Detection Q Value', 'End Time', 'File Name', 'Fragment Ion', 'Fwhm', 'Isotope Dot Product', 'Peptide', 'Peptide Modified Sequence Unimod Ids', 'Precursor Charge', 'Precursor Mz', 'Product Charge', 'Product Mz', 'Protein', 'Protein Accession', 'Protein Gene', 'Replicate Name', 'Retention Time', 'Sample ID', 'Shape Correlation', 'Source Document', 'Start Time', 'Total Ion Current Area', 'Truncated']
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Peptide column 'Peptide Modified Sequence' not found, using 'Peptide Modified Sequence Unimod Ids'
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Using 'Sample ID' for unique sample identification across batches
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - Using columns: peptide=Peptide Modified Sequence Unimod Ids, sample=Sample ID, abundance=Area
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - 
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - Input data summary:
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Total rows: 19,805,912
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Unique peptides: 8,455
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Unique transitions: 67,974
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Samples: 238
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Avg transitions per peptide: 8.0
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - Stage 2: Transition -> Peptide rollup
+2025-12-28 22:12:24 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Rollup method: adaptive
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Include MS1 precursors: False
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Min transitions: 3
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -   Learning adaptive rollup parameters...
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -     Reference samples: 20
+2025-12-28 22:12:24 - skyline_prism.cli - INFO -     QC samples: 20
+Traceback (most recent call last):
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/bin/prism", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/cli.py", line 1642, in main
+    return cmd_run(args)
+           ^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/cli.py", line 804, in cmd_run
+    """).fetchdf()
+         ^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/numpy/ma/core.py", line 2883, in __new__
+    def __new__(cls, data=None, mask=nomask, dtype=None, copy=False,
+
+KeyboardInterrupt
+2025-12-28 22:27:12 - skyline_prism - INFO - Logging to: example-files/out_subset_adaptive_4param/prism_run_20251228_222712.log
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - Stage 1: Merge CSVs / Prepare Input Data
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - Found existing merged parquet: example-files/out_subset_adaptive_4param/merged_data.parquet
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Source files match - using cached parquet
+2025-12-28 22:27:12 - skyline_prism.data_io - INFO - No RunOrder column in metadata - will be calculated from acquired_time
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Loaded existing metadata: example-files/out_subset_adaptive_4param/sample_metadata.tsv
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Available columns: ['Acquired Time', 'Area', 'Batch', 'Coeluting', 'Detection Q Value', 'End Time', 'File Name', 'Fragment Ion', 'Fwhm', 'Isotope Dot Product', 'Peptide', 'Peptide Modified Sequence Unimod Ids', 'Precursor Charge', 'Precursor Mz', 'Product Charge', 'Product Mz', 'Protein', 'Protein Accession', 'Protein Gene', 'Replicate Name', 'Retention Time', 'Sample ID', 'Shape Correlation', 'Source Document', 'Start Time', 'Total Ion Current Area', 'Truncated']
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Peptide column 'Peptide Modified Sequence' not found, using 'Peptide Modified Sequence Unimod Ids'
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Using 'Sample ID' for unique sample identification across batches
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - Using columns: peptide=Peptide Modified Sequence Unimod Ids, sample=Sample ID, abundance=Area
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - 
+2025-12-28 22:27:12 - skyline_prism.cli - INFO - Input data summary:
+2025-12-28 22:27:12 - skyline_prism.cli - INFO -   Total rows: 19,805,912
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Unique peptides: 8,455
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Unique transitions: 67,974
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Samples: 238
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Avg transitions per peptide: 8.0
+2025-12-28 22:27:13 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:27:13 - skyline_prism.cli - INFO - Stage 2: Transition -> Peptide rollup
+2025-12-28 22:27:13 - skyline_prism.cli - INFO - ============================================================
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Rollup method: adaptive
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Include MS1 precursors: False
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Min transitions: 3
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -   Learning adaptive rollup parameters...
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -     Reference samples: 20
+2025-12-28 22:27:13 - skyline_prism.cli - INFO -     QC samples: 20
+2025-12-28 22:27:23 - skyline_prism.transition_rollup - INFO -   Computing baseline CV (sum method)...
+2025-12-28 22:27:26 - skyline_prism.transition_rollup - INFO -   Reference CV (sum): 0.3586
+2025-12-28 22:27:29 - skyline_prism.transition_rollup - INFO -   QC CV (sum): 0.3930
+2025-12-28 22:27:29 - skyline_prism.transition_rollup - INFO -   Pre-computing metrics for reference samples...
+Traceback (most recent call last):
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/bin/prism", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/cli.py", line 1642, in main
+    return cmd_run(args)
+           ^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/cli.py", line 809, in cmd_run
+    learn_result = learn_adaptive_weights(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/transition_rollup.py", line 897, in learn_adaptive_weights
+    ref_metrics, norm_params = _precompute_adaptive_metrics(
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/skyline_prism/transition_rollup.py", line 421, in _precompute_adaptive_metrics
+    filtered = data[data[sample_col].isin(sample_list)].copy()
+               ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/frame.py", line 4104, in __getitem__
+    return self._getitem_bool_array(key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/frame.py", line 4166, in _getitem_bool_array
+    return self._take_with_is_copy(indexer, axis=0)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/generic.py", line 4175, in _take_with_is_copy
+    result = self.take(indices=indices, axis=axis)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/generic.py", line 4155, in take
+    new_data = self._mgr.take(
+               ^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/internals/managers.py", line 913, in take
+    return self.reindex_indexer(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/internals/managers.py", line 707, in reindex_indexer
+    blk.take_nd(
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/internals/blocks.py", line 1373, in take_nd
+    new_values = algos.take_nd(
+                 ^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/array_algos/take.py", line 117, in take_nd
+    return _take_nd_ndarray(arr, indexer, axis, fill_value, allow_fill)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/lib/python3.12/site-packages/pandas/core/array_algos/take.py", line 162, in _take_nd_ndarray
+    func(arr, indexer, out, fill_value)
+KeyboardInterrupt

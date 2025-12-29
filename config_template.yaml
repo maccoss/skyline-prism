@@ -172,22 +172,23 @@ transition_rollup:
   # Requires at least 2 reference samples.
   learn_weights: false  # Learn parameters from reference samples
   
-  # Adaptive rollup uses a learned weight function with 5 features:
+  # Adaptive rollup uses a learned weight function with 4 features:
   #
   #   log(w) = beta_sqrt_intensity * (sqrt(intensity) - center) / scale
   #          + beta_mz * normalized_mz
   #          + beta_shape_corr * median_shape_corr
-  #          + beta_shape_corr_max * max_shape_corr
-  #          + beta_shape_corr_outlier * outlier_fraction
+  #          + beta_shape_corr_outlier * low_fraction
   #
   # Features:
   # - sqrt(intensity): Square root of mean intensity (less compression than log2),
   #                    centered at median and scaled by IQR
   # - normalized_mz: Fragment ion m/z normalized to [0,1] range
   # - median_shape_corr: Median shape correlation across all replicates
-  # - max_shape_corr: Maximum shape correlation (best case per transition)
-  # - outlier_fraction: Fraction of replicates with low shape correlation
-  #                     (below Q1 - 1.5*IQR threshold computed globally)
+  # - low_fraction: Fraction of replicates with low shape correlation
+  #                 (below shape_corr_low_threshold, default 0.5)
+  #
+  # Not optimized (reserved for future use):
+  # - beta_shape_corr_max: Max shape correlation - kept at 0.0
   #
   # Key insight: When all betas = 0, weights = 1 for all transitions,
   # equivalent to simple sum. This is the baseline for comparison.
@@ -196,7 +197,7 @@ transition_rollup:
   # - beta_sqrt_intensity >= 0 (higher intensity should not decrease weight)
   # - Other betas are unconstrained (can be positive or negative)
   #
-  # When learn_weights: true, all 5 betas are optimized simultaneously.
+  # When learn_weights: true, 4 betas are optimized simultaneously.
   # Normalization parameters (centers, scales, thresholds) are computed 
   # from reference samples and saved in metadata.json for reproducibility.
   #
@@ -204,8 +205,9 @@ transition_rollup:
     beta_sqrt_intensity: 0.0      # Weight by sqrt intensity (>= 0)
     beta_mz: 0.0                  # Weight by m/z (any value)
     beta_shape_corr: 0.0          # Weight by median shape correlation (any value)
-    beta_shape_corr_max: 0.0      # Weight by max shape correlation (any value)
-    beta_shape_corr_outlier: 0.0  # Weight by outlier fraction (any value)
+    beta_shape_corr_max: 0.0      # NOT OPTIMIZED - reserved for future use
+    beta_shape_corr_outlier: 0.0  # Weight by low-fraction (any value)
+    shape_corr_low_threshold: 0.5 # Threshold for "low" shape correlation (0-1)
     mz_normalize: true            # Normalize m/z to [0,1] range
     min_improvement_pct: 5.0      # Min improvement over sum to use adaptive weights
 

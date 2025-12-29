@@ -2502,7 +2502,7 @@ def plot_boxplot_two_stage(
         sample_medians = [np.median(d) for d in box_data if len(d) > 0]
         if sample_medians:
             median_of_medians = np.median(sample_medians)
-            ax.axhline(median_of_medians, color="darkred", linestyle="--", 
+            ax.axhline(median_of_medians, color="darkred", linestyle="--",
                        linewidth=1.5, alpha=0.7)
 
         ax.set_title(stage_label, fontsize=12, fontweight="bold")
@@ -2616,7 +2616,7 @@ def plot_boxplot_three_stage(
         sample_medians = [np.median(d) for d in box_data if len(d) > 0]
         if sample_medians:
             median_of_medians = np.median(sample_medians)
-            ax.axhline(median_of_medians, color="darkred", linestyle="--", 
+            ax.axhline(median_of_medians, color="darkred", linestyle="--",
                        linewidth=1.5, alpha=0.7)
 
         ax.set_title(stage_label, fontsize=12, fontweight="bold")
