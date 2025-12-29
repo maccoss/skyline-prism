@@ -149,51 +149,44 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 
 **Implementation**: `skyline_prism/batch_correction.py` → `combat()`, `combat_from_long()`
 
-### Variance Model Learning (Quality-Weighted Rollup)
+### Adaptive Rollup (Learned Transition Weighting)
 
-For quality-weighted transition→peptide aggregation, there are two approaches:
+For transition→peptide aggregation, the adaptive method learns optimal weighting parameters:
 
-**Legacy Variance Model** (`VarianceModelParams`):
-Uses a variance model: `var(signal) = alpha*signal + beta*signal^2 + gamma + delta*quality_penalty`
-Implementation: `skyline_prism/transition_rollup.py` → `learn_variance_model()`
-
-**New Quality Weight Model** (`QualityWeightParams`):
-Uses multiple quality signals to weight transitions:
+**Weight Formula** (`AdaptiveRollupParams`):
 ```
-w_t = intensity^alpha * shape_corr^beta * cv_penalty^delta * exp(-gamma * residual^2)
+w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)
 ```
 
 Where:
-- `intensity`: Mean intensity of transition (sqrt weighting by default, alpha=0.5)
-- `shape_corr`: Median shape correlation across samples (beta=1.0)
-- `cv_penalty`: Penalty for high CV of shape correlation (delta=0.5)
-- `residual`: Residual from preliminary median polish (gamma=1.0)
+- `log2(I) - center`: Log2 intensity centered by the peptide's mean log2 intensity
+- `mz_norm`: Product m/z normalized to [0, 1] range
+- `shape_corr`: Shape correlation from Skyline (median across samples)
 
-Key features:
-- Parameters learned on reference samples by minimizing CV
-- Validated on QC samples to ensure generalization
-- Automatic fallback to raw sum if quality-weighted doesn't improve QC CV
+Key insight: When all betas = 0, weights = 1 for all transitions (equivalent to simple sum). This provides a principled baseline.
+
+**Constraint**: `beta_log_intensity >= 0` (higher intensity should not decrease weight)
+
+**Learning process**:
+1. Parameters optimized on reference samples by minimizing median CV (L-BFGS-B optimizer)
+2. Validated on QC samples to prevent overfitting
+3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
 
 **Implementation**:
-- `skyline_prism/transition_rollup.py` → `learn_quality_weights()` - learns parameters
-- `skyline_prism/transition_rollup.py` → `rollup_peptide_quality_weighted()` - applies weights
-- `skyline_prism/transition_rollup.py` → `compute_transition_residuals()` - gets residuals from median polish
-- `skyline_prism/transition_rollup.py` → `compute_transition_quality_metrics()` - computes quality metrics
+- `skyline_prism/transition_rollup.py` → `learn_adaptive_weights()` - learns parameters
+- `skyline_prism/transition_rollup.py` → `rollup_peptide_adaptive()` - applies weights
+- `skyline_prism/transition_rollup.py` → `compute_adaptive_weights()` - computes weights from params
 
 **Configuration:**
 ```yaml
 transition_rollup:
-  method: "quality_weighted"
+  method: "adaptive"
   learn_variance_model: true  # Learn from reference samples
-  # New quality weight parameters (optional)
-  quality_weight_params:
-    alpha: 0.5      # intensity exponent (sqrt)
-    beta: 1.0       # shape_corr exponent
-    gamma: 1.0      # residual penalty
-    delta: 0.5      # shape_corr_cv penalty
-    shape_corr_agg: "median"
-    fallback_method: "sum"
-    min_improvement_pct: 5.0
+  adaptive_rollup:
+    beta_log_intensity: 0.5  # Weight for log2 intensity (must be >= 0)
+    beta_mz: 0.0             # Weight for normalized m/z
+    beta_shape_corr: 1.0     # Weight for shape correlation
+    min_improvement_pct: 5.0 # Required improvement over sum
 ```
 
 ## Development Guidelines
@@ -280,7 +273,7 @@ The authoritative technical specification. Contains:
 
 ### config_template.yaml
 Comprehensive configuration file with all options documented. Key sections:
-- `transition_rollup`: Transition→peptide rollup (method: median_polish, quality_weighted, sum)
+- `transition_rollup`: Transition→peptide rollup (method: median_polish, adaptive, sum)
 - `sample_outlier_detection`: Detect low-signal samples (method: iqr or fold_median, action: report or exclude)
 - `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
 - `batch_correction`: ComBat settings (method: combat)

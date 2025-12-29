@@ -1,7 +1,7 @@
 """Tests for transition rollup module.
 
-Tests the quality-weighted aggregation of transitions to peptides,
-median polish rollup, and variance model learning.
+Tests the adaptive weighted aggregation of transitions to peptides,
+median polish rollup, and adaptive weight learning.
 """
 
 import numpy as np
@@ -9,173 +9,14 @@ import pandas as pd
 import pytest
 
 from skyline_prism.transition_rollup import (
+    AdaptiveRollupParams,
+    AdaptiveRollupResult,
     TransitionRollupResult,
-    VarianceModelParams,
-    aggregate_transitions_weighted,
-    compute_transition_variance,
-    compute_transition_weights,
-    learn_variance_model,
+    compute_adaptive_weights,
+    learn_adaptive_weights,
+    rollup_peptide_adaptive,
     rollup_transitions_to_peptides,
 )
-
-
-class TestVarianceModelParams:
-    """Test VarianceModelParams dataclass."""
-
-    def test_default_values(self):
-        """Test default parameter values."""
-        params = VarianceModelParams()
-        assert params.alpha == 1.0
-        assert params.beta == 0.01
-        assert params.gamma == 100.0
-        assert params.delta == 1.0
-        assert params.shape_corr_exponent == 2.0
-        assert params.coelution_penalty == 10.0
-
-    def test_custom_values(self):
-        """Test custom parameter initialization."""
-        params = VarianceModelParams(
-            alpha=2.0,
-            beta=0.05,
-            gamma=200.0,
-            delta=1.5,
-            shape_corr_exponent=3.0,
-            coelution_penalty=5.0,
-        )
-        assert params.alpha == 2.0
-        assert params.beta == 0.05
-        assert params.gamma == 200.0
-        assert params.delta == 1.5
-        assert params.shape_corr_exponent == 3.0
-        assert params.coelution_penalty == 5.0
-
-
-class TestComputeTransitionVariance:
-    """Test variance computation from intensity and quality metrics."""
-
-    def test_variance_increases_with_intensity(self):
-        """Higher intensity should have higher variance (for Poisson component)."""
-        params = VarianceModelParams(alpha=1.0, beta=0.0, gamma=0.0, delta=0.0)
-
-        intensity = np.array([100.0, 1000.0, 10000.0])
-        shape_corr = np.array([1.0, 1.0, 1.0])
-        coeluting = np.array([True, True, True])
-
-        variance = compute_transition_variance(intensity, shape_corr, coeluting, params)
-
-        # With only alpha (shot noise), variance should scale linearly with intensity
-        assert variance[1] > variance[0]
-        assert variance[2] > variance[1]
-        np.testing.assert_array_almost_equal(variance, intensity)
-
-    def test_poor_shape_correlation_increases_variance(self):
-        """Low shape correlation should increase variance."""
-        params = VarianceModelParams(delta=2.0, shape_corr_exponent=2.0)
-
-        intensity = np.array([1000.0, 1000.0, 1000.0])
-        shape_corr = np.array([1.0, 0.5, 0.0])  # Perfect, medium, poor
-        coeluting = np.array([True, True, True])
-
-        variance = compute_transition_variance(intensity, shape_corr, coeluting, params)
-
-        # Poor correlation should have highest variance
-        assert variance[2] > variance[1] > variance[0]
-
-    def test_non_coeluting_increases_variance(self):
-        """Non-coeluting transitions should have higher variance."""
-        params = VarianceModelParams(coelution_penalty=10.0)
-
-        intensity = np.array([1000.0, 1000.0])
-        shape_corr = np.array([1.0, 1.0])
-        coeluting = np.array([True, False])
-
-        variance = compute_transition_variance(intensity, shape_corr, coeluting, params)
-
-        # Non-coeluting should have higher variance
-        assert variance[1] > variance[0]
-
-
-class TestComputeTransitionWeights:
-    """Test transition weight computation."""
-
-    def test_equal_quality_equal_weights(self):
-        """Transitions with equal quality should get equal weights."""
-        intensities = pd.DataFrame(
-            {
-                "S1": [1000.0, 1000.0, 1000.0],
-                "S2": [1000.0, 1000.0, 1000.0],
-            },
-            index=["t1", "t2", "t3"],
-        )
-        shape_corrs = pd.DataFrame(1.0, index=intensities.index, columns=intensities.columns)
-        coeluting = pd.DataFrame(True, index=intensities.index, columns=intensities.columns)
-        params = VarianceModelParams()
-
-        weights = compute_transition_weights(intensities, shape_corrs, coeluting, params)
-
-        # All weights should be equal
-        assert len(set(weights.values.round(6))) == 1
-
-    def test_low_quality_lower_weight(self):
-        """Transition with poor quality should get lower weight."""
-        intensities = pd.DataFrame(
-            {
-                "S1": [1000.0, 1000.0],
-                "S2": [1000.0, 1000.0],
-            },
-            index=["good", "poor"],
-        )
-        shape_corrs = pd.DataFrame(
-            {"S1": [1.0, 0.3], "S2": [1.0, 0.3]},
-            index=["good", "poor"],
-        )
-        coeluting = pd.DataFrame(True, index=intensities.index, columns=intensities.columns)
-        params = VarianceModelParams(delta=2.0)
-
-        weights = compute_transition_weights(intensities, shape_corrs, coeluting, params)
-
-        # Poor quality transition should have lower weight
-        assert weights["good"] > weights["poor"]
-
-
-class TestAggregateTransitionsWeighted:
-    """Test weighted aggregation of transitions."""
-
-    def test_simple_weighted_average(self):
-        """Test basic weighted average computation."""
-        # Log2 intensities
-        intensities = pd.DataFrame(
-            {
-                "S1": [10.0, 12.0, 11.0],  # Mean would be 11
-                "S2": [11.0, 13.0, 12.0],  # Mean would be 12
-            },
-            index=["t1", "t2", "t3"],
-        )
-        weights = pd.Series([1.0, 1.0, 1.0], index=["t1", "t2", "t3"])
-
-        abundances, uncertainties, n_used = aggregate_transitions_weighted(
-            intensities, weights, min_transitions=2
-        )
-
-        assert n_used == 3
-        np.testing.assert_almost_equal(abundances["S1"], 11.0)
-        np.testing.assert_almost_equal(abundances["S2"], 12.0)
-
-    def test_min_transitions_not_met(self):
-        """Should return NaN if min_transitions not met."""
-        intensities = pd.DataFrame(
-            {"S1": [10.0, 12.0], "S2": [11.0, 13.0]},
-            index=["t1", "t2"],
-        )
-        weights = pd.Series([1.0, 1.0], index=["t1", "t2"])
-
-        abundances, uncertainties, n_used = aggregate_transitions_weighted(
-            intensities, weights, min_transitions=5
-        )
-
-        assert n_used == 0
-        assert np.isnan(abundances["S1"])
-        assert np.isnan(abundances["S2"])
 
 
 class TestRollupTransitionsToPeptides:
@@ -213,26 +54,10 @@ class TestRollupTransitionsToPeptides:
                     950,  # ANOTHERK
                 ],
                 "shape_correlation": [0.95, 0.98, 0.90, 0.94, 0.97, 0.89, 0.92, 0.88, 0.91, 0.87],
-                "coeluting": [True] * 10,
+                "Product Mz": [400, 500, 600, 400, 500, 600, 450, 550, 450, 550],
             }
         )
         return data
-
-    def test_quality_weighted_rollup(self, sample_transition_data):
-        """Test quality-weighted rollup method."""
-        result = rollup_transitions_to_peptides(
-            sample_transition_data,
-            method="quality_weighted",
-            min_transitions=2,
-        )
-
-        assert isinstance(result, TransitionRollupResult)
-        assert "PEPTIDEK" in result.peptide_abundances.index
-        assert "ANOTHERK" in result.peptide_abundances.index
-        assert "S1" in result.peptide_abundances.columns
-        assert "S2" in result.peptide_abundances.columns
-        # Values should be present (not NaN)
-        assert not np.isnan(result.peptide_abundances.loc["PEPTIDEK", "S1"])
 
     def test_median_polish_rollup(self, sample_transition_data):
         """Test median polish rollup method."""
@@ -259,6 +84,22 @@ class TestRollupTransitionsToPeptides:
         # Sum should produce values
         assert not np.isnan(result.peptide_abundances.loc["PEPTIDEK", "S1"])
 
+    def test_adaptive_rollup(self, sample_transition_data):
+        """Test adaptive rollup method."""
+        result = rollup_transitions_to_peptides(
+            sample_transition_data,
+            method="adaptive",
+            min_transitions=2,
+        )
+
+        assert isinstance(result, TransitionRollupResult)
+        assert "PEPTIDEK" in result.peptide_abundances.index
+        assert "ANOTHERK" in result.peptide_abundances.index
+        assert "S1" in result.peptide_abundances.columns
+        assert "S2" in result.peptide_abundances.columns
+        # Values should be present (not NaN)
+        assert not np.isnan(result.peptide_abundances.loc["PEPTIDEK", "S1"])
+
     def test_unknown_method_raises(self, sample_transition_data):
         """Unknown rollup method should raise error."""
         with pytest.raises(ValueError, match="Unknown rollup method"):
@@ -268,474 +109,462 @@ class TestRollupTransitionsToPeptides:
             )
 
 
-class TestLearnVarianceModel:
-    """Test variance model learning from reference samples."""
-
-    @pytest.fixture
-    def reference_data(self):
-        """Create sample data with reference samples for parameter learning."""
-        np.random.seed(42)
-
-        # Create realistic transition data with multiple peptides
-        peptides = [f"PEPTIDE{i}K" for i in range(1, 11)]
-        transitions = ["y3", "y4", "y5", "y6"]
-        samples = ["Ref1", "Ref2", "Ref3", "Exp1", "Exp2"]
-
-        rows = []
-        for peptide in peptides:
-            base_intensity = np.random.uniform(500, 5000)
-            for transition in transitions:
-                trans_effect = np.random.uniform(0.5, 2.0)
-                for sample in samples:
-                    # Add sample-to-sample variation (technical noise)
-                    noise = np.random.normal(1.0, 0.1)
-                    intensity = base_intensity * trans_effect * noise
-                    rows.append(
-                        {
-                            "peptide_modified": peptide,
-                            "fragment_ion": transition,
-                            "replicate_name": sample,
-                            "area": max(10, intensity),
-                            "shape_correlation": np.random.uniform(0.8, 1.0),
-                            "coeluting": np.random.random() > 0.1,
-                        }
-                    )
-
-        return pd.DataFrame(rows)
-
-    def test_learn_variance_model_basic(self, reference_data):
-        """Test that variance model learning runs and returns valid parameters."""
-        reference_samples = ["Ref1", "Ref2", "Ref3"]
-
-        params = learn_variance_model(
-            reference_data,
-            reference_samples=reference_samples,
-            n_iterations=10,  # Few iterations for speed
-        )
-
-        assert isinstance(params, VarianceModelParams)
-        # All parameters should be positive
-        assert params.alpha > 0
-        assert params.beta > 0
-        assert params.gamma > 0
-        assert params.delta > 0
-        assert params.shape_corr_exponent > 0
-        assert params.coelution_penalty > 0
-
-    def test_learn_variance_model_insufficient_samples(self, reference_data):
-        """Should return defaults if < 2 reference samples."""
-        reference_samples = ["Ref1"]  # Only one sample
-
-        params = learn_variance_model(
-            reference_data,
-            reference_samples=reference_samples,
-        )
-
-        # Should return default parameters
-        default = VarianceModelParams()
-        assert params.alpha == default.alpha
-        assert params.beta == default.beta
-
-    def test_learn_variance_model_no_quality_columns(self):
-        """Should work without quality columns (using defaults for shape/coelution)."""
-        # Data without shape_correlation and coeluting columns
-        data = pd.DataFrame(
-            {
-                "peptide_modified": ["PEPTIDEK"] * 12,
-                "fragment_ion": ["y3", "y4", "y5"] * 4,
-                "replicate_name": ["Ref1", "Ref1", "Ref1", "Ref2", "Ref2", "Ref2",
-                                   "Ref3", "Ref3", "Ref3", "Exp1", "Exp1", "Exp1"],
-                "area": np.random.uniform(1000, 5000, 12),
-            }
-        )
-
-        reference_samples = ["Ref1", "Ref2", "Ref3"]
-
-        # Should not raise, should use defaults for missing columns
-        params = learn_variance_model(
-            data,
-            reference_samples=reference_samples,
-            n_iterations=5,
-        )
-
-        assert isinstance(params, VarianceModelParams)
-
-    def test_learned_params_improve_cv(self, reference_data):
-        """Learned parameters should potentially improve (or not worsen) CV."""
-        reference_samples = ["Ref1", "Ref2", "Ref3"]
-
-        # Get CV with default parameters
-        default_params = VarianceModelParams()
-        default_result = rollup_transitions_to_peptides(
-            reference_data[reference_data["replicate_name"].isin(reference_samples)],
-            method="quality_weighted",
-            params=default_params,
-        )
-        default_cvs = (
-            default_result.peptide_abundances.std(axis=1)
-            / default_result.peptide_abundances.mean(axis=1).abs()
-        )
-        default_median_cv = default_cvs.median()
-
-        # Learn parameters
-        learned_params = learn_variance_model(
-            reference_data,
-            reference_samples=reference_samples,
-            n_iterations=20,
-        )
-
-        # Get CV with learned parameters
-        learned_result = rollup_transitions_to_peptides(
-            reference_data[reference_data["replicate_name"].isin(reference_samples)],
-            method="quality_weighted",
-            params=learned_params,
-        )
-        learned_cvs = (
-            learned_result.peptide_abundances.std(axis=1)
-            / learned_result.peptide_abundances.mean(axis=1).abs()
-        )
-        learned_median_cv = learned_cvs.median()
-
-        # Learned CV should not be dramatically worse
-        # (may not always improve due to optimization stochasticity)
-        assert learned_median_cv < default_median_cv * 1.5
+# ============================================================================
+# Tests for AdaptiveRollup
+# ============================================================================
 
 
-# =============================================================================
-# Tests for new quality-weighted rollup (v2)
-# =============================================================================
-
-from skyline_prism.transition_rollup import (
-    QualityWeightParams,
-    QualityWeightResult,
-    TransitionQualityMetrics,
-    compute_quality_weights,
-    compute_transition_quality_metrics,
-    compute_transition_residuals,
-    learn_quality_weights,
-    rollup_peptide_quality_weighted,
-)
-
-
-class TestQualityWeightParams:
-    """Test QualityWeightParams dataclass."""
+class TestAdaptiveRollupParams:
+    """Test AdaptiveRollupParams dataclass."""
 
     def test_default_values(self):
         """Test default parameter values."""
-        params = QualityWeightParams()
-        assert params.alpha == 0.5  # sqrt weighting
-        assert params.beta == 1.0
-        assert params.gamma == 1.0
-        assert params.delta == 0.5
-        assert params.shape_corr_agg == "median"
-        assert params.fallback_method == "sum"
+        params = AdaptiveRollupParams()
+        # Default betas are all 0 (simple sum baseline)
+        assert params.beta_log_intensity == 0.0
+        assert params.beta_mz == 0.0
+        assert params.beta_shape_corr == 0.0
+        assert params.mz_min == 0.0
+        assert params.mz_max == 2000.0
+        assert params.log_intensity_center == 15.0
+        assert params.fallback_to_sum is True
         assert params.min_improvement_pct == 5.0
 
     def test_custom_values(self):
         """Test custom parameter initialization."""
-        params = QualityWeightParams(
-            alpha=1.0,
-            beta=2.0,
-            gamma=0.5,
-            delta=0.0,
-            shape_corr_agg="mean",
-            fallback_method="median_polish",
+        params = AdaptiveRollupParams(
+            beta_log_intensity=1.0,
+            beta_mz=-0.5,
+            beta_shape_corr=2.0,
+            mz_min=200.0,
+            mz_max=1500.0,
+            log_intensity_center=14.0,
+            fallback_to_sum=False,
             min_improvement_pct=10.0,
         )
-        assert params.alpha == 1.0
-        assert params.beta == 2.0
-        assert params.gamma == 0.5
-        assert params.delta == 0.0
-        assert params.shape_corr_agg == "mean"
-        assert params.fallback_method == "median_polish"
+        assert params.beta_log_intensity == 1.0
+        assert params.beta_mz == -0.5
+        assert params.beta_shape_corr == 2.0
+        assert params.mz_min == 200.0
+        assert params.mz_max == 1500.0
+        assert params.log_intensity_center == 14.0
+        assert params.fallback_to_sum is False
         assert params.min_improvement_pct == 10.0
 
 
-class TestComputeTransitionQualityMetrics:
-    """Test quality metric computation."""
+class TestComputeAdaptiveWeights:
+    """Test adaptive weight computation."""
 
-    def test_mean_intensity(self):
-        """Mean intensity is computed correctly."""
-        intensity = pd.DataFrame(
-            {"S1": [100.0, 200.0], "S2": [150.0, 250.0]},
-            index=["T1", "T2"],
+    def test_zero_betas_equal_weights(self):
+        """When all betas are zero, all weights should be equal (=1)."""
+        params = AdaptiveRollupParams(
+            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0
         )
-        shape_corr = pd.DataFrame(
-            {"S1": [0.9, 0.8], "S2": [0.95, 0.85]},
-            index=["T1", "T2"],
-        )
+        log_intensity = np.array([10.0, 12.0, 14.0, 16.0])
+        mz_values = np.array([400.0, 600.0, 800.0, 1000.0])
+        shape_corr = np.array([0.9, 0.95, 0.8, 0.99])
 
-        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
+        weights = compute_adaptive_weights(log_intensity, mz_values, shape_corr, params)
 
-        np.testing.assert_array_almost_equal(
-            metrics.mean_intensity.values, [125.0, 225.0]
-        )
-
-    def test_shape_corr_median(self):
-        """Median shape correlation is computed correctly."""
-        intensity = pd.DataFrame(
-            {"S1": [100.0, 100.0], "S2": [100.0, 100.0], "S3": [100.0, 100.0]},
-            index=["T1", "T2"],
-        )
-        shape_corr = pd.DataFrame(
-            {"S1": [0.9, 0.5], "S2": [0.8, 0.6], "S3": [0.7, 0.7]},
-            index=["T1", "T2"],
-        )
-
-        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
-
-        np.testing.assert_array_almost_equal(
-            metrics.shape_corr.values, [0.8, 0.6]
-        )
-
-    def test_shape_corr_cv(self):
-        """CV of shape correlation is computed correctly."""
-        intensity = pd.DataFrame(
-            {"S1": [100.0, 100.0], "S2": [100.0, 100.0]},
-            index=["T1", "T2"],
-        )
-        # T1 has low CV, T2 has high CV
-        shape_corr = pd.DataFrame(
-            {"S1": [0.9, 0.5], "S2": [0.9, 0.9]},
-            index=["T1", "T2"],
-        )
-
-        metrics = compute_transition_quality_metrics(intensity, shape_corr, "median")
-
-        # T1 has low CV (consistent), T2 has higher CV (variable)
-        assert metrics.shape_corr_cv["T1"] < metrics.shape_corr_cv["T2"]
-
-
-class TestComputeTransitionResiduals:
-    """Test residual computation via median polish."""
-
-    def test_returns_zero_for_single_transition(self):
-        """Single transition should return zero residual."""
-        intensity = pd.DataFrame(
-            {"S1": [15.0], "S2": [16.0]},  # log2 scale
-            index=["T1"],
-        )
-
-        residuals_mad = compute_transition_residuals(intensity)
-
-        assert len(residuals_mad) == 1
-        assert residuals_mad["T1"] == 0.0
-
-    def test_outlier_has_larger_residual(self):
-        """Transition with outlier value should have larger residual MAD."""
-        # T1-T3 have consistent pattern across samples (perfect additive model)
-        # T4 has outliers in S1 and S2 (much higher than expected from pattern)
-        intensity = pd.DataFrame(
-            {
-                "S1": [15.0, 14.0, 13.0, 25.0],  # T4 is anomalously high
-                "S2": [16.0, 15.0, 14.0, 26.0],  # T4 is anomalously high
-                "S3": [17.0, 16.0, 15.0, 14.0],  # T4 is normal
-                "S4": [18.0, 17.0, 16.0, 15.0],  # T4 is normal
-            },
-            index=["T1", "T2", "T3", "T4"],
-        )
-
-        residuals_mad = compute_transition_residuals(intensity)
-
-        # T4 should have higher residual MAD due to the outliers
-        # T1-T3 follow perfect additive model, so have zero residuals
-        assert residuals_mad["T4"] > 0
-        assert residuals_mad["T4"] > residuals_mad["T1"]
-
-
-class TestComputeQualityWeights:
-    """Test quality weight computation."""
+        np.testing.assert_array_almost_equal(weights, [1.0, 1.0, 1.0, 1.0])
 
     def test_higher_intensity_higher_weight(self):
-        """Higher intensity transitions should have higher weight (alpha > 0)."""
-        metrics = TransitionQualityMetrics(
-            mean_intensity=pd.Series([100.0, 1000.0, 10000.0], index=["T1", "T2", "T3"]),
-            shape_corr=pd.Series([1.0, 1.0, 1.0], index=["T1", "T2", "T3"]),
-            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
-            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+        """Higher intensity should have higher weight when beta_log_intensity > 0."""
+        params = AdaptiveRollupParams(
+            beta_log_intensity=1.0, beta_mz=0.0, beta_shape_corr=0.0,
+            log_intensity_center=14.0,  # Center at 14
         )
-        residuals_mad = pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"])
-        params = QualityWeightParams(alpha=0.5, beta=0.0, gamma=0.0, delta=0.0)
+        log_intensity = np.array([10.0, 14.0, 18.0])  # Below, at, and above center
+        mz_values = np.array([500.0, 500.0, 500.0])
+        shape_corr = np.array([0.9, 0.9, 0.9])
 
-        weights = compute_quality_weights(metrics, residuals_mad, params)
+        weights = compute_adaptive_weights(log_intensity, mz_values, shape_corr, params)
 
-        # Higher intensity = higher weight (sqrt relationship)
-        assert weights["T3"] > weights["T2"] > weights["T1"]
+        # Weights should increase with intensity
+        assert weights[0] < weights[1] < weights[2]
+        # Weight at center should be 1.0 (exp(0))
+        np.testing.assert_almost_equal(weights[1], 1.0)
 
-    def test_higher_shape_corr_higher_weight(self):
-        """Higher shape correlation should have higher weight."""
-        metrics = TransitionQualityMetrics(
-            mean_intensity=pd.Series([1000.0, 1000.0, 1000.0], index=["T1", "T2", "T3"]),
-            shape_corr=pd.Series([0.5, 0.8, 1.0], index=["T1", "T2", "T3"]),
-            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
-            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+    def test_shape_corr_increases_weight(self):
+        """Higher shape correlation should increase weight when beta_shape_corr > 0."""
+        params = AdaptiveRollupParams(
+            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=2.0
         )
-        residuals_mad = pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"])
-        params = QualityWeightParams(alpha=0.0, beta=1.0, gamma=0.0, delta=0.0)
+        log_intensity = np.array([14.0, 14.0, 14.0])
+        mz_values = np.array([500.0, 500.0, 500.0])
+        shape_corr = np.array([0.5, 0.75, 1.0])
 
-        weights = compute_quality_weights(metrics, residuals_mad, params)
+        weights = compute_adaptive_weights(log_intensity, mz_values, shape_corr, params)
 
-        assert weights["T3"] > weights["T2"] > weights["T1"]
+        # Weights should increase with shape correlation
+        assert weights[0] < weights[1] < weights[2]
 
-    def test_larger_residual_lower_weight(self):
-        """Larger residuals should result in lower weight."""
-        metrics = TransitionQualityMetrics(
-            mean_intensity=pd.Series([1000.0, 1000.0, 1000.0], index=["T1", "T2", "T3"]),
-            shape_corr=pd.Series([1.0, 1.0, 1.0], index=["T1", "T2", "T3"]),
-            shape_corr_cv=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
-            residuals_mad=pd.Series([0.0, 0.0, 0.0], index=["T1", "T2", "T3"]),
+    def test_mz_affects_weight(self):
+        """M/z should affect weight when beta_mz != 0."""
+        params = AdaptiveRollupParams(
+            beta_log_intensity=0.0, beta_mz=1.0, beta_shape_corr=0.0,
+            mz_min=400.0, mz_max=1000.0,  # Define range for normalization
         )
-        residuals_mad = pd.Series([0.0, 0.5, 1.0], index=["T1", "T2", "T3"])
-        params = QualityWeightParams(alpha=0.0, beta=0.0, gamma=1.0, delta=0.0)
+        log_intensity = np.array([14.0, 14.0, 14.0])
+        mz_values = np.array([400.0, 700.0, 1000.0])  # Low, mid, high m/z
+        shape_corr = np.array([0.9, 0.9, 0.9])
 
-        weights = compute_quality_weights(metrics, residuals_mad, params)
+        weights = compute_adaptive_weights(log_intensity, mz_values, shape_corr, params)
 
-        # Larger residual = lower weight (exponential decay)
-        assert weights["T1"] > weights["T2"] > weights["T3"]
+        # With positive beta_mz, higher m/z should have higher weight
+        assert weights[0] < weights[1] < weights[2]
 
 
-class TestRollupPeptideQualityWeighted:
-    """Test full quality-weighted rollup for a single peptide."""
+class TestRollupPeptideAdaptive:
+    """Test adaptive peptide rollup."""
 
-    def test_basic_rollup(self):
-        """Basic rollup produces expected outputs."""
-        intensity = pd.DataFrame(
-            {"S1": [15.0, 14.0, 13.0], "S2": [16.0, 15.0, 14.0]},  # log2 scale
-            index=["T1", "T2", "T3"],
-        )
-        shape_corr = pd.DataFrame(
-            {"S1": [1.0, 0.9, 0.8], "S2": [0.95, 0.85, 0.75]},
-            index=["T1", "T2", "T3"],
-        )
-        params = QualityWeightParams()
-
-        abundances, uncertainties, weights, n_used = rollup_peptide_quality_weighted(
-            intensity, shape_corr, params, min_transitions=2
+    @pytest.fixture
+    def sample_intensity_matrix(self):
+        """Create sample intensity matrix in log2 scale."""
+        return pd.DataFrame(
+            {
+                "Sample1": [14.0, 13.0, 12.0],
+                "Sample2": [14.5, 13.5, 12.5],
+                "Sample3": [15.0, 14.0, 13.0],
+            },
+            index=["Trans1", "Trans2", "Trans3"],
         )
 
-        assert len(abundances) == 2  # Two samples
-        assert len(weights) == 3  # Three transitions
-        assert n_used == 3
-        assert not abundances.isna().any()
+    @pytest.fixture
+    def sample_mz_values(self):
+        """Create sample m/z values."""
+        return pd.Series([400.0, 600.0, 800.0], index=["Trans1", "Trans2", "Trans3"])
+
+    @pytest.fixture
+    def sample_shape_corr_matrix(self):
+        """Create sample shape correlation matrix."""
+        return pd.DataFrame(
+            {
+                "Sample1": [0.95, 0.90, 0.85],
+                "Sample2": [0.92, 0.88, 0.82],
+                "Sample3": [0.98, 0.93, 0.88],
+            },
+            index=["Trans1", "Trans2", "Trans3"],
+        )
+
+    def test_basic_rollup(
+        self, sample_intensity_matrix, sample_mz_values, sample_shape_corr_matrix
+    ):
+        """Test basic adaptive rollup returns expected structure."""
+        params = AdaptiveRollupParams()
+
+        abund, uncert, weights, n_used = rollup_peptide_adaptive(
+            sample_intensity_matrix,
+            sample_mz_values,
+            sample_shape_corr_matrix,
+            params,
+        )
+
+        assert isinstance(abund, pd.Series)
+        assert isinstance(uncert, pd.Series)
+        assert isinstance(weights, pd.Series)
+        assert len(abund) == 3  # 3 samples
+        assert n_used == 3  # 3 transitions
 
     def test_min_transitions_not_met(self):
-        """Returns NaN when minimum transitions not met."""
-        intensity = pd.DataFrame(
-            {"S1": [15.0, 14.0], "S2": [16.0, 15.0]},
-            index=["T1", "T2"],
+        """Should return NaN when min_transitions not met."""
+        intensity_matrix = pd.DataFrame(
+            {"Sample1": [14.0, 13.0]},
+            index=["Trans1", "Trans2"],
         )
-        shape_corr = pd.DataFrame(
-            {"S1": [1.0, 0.9], "S2": [0.95, 0.85]},
-            index=["T1", "T2"],
+        mz_values = pd.Series([400.0, 600.0], index=["Trans1", "Trans2"])
+        shape_corr_matrix = pd.DataFrame(
+            {"Sample1": [0.9, 0.85]},
+            index=["Trans1", "Trans2"],
         )
-        params = QualityWeightParams()
+        params = AdaptiveRollupParams()
 
-        abundances, uncertainties, weights, n_used = rollup_peptide_quality_weighted(
-            intensity, shape_corr, params, min_transitions=3
+        abund, _, _, n_used = rollup_peptide_adaptive(
+            intensity_matrix, mz_values, shape_corr_matrix, params, min_transitions=3
         )
 
-        assert abundances.isna().all()
+        assert all(np.isnan(abund))
+        # n_used is 0 when min_transitions not met (function returns early)
         assert n_used == 0
 
+    def test_zero_betas_equals_sum(
+        self, sample_intensity_matrix, sample_mz_values, sample_shape_corr_matrix
+    ):
+        """When all betas are 0, result should equal simple sum."""
+        params = AdaptiveRollupParams(
+            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0
+        )
 
-class TestLearnQualityWeights:
-    """Test quality weight parameter learning."""
+        abund_adaptive, _, _, _ = rollup_peptide_adaptive(
+            sample_intensity_matrix,
+            sample_mz_values,
+            sample_shape_corr_matrix,
+            params,
+        )
+
+        # Calculate expected sum (on linear scale, then back to log2)
+        linear = 2**sample_intensity_matrix
+        expected = np.log2(linear.sum(axis=0))
+
+        np.testing.assert_array_almost_equal(
+            abund_adaptive.values, expected.values, decimal=10
+        )
+
+
+class TestLearnAdaptiveWeights:
+    """Test learning adaptive weight parameters."""
 
     @pytest.fixture
     def sample_data(self):
-        """Create sample transition data with reference and QC samples."""
+        """Create sample data with transitions, peptides, and samples."""
         np.random.seed(42)
-        n_peptides = 20
-        n_transitions = 5
-        n_ref = 4
-        n_qc = 3
+
+        peptides = ["Pep1"] * 4 + ["Pep2"] * 3 + ["Pep3"] * 5
+        transitions = (
+            ["Pep1_y3", "Pep1_y4", "Pep1_y5", "Pep1_y6"]
+            + ["Pep2_y3", "Pep2_y4", "Pep2_y5"]
+            + ["Pep3_y3", "Pep3_y4", "Pep3_y5", "Pep3_y6", "Pep3_y7"]
+        )
+
+        samples = ["Ref1", "Ref2", "Ref3", "Ref4", "QC1", "QC2", "QC3", "Exp1", "Exp2"]
+        mz_values = [400, 500, 600, 700, 450, 550, 650, 480, 580, 680, 780, 880]
 
         rows = []
-        for pep_idx in range(n_peptides):
-            peptide = f"PEP{pep_idx}"
-            base_intensity = 10 ** np.random.uniform(3, 6)  # Vary peptide intensity
-
-            for trans_idx in range(n_transitions):
-                transition = f"T{trans_idx}"
-                trans_factor = np.random.uniform(0.5, 1.5)  # Transition effect
-                # Quality varies by transition
-                base_quality = 0.7 + 0.3 * (1 - trans_idx / n_transitions)
-
-                for rep_idx in range(n_ref):
-                    sample = f"Ref{rep_idx + 1}"
-                    noise = np.random.normal(1.0, 0.15)  # 15% CV
-                    intensity = base_intensity * trans_factor * noise
-                    shape_corr = base_quality + np.random.normal(0, 0.05)
-
-                    rows.append({
-                        "peptide_modified": peptide,
-                        "fragment_ion": transition,
-                        "replicate_name": sample,
-                        "area": max(intensity, 1),
-                        "shape_correlation": np.clip(shape_corr, 0, 1),
-                    })
-
-                for rep_idx in range(n_qc):
-                    sample = f"QC{rep_idx + 1}"
-                    noise = np.random.normal(1.0, 0.15)
-                    intensity = base_intensity * trans_factor * noise
-                    shape_corr = base_quality + np.random.normal(0, 0.05)
-
-                    rows.append({
-                        "peptide_modified": peptide,
-                        "fragment_ion": transition,
-                        "replicate_name": sample,
-                        "area": max(intensity, 1),
-                        "shape_correlation": np.clip(shape_corr, 0, 1),
-                    })
+        for i, (pep, trans) in enumerate(zip(peptides, transitions)):
+            base_intensity = 10000 * (1 + i * 0.1)
+            mz = mz_values[i]
+            for j, sample in enumerate(samples):
+                # Add some sample-specific variation
+                intensity = base_intensity * (1 + np.random.normal(0, 0.1))
+                shape_corr = 0.85 + np.random.uniform(0, 0.15)
+                rows.append(
+                    {
+                        "Peptide Modified Sequence": pep,
+                        "Fragment Ion": trans,
+                        "Replicate Name": sample,
+                        "Area": max(intensity, 100),
+                        "Product Mz": mz,
+                        "Shape Correlation": shape_corr,
+                    }
+                )
 
         return pd.DataFrame(rows)
 
     def test_returns_result(self, sample_data):
-        """Learning returns QualityWeightResult."""
+        """Should return AdaptiveRollupResult."""
         reference_samples = ["Ref1", "Ref2", "Ref3", "Ref4"]
-        pool_samples = ["QC1", "QC2", "QC3"]
+        qc_samples = ["QC1", "QC2", "QC3"]
 
-        result = learn_quality_weights(
+        result = learn_adaptive_weights(
             sample_data,
             reference_samples=reference_samples,
-            pool_samples=pool_samples,
+            qc_samples=qc_samples,
+            peptide_col="Peptide Modified Sequence",
+            transition_col="Fragment Ion",
+            sample_col="Replicate Name",
+            abundance_col="Area",
             n_iterations=5,
         )
 
-        assert isinstance(result, QualityWeightResult)
-        assert isinstance(result.params, QualityWeightParams)
-        assert np.isfinite(result.reference_cv_before)
-        assert np.isfinite(result.reference_cv_after)
-        assert np.isfinite(result.pool_cv_before)
-        assert np.isfinite(result.pool_cv_after)
+        assert isinstance(result, AdaptiveRollupResult)
+        assert isinstance(result.params, AdaptiveRollupParams)
+        assert np.isfinite(result.reference_cv_sum)
+        assert np.isfinite(result.reference_cv_adaptive)
 
     def test_insufficient_reference_samples(self, sample_data):
         """Returns fallback when insufficient reference samples."""
         reference_samples = ["Ref1"]  # Only one sample
-        pool_samples = ["QC1", "QC2"]
+        qc_samples = ["QC1", "QC2"]
 
-        result = learn_quality_weights(
+        result = learn_adaptive_weights(
             sample_data,
             reference_samples=reference_samples,
-            pool_samples=pool_samples,
+            qc_samples=qc_samples,
+            peptide_col="Peptide Modified Sequence",
+            transition_col="Fragment Ion",
+            sample_col="Replicate Name",
+            abundance_col="Area",
         )
 
-        assert result.use_quality_weights is False
-        assert "Insufficient reference samples" in result.fallback_reason
+        assert result.use_adaptive_weights is False
+        assert "reference samples" in result.fallback_reason.lower()
 
-    def test_learning_improves_reference_cv(self, sample_data):
-        """Learned parameters should improve or maintain CV on reference."""
+    def test_learned_params_constraints(self, sample_data):
+        """Learned beta_log_intensity should be >= 0 (constraint)."""
         reference_samples = ["Ref1", "Ref2", "Ref3", "Ref4"]
-        pool_samples = ["QC1", "QC2", "QC3"]
+        qc_samples = ["QC1", "QC2", "QC3"]
 
-        result = learn_quality_weights(
+        result = learn_adaptive_weights(
             sample_data,
             reference_samples=reference_samples,
-            pool_samples=pool_samples,
-            n_iterations=20,
+            qc_samples=qc_samples,
+            peptide_col="Peptide Modified Sequence",
+            transition_col="Fragment Ion",
+            sample_col="Replicate Name",
+            abundance_col="Area",
+            n_iterations=10,
         )
 
-        # Reference CV should improve (or not worsen much)
-        # Allow small degradation due to optimization stochasticity
-        assert result.reference_cv_after <= result.reference_cv_before * 1.1
+        # beta_log_intensity should respect the >= 0 constraint
+        assert result.params.beta_log_intensity >= 0.0
+
+
+class TestAdaptiveZeroBetasEqualsSum:
+    """Test that adaptive rollup with all betas=0 equals simple sum.
+
+    This is a critical property: when all beta coefficients are zero,
+    all transition weights should be 1.0, making the weighted sum
+    equivalent to a simple sum. This provides a principled baseline
+    and ensures the adaptive method degrades gracefully.
+    """
+
+    @pytest.fixture
+    def multi_peptide_data(self):
+        """Create multi-peptide transition data for comprehensive testing."""
+        np.random.seed(12345)
+
+        data_rows = []
+        peptides = ["AAAPEPTIDEK", "BBBSEQUENCER", "CCCANALYZEK", "DDDDETECTOR"]
+        samples = ["Sample_A", "Sample_B", "Sample_C", "Sample_D", "Sample_E"]
+
+        for pep_idx, peptide in enumerate(peptides):
+            n_transitions = np.random.randint(4, 8)  # 4-7 transitions per peptide
+            base_intensity = 5000 * (1 + pep_idx)
+
+            for t_idx in range(n_transitions):
+                frag_ion = f"y{t_idx + 3}"
+                mz = 350 + t_idx * 100 + pep_idx * 50
+
+                for sample in samples:
+                    # Vary intensity by sample with realistic noise
+                    sample_factor = 0.8 + 0.4 * np.random.random()
+                    trans_factor = 0.5 + np.random.random()  # Transition-specific
+                    intensity = base_intensity * sample_factor * trans_factor
+                    shape_corr = 0.7 + 0.3 * np.random.random()
+
+                    data_rows.append({
+                        "Peptide Modified Sequence": peptide,
+                        "Fragment Ion": frag_ion,
+                        "Replicate Name": sample,
+                        "Area": intensity,
+                        "Product Mz": mz,
+                        "Shape Correlation": shape_corr,
+                    })
+
+        return pd.DataFrame(data_rows)
+
+    def test_zero_betas_equals_sum_single_peptide(self, multi_peptide_data):
+        """For a single randomly selected peptide, adaptive(betas=0) should equal sum."""
+        # Pick a random peptide
+        np.random.seed(42)
+        peptide = np.random.choice(multi_peptide_data["Peptide Modified Sequence"].unique())
+        pep_data = multi_peptide_data[
+            multi_peptide_data["Peptide Modified Sequence"] == peptide
+        ].copy()
+        samples = pep_data["Replicate Name"].unique().tolist()
+
+        # Method 1: Simple sum of transition areas per sample
+        sum_by_sample = pep_data.groupby("Replicate Name")["Area"].sum()
+
+        # Method 2: Adaptive rollup with all betas = 0
+        # First, pivot to get intensity matrix (log2 scale)
+        intensity_pivot = pep_data.pivot_table(
+            index="Fragment Ion",
+            columns="Replicate Name",
+            values="Area",
+            aggfunc="first",
+        )
+        intensity_log2 = np.log2(np.maximum(intensity_pivot.values, 1.0))
+        intensity_matrix = pd.DataFrame(
+            intensity_log2, index=intensity_pivot.index, columns=intensity_pivot.columns
+        )
+
+        # Get m/z values
+        mz_pivot = pep_data.pivot_table(
+            index="Fragment Ion", columns="Replicate Name", values="Product Mz", aggfunc="first"
+        )
+        mz_values = mz_pivot.apply(lambda x: x.dropna().iloc[0] if x.notna().any() else 0.0, axis=1)
+
+        # Get shape correlation
+        shape_pivot = pep_data.pivot_table(
+            index="Fragment Ion",
+            columns="Replicate Name",
+            values="Shape Correlation",
+            aggfunc="first",
+        )
+        shape_pivot = shape_pivot.reindex(index=intensity_matrix.index, columns=samples).fillna(1.0)
+
+        # Adaptive rollup with zero betas
+        params = AdaptiveRollupParams(
+            beta_log_intensity=0.0,
+            beta_mz=0.0,
+            beta_shape_corr=0.0,
+        )
+
+        abund_adaptive, _, weights, _ = rollup_peptide_adaptive(
+            intensity_matrix,
+            mz_values,
+            shape_pivot,
+            params,
+            min_transitions=1,
+        )
+
+        # All weights should be exactly 1.0
+        np.testing.assert_array_almost_equal(
+            weights.values, np.ones(len(weights)), decimal=10,
+            err_msg="Weights should all be 1.0 when betas are 0",
+        )
+
+        # Adaptive result is log2(weighted sum of linear values)
+        # With weights=1, this equals log2(sum of linear values)
+        expected_log2 = np.log2(sum_by_sample)
+
+        for sample in samples:
+            np.testing.assert_almost_equal(
+                abund_adaptive[sample],
+                expected_log2[sample],
+                decimal=6,
+                err_msg=f"Adaptive(betas=0) should equal log2(sum) for sample {sample}",
+            )
+
+    def test_zero_betas_equals_sum_all_peptides(self, multi_peptide_data):
+        """Verify across all peptides that adaptive(betas=0) equals sum."""
+        samples = multi_peptide_data["Replicate Name"].unique().tolist()
+        peptides = multi_peptide_data["Peptide Modified Sequence"].unique()
+
+        for peptide in peptides:
+            pep_data = multi_peptide_data[
+                multi_peptide_data["Peptide Modified Sequence"] == peptide
+            ].copy()
+
+            # Simple sum
+            sum_by_sample = pep_data.groupby("Replicate Name")["Area"].sum()
+
+            # Adaptive with zero betas (via main rollup function)
+            result = rollup_transitions_to_peptides(
+                pep_data,
+                method="adaptive",
+                peptide_col="Peptide Modified Sequence",
+                transition_col="Fragment Ion",
+                sample_col="Replicate Name",
+                abundance_col="Area",
+                adaptive_params=AdaptiveRollupParams(
+                    beta_log_intensity=0.0,
+                    beta_mz=0.0,
+                    beta_shape_corr=0.0,
+                ),
+                min_transitions=1,
+            )
+
+            # Result is in log2 scale
+            expected_log2 = np.log2(sum_by_sample)
+
+            for sample in samples:
+                adaptive_val = result.peptide_abundances.loc[peptide, sample]
+                expected_val = expected_log2[sample]
+                np.testing.assert_almost_equal(
+                    adaptive_val,
+                    expected_val,
+                    decimal=5,
+                    err_msg=f"Mismatch for peptide {peptide}, sample {sample}",
+                )

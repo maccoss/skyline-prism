@@ -288,11 +288,11 @@ For drilling down into protein quantification or peptide-level analysis.
 | residual | median_polish | Deviation from expected (row + column effects) |
 | row_effect | median_polish | Peptide ionization efficiency (α_i) |
 | topn_selected | topn (protein rollup) | Boolean - was this peptide used for protein quant? |
-| transition_weight | quality_weighted (transition rollup) | Weight assigned to each transition (0-1) |
+| transition_weight | adaptive (transition rollup) | Weight assigned to each transition (0-1) |
 
 For **top-N rollup** (peptide→protein), the `topn_selected` column allows users to see exactly which peptides contributed to each protein's abundance. The same peptides are selected across all samples for comparability.
 
-For **quality-weighted rollup** (transition→peptide only), the `transition_weight` column shows how much each transition contributed, based on Skyline quality metrics (ShapeCorrelation, Coeluting).
+For **adaptive rollup** (transition→peptide only), the `transition_weight` column shows how much each transition contributed, based on learned weights from intensity, m/z, and ShapeCorrelation.
 
 #### 3. `{name}_metadata.json` - Processing Metadata
 
@@ -322,16 +322,15 @@ Complete provenance and parameters for reproducibility.
   
   "processing_parameters": {
     "transition_rollup": {
-      "method": "quality_weighted",
+      "method": "adaptive",
       "min_transitions": 3,
       "use_ms1": false,
-      "variance_model": {
-        "alpha": 1.23,
-        "beta": 0.015,
-        "gamma": 85.2,
-        "delta": 0.89,
-        "shape_corr_exponent": 2.1,
-        "coelution_penalty": 8.5,
+      "adaptive_params": {
+        "beta_log_intensity": 0.5,
+        "beta_mz": 0.0,
+        "beta_shape_corr": 1.0,
+        "mz_min": 350.0,
+        "mz_max": 1200.0,
         "learned_from": "reference_samples",
         "n_reference_samples": 6
       }
@@ -1746,13 +1745,17 @@ sample_annotations:
 # Stage 0: Transition to peptide rollup (if needed)
 transition_rollup:
   enabled: false  # Set true if input has transition-level data
-  method: "median_polish"  # options: median_polish, sum, quality_weighted
+  method: "median_polish"  # options: median_polish, sum, adaptive
   use_ms1: false  # Whether to include MS1 in quantification (default: no)
   min_transitions: 3  # Minimum transitions required
   
-  # For quality_weighted method - Skyline column names
-  shape_correlation_col: "ShapeCorrelation"  # Correlation with median transition
-  coeluting_col: "Coeluting"  # Boolean: apex within integration boundaries
+  # For adaptive method - uses learned weights from intensity, m/z, shape_corr
+  # Weight formula: w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)
+  adaptive_rollup:
+    beta_log_intensity: 0.5  # Weight for log2 intensity (must be >= 0)
+    beta_mz: 0.0             # Weight for normalized m/z
+    beta_shape_corr: 1.0     # Weight for shape correlation
+    min_improvement_pct: 5.0 # Required improvement over sum to use adaptive
 
 # Sample outlier detection (one-sided, low signal only)
 # Detects samples with abnormally low signal (failed injections, degradation)

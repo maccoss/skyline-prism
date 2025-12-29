@@ -1,0 +1,47 @@
+# PRISM Configuration for Adaptive Transition Rollup Testing
+# All beta defaults are 0.0 - this makes simple sum the baseline
+sample_annotations:
+  # Pool samples are inter-experiment reference (for learning RT correction)
+  reference_pattern:
+    - "-Pool_"
+    - "-Pool"
+  # Carl samples are intra-experiment QC (for validation)
+  qc_pattern:
+    - "-Carl_"
+    - "-Carl"
+  # Everything else is experimental
+
+parsimony:
+  fasta_path: "/home/maccoss/GitHub-Repo/maccoss/skyline-prism/example-files/uniprot_mouse_may2025_contam_yeastENO1.fasta"
+  shared_peptide_handling: "all_groups"
+
+transition_rollup:
+  method: "adaptive"
+  learn_adaptive_weights: true  # Learn optimal parameters from reference samples
+  adaptive_rollup:
+    # All defaults are 0.0 - when all betas = 0, weights = 1 (equivalent to simple sum)
+    # Learning will optimize these to improve on the baseline
+    beta_log_intensity: 0.0  # Weight for log2 intensity (must be >= 0)
+    beta_mz: 0.0             # Weight for normalized m/z
+    beta_shape_corr: 0.0     # Weight for shape correlation
+    mz_min: 200.0            # Min m/z for normalization
+    mz_max: 1960.0           # Max m/z for normalization
+    min_improvement_pct: 5.0 # Required improvement over sum to use learned weights
+
+protein_rollup:
+  method: "median_polish"
+
+global_normalization:
+  method: "median"
+
+batch_correction:
+  method: "combat"
+  enabled: true
+
+rt_correction:
+  enabled: false  # Disabled by default
+
+qc_report:
+  enabled: true
+  save_plots: true
+  embed_plots: true

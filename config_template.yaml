@@ -129,13 +129,13 @@ sample_outlier_detection:
 transition_rollup:
   enabled: true  # Set true if input has individual transitions
   
-  # Rollup method: sum, median_polish, quality_weighted, topn
+  # Rollup method: sum, median_polish, adaptive, topn
   # - sum: Simple sum of all fragment intensities (default, robust)
   # - median_polish: Tukey median polish (robust to interference)
-  # - quality_weighted: Weight by intensity and shape correlation consistency
+  # - adaptive: Learned weight function based on intensity, m/z, and shape correlation
   # - topn: Select top N transitions by correlation consistency, weight by sqrt(intensity)
   #
-  # Note: Sum is recommended for most datasets. Quality_weighted and topn
+  # Note: Sum is recommended for most datasets. Adaptive and topn
   # may improve CV for high-quality data with good shape correlation.
   method: "sum"
   
@@ -164,38 +164,32 @@ transition_rollup:
   topn_weighting: "sqrt"
   
   # -------------------------------------------------------------------------
-  # Quality-Weighted Method Parameters (only used if method: quality_weighted)
+  # Adaptive Rollup Parameters (only used if method: adaptive)
   # -------------------------------------------------------------------------
-  # Learn variance model from reference samples (only for quality_weighted)
-  # When true, optimizes quality weight parameters (alpha, beta, gamma, delta)
-  # by minimizing median CV across peptides in reference samples.
-  # Validated on pool samples to ensure generalization.
+  # Learn parameters from reference samples (recommended for adaptive method)
+  # When true, optimizes beta parameters by minimizing median CV across peptides
+  # in reference samples. Validated on pool samples to ensure generalization.
   # Requires at least 2 reference samples.
   learn_weights: false  # Learn parameters from reference samples
   
-  # For quality_weighted method - explicit weight parameters
-  # Only used if learn_weights is false. If neither is specified,
-  # sensible defaults are used.
-  # 
-  # Weight formula: w_t = intensity^alpha * shape_corr^beta * cv_penalty^delta * exp(-gamma * residual^2)
-  # Set gamma: 0 to disable residual penalty (much faster, skips median polish)
-  # 
-  # quality_weight_params:
-  #   alpha: 0.5        # Intensity exponent (sqrt weighting)
-  #   beta: 1.0         # Shape correlation exponent
-  #   gamma: 1.0        # Residual penalty (from median polish)
-  #   delta: 0.5        # Shape correlation CV penalty
-  #   shape_corr_agg: "median"  # How to aggregate shape correlation
-  #   min_improvement_pct: 5.0  # Minimum improvement over sum to use quality weights
-    
-  # New quality weight parameters (used as initial values for learning)
-  quality_weight_params:
-    alpha: 0.5      # intensity exponent (sqrt)
-    beta: 1.0       # shape_corr exponent
-    gamma: 0      # residual penalty
-    delta: 0.5      # shape_corr_cv penalty
-    shape_corr_agg: "median"
-    min_improvement_pct: 5.0
+  # Adaptive rollup uses a learned weight function:
+  #   w_t = exp(beta_intensity * (log2(intensity) - center) + 
+  #             beta_mz * normalized_mz + 
+  #             beta_shape * shape_corr)
+  #
+  # Key insight: When all betas = 0, weights = 1 for all transitions,
+  # equivalent to simple sum. This is the baseline for comparison.
+  #
+  # Constraints:
+  # - beta_log_intensity >= 0 (higher intensity = higher weight)
+  # - Other betas can be positive or negative
+  #
+  adaptive_rollup:
+    beta_log_intensity: 0.5   # Weight by log intensity (0 = no weighting)
+    beta_mz: 0.0              # Weight by m/z (0 = no weighting)
+    beta_shape_corr: 0.0      # Weight by shape correlation (0 = no weighting)
+    mz_normalize: true        # Normalize m/z to [0,1] range
+    min_improvement_pct: 5.0  # Min improvement over sum to use adaptive weights
 
 # =============================================================================
 # Stage 1: RT-Aware Normalization (DISABLED BY DEFAULT)

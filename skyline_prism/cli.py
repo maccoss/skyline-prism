@@ -106,7 +106,7 @@ def load_config(config_path: Path | None) -> dict:
             'enabled': False,
             'method': 'median_polish',
             'min_transitions': 3,
-            'learn_weights': False,  # Learn from reference samples
+            'learn_adaptive_weights': False,  # Learn from reference samples
         },
         'rt_correction': {
             'enabled': False,  # Disabled by default per SPECIFICATION
@@ -487,7 +487,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         rollup_transitions_sorted,
     )
     from .transition_rollup import (
-        QualityWeightParams,
+        AdaptiveRollupParams,
     )
     from .parsimony import (
         build_peptide_protein_map,
@@ -661,9 +661,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     # Get other column names (use config or auto-detect)
-    sample_col = config['data']['sample_column']
-    if sample_col not in available_columns and 'Replicate Name' in available_columns:
+    # ALWAYS prefer 'Sample ID' (unique across batches) over 'Replicate Name'
+    # This ensures duplicate sample names in different batches are kept separate
+    if 'Sample ID' in available_columns:
+        sample_col = 'Sample ID'
+        logger.info("  Using 'Sample ID' for unique sample identification across batches")
+    elif config['data']['sample_column'] in available_columns:
+        sample_col = config['data']['sample_column']
+    elif 'Replicate Name' in available_columns:
         sample_col = 'Replicate Name'
+    else:
+        sample_col = config['data']['sample_column']
 
     abundance_col = config['data']['abundance_column']
     if abundance_col not in available_columns and 'Area' in available_columns:
@@ -730,34 +738,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     rollup_method = config['transition_rollup'].get('method', 'sum')
     use_ms1 = config['transition_rollup'].get('use_ms1', False)
     min_transitions = config['transition_rollup'].get('min_transitions', 3)
-    learn_weights = config['transition_rollup'].get('learn_weights', False)
+    # Support both 'learn_weights' and 'learn_adaptive_weights' config keys
+    learn_weights = config['transition_rollup'].get(
+        'learn_adaptive_weights',
+        config['transition_rollup'].get('learn_weights', False)
+    )
 
     logger.info(f"  Rollup method: {rollup_method}")
     logger.info(f"  Include MS1 precursors: {use_ms1}")
     logger.info(f"  Min transitions: {min_transitions}")
 
-    # Initialize quality weight params (None for non-quality_weighted methods)
-    quality_weight_params = None
+    # Initialize adaptive rollup params (None for non-adaptive methods)
+    adaptive_params = None
 
-    if rollup_method == "quality_weighted":
+    if rollup_method == "adaptive":
         # Check for explicit parameters in config
-        qw_config = config['transition_rollup'].get('quality_weight_params', {})
-        quality_weight_params = QualityWeightParams(
-            alpha=qw_config.get('alpha', 0.5),
-            beta=qw_config.get('beta', 1.0),
-            gamma=qw_config.get('gamma', 1.0),
-            delta=qw_config.get('delta', 0.5),
-            shape_corr_agg=qw_config.get('shape_corr_agg', 'median'),
-            min_improvement_pct=qw_config.get('min_improvement_pct', 5.0),
+        ar_config = config['transition_rollup'].get('adaptive_rollup', {})
+        adaptive_params = AdaptiveRollupParams(
+            beta_log_intensity=ar_config.get('beta_log_intensity', 0.0),
+            beta_mz=ar_config.get('beta_mz', 0.0),
+            beta_shape_corr=ar_config.get('beta_shape_corr', 0.0),
+            mz_min=ar_config.get('mz_min', 0.0),
+            mz_max=ar_config.get('mz_max', 2000.0),
+            log_intensity_center=ar_config.get('log_intensity_center', 15.0),
+            min_improvement_pct=ar_config.get('min_improvement_pct', 5.0),
         )
 
         # Learn weights from reference/pool samples if enabled
         if learn_weights:
-            from .transition_rollup import learn_quality_weights
+            from .transition_rollup import learn_adaptive_weights
 
             # Extract sample types from metadata
+            # Use sample_id (unique across batches) if available, else sample
+            meta_id_col = 'sample_id' if 'sample_id' in metadata_df.columns else 'sample'
             sample_types = dict(
-                zip(metadata_df['sample'], metadata_df['sample_type'])
+                zip(metadata_df[meta_id_col], metadata_df['sample_type'])
             )
             ref_samples = [
                 s for s, t in sample_types.items() if t == 'reference'
@@ -767,7 +782,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             ]
 
             if len(ref_samples) >= 2:
-                logger.info("  Learning quality weight parameters...")
+                logger.info("  Learning adaptive rollup parameters...")
                 logger.info(f"    Reference samples: {len(ref_samples)}")
                 logger.info(f"    Pool (QC) samples: {len(pool_samples)}")
 
@@ -784,35 +799,51 @@ def cmd_run(args: argparse.Namespace) -> int:
                 # Data is already in LINEAR scale from merged parquet
                 # (log transform happens in rollup, not in merge)
 
-                learn_result = learn_quality_weights(
+                learn_result = learn_adaptive_weights(
                     learn_df,
                     reference_samples=ref_samples,
-                    pool_samples=pool_samples,
+                    qc_samples=pool_samples,
                     peptide_col=peptide_col,
                     transition_col=transition_col,
                     sample_col=sample_col,
                     abundance_col=abundance_col,
+                    mz_col='Product Mz',
                     shape_corr_col='Shape Correlation',
                     n_iterations=100,
-                    initial_params=quality_weight_params,
+                    initial_params=adaptive_params,
                 )
 
-                if learn_result.use_quality_weights:
-                    quality_weight_params = learn_result.params
+                if learn_result.use_adaptive_weights:
+                    adaptive_params = learn_result.params
                     logger.info("  Using learned parameters")
+                    logger.info(
+                        f"    Reference CV: {learn_result.reference_cv_sum * 100:.1f}% -> "
+                        f"{learn_result.reference_cv_adaptive * 100:.1f}%"
+                    )
+                    if np.isfinite(learn_result.qc_cv_sum):
+                        logger.info(
+                            f"    QC CV: {learn_result.qc_cv_sum * 100:.1f}% -> "
+                            f"{learn_result.qc_cv_adaptive * 100:.1f}%"
+                        )
                 else:
                     logger.warning(f"  {learn_result.fallback_reason}")
-                    logger.warning("  Using default parameters")
+                    logger.warning("  Using sum method as fallback")
+                    # Fallback to sum (beta = 0,0,0)
+                    adaptive_params = AdaptiveRollupParams(
+                        beta_log_intensity=0.0,
+                        beta_mz=0.0,
+                        beta_shape_corr=0.0,
+                    )
             else:
                 logger.warning(
                     f"  Not enough reference samples for learning ({len(ref_samples)})"
                 )
+                logger.info("  Using default parameters")
 
         logger.info(
-            f"  Using parameters: alpha={quality_weight_params.alpha:.2f}, "
-            f"beta={quality_weight_params.beta:.2f}, "
-            f"gamma={quality_weight_params.gamma:.2f}, "
-            f"delta={quality_weight_params.delta:.2f}"
+            f"  Adaptive params: beta_intensity={adaptive_params.beta_log_intensity:.3f}, "
+            f"beta_mz={adaptive_params.beta_mz:.3f}, "
+            f"beta_shape={adaptive_params.beta_shape_corr:.3f}"
         )
 
     # Get topn method parameters
@@ -835,7 +866,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_transform=True,
         exclude_precursor=not use_ms1,  # exclude_precursor is inverse of use_ms1
         progress_interval=5000,
-        quality_weight_params=quality_weight_params,
+        adaptive_params=adaptive_params,
         topn_count=topn_count,
         topn_selection=topn_selection,
         topn_weighting=topn_weighting,
@@ -1003,8 +1034,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Get batch info from metadata
         batch_col = 'batch'
         sample_type_col = 'sample_type'
-        # Use 'sample' or 'replicate_name' column for sample names
-        meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
+        # Use sample_id (unique across batches) if available, else sample/replicate_name
+        if 'sample_id' in metadata_df.columns:
+            meta_sample_col = 'sample_id'
+        elif 'sample' in metadata_df.columns:
+            meta_sample_col = 'sample'
+        else:
+            meta_sample_col = 'replicate_name'
 
         if batch_col in metadata_df.columns:
             # Build sample -> batch mapping
@@ -1184,7 +1220,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         batch_col = 'batch'
         sample_type_col = 'sample_type'
-        meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
+        # Use sample_id (unique across batches) if available
+        if 'sample_id' in metadata_df.columns:
+            meta_sample_col = 'sample_id'
+        elif 'sample' in metadata_df.columns:
+            meta_sample_col = 'sample'
+        else:
+            meta_sample_col = 'replicate_name'
 
         if batch_col in metadata_df.columns:
             sample_to_batch = dict(
@@ -1323,12 +1365,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Build sample types mapping
         sample_types_map = {}
         if metadata_df is not None:
-            meta_sample_col = 'sample' if 'sample' in metadata_df.columns else 'replicate_name'
+            # Use sample_id (unique across batches) if available
+            if 'sample_id' in metadata_df.columns:
+                meta_sample_col = 'sample_id'
+            elif 'sample' in metadata_df.columns:
+                meta_sample_col = 'sample'
+            else:
+                meta_sample_col = 'replicate_name'
             if 'sample_type' in metadata_df.columns:
                 sample_types_map = dict(
                     zip(metadata_df[meta_sample_col], metadata_df['sample_type'])
                 )
-
         qc_report_path = output_dir / qc_config.get('filename', 'qc_report.html')
 
         try:

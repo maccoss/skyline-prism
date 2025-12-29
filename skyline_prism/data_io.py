@@ -156,7 +156,9 @@ def generate_sample_metadata(
     """Generate sample metadata DataFrame from sample names.
 
     Automatically classifies samples based on naming patterns and assigns
-    batch information.
+    batch information. Creates a unique sample_id that combines sample name
+    and batch to handle duplicate sample names across batches (e.g., Pool
+    samples run in each plate).
 
     Args:
         samples_by_batch: Dict mapping batch_name -> set of sample names
@@ -164,7 +166,8 @@ def generate_sample_metadata(
         qc_patterns: Patterns for QC samples (default: -Carl_, -QC_, etc.)
 
     Returns:
-        DataFrame with columns: sample, sample_type, batch
+        DataFrame with columns: sample_id, sample, sample_type, batch
+        where sample_id is unique across all batches
 
     """
     rows = []
@@ -173,7 +176,12 @@ def generate_sample_metadata(
             sample_type = classify_sample_by_name(
                 sample_name, reference_patterns, qc_patterns
             )
+            # Create unique sample_id combining sample name and batch
+            # This ensures samples with the same name in different batches
+            # are treated as separate replicates
+            sample_id = f"{sample_name}__@__{batch_name}"
             rows.append({
+                'sample_id': sample_id,
                 'sample': sample_name,
                 'sample_type': sample_type,
                 'batch': batch_name,
@@ -182,7 +190,6 @@ def generate_sample_metadata(
     df = pd.DataFrame(rows)
 
     # Log summary
-    type_counts = df.groupby('batch')['sample_type'].value_counts()
     logger.info("Generated sample metadata:")
     for batch in df['batch'].unique():
         batch_df = df[df['batch'] == batch]
@@ -657,6 +664,20 @@ def merge_skyline_reports_streaming(
                 'Source Document', pa.array([csv_path.stem] * len(batch), type=pa.string())
             )
 
+            # Create unique Sample ID combining Replicate Name and Batch
+            # This ensures samples with the same name in different batches are treated
+            # as separate replicates (e.g., Pool samples run in each plate)
+            if replicate_col in batch.schema.names:
+                rep_array = batch.column(replicate_col)
+                # Create Sample ID as "ReplicateName__BatchName"
+                sample_ids = [
+                    f"{rep}__@__{batch_name}" if rep is not None else None
+                    for rep in rep_array.to_pylist()
+                ]
+                batch = batch.append_column(
+                    'Sample ID', pa.array(sample_ids, type=pa.string())
+                )
+
             # Initialize or append to writer
             if writer is None:
                 writer = pq.ParquetWriter(
@@ -917,7 +938,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
         )
 
     # Check for duplicate sample names within the same batch
-    # (duplicates across batches are allowed - e.g., the same reference/QC sample
+    # (duplicates across batches are allowed - e.g., the same reference/pool sample
     # run in multiple batches)
     if 'batch' in meta.columns:
         duplicates = (

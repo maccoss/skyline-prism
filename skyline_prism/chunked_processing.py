@@ -29,8 +29,8 @@ import pyarrow.parquet as pq
 from .parsimony import ProteinGroup
 from .rollup import tukey_median_polish
 from .transition_rollup import (
-    QualityWeightParams,
-    rollup_peptide_quality_weighted,
+    AdaptiveRollupParams,
+    rollup_peptide_adaptive,
     rollup_peptide_topn,
 )
 
@@ -53,12 +53,13 @@ class ChunkedRollupConfig:
     coeluting_col: str = "Coeluting"
     rt_col: str = "Retention Time"
     batch_col: str = "Batch"
+    mz_col: str = "Product Mz"  # For adaptive rollup
 
     # Rollup parameters
-    method: str = "median_polish"
+    method: str = "sum"
     min_transitions: int = 3
     log_transform: bool = True
-    quality_weight_params: QualityWeightParams | None = None
+    adaptive_params: AdaptiveRollupParams | None = None  # For adaptive method
     exclude_precursor: bool = True  # Exclude MS1 precursor ions from rollup
 
     # Top-N method parameters
@@ -186,37 +187,6 @@ def _process_single_peptide(
             n_used = 0
             residuals = None
 
-    elif config.method == "quality_weighted":
-        params = config.quality_weight_params or QualityWeightParams()
-
-        # Get shape correlation matrix
-        if config.shape_corr_col in pep_data.columns:
-            shape_corr_matrix = pep_data.pivot_table(
-                index=config.transition_col,
-                columns=config.sample_col,
-                values=config.shape_corr_col,
-                aggfunc="first",
-            )
-            # Align with intensity_matrix (same rows and columns)
-            shape_corr_matrix = shape_corr_matrix.reindex(
-                index=intensity_matrix.index, columns=samples
-            ).fillna(1.0)
-        else:
-            shape_corr_matrix = pd.DataFrame(
-                1.0, index=intensity_matrix.index, columns=samples
-            )
-
-        # Use the new quality-weighted rollup
-        abund_series, uncert_series, weights, n_used = rollup_peptide_quality_weighted(
-            intensity_matrix,
-            shape_corr_matrix,
-            params,
-            config.min_transitions,
-        )
-        abundances = abund_series.to_dict()
-        uncertainties = uncert_series.to_dict()
-        residuals = None
-
     elif config.method == "sum":
         linear = 2**intensity_matrix if config.log_transform else intensity_matrix
         summed = linear.sum(axis=0)
@@ -252,6 +222,51 @@ def _process_single_peptide(
             selection_method=config.topn_selection,
             weighting=config.topn_weighting,
             min_transitions=config.min_transitions,
+        )
+        abundances = abund_series.to_dict()
+        uncertainties = uncert_series.to_dict()
+        residuals = None
+
+    elif config.method == "adaptive":
+        params = config.adaptive_params or AdaptiveRollupParams()
+
+        # Get shape correlation matrix
+        if config.shape_corr_col in pep_data.columns:
+            shape_corr_matrix = pep_data.pivot_table(
+                index=config.transition_col,
+                columns=config.sample_col,
+                values=config.shape_corr_col,
+                aggfunc="first",
+            )
+            shape_corr_matrix = shape_corr_matrix.reindex(
+                index=intensity_matrix.index, columns=samples
+            ).fillna(1.0)
+        else:
+            shape_corr_matrix = pd.DataFrame(
+                1.0, index=intensity_matrix.index, columns=samples
+            )
+
+        # Get m/z values per transition
+        if config.mz_col in pep_data.columns:
+            mz_pivot = pep_data.pivot_table(
+                index=config.transition_col,
+                columns=config.sample_col,
+                values=config.mz_col,
+                aggfunc="first",
+            )
+            mz_values = mz_pivot.apply(
+                lambda x: x.dropna().iloc[0] if x.notna().any() else 0.0, axis=1
+            )
+            mz_values = mz_values.reindex(intensity_matrix.index).fillna(0)
+        else:
+            mz_values = pd.Series(0.0, index=intensity_matrix.index)
+
+        abund_series, uncert_series, _, n_used = rollup_peptide_adaptive(
+            intensity_matrix,
+            mz_values,
+            shape_corr_matrix,
+            params,
+            config.min_transitions,
         )
         abundances = abund_series.to_dict()
         uncertainties = uncert_series.to_dict()

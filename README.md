@@ -194,9 +194,9 @@ sample_annotations:
 # Transition to peptide rollup (if using transition-level data)
 transition_rollup:
   enabled: true
-  method: "median_polish"  # default, recommended
+  method: "median_polish"  # default; alternatives: adaptive, sum
   min_transitions: 3
-  learn_variance_model: false  # Set true for quality_weighted method
+  learn_variance_model: false  # Set true for adaptive method
 
 # Sample outlier detection (one-sided, low signal only)
 sample_outlier_detection:
@@ -308,7 +308,7 @@ While median polish is recommended, these alternative methods are available:
 | Method             | Description                     | Use Case                                                           |
 | ------------------ | ------------------------------- | ------------------------------------------------------------------ |
 | `median_polish`    | Tukey median polish (default)   | General use, robust to outliers                                    |
-| `quality_weighted` | Variance-model weighted average | When quality metrics (ShapeCorrelation, Coeluting) are available   |
+| `adaptive`         | Learned weighted average        | When quality metrics (intensity, m/z, ShapeCorrelation) are available |
 | `sum`              | Simple sum of intensities       | Fast but sensitive to outliers                                     |
 
 **Peptide → Protein Rollup**:
@@ -345,17 +345,29 @@ counts = get_theoretical_peptide_counts(
 )
 ```
 
-### Quality-Weighted Rollup with Variance Model Learning
+### Adaptive Rollup with Learned Weights
 
-For transition→peptide rollup, the `quality_weighted` method can learn optimal variance model parameters from reference samples:
+For transition→peptide rollup, the `adaptive` method learns optimal weighting parameters from reference samples:
 
 ```yaml
 transition_rollup:
-  method: "quality_weighted"
+  method: "adaptive"
   learn_variance_model: true  # Learns from reference samples
+  adaptive_rollup:
+    beta_log_intensity: 0.5   # Weight for log2 intensity (must be >= 0)
+    beta_mz: 0.0              # Weight for normalized m/z
+    beta_shape_corr: 1.0      # Weight for shape correlation
+    min_improvement_pct: 5.0  # Required improvement over sum to use adaptive weights
 ```
 
-This learns optimal weights by minimizing CV across peptides in reference samples. The variance model accounts for shot noise, multiplicative noise, and quality penalties based on Skyline's shape correlation and coelution metrics.
+The weight formula is: `w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)`
+
+Key insight: When all betas are 0, weights equal 1 for all transitions, equivalent to simple sum. This provides a principled baseline where the optimizer can choose "no weighting" if it doesn't help.
+
+**Learning process:**
+1. Parameters are optimized on reference samples by minimizing median CV
+2. Results are validated on QC samples to prevent overfitting
+3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
 
 **Note:** For very large cohorts (hundreds to thousands of samples), consider [directLFQ](https://github.com/MannLabs/directlfq) which uses a different "intensity trace" algorithm with linear runtime scaling. Our `maxlfq` implementation uses the original pairwise ratio approach which scales quadratically with sample count.
 
