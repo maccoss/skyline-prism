@@ -756,17 +756,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Check for explicit parameters in config
         ar_config = config['transition_rollup'].get('adaptive_rollup', {})
         adaptive_params = AdaptiveRollupParams(
-            beta_log_intensity=ar_config.get('beta_log_intensity', 0.0),
-            beta_sqrt_intensity=ar_config.get('beta_sqrt_intensity', 0.0),
+            beta_log_intensity=0.0,  # Deprecated
+            beta_sqrt_intensity=0.0,  # Deprecated
+            beta_relative_intensity=ar_config.get('beta_relative_intensity', 0.0),
             beta_mz=ar_config.get('beta_mz', 0.0),
             beta_shape_corr=ar_config.get('beta_shape_corr', 0.0),
-            beta_shape_corr_max=ar_config.get('beta_shape_corr_max', 0.0),
+            beta_shape_corr_max=0.0,  # Not optimized
             beta_shape_corr_outlier=ar_config.get('beta_shape_corr_outlier', 0.0),
             mz_min=ar_config.get('mz_min', 0.0),
             mz_max=ar_config.get('mz_max', 2000.0),
             log_intensity_center=ar_config.get('log_intensity_center', 15.0),
-            sqrt_intensity_center=ar_config.get('sqrt_intensity_center', 100.0),
-            sqrt_intensity_scale=ar_config.get('sqrt_intensity_scale', 100.0),
             shape_corr_low_threshold=ar_config.get('shape_corr_low_threshold', 0.5),
             min_improvement_pct=ar_config.get('min_improvement_pct', 5.0),
         )
@@ -839,6 +838,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     adaptive_params = AdaptiveRollupParams(
                         beta_log_intensity=0.0,
                         beta_sqrt_intensity=0.0,
+                        beta_relative_intensity=0.0,
                         beta_mz=0.0,
                         beta_shape_corr=0.0,
                         beta_shape_corr_max=0.0,
@@ -851,10 +851,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 logger.info("  Using default parameters")
 
         logger.info(
-            f"  Adaptive params: sqrt_int={adaptive_params.beta_sqrt_intensity:.3f}, "
+            f"  Adaptive params: rel_int={adaptive_params.beta_relative_intensity:.3f}, "
             f"mz={adaptive_params.beta_mz:.3f}, "
             f"shape_med={adaptive_params.beta_shape_corr:.3f}, "
-            f"shape_max={adaptive_params.beta_shape_corr_max:.3f}, "
             f"shape_out={adaptive_params.beta_shape_corr_outlier:.3f}"
         )
 

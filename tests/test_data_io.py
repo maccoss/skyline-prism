@@ -1,13 +1,16 @@
 """Tests for data I/O module."""
 
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 from skyline_prism.data_io import (
     _standardize_columns,
     load_sample_metadata,
+    merge_skyline_reports_streaming,
     validate_skyline_report,
 )
 
@@ -276,3 +279,157 @@ class TestCreateTestData:
                     })
 
         return pd.DataFrame(rows)
+
+
+class TestMergeStreamingSchemaNormalization:
+    """Tests for schema normalization in streaming merge.
+
+    When merging multiple CSV files, PyArrow may infer different types for
+    the same column (e.g., 'Acquired Time' as timestamp in one file, string
+    in another). The merge function must normalize these to a consistent type.
+    """
+
+    def test_merge_with_mixed_timestamp_types(self, tmp_path):
+        """Test that files with different date column types can be merged.
+
+        This reproduces the bug where Plate1 had 'Acquired Time' as string
+        but Plate2 had it as timestamp, causing a schema mismatch error.
+        """
+        # Create first CSV with date as a string format that PyArrow parses as string
+        csv1 = tmp_path / "plate1.csv"
+        df1 = pd.DataFrame({
+            'Protein': ['P1', 'P1'],
+            'Peptide Modified Sequence Unimod Ids': ['PEPTIDEK', 'PEPTIDEK'],
+            'Precursor Charge': [2, 2],
+            'Fragment Ion': ['y5', 'y6'],
+            'Product Charge': [1, 1],
+            'Product Mz': [500.0, 600.0],
+            'Area': [1000, 2000],
+            'Replicate Name': ['Sample1', 'Sample1'],
+            # Date format that PyArrow typically parses as string
+            'Acquired Time': ['2025-01-15 10:30:00', '2025-01-15 10:30:00'],
+        })
+        df1.to_csv(csv1, index=False)
+
+        # Create second CSV with date format that PyArrow parses as timestamp
+        csv2 = tmp_path / "plate2.csv"
+        df2 = pd.DataFrame({
+            'Protein': ['P2', 'P2'],
+            'Peptide Modified Sequence Unimod Ids': ['ANOTHERK', 'ANOTHERK'],
+            'Precursor Charge': [2, 2],
+            'Fragment Ion': ['y5', 'y6'],
+            'Product Charge': [1, 1],
+            'Product Mz': [500.0, 600.0],
+            'Area': [3000, 4000],
+            'Replicate Name': ['Sample2', 'Sample2'],
+            # ISO format that PyArrow typically parses as timestamp
+            'Acquired Time': ['2025-01-16T11:45:00', '2025-01-16T11:45:00'],
+        })
+        df2.to_csv(csv2, index=False)
+
+        # Merge should succeed without schema mismatch error
+        output_path = tmp_path / "merged.parquet"
+        result_path, samples_by_batch, total_rows = merge_skyline_reports_streaming(
+            report_paths=[csv1, csv2],
+            output_path=output_path,
+            batch_names=['Plate1', 'Plate2'],
+        )
+
+        # Verify merge succeeded
+        assert result_path.exists()
+        assert total_rows == 4
+
+        # Verify data can be read back
+        merged_df = pd.read_parquet(result_path)
+        assert len(merged_df) == 4
+        assert 'Acquired Time' in merged_df.columns
+
+        # Acquired Time should be string type (normalized)
+        assert merged_df['Acquired Time'].dtype == object  # pandas string dtype
+
+    def test_merge_with_consistent_types(self, tmp_path):
+        """Test that merge works normally when types are already consistent."""
+        csv1 = tmp_path / "plate1.csv"
+        df1 = pd.DataFrame({
+            'Protein': ['P1'],
+            'Peptide Modified Sequence Unimod Ids': ['PEPTIDEK'],
+            'Precursor Charge': [2],
+            'Fragment Ion': ['y5'],
+            'Product Charge': [1],
+            'Product Mz': [500.0],
+            'Area': [1000],
+            'Replicate Name': ['Sample1'],
+        })
+        df1.to_csv(csv1, index=False)
+
+        csv2 = tmp_path / "plate2.csv"
+        df2 = pd.DataFrame({
+            'Protein': ['P2'],
+            'Peptide Modified Sequence Unimod Ids': ['ANOTHERK'],
+            'Precursor Charge': [2],
+            'Fragment Ion': ['y5'],
+            'Product Charge': [1],
+            'Product Mz': [500.0],
+            'Area': [3000],
+            'Replicate Name': ['Sample2'],
+        })
+        df2.to_csv(csv2, index=False)
+
+        output_path = tmp_path / "merged.parquet"
+        result_path, samples_by_batch, total_rows = merge_skyline_reports_streaming(
+            report_paths=[csv1, csv2],
+            output_path=output_path,
+            batch_names=['Plate1', 'Plate2'],
+        )
+
+        assert result_path.exists()
+        assert total_rows == 2
+
+        merged_df = pd.read_parquet(result_path)
+        assert len(merged_df) == 2
+        assert set(merged_df['Protein'].unique()) == {'P1', 'P2'}
+
+    def test_merge_preserves_sample_ids(self, tmp_path):
+        """Test that Sample ID column is correctly created during merge."""
+        csv1 = tmp_path / "plate1.csv"
+        df1 = pd.DataFrame({
+            'Protein': ['P1', 'P1'],
+            'Peptide Modified Sequence Unimod Ids': ['PEPTIDEK', 'PEPTIDEK'],
+            'Precursor Charge': [2, 2],
+            'Fragment Ion': ['y5', 'y6'],
+            'Product Charge': [1, 1],
+            'Product Mz': [500.0, 600.0],
+            'Area': [1000, 2000],
+            'Replicate Name': ['Pool_001', 'Pool_001'],
+        })
+        df1.to_csv(csv1, index=False)
+
+        csv2 = tmp_path / "plate2.csv"
+        df2 = pd.DataFrame({
+            'Protein': ['P1', 'P1'],
+            'Peptide Modified Sequence Unimod Ids': ['PEPTIDEK', 'PEPTIDEK'],
+            'Precursor Charge': [2, 2],
+            'Fragment Ion': ['y5', 'y6'],
+            'Product Charge': [1, 1],
+            'Product Mz': [500.0, 600.0],
+            'Area': [3000, 4000],
+            # Same replicate name in different batch
+            'Replicate Name': ['Pool_001', 'Pool_001'],
+        })
+        df2.to_csv(csv2, index=False)
+
+        output_path = tmp_path / "merged.parquet"
+        result_path, samples_by_batch, total_rows = merge_skyline_reports_streaming(
+            report_paths=[csv1, csv2],
+            output_path=output_path,
+            batch_names=['Plate1', 'Plate2'],
+        )
+
+        merged_df = pd.read_parquet(result_path)
+
+        # Sample ID should distinguish same replicate name across batches
+        assert 'Sample ID' in merged_df.columns
+        sample_ids = merged_df['Sample ID'].unique()
+        assert len(sample_ids) == 2  # Pool_001 in Plate1 and Pool_001 in Plate2
+        assert any('Plate1' in sid for sid in sample_ids)
+        assert any('Plate2' in sid for sid in sample_ids)

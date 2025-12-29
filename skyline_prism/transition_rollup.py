@@ -70,7 +70,8 @@ class AdaptiveRollupParams:
     Key insight: When all beta = 0, all weights are 1, giving simple sum (baseline).
 
     Features (4 optimized):
-    - sqrt(intensity): Mean sqrt intensity, centered and scaled (less compression than log2)
+    - relative_intensity: Transition intensity / max intensity in the peptide [0, 1]
+                         Computed per-peptide so the most intense transition = 1.0
     - mz: Product m/z, normalized to [0, 1] range
     - shape_corr: Median shape correlation across samples (0-1)
     - shape_corr_low_frac: Fraction of samples with shape correlation below threshold
@@ -80,21 +81,25 @@ class AdaptiveRollupParams:
     - beta_shape_corr_max: Max shape correlation - kept at 0.0
 
     Constraints:
-    - beta_sqrt_intensity >= 0 (higher intensity transitions should not be penalized)
+    - beta_relative_intensity >= 0 (higher intensity transitions should not be penalized)
     - Other betas are unconstrained (can be positive or negative)
 
-    Note: beta_log_intensity is deprecated (redundant with sqrt_intensity).
+    Note: beta_log_intensity and beta_sqrt_intensity are deprecated.
     """
 
-    # DEPRECATED: beta_log_intensity is redundant with beta_sqrt_intensity
-    # Kept for backwards compatibility but NOT optimized
+    # DEPRECATED: beta_log_intensity is redundant - kept for backwards compatibility
     # Always set to 0.0 in new code
     beta_log_intensity: float = 0.0
 
-    # Coefficient for sqrt(intensity) - less compression than log2
-    # >= 0 by constraint: higher intensity should not decrease weight
-    # Default 0.0: no sqrt intensity weighting (baseline = simple sum)
+    # DEPRECATED: beta_sqrt_intensity replaced by beta_relative_intensity
+    # Kept for backwards compatibility, but NOT used if beta_relative_intensity is set
     beta_sqrt_intensity: float = 0.0
+
+    # Coefficient for relative intensity (transition_mean / peptide_max)
+    # Range [0, 1]: 1.0 = most intense transition in the peptide
+    # >= 0 by constraint: higher relative intensity should not decrease weight
+    # Default 0.0: no relative intensity weighting (baseline = simple sum)
+    beta_relative_intensity: float = 0.0
 
     # Coefficient for normalized m/z (m/z scaled to [0, 1])
     # Default 0.0: no m/z weighting
@@ -156,7 +161,7 @@ def compute_adaptive_weights(
     mz_values: np.ndarray,
     median_shape_corr: np.ndarray,
     params: AdaptiveRollupParams,
-    mean_sqrt_intensity: np.ndarray | None = None,
+    relative_intensity: np.ndarray | None = None,
     max_shape_corr: np.ndarray | None = None,
     shape_corr_outlier_frac: np.ndarray | None = None,
 ) -> np.ndarray:
@@ -164,7 +169,7 @@ def compute_adaptive_weights(
 
     Weight function:
         log(w) = beta_log_intensity * (log_intensity - log_center)
-               + beta_sqrt_intensity * (sqrt_intensity - sqrt_center) / sqrt_scale
+               + beta_relative_intensity * relative_intensity
                + beta_mz * normalized_mz
                + beta_shape_corr * median_shape_corr
                + beta_shape_corr_max * max_shape_corr
@@ -179,7 +184,8 @@ def compute_adaptive_weights(
         mz_values: Product m/z per transition (n_transitions,)
         median_shape_corr: Median shape correlation per transition (n_transitions,)
         params: Adaptive rollup parameters with beta coefficients
-        mean_sqrt_intensity: Mean sqrt intensity per transition (optional)
+        relative_intensity: Relative intensity per transition [0, 1] where
+                           1.0 = most intense transition in the peptide (optional)
         max_shape_corr: Maximum shape correlation per transition (optional)
         shape_corr_outlier_frac: Fraction of outlier samples per transition (optional)
 
@@ -197,16 +203,13 @@ def compute_adaptive_weights(
         normalized_mz = np.zeros_like(mz_values)
     normalized_mz = np.clip(normalized_mz, 0.0, 1.0)
 
-    # Center log intensity
+    # Center log intensity (deprecated, beta should be 0)
     centered_log_intensity = mean_log_intensity - params.log_intensity_center
 
-    # Normalize sqrt intensity (centered and scaled)
-    if mean_sqrt_intensity is not None and params.sqrt_intensity_scale > 0:
-        centered_sqrt_intensity = (
-            mean_sqrt_intensity - params.sqrt_intensity_center
-        ) / params.sqrt_intensity_scale
-    else:
-        centered_sqrt_intensity = np.zeros(n_trans)
+    # Relative intensity: already in [0, 1] range, no normalization needed
+    # 1.0 = most intense transition in this peptide, 0 = no signal
+    if relative_intensity is None:
+        relative_intensity = np.ones(n_trans)  # Equal weights if not provided
 
     # Use provided max shape correlation or default to median
     if max_shape_corr is None:
@@ -217,9 +220,10 @@ def compute_adaptive_weights(
         shape_corr_outlier_frac = np.zeros(n_trans)
 
     # Compute log-weight as linear combination of features
+    # Note: beta_sqrt_intensity is deprecated, use beta_relative_intensity
     log_weight = (
         params.beta_log_intensity * centered_log_intensity
-        + params.beta_sqrt_intensity * centered_sqrt_intensity
+        + params.beta_relative_intensity * relative_intensity
         + params.beta_mz * normalized_mz
         + params.beta_shape_corr * median_shape_corr
         + params.beta_shape_corr_max * max_shape_corr
@@ -335,8 +339,10 @@ class _AdaptivePrecomputedPeptide:
     intensity_linear: np.ndarray
     # Mean log2 intensity per transition: n_transitions
     mean_log_intensity: np.ndarray
-    # Mean sqrt intensity per transition: n_transitions
-    mean_sqrt_intensity: np.ndarray
+    # Relative intensity per transition: n_transitions
+    # Computed as mean_linear / max(mean_linear) within each peptide
+    # Range [0, 1] where 1.0 = most intense transition in this peptide
+    relative_intensity: np.ndarray
     # Product m/z per transition: n_transitions
     mz_values: np.ndarray
     # Median shape correlation per transition: n_transitions
@@ -358,8 +364,7 @@ class _AdaptiveNormalizationParams:
     mz_min: float
     mz_max: float
     log_intensity_center: float
-    sqrt_intensity_center: float
-    sqrt_intensity_scale: float
+    # Note: relative_intensity is computed per-peptide, so no global center/scale needed
     shape_corr_low_threshold: float  # Fixed threshold for "low" shape correlation
 
 
@@ -535,23 +540,12 @@ def _precompute_adaptive_metrics(
     valid_log_int = trans_stats[log_int_col].dropna()
     log_intensity_center = float(valid_log_int.median()) if len(valid_log_int) > 0 else 15.0
 
-    sqrt_int_col = 'sqrt_intensity_mean'
-    valid_sqrt_int = trans_stats[sqrt_int_col].dropna()
-    if len(valid_sqrt_int) > 0:
-        sqrt_intensity_center = float(valid_sqrt_int.median())
-        q1_sqrt = float(valid_sqrt_int.quantile(0.25))
-        q3_sqrt = float(valid_sqrt_int.quantile(0.75))
-        sqrt_intensity_scale = max(q3_sqrt - q1_sqrt, 1.0)
-    else:
-        sqrt_intensity_center = 100.0
-        sqrt_intensity_scale = 100.0
+    # Note: relative_intensity is computed per-peptide below, no global params needed
 
     norm_params = _AdaptiveNormalizationParams(
         mz_min=mz_min,
         mz_max=mz_max,
         log_intensity_center=log_intensity_center,
-        sqrt_intensity_center=sqrt_intensity_center,
-        sqrt_intensity_scale=sqrt_intensity_scale,
         shape_corr_low_threshold=shape_corr_low_threshold,
     )
 
@@ -615,7 +609,16 @@ def _precompute_adaptive_metrics(
 
         # Extract pre-computed metrics (using .values for speed)
         mean_log_intensity = pep_stats[log_int_col].values
-        mean_sqrt_intensity = pep_stats[sqrt_int_col].values
+
+        # Compute RELATIVE intensity within this peptide:
+        # relative_intensity = mean_linear / max(mean_linear)
+        # Range [0, 1] where 1.0 = most intense transition in this peptide
+        mean_linear = np.nanmean(intensity_linear, axis=1)  # mean across samples
+        max_mean_linear = np.nanmax(mean_linear)
+        if max_mean_linear > 0:
+            relative_intensity = mean_linear / max_mean_linear
+        else:
+            relative_intensity = np.ones(n_trans)  # All zeros -> equal weights
 
         if has_mz:
             mz_values = pep_stats[mz_col_agg].fillna(0).values
@@ -634,7 +637,7 @@ def _precompute_adaptive_metrics(
         results[peptide] = _AdaptivePrecomputedPeptide(
             intensity_linear=intensity_linear,
             mean_log_intensity=mean_log_intensity,
-            mean_sqrt_intensity=mean_sqrt_intensity,
+            relative_intensity=relative_intensity,
             mz_values=mz_values,
             median_shape_corr=median_shape_corr,
             max_shape_corr=max_shape_corr,
@@ -681,7 +684,7 @@ def _rollup_with_adaptive_params(
             metrics.mz_values,
             metrics.median_shape_corr,
             params,
-            mean_sqrt_intensity=metrics.mean_sqrt_intensity,
+            relative_intensity=metrics.relative_intensity,
             max_shape_corr=metrics.max_shape_corr,
             shape_corr_outlier_frac=metrics.shape_corr_outlier_frac,
         )
@@ -935,31 +938,32 @@ def learn_adaptive_weights(
     logger.info(f"  Pre-computed {len(ref_metrics)} peptides")
     logger.info(f"  m/z range: [{norm_params.mz_min:.1f}, {norm_params.mz_max:.1f}]")
     logger.info(f"  Log2 intensity center: {norm_params.log_intensity_center:.2f}")
-    logger.info(f"  Sqrt intensity: center={norm_params.sqrt_intensity_center:.1f}, "
-                f"scale={norm_params.sqrt_intensity_scale:.1f}")
+    logger.info("  Relative intensity: computed per-peptide [0, 1]")
     logger.info(f"  Shape corr low threshold: {norm_params.shape_corr_low_threshold:.3f}")
 
     # Track optimization - keep the BEST parameters found, not just where optimizer stops
     iteration_count = [0]
     best_cv = [reference_cv_sum]
-    best_params = [np.array([0.0, 0.0, 0.0, 0.0])]  # Start with zeros (sum baseline)
+    best_params = [np.array([0.0, 0.0, 0.0])]  # Start with zeros (sum baseline)
 
     def objective(beta_array):
         """Objective: minimize median CV on reference samples."""
-        # Optimizing 4 parameters (beta_log_intensity and beta_shape_corr_max are not optimized)
-        # Constraint: beta_sqrt_intensity >= 0
+        # Optimizing 3 parameters:
+        # [0] beta_relative_intensity >= 0
+        # [1] beta_mz (unconstrained)
+        # [2] beta_shape_corr_outlier (penalize high outlier fraction)
+        # Note: beta_shape_corr (median) is NOT optimized - fixed at 0.0
         params = AdaptiveRollupParams(
             beta_log_intensity=0.0,  # Deprecated, not optimized
-            beta_sqrt_intensity=max(0.0, beta_array[0]),
+            beta_sqrt_intensity=0.0,  # Deprecated, not optimized
+            beta_relative_intensity=max(0.0, beta_array[0]),
             beta_mz=beta_array[1],
-            beta_shape_corr=beta_array[2],
-            beta_shape_corr_max=0.0,  # Not optimized - kept for future binary feature
-            beta_shape_corr_outlier=beta_array[3],
+            beta_shape_corr=0.0,  # Not optimized - fixed at 0.0
+            beta_shape_corr_max=0.0,  # Not optimized - kept for future use
+            beta_shape_corr_outlier=beta_array[2],
             mz_min=norm_params.mz_min,
             mz_max=norm_params.mz_max,
             log_intensity_center=norm_params.log_intensity_center,
-            sqrt_intensity_center=norm_params.sqrt_intensity_center,
-            sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
             shape_corr_low_threshold=norm_params.shape_corr_low_threshold,
         )
 
@@ -976,23 +980,21 @@ def learn_adaptive_weights(
             return 1.0
 
     # Initial parameters: all zeros (simple sum baseline)
-    # Note: beta_log_intensity and beta_shape_corr_max are not optimized
+    # Note: beta_log_intensity, beta_shape_corr, and beta_shape_corr_max are not optimized
     x0 = [
-        initial_params.beta_sqrt_intensity,
+        initial_params.beta_relative_intensity,
         initial_params.beta_mz,
-        initial_params.beta_shape_corr,
         initial_params.beta_shape_corr_outlier,
     ]
 
-    # Bounds for 4 parameters
+    # Bounds for 3 parameters
     bounds = [
-        (0.0, 1.0),     # beta_sqrt_intensity (must be non-negative)
-        (0.0, 1.0),    # beta_mz (can be negative or positive)
-        (0.0, 1.0),    # beta_shape_corr (median, can be negative or positive)
-        (-1.0, 0.0),    # beta_shape_corr_outlier (fraction of low samples)
+        (0.0, 1.0),     # beta_relative_intensity (must be non-negative)
+        (-1.0, 1.0),    # beta_mz (unconstrained)
+        (-1.0, 0.0),    # beta_shape_corr_outlier (penalize high outlier fraction)
     ]
 
-    logger.info("  Optimizing 4 beta coefficients...")
+    logger.info("  Optimizing 3 beta coefficients...")
     result = minimize(
         objective,
         x0,
@@ -1012,19 +1014,18 @@ def learn_adaptive_weights(
     # This guarantees we never return worse than the starting point (zeros = sum)
     opt = best_params[0]
     logger.info(f"  Best CV found: {best_cv[0]:.4f} (baseline: {reference_cv_sum:.4f})")
-    
+
     learned_params = AdaptiveRollupParams(
-        beta_log_intensity=0.0,  # Deprecated, not optimized
-        beta_sqrt_intensity=max(0.0, opt[0]),
+        beta_log_intensity=0.0,  # Deprecated
+        beta_sqrt_intensity=0.0,  # Deprecated
+        beta_relative_intensity=max(0.0, opt[0]),
         beta_mz=opt[1],
-        beta_shape_corr=opt[2],
+        beta_shape_corr=0.0,  # Not optimized - fixed at 0.0
         beta_shape_corr_max=0.0,  # Not optimized
-        beta_shape_corr_outlier=opt[3],
+        beta_shape_corr_outlier=opt[2],
         mz_min=norm_params.mz_min,
         mz_max=norm_params.mz_max,
         log_intensity_center=norm_params.log_intensity_center,
-        sqrt_intensity_center=norm_params.sqrt_intensity_center,
-        sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
         shape_corr_low_threshold=norm_params.shape_corr_low_threshold,
         fallback_to_sum=initial_params.fallback_to_sum,
         min_improvement_pct=initial_params.min_improvement_pct,
@@ -1034,10 +1035,9 @@ def learn_adaptive_weights(
     ref_abundances_adaptive = _rollup_with_adaptive_params(ref_metrics, learned_params)
     reference_cv_adaptive = _compute_median_cv_for_adaptive(ref_abundances_adaptive)
 
-    logger.info("  Learned parameters (4 features):")
-    logger.info(f"    beta_sqrt_intensity: {learned_params.beta_sqrt_intensity:.4f}")
+    logger.info("  Learned parameters (3 features):")
+    logger.info(f"    beta_relative_intensity: {learned_params.beta_relative_intensity:.4f}")
     logger.info(f"    beta_mz: {learned_params.beta_mz:.4f}")
-    logger.info(f"    beta_shape_corr (median): {learned_params.beta_shape_corr:.4f}")
     logger.info(f"    beta_shape_corr_outlier: {learned_params.beta_shape_corr_outlier:.4f}")
     logger.info(f"  Reference CV: {reference_cv_sum:.4f} -> {reference_cv_adaptive:.4f}")
 

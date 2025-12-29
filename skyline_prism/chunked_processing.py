@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,6 +72,7 @@ class ChunkedRollupConfig:
     n_workers: int = 1  # Number of parallel workers (0 = all CPUs)
     peptide_batch_size: int = 1000  # Process this many peptides at once
     progress_interval: int = 10000  # Log progress every N peptides
+    max_memory_gb: float = 8.0  # Maximum memory to use for parallel processing (per worker)
 
 
 @dataclass
@@ -285,6 +287,36 @@ def _process_single_peptide(
     )
 
 
+def _worker_process_batch(
+    args: tuple[dict[str, pd.DataFrame], list[str], dict],
+) -> list[dict]:
+    """Worker function for parallel peptide processing.
+    
+    Takes a tuple of (peptide_data_dict, samples, config_dict) and returns
+    a list of result dictionaries (easily picklable).
+    
+    This function is designed to be pickle-able for multiprocessing.
+    """
+    peptide_data_dict, samples, config_dict = args
+    
+    # Reconstruct config from dict (dataclasses aren't always pickle-friendly)
+    config = ChunkedRollupConfig(**config_dict)
+    
+    results = []
+    for peptide, pep_data in peptide_data_dict.items():
+        result = _process_single_peptide(pep_data, peptide, samples, config)
+        # Convert to dict for pickling
+        results.append({
+            "peptide": result.peptide,
+            "abundances": result.abundances,
+            "uncertainties": result.uncertainties,
+            "n_transitions": result.n_transitions,
+            "residuals": result.residuals,
+            "mean_rt": result.mean_rt,
+        })
+    return results
+
+
 def _process_peptide_batch(
     peptide_data_dict: dict[str, pd.DataFrame],
     samples: list[str],
@@ -454,13 +486,114 @@ def rollup_transitions_streaming(
                 logger.info(f"  Processed {n_peptides:,} peptides...")
 
     else:
-        # Multi-process version
-        # For now, use single-threaded - parallel version requires more careful design
-        # to avoid pickle issues with complex objects
-        logger.warning("Multi-process rollup not yet implemented, using single thread")
-        return rollup_transitions_streaming(
-            parquet_path, output_path, config._replace(n_workers=1), samples, save_residuals
-        )
+        # Multi-process version using ProcessPoolExecutor
+        logger.info(f"  Using {n_workers} parallel workers")
+        
+        # Convert config to dict for pickling
+        config_dict = {
+            "peptide_col": config.peptide_col,
+            "transition_col": config.transition_col,
+            "sample_col": config.sample_col,
+            "abundance_col": config.abundance_col,
+            "shape_corr_col": config.shape_corr_col,
+            "coeluting_col": config.coeluting_col,
+            "rt_col": config.rt_col,
+            "batch_col": config.batch_col,
+            "mz_col": config.mz_col,
+            "method": config.method,
+            "min_transitions": config.min_transitions,
+            "log_transform": config.log_transform,
+            "adaptive_params": config.adaptive_params,
+            "exclude_precursor": config.exclude_precursor,
+            "topn_count": config.topn_count,
+            "topn_selection": config.topn_selection,
+            "topn_weighting": config.topn_weighting,
+            "n_workers": 1,  # Workers don't spawn sub-workers
+            "peptide_batch_size": config.peptide_batch_size,
+            "progress_interval": config.progress_interval,
+            "max_memory_gb": config.max_memory_gb,
+        }
+        
+        # Collect batches first, then process in parallel
+        # This trades some memory for better parallelization
+        batches_to_process = []
+        for batch in stream_peptide_groups(parquet_path, config, config.peptide_batch_size):
+            batches_to_process.append((batch, samples, config_dict))
+            
+            # Process when we have enough batches for all workers
+            if len(batches_to_process) >= n_workers:
+                with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                    futures = [executor.submit(_worker_process_batch, b) for b in batches_to_process]
+                    for future in as_completed(futures):
+                        try:
+                            batch_results = future.result()
+                            for result in batch_results:
+                                # Skip peptides with insufficient transitions
+                                if result["n_transitions"] < config.min_transitions:
+                                    n_filtered += 1
+                                    continue
+                                    
+                                # Build peptide row
+                                row = {
+                                    config.peptide_col: result["peptide"],
+                                    "n_transitions": result["n_transitions"],
+                                }
+                                if result["mean_rt"] is not None:
+                                    row["mean_rt"] = result["mean_rt"]
+                                row.update(result["abundances"])
+                                peptide_rows.append(row)
+                                
+                                # Build residual rows if available
+                                if save_residuals and result["residuals"]:
+                                    for transition, sample_residuals in result["residuals"].items():
+                                        res_row = {
+                                            config.peptide_col: result["peptide"],
+                                            config.transition_col: transition,
+                                        }
+                                        res_row.update(sample_residuals)
+                                        residual_rows.append(res_row)
+                                        
+                                n_peptides += 1
+                        except Exception as e:
+                            logger.error(f"Worker error: {e}")
+                            raise
+                
+                batches_to_process = []
+                if n_peptides % config.progress_interval == 0:
+                    logger.info(f"  Processed {n_peptides:,} peptides...")
+        
+        # Process remaining batches
+        if batches_to_process:
+            with ProcessPoolExecutor(max_workers=min(n_workers, len(batches_to_process))) as executor:
+                futures = [executor.submit(_worker_process_batch, b) for b in batches_to_process]
+                for future in as_completed(futures):
+                    try:
+                        batch_results = future.result()
+                        for result in batch_results:
+                            if result["n_transitions"] < config.min_transitions:
+                                n_filtered += 1
+                                continue
+                            row = {
+                                config.peptide_col: result["peptide"],
+                                "n_transitions": result["n_transitions"],
+                            }
+                            if result["mean_rt"] is not None:
+                                row["mean_rt"] = result["mean_rt"]
+                            row.update(result["abundances"])
+                            peptide_rows.append(row)
+                            
+                            if save_residuals and result["residuals"]:
+                                for transition, sample_residuals in result["residuals"].items():
+                                    res_row = {
+                                        config.peptide_col: result["peptide"],
+                                        config.transition_col: transition,
+                                    }
+                                    res_row.update(sample_residuals)
+                                    residual_rows.append(res_row)
+                            n_peptides += 1
+                    except Exception as e:
+                        logger.error(f"Worker error: {e}")
+                        raise
 
     logger.info(f"  Completed: {n_peptides:,} peptides processed")
     if n_filtered > 0:
@@ -565,6 +698,13 @@ def rollup_transitions_sorted(
 
     logger.info("  Sorting complete, streaming rollup...")
 
+    # Determine number of workers
+    n_workers = config.n_workers if config.n_workers > 0 else mp.cpu_count()
+    use_parallel = n_workers > 1
+    
+    if use_parallel:
+        logger.info(f"  Using {n_workers} parallel workers")
+
     # Step 2: Stream through sorted file
     pf = pq.ParquetFile(sorted_path)
     required_cols, optional_cols = _get_required_columns(config)
@@ -577,38 +717,122 @@ def rollup_transitions_sorted(
     peptide_rows = []
     residual_rows = []
     n_peptides = 0
+    n_filtered = 0
 
     current_peptide = None
     current_data = []
+    
+    # For parallel processing: collect completed peptides into batches
+    pending_peptides: dict[str, pd.DataFrame] = {}
+    
+    # Config dict for parallel workers
+    config_dict = None
+    if use_parallel:
+        config_dict = {
+            "peptide_col": config.peptide_col,
+            "transition_col": config.transition_col,
+            "sample_col": config.sample_col,
+            "abundance_col": config.abundance_col,
+            "shape_corr_col": config.shape_corr_col,
+            "coeluting_col": config.coeluting_col,
+            "rt_col": config.rt_col,
+            "batch_col": config.batch_col,
+            "mz_col": config.mz_col,
+            "method": config.method,
+            "min_transitions": config.min_transitions,
+            "log_transform": config.log_transform,
+            "adaptive_params": config.adaptive_params,
+            "exclude_precursor": config.exclude_precursor,
+            "topn_count": config.topn_count,
+            "topn_selection": config.topn_selection,
+            "topn_weighting": config.topn_weighting,
+            "n_workers": 1,
+            "peptide_batch_size": config.peptide_batch_size,
+            "progress_interval": config.progress_interval,
+            "max_memory_gb": config.max_memory_gb,
+        }
+
+    def process_batch_parallel(batch_dict: dict[str, pd.DataFrame]) -> None:
+        """Process a batch of peptides in parallel and collect results."""
+        nonlocal n_peptides, n_filtered
+        
+        # Split batch into chunks for workers
+        peptide_items = list(batch_dict.items())
+        chunk_size = max(1, len(peptide_items) // n_workers)
+        chunks = []
+        for i in range(0, len(peptide_items), chunk_size):
+            chunk_dict = dict(peptide_items[i:i + chunk_size])
+            chunks.append((chunk_dict, samples, config_dict))
+        
+        with ProcessPoolExecutor(max_workers=min(n_workers, len(chunks))) as executor:
+            futures = [executor.submit(_worker_process_batch, chunk) for chunk in chunks]
+            for future in as_completed(futures):
+                try:
+                    batch_results = future.result()
+                    for result in batch_results:
+                        if result["n_transitions"] < config.min_transitions:
+                            n_filtered += 1
+                            continue
+                        row = {
+                            config.peptide_col: result["peptide"],
+                            "n_transitions": result["n_transitions"],
+                        }
+                        if result["mean_rt"] is not None:
+                            row["mean_rt"] = result["mean_rt"]
+                        row.update(result["abundances"])
+                        peptide_rows.append(row)
+                        
+                        if save_residuals and result["residuals"]:
+                            for transition, sample_residuals in result["residuals"].items():
+                                res_row = {
+                                    config.peptide_col: result["peptide"],
+                                    config.transition_col: transition,
+                                }
+                                res_row.update(sample_residuals)
+                                residual_rows.append(res_row)
+                        n_peptides += 1
+                except Exception as e:
+                    logger.error(f"Worker error: {e}")
+                    raise
 
     def flush_peptide():
         """Process accumulated data for current peptide."""
-        nonlocal n_peptides
+        nonlocal n_peptides, n_filtered
         if current_data:
             pep_df = pd.concat(current_data, ignore_index=True)
-            result = _process_single_peptide(pep_df, current_peptide, samples, config)
+            
+            if use_parallel:
+                # Add to pending batch for parallel processing
+                pending_peptides[current_peptide] = pep_df
+            else:
+                # Process immediately (single-threaded)
+                result = _process_single_peptide(pep_df, current_peptide, samples, config)
+                
+                if result.n_transitions < config.min_transitions:
+                    n_filtered += 1
+                    return
 
-            # Build peptide row
-            row = {
-                config.peptide_col: result.peptide,
-                "n_transitions": result.n_transitions,
-            }
-            if result.mean_rt is not None:
-                row["mean_rt"] = result.mean_rt
-            row.update(result.abundances)
-            peptide_rows.append(row)
+                # Build peptide row
+                row = {
+                    config.peptide_col: result.peptide,
+                    "n_transitions": result.n_transitions,
+                }
+                if result.mean_rt is not None:
+                    row["mean_rt"] = result.mean_rt
+                row.update(result.abundances)
+                peptide_rows.append(row)
 
-            # Build residual rows
-            if save_residuals and result.residuals:
-                for transition, sample_residuals in result.residuals.items():
-                    res_row = {
-                        config.peptide_col: result.peptide,
-                        config.transition_col: transition,
-                    }
-                    res_row.update(sample_residuals)
-                    residual_rows.append(res_row)
+                # Build residual rows
+                if save_residuals and result.residuals:
+                    for transition, sample_residuals in result.residuals.items():
+                        res_row = {
+                            config.peptide_col: result.peptide,
+                            config.transition_col: transition,
+                        }
+                        res_row.update(sample_residuals)
+                        residual_rows.append(res_row)
 
-            n_peptides += 1
+                n_peptides += 1
 
     # Stream through row groups
     for i in range(pf.metadata.num_row_groups):
@@ -624,14 +848,26 @@ def rollup_transitions_sorted(
 
                 if n_peptides > 0 and n_peptides % config.progress_interval == 0:
                     logger.info(f"  Processed {n_peptides:,} peptides...")
+                
+                # In parallel mode, process batch when it reaches target size
+                if use_parallel and len(pending_peptides) >= config.peptide_batch_size:
+                    process_batch_parallel(pending_peptides)
+                    pending_peptides.clear()
 
             # Accumulate data for this peptide
             current_data.append(df[df[config.peptide_col] == peptide])
 
     # Flush final peptide
     flush_peptide()
+    
+    # Process any remaining pending peptides in parallel mode
+    if use_parallel and pending_peptides:
+        process_batch_parallel(pending_peptides)
+        pending_peptides.clear()
 
     logger.info(f"  Completed: {n_peptides:,} peptides processed")
+    if n_filtered > 0:
+        logger.info(f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions")
 
     # Clean up temp file (use missing_ok=True in case it was already removed)
     sorted_path.unlink(missing_ok=True)

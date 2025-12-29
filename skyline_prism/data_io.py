@@ -681,21 +681,25 @@ def merge_skyline_reports_streaming(
             # Normalize schema: cast timestamp columns to string for consistency
             # Different CSV files may parse date/time columns differently
             # (e.g., "Acquired Time" may be timestamp in one file, string in another)
-            normalized_columns = []
-            for i, fld in enumerate(batch.schema):
-                col = batch.column(i)
-                if pa.types.is_timestamp(fld.type):
-                    # Cast timestamp to string for consistency across files
-                    col = col.cast(pa.string())
-                    fld = pa.field(fld.name, pa.string())
-                normalized_columns.append((fld, col))
-            
-            if any(pa.types.is_timestamp(f.type) for f in batch.schema):
-                # Rebuild batch with normalized schema
-                new_schema = pa.schema([f for f, _ in normalized_columns])
+            # Only rebuild batch if there are actually timestamp columns to convert
+            timestamp_cols = [
+                i for i, fld in enumerate(batch.schema)
+                if pa.types.is_timestamp(fld.type)
+            ]
+            if timestamp_cols:
+                # Build new schema with timestamps converted to strings
+                new_fields = []
+                new_arrays = []
+                for i, fld in enumerate(batch.schema):
+                    col = batch.column(i)
+                    if i in timestamp_cols:
+                        col = col.cast(pa.string())
+                        fld = pa.field(fld.name, pa.string())
+                    new_fields.append(fld)
+                    new_arrays.append(col)
                 batch = pa.RecordBatch.from_arrays(
-                    [col for _, col in normalized_columns],
-                    schema=new_schema
+                    new_arrays,
+                    schema=pa.schema(new_fields)
                 )
 
             # Initialize or append to writer

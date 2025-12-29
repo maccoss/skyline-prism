@@ -174,14 +174,14 @@ transition_rollup:
   
   # Adaptive rollup uses a learned weight function with 4 features:
   #
-  #   log(w) = beta_sqrt_intensity * (sqrt(intensity) - center) / scale
+  #   log(w) = beta_relative_intensity * relative_intensity
   #          + beta_mz * normalized_mz
   #          + beta_shape_corr * median_shape_corr
   #          + beta_shape_corr_outlier * low_fraction
   #
   # Features:
-  # - sqrt(intensity): Square root of mean intensity (less compression than log2),
-  #                    centered at median and scaled by IQR
+  # - relative_intensity: Transition intensity / max intensity in the peptide [0,1]
+  #                       Computed per-peptide so the most intense transition = 1.0
   # - normalized_mz: Fragment ion m/z normalized to [0,1] range
   # - median_shape_corr: Median shape correlation across all replicates
   # - low_fraction: Fraction of replicates with low shape correlation
@@ -194,7 +194,7 @@ transition_rollup:
   # equivalent to simple sum. This is the baseline for comparison.
   #
   # Constraints:
-  # - beta_sqrt_intensity >= 0 (higher intensity should not decrease weight)
+  # - beta_relative_intensity >= 0 (higher intensity should not decrease weight)
   # - Other betas are unconstrained (can be positive or negative)
   #
   # When learn_weights: true, 4 betas are optimized simultaneously.
@@ -202,10 +202,9 @@ transition_rollup:
   # from reference samples and saved in metadata.json for reproducibility.
   #
   adaptive_rollup:
-    beta_sqrt_intensity: 0.0      # Weight by sqrt intensity (>= 0)
+    beta_relative_intensity: 0.0  # Weight by relative intensity [0,1] (>= 0)
     beta_mz: 0.0                  # Weight by m/z (any value)
     beta_shape_corr: 0.0          # Weight by median shape correlation (any value)
-    beta_shape_corr_max: 0.0      # NOT OPTIMIZED - reserved for future use
     beta_shape_corr_outlier: 0.0  # Weight by low-fraction (any value)
     shape_corr_low_threshold: 0.5 # Threshold for "low" shape correlation (0-1)
     mz_normalize: true            # Normalize m/z to [0,1] range
