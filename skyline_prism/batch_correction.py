@@ -1039,7 +1039,7 @@ def evaluate_batch_correction(
             f"but QC only {qc_improvement:.1%} (ratio {overfitting_ratio:.1f})"
         )
 
-    if qc_cv_after > qc_cv_before * 1.1:  # Pool got worse by >10%
+    if qc_cv_after > qc_cv_before * 1.1:  # QC got worse by >10%
         passed = False
         warnings.append(
             f"QC CV increased from {qc_cv_before:.3f} to {qc_cv_after:.3f}"

@@ -110,7 +110,7 @@ VALID_SAMPLE_TYPES = {'experimental', 'qc', 'reference', 'blank'}
 # Default patterns for classifying samples by name
 # These can be overridden in config
 DEFAULT_SAMPLE_TYPE_PATTERNS = {
-    'reference': ['-Pool_', '-Pool', '_Pool_', '_Pool'],  # Inter-experiment reference
+    'reference': ['-Pool_', '-Pool', '_Pool_', '_Pool'],  # Reference samples (e.g., commercial plasma pool)
     'qc': ['-Carl_', '-Carl', '_QC_', '_QC', '-QC_', '-QC'],  # Intra-experiment QC
     # Everything else is experimental
 }
@@ -157,12 +157,12 @@ def generate_sample_metadata(
 
     Automatically classifies samples based on naming patterns and assigns
     batch information. Creates a unique sample_id that combines sample name
-    and batch to handle duplicate sample names across batches (e.g., Pool
+    and batch to handle duplicate sample names across batches (e.g., Reference or QC
     samples run in each plate).
 
     Args:
         samples_by_batch: Dict mapping batch_name -> set of sample names
-        reference_patterns: Patterns for reference samples (default: -Pool_, etc.)
+        reference_patterns: Patterns for reference samples (patterns like -Pool_ match reference samples)
         qc_patterns: Patterns for QC samples (default: -Carl_, -QC_, etc.)
 
     Returns:
@@ -666,7 +666,7 @@ def merge_skyline_reports_streaming(
 
             # Create unique Sample ID combining Replicate Name and Batch
             # This ensures samples with the same name in different batches are treated
-            # as separate replicates (e.g., Pool samples run in each plate)
+            # as separate replicates (e.g., Reference or QC samples run in each plate)
             if replicate_col in batch.schema.names:
                 rep_array = batch.column(replicate_col)
                 # Create Sample ID as "ReplicateName__BatchName"

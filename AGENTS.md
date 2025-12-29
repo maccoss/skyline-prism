@@ -551,7 +551,7 @@ Based on current usage and known issues:
 
 - Implemented log file generation with timestamps
 - Fixed metadata column handling (`sample` vs `replicate_name`)
-- Added support for duplicate samples across batches (Pool/reference in multiple plates)
+- Added support for duplicate samples across batches (Reference/QC in multiple plates)
 - Improved protein sample column detection using dtype checks
 - Updated stage naming (1, 2, 2b, 2c, 3, 4, 4b, 4c, 5, 5b)
 - Validated on 238 samples across 3 batches (~47GB total data)

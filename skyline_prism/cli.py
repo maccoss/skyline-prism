@@ -2,7 +2,7 @@
 
 PRISM: Proteomics Reference-Integrated Signal Modeling
 
-RT-aware normalization for Skyline proteomics data with robust protein quantification.
+Normalization and batch correction for Skyline proteomics data with robust protein quantification.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
     # Get root logger for skyline_prism
     root_logger = logging.getLogger('skyline_prism')
     root_logger.setLevel(level)
+    root_logger.propagate = False  # Prevent duplicate output to root logger
 
     # Clear any existing handlers to avoid duplicates
     root_logger.handlers.clear()
@@ -756,15 +757,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         ar_config = config['transition_rollup'].get('adaptive_rollup', {})
         adaptive_params = AdaptiveRollupParams(
             beta_log_intensity=ar_config.get('beta_log_intensity', 0.0),
+            beta_sqrt_intensity=ar_config.get('beta_sqrt_intensity', 0.0),
             beta_mz=ar_config.get('beta_mz', 0.0),
             beta_shape_corr=ar_config.get('beta_shape_corr', 0.0),
+            beta_shape_corr_max=ar_config.get('beta_shape_corr_max', 0.0),
+            beta_shape_corr_outlier=ar_config.get('beta_shape_corr_outlier', 0.0),
             mz_min=ar_config.get('mz_min', 0.0),
             mz_max=ar_config.get('mz_max', 2000.0),
             log_intensity_center=ar_config.get('log_intensity_center', 15.0),
+            sqrt_intensity_center=ar_config.get('sqrt_intensity_center', 100.0),
+            sqrt_intensity_scale=ar_config.get('sqrt_intensity_scale', 100.0),
+            shape_corr_outlier_threshold=ar_config.get('shape_corr_outlier_threshold', 0.5),
             min_improvement_pct=ar_config.get('min_improvement_pct', 5.0),
         )
 
-        # Learn weights from reference/pool samples if enabled
+        # Learn weights from reference/QC samples if enabled
         if learn_weights:
             from .transition_rollup import learn_adaptive_weights
 
@@ -784,7 +791,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if len(ref_samples) >= 2:
                 logger.info("  Learning adaptive rollup parameters...")
                 logger.info(f"    Reference samples: {len(ref_samples)}")
-                logger.info(f"    Pool (QC) samples: {len(pool_samples)}")
+                logger.info(f"    QC samples: {len(pool_samples)}")
 
                 # Load transition data for learning (sample of data)
                 import duckdb
@@ -828,11 +835,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                 else:
                     logger.warning(f"  {learn_result.fallback_reason}")
                     logger.warning("  Using sum method as fallback")
-                    # Fallback to sum (beta = 0,0,0)
+                    # Fallback to sum (all betas = 0)
                     adaptive_params = AdaptiveRollupParams(
                         beta_log_intensity=0.0,
+                        beta_sqrt_intensity=0.0,
                         beta_mz=0.0,
                         beta_shape_corr=0.0,
+                        beta_shape_corr_max=0.0,
+                        beta_shape_corr_outlier=0.0,
                     )
             else:
                 logger.warning(
@@ -841,9 +851,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                 logger.info("  Using default parameters")
 
         logger.info(
-            f"  Adaptive params: beta_intensity={adaptive_params.beta_log_intensity:.3f}, "
-            f"beta_mz={adaptive_params.beta_mz:.3f}, "
-            f"beta_shape={adaptive_params.beta_shape_corr:.3f}"
+            f"  Adaptive params: sqrt_int={adaptive_params.beta_sqrt_intensity:.3f}, "
+            f"mz={adaptive_params.beta_mz:.3f}, "
+            f"shape_med={adaptive_params.beta_shape_corr:.3f}, "
+            f"shape_max={adaptive_params.beta_shape_corr_max:.3f}, "
+            f"shape_out={adaptive_params.beta_shape_corr_outlier:.3f}"
         )
 
     # Get topn method parameters

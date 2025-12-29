@@ -168,28 +168,46 @@ transition_rollup:
   # -------------------------------------------------------------------------
   # Learn parameters from reference samples (recommended for adaptive method)
   # When true, optimizes beta parameters by minimizing median CV across peptides
-  # in reference samples. Validated on pool samples to ensure generalization.
+  # in reference samples. Validated on QC samples to ensure generalization.
   # Requires at least 2 reference samples.
   learn_weights: false  # Learn parameters from reference samples
   
-  # Adaptive rollup uses a learned weight function:
-  #   w_t = exp(beta_intensity * (log2(intensity) - center) + 
-  #             beta_mz * normalized_mz + 
-  #             beta_shape * shape_corr)
+  # Adaptive rollup uses a learned weight function with 5 features:
+  #
+  #   log(w) = beta_sqrt_intensity * (sqrt(intensity) - center) / scale
+  #          + beta_mz * normalized_mz
+  #          + beta_shape_corr * median_shape_corr
+  #          + beta_shape_corr_max * max_shape_corr
+  #          + beta_shape_corr_outlier * outlier_fraction
+  #
+  # Features:
+  # - sqrt(intensity): Square root of mean intensity (less compression than log2),
+  #                    centered at median and scaled by IQR
+  # - normalized_mz: Fragment ion m/z normalized to [0,1] range
+  # - median_shape_corr: Median shape correlation across all replicates
+  # - max_shape_corr: Maximum shape correlation (best case per transition)
+  # - outlier_fraction: Fraction of replicates with low shape correlation
+  #                     (below Q1 - 1.5*IQR threshold computed globally)
   #
   # Key insight: When all betas = 0, weights = 1 for all transitions,
   # equivalent to simple sum. This is the baseline for comparison.
   #
   # Constraints:
-  # - beta_log_intensity >= 0 (higher intensity = higher weight)
-  # - Other betas can be positive or negative
+  # - beta_sqrt_intensity >= 0 (higher intensity should not decrease weight)
+  # - Other betas are unconstrained (can be positive or negative)
+  #
+  # When learn_weights: true, all 5 betas are optimized simultaneously.
+  # Normalization parameters (centers, scales, thresholds) are computed 
+  # from reference samples and saved in metadata.json for reproducibility.
   #
   adaptive_rollup:
-    beta_log_intensity: 0.5   # Weight by log intensity (0 = no weighting)
-    beta_mz: 0.0              # Weight by m/z (0 = no weighting)
-    beta_shape_corr: 0.0      # Weight by shape correlation (0 = no weighting)
-    mz_normalize: true        # Normalize m/z to [0,1] range
-    min_improvement_pct: 5.0  # Min improvement over sum to use adaptive weights
+    beta_sqrt_intensity: 0.0      # Weight by sqrt intensity (>= 0)
+    beta_mz: 0.0                  # Weight by m/z (any value)
+    beta_shape_corr: 0.0          # Weight by median shape correlation (any value)
+    beta_shape_corr_max: 0.0      # Weight by max shape correlation (any value)
+    beta_shape_corr_outlier: 0.0  # Weight by outlier fraction (any value)
+    mz_normalize: true            # Normalize m/z to [0,1] range
+    min_improvement_pct: 5.0      # Min improvement over sum to use adaptive weights
 
 # =============================================================================
 # Stage 1: RT-Aware Normalization (DISABLED BY DEFAULT)
@@ -408,11 +426,11 @@ qc_report:
     pca_comparison: true
     
     # Correlation heatmap for control samples
-    # Shows reproducibility of reference and pool samples after correction
+    # Shows reproducibility of reference and QC samples after correction
     control_correlation: true
     
     # CV (coefficient of variation) histograms
-    # Shows precision improvement for reference and pool samples
+    # Shows precision improvement for reference and QC samples
     # Generated separately for reference and pool sample types
     cv_distribution: true
     

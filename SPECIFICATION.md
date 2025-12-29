@@ -709,7 +709,7 @@ Use the inter-experiment reference to **learn** what RT-dependent technical vari
 | Control Type | Composition | Purpose | Replicates per Batch |
 |--------------|-------------|---------|---------------------|
 | Inter-experiment reference | Commercial pool (e.g., Golden West CSF, pooled plasma) | Calibration anchor, RT correction derivation | 1-8 |
-| Intra-experiment QC | Pool of experimental samples from current study | Validation, assess prep consistency | 1-8 |
+| Intra-experiment QC | Pooled experimental samples from current study | Validation, assess prep consistency | 1-8 |
 
 **Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
@@ -1260,12 +1260,12 @@ For each experimental sample s:
         normalized_abundance_ps = raw_abundance_ps / reference_abundance_p
 ```
 
-### Phase 4: Validation Using Intra-Experiment Pool
+### Phase 4: Validation Using Intra-Experiment QC
 
 **Success criteria:**
 
 1. **QC variance decreases:** CV of intra-experiment QC replicates should decrease after correction
-2. **Pool remains distinct from reference:** Pool and reference should not collapse together in PCA
+2. **QC remains distinct from reference:** QC and reference should not collapse together in PCA
 3. **Biological signal preserved:** Known biological differences (if any between conditions) should remain
 4. **Comparable variance reduction:** Variance reduction in QC should be similar to reference (not much less)
 
@@ -1320,7 +1320,7 @@ corrected_df = combat_from_long(
 corrected_df, eval_result = combat_with_reference_samples(
     df,
     reference_samples=["Ref1", "Ref2"],
-    qc_samples=["Pool1", "Pool2"],
+    qc_samples=["QC1", "QC2"],
     fallback_on_failure=True  # Revert if correction degrades quality
 )
 ```
@@ -1845,7 +1845,7 @@ over-smoothed by batch correction.
 │  - Skyline report (CSV/TSV) with transition-level data         │
 │  - Sample metadata (sample types, batches)                      │
 │  - Reference replicates: inter-experiment QC (for RT model)    │
-│  - Pool replicates: intra-experiment QC (for validation)       │
+│  - QC replicates (intra-experiment) (for validation)       │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼

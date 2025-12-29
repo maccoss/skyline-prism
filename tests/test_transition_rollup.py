@@ -390,7 +390,7 @@ class TestLearnAdaptiveWeights:
         assert "reference samples" in result.fallback_reason.lower()
 
     def test_learned_params_constraints(self, sample_data):
-        """Learned beta_log_intensity should be >= 0 (constraint)."""
+        """Learned beta_sqrt_intensity should be >= 0 (constraint)."""
         reference_samples = ["Ref1", "Ref2", "Ref3", "Ref4"]
         qc_samples = ["QC1", "QC2", "QC3"]
 
@@ -405,8 +405,10 @@ class TestLearnAdaptiveWeights:
             n_iterations=10,
         )
 
-        # beta_log_intensity should respect the >= 0 constraint
-        assert result.params.beta_log_intensity >= 0.0
+        # beta_sqrt_intensity should respect the >= 0 constraint
+        assert result.params.beta_sqrt_intensity >= 0.0
+        # beta_log_intensity is deprecated and always 0
+        assert result.params.beta_log_intensity == 0.0
 
 
 class TestAdaptiveZeroBetasEqualsSum:

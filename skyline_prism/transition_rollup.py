@@ -60,42 +60,67 @@ class AdaptiveRollupParams:
     """Parameters for adaptive transition weighting.
 
     Weight function (in log space):
-        log(w_t) = beta_log_intensity * (log2(intensity) - center)
+        log(w_t) = beta_sqrt_intensity * (sqrt(intensity) - sqrt_center) / sqrt_scale
                  + beta_mz * normalized_mz
-                 + beta_shape_corr * shape_corr
+                 + beta_shape_corr * median_shape_corr
+                 + beta_shape_corr_max * max_shape_corr
+                 + beta_shape_corr_outlier * outlier_fraction
 
-    Equivalently:
-        w_t = intensity^beta_log_intensity * exp(beta_mz * mz + beta_shape_corr * shape_corr)
+        w = exp(log(w))
 
     Key insight: When all beta = 0, all weights are 1, giving simple sum (baseline).
 
-    Features:
-    - log2(intensity): Mean log2 intensity of transition across samples
+    Features (5 total):
+    - sqrt(intensity): Mean sqrt intensity, centered and scaled (less compression than log2)
     - mz: Product m/z, normalized to [0, 1] range
     - shape_corr: Median shape correlation across samples (0-1)
+    - shape_corr_max: Maximum shape correlation across samples (0-1)
+    - shape_corr_outlier: Fraction of samples with outlier (low) shape correlation
 
     Constraints:
-    - beta_log_intensity >= 0 (higher intensity transitions should not be penalized)
-    - Other betas are unconstrained (can be negative)
+    - beta_sqrt_intensity >= 0 (higher intensity transitions should not be penalized)
+    - Other betas are unconstrained (can be positive or negative)
+
+    Note: beta_log_intensity is deprecated (redundant with sqrt_intensity).
     """
 
-    # Coefficient for log2(intensity) - effectively an exponent on intensity
-    # >= 0 by constraint: higher intensity should not decrease weight
-    # Default 0.0: no intensity weighting (baseline = simple sum)
+    # DEPRECATED: beta_log_intensity is redundant with beta_sqrt_intensity
+    # Kept for backwards compatibility but NOT optimized
+    # Always set to 0.0 in new code
     beta_log_intensity: float = 0.0
+
+    # Coefficient for sqrt(intensity) - less compression than log2
+    # >= 0 by constraint: higher intensity should not decrease weight
+    # Default 0.0: no sqrt intensity weighting (baseline = simple sum)
+    beta_sqrt_intensity: float = 0.0
 
     # Coefficient for normalized m/z (m/z scaled to [0, 1])
     # Default 0.0: no m/z weighting
     beta_mz: float = 0.0
 
-    # Coefficient for median shape correlation
+    # Coefficient for median shape correlation (legacy name preserved for compatibility)
     # Default 0.0: no shape correlation weighting
     beta_shape_corr: float = 0.0
+
+    # Coefficient for maximum shape correlation across samples
+    # Default 0.0: no max shape correlation weighting
+    beta_shape_corr_max: float = 0.0
+
+    # Coefficient for shape correlation outlier fraction
+    # Unconstrained: can be positive or negative
+    # Negative values penalize transitions with more outliers
+    # Default 0.0: no outlier weighting
+    beta_shape_corr_outlier: float = 0.0
 
     # Feature normalization parameters (learned from data)
     mz_min: float = 0.0      # Minimum m/z for normalization
     mz_max: float = 2000.0   # Maximum m/z for normalization
     log_intensity_center: float = 15.0  # Centering value for log2(intensity)
+    sqrt_intensity_center: float = 100.0  # Centering value for sqrt(intensity)
+    sqrt_intensity_scale: float = 100.0   # Scale for sqrt(intensity) normalization
+
+    # Global shape correlation outlier threshold (Q1 - 1.5*IQR)
+    shape_corr_outlier_threshold: float = 0.5  # Learned from data
 
     # Fallback settings
     fallback_to_sum: bool = True      # Fall back to sum if no improvement
@@ -124,15 +149,21 @@ class AdaptiveRollupResult:
 def compute_adaptive_weights(
     mean_log_intensity: np.ndarray,
     mz_values: np.ndarray,
-    shape_corr: np.ndarray,
+    median_shape_corr: np.ndarray,
     params: AdaptiveRollupParams,
+    mean_sqrt_intensity: np.ndarray | None = None,
+    max_shape_corr: np.ndarray | None = None,
+    shape_corr_outlier_frac: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute adaptive transition weights from features.
 
     Weight function:
-        log(w) = beta_log_intensity * (log_intensity - center)
+        log(w) = beta_log_intensity * (log_intensity - log_center)
+               + beta_sqrt_intensity * (sqrt_intensity - sqrt_center) / sqrt_scale
                + beta_mz * normalized_mz
-               + beta_shape_corr * shape_corr
+               + beta_shape_corr * median_shape_corr
+               + beta_shape_corr_max * max_shape_corr
+               + beta_shape_corr_outlier * outlier_fraction
 
         w = exp(log(w))
 
@@ -141,13 +172,18 @@ def compute_adaptive_weights(
     Args:
         mean_log_intensity: Mean log2 intensity per transition (n_transitions,)
         mz_values: Product m/z per transition (n_transitions,)
-        shape_corr: Median shape correlation per transition (n_transitions,)
+        median_shape_corr: Median shape correlation per transition (n_transitions,)
         params: Adaptive rollup parameters with beta coefficients
+        mean_sqrt_intensity: Mean sqrt intensity per transition (optional)
+        max_shape_corr: Maximum shape correlation per transition (optional)
+        shape_corr_outlier_frac: Fraction of outlier samples per transition (optional)
 
     Returns:
         Weight per transition (n_transitions,), NOT normalized
 
     """
+    n_trans = len(mean_log_intensity)
+
     # Normalize m/z to [0, 1] range
     mz_range = params.mz_max - params.mz_min
     if mz_range > 0:
@@ -159,11 +195,30 @@ def compute_adaptive_weights(
     # Center log intensity
     centered_log_intensity = mean_log_intensity - params.log_intensity_center
 
+    # Normalize sqrt intensity (centered and scaled)
+    if mean_sqrt_intensity is not None and params.sqrt_intensity_scale > 0:
+        centered_sqrt_intensity = (
+            mean_sqrt_intensity - params.sqrt_intensity_center
+        ) / params.sqrt_intensity_scale
+    else:
+        centered_sqrt_intensity = np.zeros(n_trans)
+
+    # Use provided max shape correlation or default to median
+    if max_shape_corr is None:
+        max_shape_corr = median_shape_corr
+
+    # Use provided outlier fraction or default to zeros
+    if shape_corr_outlier_frac is None:
+        shape_corr_outlier_frac = np.zeros(n_trans)
+
     # Compute log-weight as linear combination of features
     log_weight = (
         params.beta_log_intensity * centered_log_intensity
+        + params.beta_sqrt_intensity * centered_sqrt_intensity
         + params.beta_mz * normalized_mz
-        + params.beta_shape_corr * shape_corr
+        + params.beta_shape_corr * median_shape_corr
+        + params.beta_shape_corr_max * max_shape_corr
+        + params.beta_shape_corr_outlier * shape_corr_outlier_frac
     )
 
     # Exponentiate to get weights (exp(0) = 1 when all betas = 0)
@@ -269,14 +324,32 @@ class _AdaptivePrecomputedPeptide:
     intensity_log2: np.ndarray
     # Mean log2 intensity per transition: n_transitions
     mean_log_intensity: np.ndarray
+    # Mean sqrt intensity per transition: n_transitions
+    mean_sqrt_intensity: np.ndarray
     # Product m/z per transition: n_transitions
     mz_values: np.ndarray
     # Median shape correlation per transition: n_transitions
     median_shape_corr: np.ndarray
+    # Maximum shape correlation per transition: n_transitions
+    max_shape_corr: np.ndarray
+    # Fraction of samples with outlier (low) shape correlation: n_transitions
+    shape_corr_outlier_frac: np.ndarray
     # Number of transitions
     n_transitions: int
     # Sample names
     sample_names: list[str]
+
+
+@dataclass
+class _AdaptiveNormalizationParams:
+    """Normalization parameters computed from data for adaptive weights."""
+
+    mz_min: float
+    mz_max: float
+    log_intensity_center: float
+    sqrt_intensity_center: float
+    sqrt_intensity_scale: float
+    shape_corr_outlier_threshold: float
 
 
 def _precompute_adaptive_metrics(
@@ -291,26 +364,44 @@ def _precompute_adaptive_metrics(
     min_transitions: int = 3,
     exclude_precursor: bool = True,
     batch_col: str | None = "Batch",
-) -> tuple[dict[str, _AdaptivePrecomputedPeptide], float, float, float]:
+) -> tuple[dict[str, _AdaptivePrecomputedPeptide], _AdaptiveNormalizationParams]:
     """Pre-compute metrics for all peptides for adaptive weight learning.
 
     Returns pre-computed metrics plus feature normalization bounds.
 
+    OPTIMIZED: Uses vectorized groupby operations instead of per-peptide loops.
+    All metrics are computed in a single pass through the data.
+
     When batch_col is provided and samples appear in multiple batches,
-    they are treated as separate replicates (e.g., Pool_029 in Plate1 and
-    Pool_029 in Plate2 become two separate columns).
+    they are treated as separate replicates (e.g., Ref_029 in Plate1 and
+    Ref_029 in Plate2 become two separate columns).
+
+    Computes the following features per transition:
+    - mean_log_intensity: Mean log2 intensity across samples
+    - mean_sqrt_intensity: Mean sqrt intensity across samples
+    - mz_values: Product m/z
+    - median_shape_corr: Median shape correlation across samples
+    - max_shape_corr: Maximum shape correlation across samples
+    - shape_corr_outlier_frac: Fraction of samples with outlier (low) shape corr
+
+    The shape correlation outlier threshold is computed globally using IQR:
+    threshold = Q1 - 1.5 * IQR, where Q1 and IQR are from all shape correlations.
 
     Args:
         data: Transition-level DataFrame (LINEAR scale intensities)
         sample_list: Samples to include
-        peptide_col, transition_col, sample_col, abundance_col, mz_col, shape_corr_col:
-            Column names
+        peptide_col: Column name for peptide identifier
+        transition_col: Column name for transition identifier
+        sample_col: Column name for sample identifier
+        abundance_col: Column name for abundance values
+        mz_col: Column name for product m/z
+        shape_corr_col: Column name for shape correlation
         min_transitions: Minimum transitions required
         exclude_precursor: If True, filter out MS1 precursor ions
         batch_col: Column name for batch identifier (to handle duplicate names)
 
     Returns:
-        Tuple of (precomputed_dict, mz_min, mz_max, log_intensity_center)
+        Tuple of (precomputed_dict, normalization_params)
 
     """
     # Filter to specified samples
@@ -335,7 +426,6 @@ def _precompute_adaptive_metrics(
                 filtered[sample_col].astype(str) + '::' + filtered[batch_col].astype(str)
             )
             composite_col = '_sample_batch'
-            # Get unique sample-batch combinations for the requested samples
             unique_sample_batches = filtered[composite_col].unique().tolist()
         else:
             composite_col = sample_col
@@ -344,78 +434,183 @@ def _precompute_adaptive_metrics(
         composite_col = sample_col
         unique_sample_batches = list(dict.fromkeys(sample_list))
 
-    peptides = filtered[peptide_col].unique()
+    n_samples = len(unique_sample_batches)
+
+    # Compute global shape correlation outlier threshold using IQR
+    has_shape_corr = shape_corr_col in filtered.columns
+    if has_shape_corr:
+        all_shape_corr = filtered[shape_corr_col].dropna().values
+        if len(all_shape_corr) > 0:
+            q1 = np.percentile(all_shape_corr, 25)
+            q3 = np.percentile(all_shape_corr, 75)
+            iqr = q3 - q1
+            shape_corr_outlier_threshold = float(q1 - 1.5 * iqr)
+        else:
+            shape_corr_outlier_threshold = 0.5
+    else:
+        shape_corr_outlier_threshold = 0.5
+
+    has_mz = mz_col in filtered.columns
+
+    # ========================================================================
+    # VECTORIZED APPROACH: Compute all per-transition metrics via groupby
+    # ========================================================================
+
+    # Precompute transformed values once
+    filtered['_log2_intensity'] = np.log2(np.maximum(filtered[abundance_col].values, 1.0))
+    filtered['_sqrt_intensity'] = np.sqrt(np.maximum(filtered[abundance_col].values, 0.0))
+
+    if has_shape_corr:
+        filtered['_shape_outlier'] = (
+            filtered[shape_corr_col].fillna(1.0) < shape_corr_outlier_threshold
+        ).astype(float)
+
+    # Group by peptide + transition to compute per-transition statistics
+    group_cols = [peptide_col, transition_col]
+
+    # Build aggregation dict - compute all metrics in ONE groupby
+    agg_dict = {
+        '_log2_intensity': ['mean', 'first'],  # mean for metric, first for sample values
+        '_sqrt_intensity': 'mean',
+    }
+    if has_mz:
+        agg_dict[mz_col] = 'first'  # m/z is constant per transition
+    if has_shape_corr:
+        agg_dict[shape_corr_col] = ['median', 'max']
+        agg_dict['_shape_outlier'] = 'mean'  # Mean of 0/1 = fraction
+
+    # Aggregate per transition (across all samples)
+    trans_stats = filtered.groupby(group_cols, sort=False).agg(agg_dict)
+    # Flatten column names: ('_log2_intensity', 'mean') -> 'log2_intensity_mean'
+    trans_stats.columns = ['_'.join(col).lstrip('_') for col in trans_stats.columns]
+    trans_stats = trans_stats.reset_index()
+
+    # Count transitions per peptide to filter by min_transitions
+    trans_counts = trans_stats.groupby(peptide_col).size()
+    valid_peptides = trans_counts[trans_counts >= min_transitions].index
+
+    # Filter to valid peptides
+    trans_stats = trans_stats[trans_stats[peptide_col].isin(valid_peptides)]
+
+    # Compute normalization bounds from aggregated stats
+    if has_mz:
+        mz_col_agg = f'{mz_col}_first'
+        valid_mz = trans_stats[mz_col_agg][trans_stats[mz_col_agg] > 0]
+        mz_min = float(valid_mz.min()) if len(valid_mz) > 0 else 0.0
+        mz_max = float(valid_mz.max()) if len(valid_mz) > 0 else 2000.0
+    else:
+        mz_min, mz_max = 0.0, 2000.0
+
+    # Column names after flattening: 'log2_intensity_mean', 'sqrt_intensity_mean'
+    log_int_col = 'log2_intensity_mean'
+    valid_log_int = trans_stats[log_int_col].dropna()
+    log_intensity_center = float(valid_log_int.median()) if len(valid_log_int) > 0 else 15.0
+
+    sqrt_int_col = 'sqrt_intensity_mean'
+    valid_sqrt_int = trans_stats[sqrt_int_col].dropna()
+    if len(valid_sqrt_int) > 0:
+        sqrt_intensity_center = float(valid_sqrt_int.median())
+        q1_sqrt = float(valid_sqrt_int.quantile(0.25))
+        q3_sqrt = float(valid_sqrt_int.quantile(0.75))
+        sqrt_intensity_scale = max(q3_sqrt - q1_sqrt, 1.0)
+    else:
+        sqrt_intensity_center = 100.0
+        sqrt_intensity_scale = 100.0
+
+    norm_params = _AdaptiveNormalizationParams(
+        mz_min=mz_min,
+        mz_max=mz_max,
+        log_intensity_center=log_intensity_center,
+        sqrt_intensity_center=sqrt_intensity_center,
+        sqrt_intensity_scale=sqrt_intensity_scale,
+        shape_corr_outlier_threshold=shape_corr_outlier_threshold,
+    )
+
+    # ========================================================================
+    # Build per-peptide intensity matrices via pivot (needed for rollup)
+    # This is the only part that needs per-peptide structure
+    # ========================================================================
+
+    # Pivot intensity to get peptide -> (transition x sample) matrices
+    # Use multi-index pivot for efficiency
+    intensity_pivot = filtered.pivot_table(
+        index=[peptide_col, transition_col],
+        columns=composite_col,
+        values='_log2_intensity',
+        aggfunc='first',
+    )
+
+    # Ensure all samples present
+    for s in unique_sample_batches:
+        if s not in intensity_pivot.columns:
+            intensity_pivot[s] = np.nan
+    intensity_pivot = intensity_pivot[unique_sample_batches]
+
+    # ========================================================================
+    # Build results dict using efficient groupby iteration
+    # ========================================================================
+
+    # Set index on trans_stats for fast lookup
+    trans_stats_indexed = trans_stats.set_index(peptide_col)
+
+    # Define column names for extraction
+    shape_med_col = f'{shape_corr_col}_median' if has_shape_corr else None
+    shape_max_col = f'{shape_corr_col}_max' if has_shape_corr else None
+    shape_out_col = 'shape_outlier_mean' if has_shape_corr else None
 
     results = {}
-    all_mz = []
-    all_log_intensity = []
 
-    for peptide in peptides:
-        pep_data = filtered[filtered[peptide_col] == peptide]
-
-        # Pivot to transition x sample (intensity)
-        intensity_pivot = pep_data.pivot_table(
-            index=transition_col, columns=composite_col, values=abundance_col, aggfunc="first"
-        )
-
-        # Fill missing samples
-        for s in unique_sample_batches:
-            if s not in intensity_pivot.columns:
-                intensity_pivot[s] = np.nan
-        intensity_pivot = intensity_pivot[unique_sample_batches]
-
-        n_trans = len(intensity_pivot)
-        if n_trans < min_transitions:
+    # Use groupby on trans_stats for efficient iteration
+    for peptide in valid_peptides:
+        try:
+            # Fast index-based lookup
+            pep_stats = trans_stats_indexed.loc[[peptide]]
+        except KeyError:
             continue
 
-        # Log2 transform
-        intensity_log2 = np.log2(np.maximum(intensity_pivot.values, 1.0))
-        mean_log_intensity = np.nanmean(intensity_log2, axis=1)
+        n_trans = len(pep_stats)
 
-        # Get m/z values per transition
-        if mz_col in pep_data.columns:
-            mz_pivot = pep_data.pivot_table(
-                index=transition_col, columns=composite_col, values=mz_col, aggfunc="first"
-            )
-            # m/z should be same across samples; take first non-NA
-            mz_values = mz_pivot.apply(
-                lambda x: x.dropna().iloc[0] if x.notna().any() else 0.0, axis=1
-            )
-            mz_values = mz_values.reindex(intensity_pivot.index).fillna(0).values
+        # Get intensity matrix for this peptide
+        try:
+            intensity_log2 = intensity_pivot.loc[peptide].values
+        except KeyError:
+            continue
+
+        # Handle case where only one transition (returns Series not DataFrame)
+        if intensity_log2.ndim == 1:
+            intensity_log2 = intensity_log2.reshape(1, -1)
+
+        # Extract pre-computed metrics (using .values for speed)
+        mean_log_intensity = pep_stats[log_int_col].values
+        mean_sqrt_intensity = pep_stats[sqrt_int_col].values
+
+        if has_mz:
+            mz_values = pep_stats[mz_col_agg].fillna(0).values
         else:
             mz_values = np.zeros(n_trans)
 
-        # Shape correlation
-        if shape_corr_col in pep_data.columns:
-            shape_pivot = pep_data.pivot_table(
-                index=transition_col, columns=composite_col, values=shape_corr_col, aggfunc="first"
-            )
-            shape_pivot = shape_pivot.reindex(
-                index=intensity_pivot.index, columns=unique_sample_batches
-            ).fillna(1.0)
-            median_shape_corr = np.nanmedian(shape_pivot.values, axis=1)
+        if has_shape_corr:
+            median_shape_corr = pep_stats[shape_med_col].fillna(1.0).values
+            max_shape_corr = pep_stats[shape_max_col].fillna(1.0).values
+            shape_corr_outlier_frac = pep_stats[shape_out_col].fillna(0.0).values
         else:
             median_shape_corr = np.ones(n_trans)
+            max_shape_corr = np.ones(n_trans)
+            shape_corr_outlier_frac = np.zeros(n_trans)
 
         results[peptide] = _AdaptivePrecomputedPeptide(
             intensity_log2=intensity_log2,
             mean_log_intensity=mean_log_intensity,
+            mean_sqrt_intensity=mean_sqrt_intensity,
             mz_values=mz_values,
             median_shape_corr=median_shape_corr,
+            max_shape_corr=max_shape_corr,
+            shape_corr_outlier_frac=shape_corr_outlier_frac,
             n_transitions=n_trans,
             sample_names=unique_sample_batches,
         )
 
-        # Collect for normalization bounds
-        all_mz.extend(mz_values[mz_values > 0].tolist())
-        all_log_intensity.extend(mean_log_intensity[~np.isnan(mean_log_intensity)].tolist())
-
-    # Compute normalization bounds
-    mz_min = min(all_mz) if all_mz else 0.0
-    mz_max = max(all_mz) if all_mz else 2000.0
-    log_intensity_center = np.median(all_log_intensity) if all_log_intensity else 15.0
-
-    return results, mz_min, mz_max, log_intensity_center
+    return results, norm_params
 
 
 def _rollup_with_adaptive_params(
@@ -447,12 +642,15 @@ def _rollup_with_adaptive_params(
         if metrics.n_transitions < min_transitions:
             continue
 
-        # Compute weights
+        # Compute weights with all features
         weights = compute_adaptive_weights(
             metrics.mean_log_intensity,
             metrics.mz_values,
             metrics.median_shape_corr,
             params,
+            mean_sqrt_intensity=metrics.mean_sqrt_intensity,
+            max_shape_corr=metrics.max_shape_corr,
+            shape_corr_outlier_frac=metrics.shape_corr_outlier_frac,
         )
 
         # Normalize weights
@@ -527,8 +725,8 @@ def _rollup_all_peptides_sum_for_adaptive(
     then sums transitions to get peptide abundance.
 
     When batch_col is provided and samples appear in multiple batches,
-    they are treated as separate replicates (e.g., Pool_029 in Plate1 and
-    Pool_029 in Plate2 become two separate columns).
+    they are treated as separate replicates (e.g., Ref_029 in Plate1 and
+    Ref_029 in Plate2 become two separate columns).
 
     Args:
         data: Transition-level DataFrame (LINEAR scale intensities)
@@ -576,40 +774,26 @@ def _rollup_all_peptides_sum_for_adaptive(
         composite_col = sample_col
         unique_sample_batches = list(dict.fromkeys(sample_list))
 
-    # Process each peptide
-    peptides = filtered_data[peptide_col].unique()
-    results = {}
+    # Vectorized: sum and count transitions per peptide x sample using groupby
+    # This replaces the per-peptide loop with a single groupby operation
+    grouped = filtered_data.groupby([peptide_col, composite_col])[abundance_col].agg(['sum', 'count'])
+    grouped = grouped.reset_index()
+    grouped.columns = [peptide_col, 'sample', 'abundance_sum', 'n_transitions']
 
-    for peptide in peptides:
-        pep_data = filtered_data[filtered_data[peptide_col] == peptide]
+    # Apply minimum transitions filter
+    grouped.loc[grouped['n_transitions'] < min_transitions, 'abundance_sum'] = np.nan
 
-        # Pivot to transition × sample matrix (first value for duplicates)
-        intensity_pivot = pep_data.pivot_table(
-            index=transition_col,
-            columns=composite_col,
-            values=abundance_col,
-            aggfunc="first",
-        )
+    # Pivot to peptide x sample matrix
+    peptide_abundances = grouped.pivot(
+        index=peptide_col,
+        columns='sample',
+        values='abundance_sum'
+    )
 
-        # Ensure all samples are present
-        for sample in unique_sample_batches:
-            if sample not in intensity_pivot.columns:
-                intensity_pivot[sample] = np.nan
-        intensity_pivot = intensity_pivot[unique_sample_batches]
-
-        # Count valid transitions per sample
-        n_trans = intensity_pivot.notna().sum(axis=0)
-
-        # Sum transitions to get peptide abundance (LINEAR scale)
-        peptide_sum = intensity_pivot.sum(axis=0)
-
-        # Apply minimum transitions filter
-        peptide_sum = peptide_sum.where(n_trans >= min_transitions)
-
-        results[peptide] = peptide_sum
-
-    # Combine into DataFrame
-    peptide_abundances = pd.DataFrame(results).T
+    # Ensure all samples are present in correct order
+    for sample in unique_sample_batches:
+        if sample not in peptide_abundances.columns:
+            peptide_abundances[sample] = np.nan
     peptide_abundances = peptide_abundances[unique_sample_batches]
 
     # Convert to log2 scale
@@ -638,13 +822,25 @@ def learn_adaptive_weights(
 
     Loss function: median(CV_p) over all peptides p in reference samples
 
-    Key insight: When beta = (0, 0, 0), all weights = 1, giving simple sum baseline.
+    Key insight: When all betas = 0, all weights = 1, giving simple sum baseline.
+
+    Features optimized (5 total):
+    - beta_sqrt_intensity: Weight for sqrt(intensity) (>= 0)
+    - beta_mz: Weight for normalized m/z (any)
+    - beta_shape_corr: Weight for median shape correlation (any)
+    - beta_shape_corr_max: Weight for max shape correlation (any)
+    - beta_shape_corr_outlier: Weight for outlier fraction (any)
+
+    Note: beta_log_intensity is deprecated and NOT optimized.
 
     Args:
         data: Transition-level DataFrame (LINEAR scale intensities)
         reference_samples: List of reference sample names (for learning)
         qc_samples: List of QC sample names (for validation)
-        peptide_col, transition_col, sample_col, abundance_col: Column names
+        peptide_col: Column name for peptide identifier
+        transition_col: Column name for transition identifier
+        sample_col: Column name for sample identifier
+        abundance_col: Column name for abundance values
         mz_col: Column with product m/z values
         shape_corr_col: Column with shape correlation values
         n_iterations: Maximum optimization iterations
@@ -656,9 +852,7 @@ def learn_adaptive_weights(
     """
     from scipy.optimize import minimize
 
-    logger.info("Learning adaptive rollup weights")
-    logger.info(f"  Reference samples: {len(reference_samples)}")
-    logger.info(f"  QC samples: {len(qc_samples)}")
+    # Note: Caller (cli.py) logs the learning header; we just log progress
 
     if initial_params is None:
         initial_params = AdaptiveRollupParams()
@@ -698,13 +892,16 @@ def learn_adaptive_weights(
 
     # Pre-compute metrics for reference samples
     logger.info("  Pre-computing metrics for reference samples...")
-    ref_metrics, mz_min, mz_max, log_intensity_center = _precompute_adaptive_metrics(
+    ref_metrics, norm_params = _precompute_adaptive_metrics(
         data, reference_samples, peptide_col, transition_col,
         sample_col, abundance_col, mz_col, shape_corr_col
     )
     logger.info(f"  Pre-computed {len(ref_metrics)} peptides")
-    logger.info(f"  m/z range: [{mz_min:.1f}, {mz_max:.1f}]")
-    logger.info(f"  Log2 intensity center: {log_intensity_center:.2f}")
+    logger.info(f"  m/z range: [{norm_params.mz_min:.1f}, {norm_params.mz_max:.1f}]")
+    logger.info(f"  Log2 intensity center: {norm_params.log_intensity_center:.2f}")
+    logger.info(f"  Sqrt intensity: center={norm_params.sqrt_intensity_center:.1f}, "
+                f"scale={norm_params.sqrt_intensity_scale:.1f}")
+    logger.info(f"  Shape corr outlier threshold: {norm_params.shape_corr_outlier_threshold:.3f}")
 
     # Track optimization
     iteration_count = [0]
@@ -712,14 +909,21 @@ def learn_adaptive_weights(
 
     def objective(beta_array):
         """Objective: minimize median CV on reference samples."""
-        # beta_log_intensity >= 0 constraint via max(0, ...)
+        # Optimizing 5 parameters (beta_log_intensity is deprecated, always 0)
+        # Constraint: beta_sqrt_intensity >= 0
         params = AdaptiveRollupParams(
-            beta_log_intensity=max(0.0, beta_array[0]),
+            beta_log_intensity=0.0,  # Deprecated, not optimized
+            beta_sqrt_intensity=max(0.0, beta_array[0]),
             beta_mz=beta_array[1],
             beta_shape_corr=beta_array[2],
-            mz_min=mz_min,
-            mz_max=mz_max,
-            log_intensity_center=log_intensity_center,
+            beta_shape_corr_max=beta_array[3],
+            beta_shape_corr_outlier=beta_array[4],  # Unconstrained
+            mz_min=norm_params.mz_min,
+            mz_max=norm_params.mz_max,
+            log_intensity_center=norm_params.log_intensity_center,
+            sqrt_intensity_center=norm_params.sqrt_intensity_center,
+            sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
+            shape_corr_outlier_threshold=norm_params.shape_corr_outlier_threshold,
         )
 
         try:
@@ -733,20 +937,25 @@ def learn_adaptive_weights(
             return 1.0
 
     # Initial parameters: all zeros (simple sum baseline)
+    # Note: beta_log_intensity is deprecated and not optimized
     x0 = [
-        initial_params.beta_log_intensity,
+        initial_params.beta_sqrt_intensity,
         initial_params.beta_mz,
         initial_params.beta_shape_corr,
+        initial_params.beta_shape_corr_max,
+        initial_params.beta_shape_corr_outlier,
     ]
 
-    # Bounds: beta_log_intensity >= 0, others unconstrained but bounded
+    # Bounds for 5 parameters (beta_log_intensity deprecated)
     bounds = [
-        (0.0, 5.0),     # beta_log_intensity (must be non-negative)
+        (0.0, 5.0),     # beta_sqrt_intensity (must be non-negative)
         (-5.0, 5.0),    # beta_mz (can be negative or positive)
-        (-5.0, 5.0),    # beta_shape_corr (can be negative or positive)
+        (-5.0, 5.0),    # beta_shape_corr (median, can be negative or positive)
+        (-5.0, 5.0),    # beta_shape_corr_max (can be negative or positive)
+        (-5.0, 5.0),    # beta_shape_corr_outlier (unconstrained)
     ]
 
-    logger.info("  Optimizing beta coefficients...")
+    logger.info("  Optimizing 5 beta coefficients...")
     result = minimize(
         objective,
         x0,
@@ -756,15 +965,21 @@ def learn_adaptive_weights(
     )
     logger.info(f"  Optimization completed in {iteration_count[0]} evaluations")
 
-    # Extract optimized parameters
+    # Extract optimized parameters (5 betas, log_intensity deprecated)
     opt = result.x
     learned_params = AdaptiveRollupParams(
-        beta_log_intensity=max(0.0, opt[0]),
+        beta_log_intensity=0.0,  # Deprecated, not optimized
+        beta_sqrt_intensity=max(0.0, opt[0]),
         beta_mz=opt[1],
         beta_shape_corr=opt[2],
-        mz_min=mz_min,
-        mz_max=mz_max,
-        log_intensity_center=log_intensity_center,
+        beta_shape_corr_max=opt[3],
+        beta_shape_corr_outlier=opt[4],  # Unconstrained
+        mz_min=norm_params.mz_min,
+        mz_max=norm_params.mz_max,
+        log_intensity_center=norm_params.log_intensity_center,
+        sqrt_intensity_center=norm_params.sqrt_intensity_center,
+        sqrt_intensity_scale=norm_params.sqrt_intensity_scale,
+        shape_corr_outlier_threshold=norm_params.shape_corr_outlier_threshold,
         fallback_to_sum=initial_params.fallback_to_sum,
         min_improvement_pct=initial_params.min_improvement_pct,
     )
@@ -773,10 +988,12 @@ def learn_adaptive_weights(
     ref_abundances_adaptive = _rollup_with_adaptive_params(ref_metrics, learned_params)
     reference_cv_adaptive = _compute_median_cv_for_adaptive(ref_abundances_adaptive)
 
-    logger.info("  Learned parameters:")
-    logger.info(f"    beta_log_intensity: {learned_params.beta_log_intensity:.4f}")
+    logger.info("  Learned parameters (5 features):")
+    logger.info(f"    beta_sqrt_intensity: {learned_params.beta_sqrt_intensity:.4f}")
     logger.info(f"    beta_mz: {learned_params.beta_mz:.4f}")
-    logger.info(f"    beta_shape_corr: {learned_params.beta_shape_corr:.4f}")
+    logger.info(f"    beta_shape_corr (median): {learned_params.beta_shape_corr:.4f}")
+    logger.info(f"    beta_shape_corr_max: {learned_params.beta_shape_corr_max:.4f}")
+    logger.info(f"    beta_shape_corr_outlier: {learned_params.beta_shape_corr_outlier:.4f}")
     logger.info(f"  Reference CV: {reference_cv_sum:.4f} -> {reference_cv_adaptive:.4f}")
 
     # Calculate improvement on reference
@@ -794,21 +1011,13 @@ def learn_adaptive_weights(
 
     if len(qc_samples) >= 2:
         # Pre-compute metrics for QC samples
-        qc_metrics, _, _, _ = _precompute_adaptive_metrics(
+        qc_metrics, _ = _precompute_adaptive_metrics(
             data, qc_samples, peptide_col, transition_col,
             sample_col, abundance_col, mz_col, shape_corr_col
         )
 
-        # Use same normalization params from reference
-        qc_params = AdaptiveRollupParams(
-            beta_log_intensity=learned_params.beta_log_intensity,
-            beta_mz=learned_params.beta_mz,
-            beta_shape_corr=learned_params.beta_shape_corr,
-            mz_min=mz_min,
-            mz_max=mz_max,
-            log_intensity_center=log_intensity_center,
-        )
-        qc_abundances_adaptive = _rollup_with_adaptive_params(qc_metrics, qc_params)
+        # Use learned params with reference normalization
+        qc_abundances_adaptive = _rollup_with_adaptive_params(qc_metrics, learned_params)
         qc_cv_adaptive = _compute_median_cv_for_adaptive(qc_abundances_adaptive)
 
         logger.info(f"  QC CV: {qc_cv_sum:.4f} -> {qc_cv_adaptive:.4f}")

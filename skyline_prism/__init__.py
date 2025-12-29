@@ -1,7 +1,7 @@
 """Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling.
 
-A pipeline for reference-anchored, RT-aware normalization of LC-MS proteomics data
-exported from Skyline, with robust protein quantification using Tukey median polish.
+A normalization pipeline for LC-MS proteomics data exported from Skyline,
+with ComBat batch correction and robust protein quantification.
 
 See: https://skyline.ms for more information about Skyline.
 """
