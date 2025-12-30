@@ -326,11 +326,11 @@ Complete provenance and parameters for reproducibility.
       "min_transitions": 3,
       "use_ms1": false,
       "adaptive_params": {
-        "beta_log_intensity": 0.5,
+        "beta_relative_intensity": 0.0,
         "beta_mz": 0.0,
-        "beta_shape_corr": 1.0,
-        "mz_min": 350.0,
-        "mz_max": 1200.0,
+        "beta_shape_corr": 0.0,
+        "beta_shape_corr_outlier": 0.0,
+        "shape_corr_low_threshold": 0.7,
         "learned_from": "reference_samples",
         "n_reference_samples": 6
       }
@@ -1745,17 +1745,20 @@ sample_annotations:
 # Stage 0: Transition to peptide rollup (if needed)
 transition_rollup:
   enabled: false  # Set true if input has transition-level data
-  method: "median_polish"  # options: median_polish, sum, adaptive
+  method: "adaptive"  # options: median_polish, sum, adaptive
   use_ms1: false  # Whether to include MS1 in quantification (default: no)
   min_transitions: 3  # Minimum transitions required
+  learn_adaptive_weights: true  # Learn weights from reference samples (default when method=adaptive)
   
   # For adaptive method - uses learned weights from intensity, m/z, shape_corr
   # Weight formula: w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)
   adaptive_rollup:
-    beta_log_intensity: 0.5  # Weight for log2 intensity (must be >= 0)
-    beta_mz: 0.0             # Weight for normalized m/z
-    beta_shape_corr: 1.0     # Weight for shape correlation
-    min_improvement_pct: 5.0 # Required improvement over sum to use adaptive
+    beta_relative_intensity: 0.0  # Weight for relative intensity within peptide
+    beta_mz: 0.0                  # Weight for normalized m/z
+    beta_shape_corr: 0.0          # Weight for median shape correlation
+    beta_shape_corr_outlier: 0.0  # Penalty for high outlier fraction
+    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation (transitions below this get penalized)
+    min_improvement_pct: 5.0      # Required improvement over sum to use adaptive
 
 # Sample outlier detection (one-sided, low signal only)
 # Detects samples with abnormally low signal (failed injections, degradation)
@@ -1820,14 +1823,15 @@ filtering:
     max_mass_error_ppm: null # maximum mass error (optional)
 
 output:
-  transitions_rolled: "transitions_to_peptides.parquet"  # if transition rollup enabled
-  transition_residuals: "transition_residuals.parquet"   # median polish residuals per transition
-  corrected_peptides: "corrected_peptides.parquet"
-  corrected_proteins: "corrected_proteins.parquet"
+  peptides_rollup: "peptides_rollup.parquet"             # raw peptide abundances from transition rollup (before normalization)
+  proteins_raw: "proteins_raw.parquet"                   # raw protein abundances from peptide rollup (before normalization)
+  corrected_peptides: "corrected_peptides.parquet"       # normalized, batch-corrected peptides
+  corrected_proteins: "corrected_proteins.parquet"       # normalized, batch-corrected proteins
   peptide_residuals: "peptide_residuals.parquet"         # median polish residuals per peptide
   protein_groups: "protein_groups.tsv"
-  qc_report: "normalization_qc_report.html"
-  diagnostic_plots: "plots/"
+  metadata: "metadata.json"                              # pipeline provenance and parameters
+  qc_report: "qc_report.html"                            # HTML report with embedded diagnostic plots
+  qc_plots: "qc_plots/"                                  # individual PNG plot files (if save_plots: true)
 ```
 
 ---
@@ -1910,11 +1914,14 @@ over-smoothed by batch correction.
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         OUTPUTS                                 │
+│  - peptides_rollup.parquet      Raw peptides from transition   │
+│                                 rollup (before normalization)  │
+│  - proteins_raw.parquet         Raw proteins from peptide      │
+│                                 rollup (before normalization)  │
 │  - corrected_peptides.parquet   Batch-corrected peptides       │
 │  - corrected_proteins.parquet   Batch-corrected proteins       │
 │  - protein_groups.tsv           Protein group definitions      │
 │  - peptide_residuals.parquet    Median polish residuals        │
-│  - transition_residuals.parquet (if transition rollup)         │
 │  - qc_report.html               QC metrics and plots           │
 │  - metadata.json                Pipeline provenance            │
 └─────────────────────────────────────────────────────────────────┘

@@ -187,12 +187,14 @@ Key insight: When all betas = 0, weights = 1 for all transitions (equivalent to 
 ```yaml
 transition_rollup:
   method: "adaptive"
-  learn_variance_model: true  # Learn from reference samples
+  learn_adaptive_weights: true  # Learn from reference samples (default when method=adaptive)
   adaptive_rollup:
-    beta_log_intensity: 0.5  # Weight for log2 intensity (must be >= 0)
-    beta_mz: 0.0             # Weight for normalized m/z
-    beta_shape_corr: 1.0     # Weight for shape correlation
-    min_improvement_pct: 5.0 # Required improvement over sum
+    beta_relative_intensity: 0.0  # Weight for relative intensity within peptide
+    beta_mz: 0.0                  # Weight for normalized m/z
+    beta_shape_corr: 0.0          # Weight for median shape correlation
+    beta_shape_corr_outlier: 0.0  # Penalty for high outlier fraction
+    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation
+    min_improvement_pct: 5.0      # Required improvement over sum
 ```
 
 ## Development Guidelines
@@ -323,8 +325,10 @@ prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m metadata.tsv
 ```
 
 This produces:
-- `corrected_peptides.parquet` - Peptide-level batch-corrected quantities
-- `corrected_proteins.parquet` - Protein-level batch-corrected quantities
+- `corrected_peptides.parquet` - Peptide-level normalized/batch-corrected quantities
+- `corrected_proteins.parquet` - Protein-level normalized/batch-corrected quantities
+- `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
+- `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
 - `protein_groups.tsv` - Protein group definitions
 - `peptide_residuals.parquet` - Residuals for outlier analysis (if enabled)
 - `metadata.json` - Complete processing parameters for reproducibility
@@ -465,7 +469,8 @@ This section tracks what's currently working, what needs attention, and what's n
 **Core Pipeline:**
 
 - Streaming CSV merge (handles ~47GB datasets)
-- Transition → Peptide rollup (Tukey median polish)
+- Transition → Peptide rollup (Tukey median polish, adaptive weighted)
+- Adaptive rollup weight learning from reference samples
 - Peptide global normalization (median-based)
 - Peptide batch correction (ComBat, empirical Bayes)
 - Protein parsimony (FASTA-based grouping)
@@ -475,6 +480,7 @@ This section tracks what's currently working, what needs attention, and what's n
 - Log file generation (timestamped in output directory)
 - Parquet output with metadata
 - Provenance tracking (metadata.json)
+- Config key validation (warns about unknown/typo config keys)
 
 **Data Handling:**
 
@@ -483,20 +489,17 @@ This section tracks what's currently working, what needs attention, and what's n
 - Sample type pattern matching (reference/QC/experimental detection)
 - Batch estimation from source files or timestamps
 - Duplicate sample validation (allows same sample across batches)
+- Scale handling: All parquet files output in LINEAR scale
 
 **Testing:**
 
-- 182 tests passing
+- 196 tests passing
 - Core algorithms well-tested (median polish, ComBat, parsimony)
+- Scale handling tests (log2/linear conversions, CV calculation)
+- Config validation tests
 - Real-world validation on 238 samples, 3 batches, ~47GB data
 
 ### [ISSUE] Known Issues / Needs Attention
-
-**QC Reporting:**
-
-- **CV calculation bug**: Reference/QC median CV shows NaN - sample type matching not working correctly
-- **Protein NaN values**: Global median/max shift occasionally NaN for proteins - investigate data quality checks
-- **QC report warning**: "list index out of range" during generation in some edge cases
 
 **ComBat Evaluation:**
 
@@ -547,7 +550,7 @@ Based on current usage and known issues:
 - `data_io.py`: 28% - File I/O (tested via integration)
 - `validation.py`: 10% - QC reporting (needs more unit tests)
 
-**Overall**: 47% coverage, 182 tests passing
+**Overall**: 47% coverage, 196 tests passing
 
 ### [CHANGELOG] Recent Changes Log
 
@@ -560,6 +563,17 @@ Based on current usage and known issues:
 - Updated stage naming (1, 2, 2b, 2c, 3, 4, 4b, 4c, 5, 5b)
 - Validated on 238 samples across 3 batches (~47GB total data)
 - Added input data summary logging (transitions, peptides, samples)
+
+**December 30, 2024:**
+
+- Fixed log2/linear scale handling throughout pipeline (overflow prevention)
+- Added config key validation (detects typos like `learn_weights` vs `learn_adaptive_weights`)
+- Fixed `learn_adaptive_weights` default to be True when `method: adaptive`
+- Fixed `shape_corr_low_threshold` not being passed from config to learning function
+- Renamed output files: `peptides_rollup.2.parquet` -> `peptides_rollup.parquet`
+- Removed redundant `peptides_normalized.3.parquet` (same as `corrected_peptides.parquet`)
+- Added comprehensive scale handling tests (`tests/test_scale_handling.py`)
+- Test count increased from 182 to 196
 
 ## Not Yet Implemented
 

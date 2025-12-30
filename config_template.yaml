@@ -191,7 +191,8 @@ transition_rollup:
   # When true, optimizes beta parameters by minimizing median CV across peptides
   # in reference samples. Validated on QC samples to ensure generalization.
   # Requires at least 2 reference samples.
-  learn_weights: false  # Learn parameters from reference samples
+  # Default: true when method=adaptive, false otherwise
+  learn_adaptive_weights: true  # Learn parameters from reference samples
   
   # Adaptive rollup uses a learned weight function with 4 features:
   #

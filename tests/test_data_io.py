@@ -1,10 +1,8 @@
 """Tests for data I/O module."""
 
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 import pytest
 
 from skyline_prism.data_io import (

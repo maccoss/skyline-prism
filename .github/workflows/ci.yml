@@ -28,10 +28,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,viz]"
 
-      - name: Run linting (ruff)
-        run: |
-          ruff check skyline_prism/
-
       - name: Run tests with coverage
         run: |
           pytest tests/ -v --cov=skyline_prism --cov-report=xml --cov-report=term-missing

@@ -313,10 +313,10 @@ def _worker_process_batch(
     This function is designed to be pickle-able for multiprocessing.
     """
     peptide_data_dict, samples, config_dict = args
-    
+
     # Reconstruct config from dict (dataclasses aren't always pickle-friendly)
     config = ChunkedRollupConfig(**config_dict)
-    
+
     results = []
     for peptide, pep_data in peptide_data_dict.items():
         result = _process_single_peptide(pep_data, peptide, samples, config)
@@ -503,7 +503,7 @@ def rollup_transitions_streaming(
     else:
         # Multi-process version using ProcessPoolExecutor
         logger.info(f"  Using {n_workers} parallel workers")
-        
+
         # Convert config to dict for pickling
         config_dict = {
             "peptide_col": config.peptide_col,
@@ -530,13 +530,13 @@ def rollup_transitions_streaming(
             "progress_interval": config.progress_interval,
             "max_memory_gb": config.max_memory_gb,
         }
-        
+
         # Collect batches first, then process in parallel
         # This trades some memory for better parallelization
         batches_to_process = []
         for batch in stream_peptide_groups(parquet_path, config, config.peptide_batch_size):
             batches_to_process.append((batch, samples, config_dict))
-            
+
             # Process when we have enough batches for all workers
             if len(batches_to_process) >= n_workers:
                 with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -549,7 +549,7 @@ def rollup_transitions_streaming(
                                 if result["n_transitions"] < config.min_transitions:
                                     n_filtered += 1
                                     continue
-                                    
+
                                 # Build peptide row
                                 row = {
                                     config.peptide_col: result["peptide"],
@@ -559,7 +559,7 @@ def rollup_transitions_streaming(
                                     row["mean_rt"] = result["mean_rt"]
                                 row.update(result["abundances"])
                                 peptide_rows.append(row)
-                                
+
                                 # Build residual rows if available
                                 if save_residuals and result["residuals"]:
                                     for transition, sample_residuals in result["residuals"].items():
@@ -569,16 +569,16 @@ def rollup_transitions_streaming(
                                         }
                                         res_row.update(sample_residuals)
                                         residual_rows.append(res_row)
-                                        
+
                                 n_peptides += 1
                         except Exception as e:
                             logger.error(f"Worker error: {e}")
                             raise
-                
+
                 batches_to_process = []
                 if n_peptides % config.progress_interval == 0:
                     logger.info(f"  Processed {n_peptides:,} peptides...")
-        
+
         # Process remaining batches
         if batches_to_process:
             with ProcessPoolExecutor(max_workers=min(n_workers, len(batches_to_process))) as executor:
@@ -598,7 +598,7 @@ def rollup_transitions_streaming(
                                 row["mean_rt"] = result["mean_rt"]
                             row.update(result["abundances"])
                             peptide_rows.append(row)
-                            
+
                             if save_residuals and result["residuals"]:
                                 for transition, sample_residuals in result["residuals"].items():
                                     res_row = {
@@ -723,7 +723,7 @@ def rollup_transitions_sorted(
     # Determine number of workers
     n_workers = config.n_workers if config.n_workers > 0 else mp.cpu_count()
     use_parallel = n_workers > 1
-    
+
     if use_parallel:
         logger.info(f"  Using {n_workers} parallel workers")
 
@@ -743,10 +743,10 @@ def rollup_transitions_sorted(
 
     current_peptide = None
     current_data = []
-    
+
     # For parallel processing: collect completed peptides into batches
     pending_peptides: dict[str, pd.DataFrame] = {}
-    
+
     # Config dict for parallel workers
     config_dict = None
     if use_parallel:
@@ -779,7 +779,7 @@ def rollup_transitions_sorted(
     def process_batch_parallel(batch_dict: dict[str, pd.DataFrame]) -> None:
         """Process a batch of peptides in parallel and collect results."""
         nonlocal n_peptides, n_filtered
-        
+
         # Split batch into chunks for workers
         peptide_items = list(batch_dict.items())
         chunk_size = max(1, len(peptide_items) // n_workers)
@@ -787,7 +787,7 @@ def rollup_transitions_sorted(
         for i in range(0, len(peptide_items), chunk_size):
             chunk_dict = dict(peptide_items[i:i + chunk_size])
             chunks.append((chunk_dict, samples, config_dict))
-        
+
         with ProcessPoolExecutor(max_workers=min(n_workers, len(chunks))) as executor:
             futures = [executor.submit(_worker_process_batch, chunk) for chunk in chunks]
             for future in as_completed(futures):
@@ -805,7 +805,7 @@ def rollup_transitions_sorted(
                             row["mean_rt"] = result["mean_rt"]
                         row.update(result["abundances"])
                         peptide_rows.append(row)
-                        
+
                         if save_residuals and result["residuals"]:
                             for transition, sample_residuals in result["residuals"].items():
                                 res_row = {
@@ -824,14 +824,14 @@ def rollup_transitions_sorted(
         nonlocal n_peptides, n_filtered
         if current_data:
             pep_df = pd.concat(current_data, ignore_index=True)
-            
+
             if use_parallel:
                 # Add to pending batch for parallel processing
                 pending_peptides[current_peptide] = pep_df
             else:
                 # Process immediately (single-threaded)
                 result = _process_single_peptide(pep_df, current_peptide, samples, config)
-                
+
                 if result.n_transitions < config.min_transitions:
                     n_filtered += 1
                     return
@@ -872,7 +872,7 @@ def rollup_transitions_sorted(
 
                 if n_peptides > 0 and n_peptides % config.progress_interval == 0:
                     logger.info(f"  Processed {n_peptides:,} peptides...")
-                
+
                 # In parallel mode, process batch when it reaches target size
                 if use_parallel and len(pending_peptides) >= config.peptide_batch_size:
                     process_batch_parallel(pending_peptides)
@@ -883,7 +883,7 @@ def rollup_transitions_sorted(
 
     # Flush final peptide
     flush_peptide()
-    
+
     # Process any remaining pending peptides in parallel mode
     if use_parallel and pending_peptides:
         process_batch_parallel(pending_peptides)

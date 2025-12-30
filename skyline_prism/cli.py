@@ -26,24 +26,17 @@ from .data_io import (
     generate_sample_metadata,
     get_parquet_source_fingerprints,
     load_sample_metadata,
-    load_unified_data,
     merge_skyline_reports,
     merge_skyline_reports_streaming,
     verify_source_fingerprints,
 )
-from .normalization import normalize_pipeline
 from .parsimony import (
     build_peptide_protein_map,
     compute_protein_groups,
     export_protein_groups,
 )
-from .rollup import (
-    rollup_to_proteins,
-)
 from .validation import (
     generate_comprehensive_qc_report,
-    generate_qc_report,
-    validate_correction,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +82,73 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
         root_logger.info(f"Logging to: {log_file}")
 
 
+# Known configuration keys for validation
+# This helps detect typos in config files
+KNOWN_CONFIG_KEYS = {
+    'data': {
+        'abundance_column', 'rt_column', 'peptide_column', 'protein_column',
+        'protein_name_column', 'sample_column', 'batch_column', 'sample_type_column',
+        'transition_column', 'precursor_column', 'fragment_column',
+    },
+    'sample_annotations': {
+        'reference_pattern', 'qc_pattern', 'experimental_pattern',
+    },
+    'batch_estimation': {
+        'min_samples_per_batch', 'max_samples_per_batch', 'gap_iqr_multiplier', 'n_batches',
+    },
+    'sample_outlier_detection': {
+        'enabled', 'action', 'method', 'iqr_multiplier', 'fold_threshold',
+    },
+    'processing': {
+        'n_workers', 'peptide_batch_size',
+    },
+    'transition_rollup': {
+        'enabled', 'method', 'use_ms1', 'min_transitions',
+        'topn_count', 'topn_selection', 'topn_weighting',
+        'learn_adaptive_weights', 'learn_weights',  # Both supported for compatibility
+        'adaptive_rollup',  # Nested section
+    },
+    'transition_rollup.adaptive_rollup': {
+        'beta_relative_intensity', 'beta_mz', 'beta_shape_corr', 'beta_shape_corr_outlier',
+        'beta_log_intensity', 'beta_sqrt_intensity', 'beta_shape_corr_max',  # Deprecated but recognized
+        'shape_corr_low_threshold', 'min_improvement_pct', 'mz_min', 'mz_max', 'log_intensity_center',
+    },
+    'rt_correction': {
+        'enabled', 'method', 'spline_df', 'per_batch', 'min_peptides_per_bin',
+    },
+    'global_normalization': {
+        'method', 'vsn_params',
+    },
+    'batch_correction': {
+        'enabled', 'method',
+    },
+    'parsimony': {
+        'fasta_path', 'shared_peptide_handling',
+    },
+    'protein_rollup': {
+        'method', 'min_peptides', 'topn', 'ibaq', 'median_polish',
+    },
+    'protein_rollup.topn': {
+        'n', 'selection',
+    },
+    'protein_rollup.ibaq': {
+        'fasta_path', 'enzyme', 'missed_cleavages', 'min_peptide_length', 'max_peptide_length',
+    },
+    'protein_rollup.median_polish': {
+        'max_iterations', 'convergence_tolerance',
+    },
+    'output': {
+        'format', 'include_residuals', 'compress',
+    },
+    'qc_report': {
+        'enabled', 'filename', 'save_plots', 'embed_plots', 'plots',
+    },
+    'qc_report.plots': {
+        'intensity_distribution', 'pca_comparison', 'control_correlation', 'cv_distribution', 'rt_correction',
+    },
+}
+
+
 def load_config(config_path: Path | None) -> dict:
     """Load configuration from YAML file or return defaults."""
     defaults = {
@@ -107,7 +167,8 @@ def load_config(config_path: Path | None) -> dict:
             'enabled': False,
             'method': 'median_polish',
             'min_transitions': 3,
-            'learn_adaptive_weights': False,  # Learn from reference samples
+            # Note: learn_adaptive_weights defaults handled dynamically below
+            # (True if method=adaptive, False otherwise)
         },
         'rt_correction': {
             'enabled': False,  # Disabled by default per SPECIFICATION
@@ -137,13 +198,52 @@ def load_config(config_path: Path | None) -> dict:
         },
     }
 
+    unknown_keys = []
     if config_path and config_path.exists():
         with open(config_path) as f:
             user_config = yaml.safe_load(f)
+        
+        # Validate config keys before merging (logging happens later)
+        unknown_keys = _find_unknown_config_keys(user_config)
+        
         # Deep merge user config over defaults
         defaults = _deep_merge(defaults, user_config)
+    
+    # Store unknown keys in config for later warning
+    defaults['_unknown_keys'] = unknown_keys
 
     return defaults
+
+
+def _find_unknown_config_keys(user_config: dict) -> list[str]:
+    """Find unknown keys in user config.
+    
+    Returns a list of unknown keys (e.g., ['transition_rollup.learn_weights']).
+    """
+    unknown_keys = []
+    
+    def check_section(config_dict: dict, section_path: str = ''):
+        """Recursively check keys in a config section."""
+        for key, value in config_dict.items():
+            full_key = f"{section_path}.{key}" if section_path else key
+            
+            # Determine which known keys to check against
+            if section_path:
+                known_section = KNOWN_CONFIG_KEYS.get(section_path, set())
+            else:
+                known_section = set(KNOWN_CONFIG_KEYS.keys())
+            
+            if key not in known_section:
+                unknown_keys.append(full_key)
+            
+            # Recursively check nested dicts (but only for known nested sections)
+            if isinstance(value, dict):
+                nested_section = f"{section_path}.{key}" if section_path else key
+                if nested_section in KNOWN_CONFIG_KEYS:
+                    check_section(value, nested_section)
+    
+    check_section(user_config)
+    return unknown_keys
 
 
 def load_config_from_provenance(provenance_path: Path) -> dict:
@@ -374,11 +474,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         rollup_proteins_streaming,
         rollup_transitions_sorted,
     )
-    from .parsimony import (
-        build_peptide_protein_map,
-        compute_protein_groups,
-        export_protein_groups,
-    )
     from .transition_rollup import (
         AdaptiveRollupParams,
     )
@@ -412,6 +507,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     log_file = output_dir / f'prism_run_{timestamp}.log'
     verbose = getattr(args, 'verbose', False)
     setup_logging(verbose=verbose, log_file=log_file)
+
+    # Warn about any unknown config keys (helps catch typos)
+    unknown_keys = config.pop('_unknown_keys', [])
+    if unknown_keys:
+        logger.warning("=" * 60)
+        logger.warning("Unknown configuration keys detected (possible typos):")
+        for key in unknown_keys:
+            logger.warning(f"  - {key}")
+        logger.warning("=" * 60)
 
     # Get sample type patterns from args or config
     reference_patterns = None
@@ -626,10 +730,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     rollup_method = config['transition_rollup'].get('method', 'sum')
     use_ms1 = config['transition_rollup'].get('use_ms1', False)
     min_transitions = config['transition_rollup'].get('min_transitions', 3)
-    # Support both 'learn_weights' and 'learn_adaptive_weights' config keys
+    # Support both 'learn_adaptive_weights' (preferred) and 'learn_weights' (deprecated)
+    # Default to True when method=adaptive, False otherwise
+    default_learn = (rollup_method == "adaptive")
     learn_weights = config['transition_rollup'].get(
         'learn_adaptive_weights',
-        config['transition_rollup'].get('learn_weights', False)
+        config['transition_rollup'].get('learn_weights', default_learn)
     )
 
     logger.info(f"  Rollup method: {rollup_method}")
@@ -658,7 +764,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
 
         # Learn weights from reference/QC samples if enabled
-        if learn_weights:
+        if learn_weights and metadata_df is not None:
             from .transition_rollup import learn_adaptive_weights
 
             # Extract sample types from metadata
@@ -748,7 +854,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     topn_count = config['transition_rollup'].get('topn_count', 3)
     topn_selection = config['transition_rollup'].get('topn_selection', 'correlation')
     topn_weighting = config['transition_rollup'].get('topn_weighting', 'sqrt')
-    
+
     # Get parallel processing parameters
     n_workers = config.get('processing', {}).get('n_workers', 1)
     peptide_batch_size = config.get('processing', {}).get('peptide_batch_size', 1000)
@@ -757,7 +863,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info(f"  Top-N count: {topn_count}")
         logger.info(f"  Selection method: {topn_selection}")
         logger.info(f"  Weighting: {topn_weighting}")
-    
+
     if n_workers != 1:
         logger.info(f"  Parallel workers: {n_workers if n_workers > 0 else 'all CPUs'}")
 
@@ -779,7 +885,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         peptide_batch_size=peptide_batch_size,
     )
 
-    peptide_rollup_path = output_dir / 'peptides_rollup.2.parquet'
+    peptide_rollup_path = output_dir / 'peptides_rollup.parquet'
     peptide_result = rollup_transitions_sorted(
         parquet_path=transition_parquet,
         output_path=peptide_rollup_path,
@@ -807,6 +913,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     meta_cols = [c for c in meta_cols if c in peptide_df.columns]
     sample_cols = [c for c in peptide_df.columns if c not in meta_cols]
 
+    # IMPORTANT: Peptide rollup output is in LINEAR scale (per AGENTS.md convention).
+    # Convert to log2 scale for normalization and batch correction.
+    # We'll convert back to linear when writing final output.
+    for col in sample_cols:
+        # Replace zeros/negatives with NaN before log transform
+        peptide_df.loc[peptide_df[col] <= 0, col] = np.nan
+        peptide_df[col] = np.log2(peptide_df[col])
+
     # Filter out peptides with all NaN (< min_transitions, failed rollup)
     # These cannot be normalized or batch-corrected
     data_matrix = peptide_df[sample_cols].values
@@ -816,7 +930,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info(f"  Filtering {n_filtered} peptides with insufficient transitions (all NaN)")
         peptide_df = peptide_df[valid_mask].reset_index(drop=True)
 
-    # Keep copy for QC comparison (before normalization)
+    # Keep copy for QC comparison (before normalization) - now in log2 scale
     peptide_pre_norm_df = peptide_df.copy()
 
     # -------------------------------------------------------------------------
@@ -1010,10 +1124,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         logger.info("  Batch correction disabled in config")
 
-    # Save normalized peptides
-    peptide_normalized_path = output_dir / 'peptides_normalized.3.parquet'
-    peptide_df.to_parquet(peptide_normalized_path, index=False)
-    logger.info(f"  Saved normalized peptides: {peptide_normalized_path}")
+    # Save corrected peptides (final output, also used for Stage 4 protein rollup)
+    output_format = config['output'].get('format', 'parquet')
+    peptide_output = output_dir / f"corrected_peptides.{output_format}"
+    if output_format == 'parquet':
+        peptide_df.to_parquet(peptide_output, index=False)
+    else:
+        sep = '\t' if output_format == 'tsv' else ','
+        peptide_df.to_csv(peptide_output, sep=sep, index=False)
+    logger.info(f"  Saved corrected peptides: {peptide_output}")
 
     # =========================================================================
     # Stage 3: Protein Parsimony
@@ -1065,7 +1184,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     protein_path = output_dir / 'proteins_raw.parquet'
     protein_result = rollup_proteins_streaming(
-        peptide_parquet_path=peptide_normalized_path,
+        peptide_parquet_path=peptide_output,
         protein_groups=protein_groups,
         output_path=protein_path,
         config=protein_config,
@@ -1095,7 +1214,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         if c not in prot_meta_cols and protein_df[c].dtype in ['float64', 'float32', 'int64', 'int32']
     ]
 
-    # Keep a copy of raw protein data for QC comparison
+    # Convert from linear to log2 scale for normalization
+    # (chunked_processing outputs linear scale, but normalization works on log2)
+    for col in prot_sample_cols:
+        protein_df[col] = np.log2(protein_df[col].replace(0, np.nan))
+
+    # Keep a copy of raw protein data (in log2 scale) for QC comparison
     protein_raw_df = protein_df.copy()
 
     # Apply global median normalization (on log2 scale)
@@ -1200,17 +1324,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 5: Output Generation")
     logger.info("=" * 60)
 
-    output_format = config['output'].get('format', 'parquet')
-
-    # Data is in wide format with sample values already normalized/corrected
-    # Save as-is (values are on log2 scale)
-    peptide_output = output_dir / f"corrected_peptides.{output_format}"
-    if output_format == 'parquet':
-        peptide_df.to_parquet(peptide_output, index=False)
-    else:
-        sep = '\t' if output_format == 'tsv' else ','
-        peptide_df.to_csv(peptide_output, sep=sep, index=False)
-    logger.info(f"  Saved peptides: {peptide_output}")
+    # Peptides already saved after Stage 2c as corrected_peptides.parquet
+    logger.info(f"  Peptides: {peptide_output} (saved after Stage 2c)")
 
     # Save proteins
     protein_output = output_dir / f"corrected_proteins.{output_format}"
@@ -1322,10 +1437,10 @@ def cmd_qc(args: argparse.Namespace) -> int:
     updating reports after visualization improvements without reprocessing data.
 
     Expected files in the output directory:
-    - peptides_rollup.2.parquet OR peptides_normalized.3.parquet (raw peptides)
-    - corrected_peptides.parquet (corrected peptides)
-    - proteins_raw.parquet (raw proteins)
-    - corrected_proteins.parquet (corrected proteins)
+    - peptides_rollup.parquet (raw peptides from transition rollup)
+    - corrected_peptides.parquet (normalized/batch-corrected peptides)
+    - proteins_raw.parquet (raw proteins from peptide rollup)
+    - corrected_proteins.parquet (normalized/batch-corrected proteins)
     - sample_metadata.tsv (sample types)
     """
     import pandas as pd
@@ -1341,17 +1456,9 @@ def cmd_qc(args: argparse.Namespace) -> int:
     logger.info("=" * 60)
     logger.info(f"  Directory: {output_dir}")
 
-    # Find peptide raw data (try multiple names for compatibility)
-    peptide_raw_path = None
-    for name in ['peptides_rollup.2.parquet', 'peptides_normalized.3.parquet',
-                 'peptides_rawsum.1.parquet', 'peptides_medianpolish.2.parquet']:
-        path = output_dir / name
-        if path.exists():
-            peptide_raw_path = path
-            break
-
-    if peptide_raw_path is None:
-        logger.error("Could not find peptide raw data file")
+    peptide_raw_path = output_dir / 'peptides_rollup.parquet'
+    if not peptide_raw_path.exists():
+        logger.error(f"Could not find peptide raw data file: {peptide_raw_path}")
         return 1
 
     # Load data files
@@ -1682,7 +1789,9 @@ transition_rollup:
   topn_weighting: "sqrt"         # or "sum"
   
   # Adaptive method parameters (only used if method: adaptive)
-  learn_weights: false
+  # When true, learns optimal weights from reference samples by minimizing CV
+  # Default: true when method=adaptive, false otherwise
+  learn_adaptive_weights: true
   adaptive_rollup:
     beta_relative_intensity: 0.0
     beta_mz: 0.0

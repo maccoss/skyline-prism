@@ -35,7 +35,7 @@ data:
   rt_column: "Retention Time"
   
   # Peptide identification (modified sequence distinguishes peptidoforms)
-  peptide_column: "Peptide Modified Sequence"
+  peptide_column: "Peptide Modified Sequence Unimod Ids"
   
   # Protein identification
   protein_column: "Protein Accession"
@@ -57,11 +57,12 @@ data:
 #       Used for validating corrections without overfitting
 # - experimental: All other samples
 
-# Reference samples (e.g., commercial plasma pool) (for learning RT correction)
+sample_annotations:
+  # Reference samples (e.g., commercial plasma pool) for learning corrections
   reference_pattern:
     - "-Pool_"
     - "-Pool"
-  # Carl samples are intra-experiment QC (for validation)
+  # QC samples are intra-experiment QC (for validation)
   qc_pattern:
     - "-Carl_"
     - "-Carl"
@@ -119,7 +120,7 @@ processing:
   #   1 = single-threaded (lowest memory, recommended for most cases)
   #   0 = use all available CPUs
   #   N = use N worker processes
-  n_workers: 4
+  n_workers: 5
   
   # Peptides per batch (larger = faster but more memory)
   peptide_batch_size: 1000
@@ -149,10 +150,12 @@ transition_rollup:
   # Top-N method parameters (only used if method: topn)
   topn_count: 3
   topn_selection: "correlation"  # or "intensity"
-  topn_weighting: "sqrt"         # or "sum"
+  topn_weighting: "sum"         # or "sum"
   
   # Adaptive method parameters (only used if method: adaptive)
-  learn_weights: true
+  # When true, learns optimal weights from reference samples by minimizing CV
+  # Default: true when method=adaptive, false otherwise
+  learn_adaptive_weights: true
   adaptive_rollup:
     beta_relative_intensity: 0.0
     beta_mz: 0.0

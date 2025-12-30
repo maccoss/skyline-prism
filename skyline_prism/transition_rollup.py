@@ -933,7 +933,8 @@ def learn_adaptive_weights(
     logger.info("  Pre-computing metrics for reference samples...")
     ref_metrics, norm_params = _precompute_adaptive_metrics(
         data, reference_samples, peptide_col, transition_col,
-        sample_col, abundance_col, mz_col, shape_corr_col
+        sample_col, abundance_col, mz_col, shape_corr_col,
+        shape_corr_low_threshold=initial_params.shape_corr_low_threshold,
     )
     logger.info(f"  Pre-computed {len(ref_metrics)} peptides")
     logger.info(f"  m/z range: [{norm_params.mz_min:.1f}, {norm_params.mz_max:.1f}]")
@@ -1002,7 +1003,7 @@ def learn_adaptive_weights(
         bounds=bounds,
         options={"maxiter": n_iterations, "ftol": 1e-6},
     )
-    
+
     # Log convergence status
     if result.success:
         logger.info(f"  Optimization CONVERGED in {iteration_count[0]} evaluations")
@@ -1058,7 +1059,8 @@ def learn_adaptive_weights(
         # Pre-compute metrics for QC samples
         qc_metrics, _ = _precompute_adaptive_metrics(
             data, qc_samples, peptide_col, transition_col,
-            sample_col, abundance_col, mz_col, shape_corr_col
+            sample_col, abundance_col, mz_col, shape_corr_col,
+            shape_corr_low_threshold=learned_params.shape_corr_low_threshold,
         )
 
         # Use learned params with reference normalization
@@ -1140,6 +1142,7 @@ def rollup_peptide_topn(
 
     Returns:
         Tuple of (abundances, uncertainties, weights, n_transitions_used)
+
     """
     n_available = len(intensity_matrix)
 

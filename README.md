@@ -1,5 +1,9 @@
 # Skyline-PRISM
 
+[![PyPI version](https://badge.fury.io/py/skyline-prism.svg)](https://badge.fury.io/py/skyline-prism)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for retention time-aware normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish.
 
 ## Key Features
@@ -37,13 +41,16 @@ prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata
 
 This produces:
 
-- `corrected_peptides.parquet` - Peptide-level quantities (batch-corrected)
-- `corrected_proteins.parquet` - Protein-level quantities (batch-corrected)  
+- `corrected_peptides.parquet` - Peptide-level quantities (normalized, batch-corrected)
+- `corrected_proteins.parquet` - Protein-level quantities (normalized, batch-corrected)
+- `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
+- `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
 - `protein_groups.tsv` - Protein group definitions
 - `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
 - `metadata.json` - Processing metadata and provenance
 - `prism_run_YYYYMMDD_HHMMSS.log` - Detailed log file with all processing steps and timings
-- `qc_plots/` - Directory with QC plots (if QC reporting enabled)
+- `qc_report.html` - HTML QC report with embedded diagnostic plots
+- `qc_plots/` - Directory with QC plots (if `save_plots: true`)
 
 **Scale:** Output files contain **linear-scale** abundances (raw peak area units). The pipeline operates on log2 scale internally but back-transforms to linear before writing output.
 
@@ -193,9 +200,9 @@ sample_annotations:
 # Transition to peptide rollup (if using transition-level data)
 transition_rollup:
   enabled: true
-  method: "median_polish"  # default; alternatives: adaptive, sum
+  method: "adaptive"  # adaptive (recommended), median_polish, or sum
   min_transitions: 3
-  learn_variance_model: false  # Set true for adaptive method
+  learn_adaptive_weights: true  # Learn optimal weights from reference samples (default when method=adaptive)
 
 # Sample outlier detection (one-sided, low signal only)
 sample_outlier_detection:
