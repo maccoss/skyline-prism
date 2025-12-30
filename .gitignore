@@ -99,3 +99,4 @@ output/
 results/
 .venv/
 example-files/
+*.log

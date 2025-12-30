@@ -349,7 +349,7 @@ Complete provenance and parameters for reproducibility.
       "method": "combat"
     },
     "protein_rollup": {
-      "method": "median_polish",
+      "method": "sum",
       "min_peptides": 3
     }
   },
@@ -1800,7 +1800,7 @@ parsimony:
 
 # Peptide to protein rollup
 protein_rollup:
-  method: "median_polish"  # options: median_polish, topn, maxlfq, ibaq, sum
+  method: "sum"  # options: sum, median_polish, topn, maxlfq, ibaq
   
   # Method-specific parameters
   topn_n: 3                # for topn method

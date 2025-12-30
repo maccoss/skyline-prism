@@ -48,6 +48,8 @@ class ChunkedRollupConfig:
     # Column names (using Skyline export names as defaults)
     peptide_col: str = "Peptide Modified Sequence"
     transition_col: str = "Fragment Ion"
+    precursor_charge_col: str = "Precursor Charge"  # For unique transition ID
+    product_charge_col: str = "Product Charge"  # For unique transition ID
     sample_col: str = "Replicate Name"
     abundance_col: str = "Area"
     shape_corr_col: str = "Shape Correlation"
@@ -104,6 +106,8 @@ def _get_required_columns(config: ChunkedRollupConfig) -> tuple[list[str], list[
     cols = [
         config.peptide_col,
         config.transition_col,
+        config.precursor_charge_col,  # For unique transition ID
+        config.product_charge_col,  # For unique transition ID
         config.sample_col,
         config.abundance_col,
     ]
@@ -126,9 +130,20 @@ def _process_single_peptide(
     if config.exclude_precursor:
         pep_data = pep_data[~pep_data[config.transition_col].str.startswith('precursor')]
 
+    # Create unique transition ID combining Fragment Ion + Precursor Charge + Product Charge
+    # This ensures transitions from different precursor charges are kept separate
+    pep_data = pep_data.copy()
+    pep_data["_transition_id"] = (
+        pep_data[config.transition_col].astype(str)
+        + "_z"
+        + pep_data[config.precursor_charge_col].astype(str)
+        + "_"
+        + pep_data[config.product_charge_col].astype(str)
+    )
+
     # Pivot to get transition × sample matrix
     intensity_matrix = pep_data.pivot_table(
-        index=config.transition_col,
+        index="_transition_id",
         columns=config.sample_col,
         values=config.abundance_col,
         aggfunc="first",
@@ -204,7 +219,7 @@ def _process_single_peptide(
         # Top-N selection by correlation or intensity
         if config.shape_corr_col in pep_data.columns:
             shape_corr_matrix = pep_data.pivot_table(
-                index=config.transition_col,
+                index="_transition_id",
                 columns=config.sample_col,
                 values=config.shape_corr_col,
                 aggfunc="first",
@@ -235,7 +250,7 @@ def _process_single_peptide(
         # Get shape correlation matrix
         if config.shape_corr_col in pep_data.columns:
             shape_corr_matrix = pep_data.pivot_table(
-                index=config.transition_col,
+                index="_transition_id",
                 columns=config.sample_col,
                 values=config.shape_corr_col,
                 aggfunc="first",
@@ -251,7 +266,7 @@ def _process_single_peptide(
         # Get m/z values per transition
         if config.mz_col in pep_data.columns:
             mz_pivot = pep_data.pivot_table(
-                index=config.transition_col,
+                index="_transition_id",
                 columns=config.sample_col,
                 values=config.mz_col,
                 aggfunc="first",
@@ -493,6 +508,8 @@ def rollup_transitions_streaming(
         config_dict = {
             "peptide_col": config.peptide_col,
             "transition_col": config.transition_col,
+            "precursor_charge_col": config.precursor_charge_col,
+            "product_charge_col": config.product_charge_col,
             "sample_col": config.sample_col,
             "abundance_col": config.abundance_col,
             "shape_corr_col": config.shape_corr_col,
@@ -600,6 +617,7 @@ def rollup_transitions_streaming(
         logger.info(f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions")
 
     # Write peptide output
+
     peptide_df = pd.DataFrame(peptide_rows)
     # Reorder columns: peptide, metadata, then samples
     meta_cols = [config.peptide_col, "n_transitions"]
@@ -608,8 +626,12 @@ def rollup_transitions_streaming(
     sample_cols = [s for s in samples if s in peptide_df.columns]
     peptide_df = peptide_df[meta_cols + sample_cols]
 
+    # Convert sample columns from log2 to linear before writing output
+    # This is required by the PRISM specification and for downstream analysis
+    if len(sample_cols) > 0:
+        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2 ** x)
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote peptide abundances: {output_path}")
+    logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
 
     # Write residuals if requested
     residuals_path = None
@@ -731,6 +753,8 @@ def rollup_transitions_sorted(
         config_dict = {
             "peptide_col": config.peptide_col,
             "transition_col": config.transition_col,
+            "precursor_charge_col": config.precursor_charge_col,
+            "product_charge_col": config.product_charge_col,
             "sample_col": config.sample_col,
             "abundance_col": config.abundance_col,
             "shape_corr_col": config.shape_corr_col,
@@ -878,10 +902,13 @@ def rollup_transitions_sorted(
     if "mean_rt" in peptide_df.columns:
         meta_cols.append("mean_rt")
     sample_cols = [s for s in samples if s in peptide_df.columns]
-    peptide_df = peptide_df[meta_cols + sample_cols]
 
+    peptide_df = peptide_df[meta_cols + sample_cols]
+    # Convert sample columns from log2 to linear before writing output
+    if len(sample_cols) > 0:
+        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2 ** x)
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote peptide abundances: {output_path}")
+    logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
 
     residuals_path = None
     if save_residuals and residual_rows:
@@ -1178,10 +1205,13 @@ def rollup_proteins_streaming(
         "low_confidence",
     ]
     sample_cols = [s for s in samples if s in protein_df.columns]
-    protein_df = protein_df[meta_cols + sample_cols]
 
+    protein_df = protein_df[meta_cols + sample_cols]
+    # Convert sample columns from log2 to linear before writing output
+    if len(sample_cols) > 0:
+        protein_df[sample_cols] = protein_df[sample_cols].apply(lambda x: 2 ** x)
     protein_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote protein abundances: {output_path}")
+    logger.info(f"  Wrote protein abundances: {output_path} (linear scale)")
 
     # Write residuals
     residuals_path = None

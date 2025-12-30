@@ -20,9 +20,15 @@ This document provides context and guidelines for AI agents working on the Skyli
 
 | Stage | Scale | Notes |
 |-------|-------|-------|
+
 | **Input** | LINEAR | Raw peak areas from Skyline |
 | **Internal** | LOG2 | All rollup/normalization operates on log2 scale |
-| **Output** | LINEAR | Final parquet/CSV files contain linear abundances |
+| **Output** | LINEAR | Final peptide/protein output matrices (parquet/CSV) are always written in LINEAR scale (values are 2^x, not log2(x)) |
+
+**Implementation Note:**
+All sample columns in the peptide and protein output matrices are explicitly converted from log2 to linear ($2^x$) immediately before writing the output files. This ensures all downstream quantitative analyses use true abundance values, not log2-transformed values. This is enforced in `chunked_processing.py` for both peptide and protein outputs.
+
+**Do not write log2 values to output files.**
 
 The pipeline automatically handles transforms:
 - Input linear values are log2-transformed for processing
@@ -272,12 +278,16 @@ The authoritative technical specification. Contains:
 - Configuration parameters
 
 ### config_template.yaml
-Comprehensive configuration file with all options documented. Key sections:
-- `transition_rollup`: Transition→peptide rollup (method: median_polish, adaptive, sum)
+Comprehensive configuration file with all options documented. Can be generated via:
+- `prism config-template -o config.yaml` (full template)
+- `prism config-template --minimal -o config.yaml` (common options only)
+
+Key sections:
+- `transition_rollup`: Transition→peptide rollup (method: sum, median_polish, adaptive)
 - `sample_outlier_detection`: Detect low-signal samples (method: iqr or fold_median, action: report or exclude)
 - `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
 - `batch_correction`: ComBat settings (method: combat)
-- `protein_rollup`: Peptide→protein rollup (method: median_polish, topn, maxlfq, ibaq, sum)
+- `protein_rollup`: Peptide→protein rollup (method: sum, median_polish, topn, maxlfq, ibaq)
 - `parsimony`: Shared peptide handling (all_groups, unique_only, razor)
 - `qc_report`: QC report generation (enabled, save_plots, embed_plots, plot selection)
 
@@ -344,12 +354,12 @@ prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 # Regenerate QC report from existing output (without reprocessing)
 prism qc -d output_dir/
 
-# Validate normalization quality
-prism validate --before data.parquet --after normalized.parquet --report qc.html
-```
+# Generate annotated configuration template
+prism config-template -o config.yaml
 
-Legacy commands (`normalize`, `rollup`) are preserved for backwards compatibility but
-the `run` command is preferred as it executes the complete two-arm pipeline.
+# Minimal config template (common options only)
+prism config-template --minimal -o config.yaml
+```
 
 ## Common Tasks
 
@@ -476,7 +486,7 @@ This section tracks what's currently working, what needs attention, and what's n
 
 **Testing:**
 
-- 164 tests passing
+- 182 tests passing
 - Core algorithms well-tested (median polish, ComBat, parsimony)
 - Real-world validation on 238 samples, 3 batches, ~47GB data
 
@@ -512,11 +522,6 @@ This section tracks what's currently working, what needs attention, and what's n
 - Quality-weighted protein rollup
 - iBAQ support (code exists but not integrated into pipeline)
 
-**Missing Functionality:**
-
-- Command-line validation report (`prism validate` exists but needs work)
-- Step-by-step commands (`prism normalize`, `prism rollup` - legacy, may remove)
-
 ### [PRIORITY] Development Priorities
 
 Based on current usage and known issues:
@@ -525,7 +530,6 @@ Based on current usage and known issues:
 2. **Investigate protein NaN values** - May indicate data quality issues
 3. **Implement ComBat quality checks** - Enable automatic fallback
 4. **Improve QC report robustness** - Fix edge cases causing warnings
-5. **Consider removing legacy commands** - Focus on `prism run` as primary interface
 
 ### [COVERAGE] Test Coverage Details
 
@@ -543,7 +547,7 @@ Based on current usage and known issues:
 - `data_io.py`: 28% - File I/O (tested via integration)
 - `validation.py`: 10% - QC reporting (needs more unit tests)
 
-**Overall**: 43% coverage, 164 tests passing
+**Overall**: 47% coverage, 182 tests passing
 
 ### [CHANGELOG] Recent Changes Log
 

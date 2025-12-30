@@ -1,0 +1,293 @@
+# =============================================================================
+# PRISM Configuration Template
+# =============================================================================
+# Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+#
+# Normalization and batch correction for LC-MS proteomics data exported from
+# Skyline, with robust protein quantification using Tukey median polish and
+# reference-anchored batch correction.
+#
+# This template includes ALL configuration options with detailed documentation.
+# Copy this file and modify for your experiment.
+#
+# Usage:
+#   prism run -i skyline_report.csv -o output_dir/ -c config.yaml
+#
+# For a minimal template with only common options, run:
+#   prism config-template --minimal
+#
+# See https://github.com/maccoss/skyline-prism for full documentation.
+# =============================================================================
+
+# =============================================================================
+# Data Column Mapping
+# =============================================================================
+# Map your Skyline report column names to PRISM internal names.
+# These are the defaults for standard Skyline exports.
+#
+# IMPORTANT: Verify these match your Skyline report column headers.
+
+data:
+  # Abundance measurement column (usually from transitions)
+  abundance_column: "Area"
+  
+  # Retention time column
+  rt_column: "Retention Time"
+  
+  # Peptide identification (modified sequence distinguishes peptidoforms)
+  peptide_column: "Peptide Modified Sequence"
+  
+  # Protein identification
+  protein_column: "Protein Accession"
+  protein_name_column: "Protein Name"
+  
+  # Sample identification
+  sample_column: "Replicate Name"
+
+# =============================================================================
+# Sample Type Detection
+# =============================================================================
+# Patterns to automatically identify sample types from replicate names.
+# These are substring matches (case-sensitive) checked in order.
+#
+# Sample types:
+# - reference: Inter-experiment reference (e.g., commercial plasma pool)
+#              Used for learning technical variation (RT correction, etc.)
+# - qc: Intra-experiment QC (e.g., pooled study samples)
+#       Used for validating corrections without overfitting
+# - experimental: All other samples
+
+# Reference samples (e.g., commercial plasma pool) (for learning RT correction)
+  reference_pattern:
+    - "-Pool_"
+    - "-Pool"
+  # Carl samples are intra-experiment QC (for validation)
+  qc_pattern:
+    - "-Carl_"
+    - "-Carl"
+  # Everything else is experimental
+
+# =============================================================================
+# Batch Estimation
+# =============================================================================
+# When batch information is not provided in metadata, PRISM estimates batches
+# from acquisition timestamps or source document names.
+#
+# TIP: Include "Result File > Acquired Time" in your Skyline report for best
+# automatic batch detection.
+
+batch_estimation:
+  # Expected samples per batch (for validation)
+  min_samples_per_batch: 12
+  max_samples_per_batch: 100
+  
+  # IQR multiplier for detecting batch breaks from time gaps
+  # Higher = fewer batch breaks detected
+  gap_iqr_multiplier: 1.5
+  
+  # Force a specific number of batches (null = automatic)
+  n_batches: null
+
+# =============================================================================
+# Sample Outlier Detection
+# =============================================================================
+# Detect samples with abnormally low signal (potential failed injections).
+# Detection is one-sided (only flags low outliers, not high).
+
+sample_outlier_detection:
+  enabled: true
+  
+  # Action when outliers detected: "report" (log only) or "exclude"
+  action: "report"
+  
+  # Detection method: "iqr" or "fold_median"
+  method: "iqr"
+  
+  # IQR multiplier (for iqr method): lower = more aggressive detection
+  iqr_multiplier: 1.5
+  
+  # Fold threshold (for fold_median method): e.g., 0.1 = 10% of median
+  fold_threshold: 0.1
+
+# =============================================================================
+# Processing Performance
+# =============================================================================
+# Parallel processing settings. Adjust based on your machine.
+
+processing:
+  # Number of parallel workers for peptide rollup
+  #   1 = single-threaded (lowest memory, recommended for most cases)
+  #   0 = use all available CPUs
+  #   N = use N worker processes
+  n_workers: 4
+  
+  # Peptides per batch (larger = faster but more memory)
+  peptide_batch_size: 1000
+
+# =============================================================================
+# Transition to Peptide Rollup
+# =============================================================================
+# Aggregate transition-level data to peptide-level quantities.
+# Only used if input is transition-level data from Skyline.
+
+transition_rollup:
+  enabled: true
+  
+  # Rollup method:
+  #   sum          - Simple sum of fragment intensities (default, robust)
+  #   median_polish - Tukey median polish (robust to interference)
+  #   adaptive     - Learned weights based on intensity, m/z, shape correlation
+  #   topn         - Select top N transitions by correlation
+  method: "adaptive"
+  
+  # Include MS1 precursor signal? (false = MS2 only, recommended)
+  use_ms1: false
+  
+  # Minimum transitions required per peptide
+  min_transitions: 3
+  
+  # Top-N method parameters (only used if method: topn)
+  topn_count: 3
+  topn_selection: "correlation"  # or "intensity"
+  topn_weighting: "sqrt"         # or "sum"
+  
+  # Adaptive method parameters (only used if method: adaptive)
+  learn_weights: true
+  adaptive_rollup:
+    beta_relative_intensity: 0.0
+    beta_mz: 0.0
+    beta_shape_corr: 0.0
+    beta_shape_corr_outlier: 0.0
+    shape_corr_low_threshold: 0.7
+    min_improvement_pct: 0.2
+
+# =============================================================================
+# RT-Aware Normalization (DISABLED BY DEFAULT)
+# =============================================================================
+# Correct RT-dependent technical variation using spline models fit to
+# reference samples.
+#
+# NOTE: Disabled by default. Search engines (DIA-NN, etc.) often apply
+# per-file RT calibration that doesn't generalize between samples.
+
+rt_correction:
+  enabled: false
+  method: "spline"
+  spline_df: 5
+  per_batch: true
+  min_peptides_per_bin: 10
+
+# =============================================================================
+# Global Normalization
+# =============================================================================
+# Correct for overall sample loading differences.
+
+global_normalization:
+  # Method:
+  #   median   - Subtract sample median (recommended)
+  #   vsn      - Variance Stabilizing Normalization
+  #   quantile - Force identical distributions (aggressive)
+  #   none     - Skip normalization
+  method: "median"
+  
+  # VSN parameters (only used if method: vsn)
+  vsn_params:
+    optimize_params: false
+
+# =============================================================================
+# Batch Correction
+# =============================================================================
+# Remove systematic batch effects using ComBat (empirical Bayes).
+
+batch_correction:
+  enabled: true
+  method: "combat"
+
+# =============================================================================
+# Protein Parsimony
+# =============================================================================
+# Handle shared peptides that map to multiple proteins.
+#
+# IMPORTANT: Requires the FASTA database used for the original search.
+
+parsimony:
+  # Path to search FASTA database (REQUIRED)
+  fasta_path: /home/maccoss/GitHub-Repo/maccoss/skyline-prism/example-files/uniprot_mouse_may2025_contam_yeastENO1.fasta  # e.g., "/path/to/uniprot_human_reviewed.fasta"
+  
+  # Strategy for shared peptides:
+  #   all_groups  - Apply to all protein groups (recommended)
+  #   unique_only - Only use peptides unique to one protein
+  #   razor       - Assign to group with most peptides (MaxQuant-style)
+  shared_peptide_handling: "all_groups"
+
+# =============================================================================
+# Protein Rollup
+# =============================================================================
+# Combine peptides into protein-level quantities.
+
+protein_rollup:
+  # Method:
+  #   sum           - Simple sum (default)
+  #   median_polish - Tukey median polish (robust to outliers)
+  #   topn          - Average of top N most intense peptides
+  #   ibaq          - Intensity-Based Absolute Quantification
+  #   maxlfq        - Maximum LFQ algorithm (MaxQuant-style)
+  method: "sum"
+  
+  # Minimum peptides required per protein
+  min_peptides: 1
+  
+  # Top-N parameters (if method: topn)
+  topn:
+    n: 3
+    selection: "median_abundance"
+  
+  # iBAQ parameters (if method: ibaq)
+  ibaq:
+    fasta_path: null
+    enzyme: "trypsin"
+    missed_cleavages: 0
+    min_peptide_length: 6
+    max_peptide_length: 30
+  
+  # Median polish parameters
+  median_polish:
+    max_iterations: 20
+    convergence_tolerance: 0.0001
+
+# =============================================================================
+# Output Options
+# =============================================================================
+
+output:
+  # File format: parquet (recommended), csv, tsv
+  format: "parquet"
+  
+  # Include median polish residuals for outlier analysis
+  include_residuals: true
+  
+  # Compress output files
+  compress: true
+
+# =============================================================================
+# QC Report
+# =============================================================================
+# HTML report with diagnostic plots for quality assessment.
+
+qc_report:
+  enabled: true
+  filename: "qc_report.html"
+  
+  # Save individual PNG plots
+  save_plots: true
+  
+  # Embed plots in HTML (makes file self-contained but larger)
+  embed_plots: true
+  
+  # Plots to include
+  plots:
+    intensity_distribution: true
+    pca_comparison: true
+    control_correlation: true
+    cv_distribution: true
+    rt_correction: true

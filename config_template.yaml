@@ -122,6 +122,27 @@ sample_outlier_detection:
   fold_threshold: 0.1
 
 # =============================================================================
+# Processing Performance
+# =============================================================================
+# Settings for parallel processing and memory management.
+# Adjust based on your machine's CPU and RAM availability.
+
+processing:
+  # Number of parallel workers for peptide rollup
+  # - 1: Single-threaded (default, lowest memory usage)
+  # - 0: Use all available CPUs
+  # - N: Use N worker processes
+  #
+  # Parallel processing can significantly speed up large datasets.
+  # Memory usage scales approximately with n_workers * peptide_batch_size.
+  n_workers: 1
+  
+  # Number of peptides to process in each batch
+  # Larger batches are more efficient but use more memory.
+  # Recommended: 500-2000 depending on available RAM.
+  peptide_batch_size: 1000
+
+# =============================================================================
 # Stage 0: Transition to Peptide Rollup
 # =============================================================================
 # Only used if input is transition-level data from Skyline.
@@ -185,7 +206,7 @@ transition_rollup:
   # - normalized_mz: Fragment ion m/z normalized to [0,1] range
   # - median_shape_corr: Median shape correlation across all replicates
   # - low_fraction: Fraction of replicates with low shape correlation
-  #                 (below shape_corr_low_threshold, default 0.5)
+  #                 (below shape_corr_low_threshold, default 0.7)
   #
   # Not optimized (reserved for future use):
   # - beta_shape_corr_max: Max shape correlation - kept at 0.0
@@ -206,7 +227,7 @@ transition_rollup:
     beta_mz: 0.0                  # Weight by m/z (any value)
     beta_shape_corr: 0.0          # Weight by median shape correlation (any value)
     beta_shape_corr_outlier: 0.0  # Weight by low-fraction (any value)
-    shape_corr_low_threshold: 0.5 # Threshold for "low" shape correlation (0-1)
+    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation (0-1)
     mz_normalize: true            # Normalize m/z to [0,1] range
     min_improvement_pct: 5.0      # Min improvement over sum to use adaptive weights
 
@@ -319,7 +340,11 @@ parsimony:
 protein_rollup:
   # Method for combining peptides into protein abundances:
   #
-  # median_polish (recommended): Tukey median polish - robust two-way decomposition
+  # sum (default): Simple sum of all peptide intensities
+  #   - Fast and straightforward
+  #   - Good baseline for most analyses
+  #
+  # median_polish: Tukey median polish - robust two-way decomposition
   #   - Separates peptide ionization effects from sample abundances
   #   - Automatically downweights outliers through median operation
   #   - Handles missing values naturally
@@ -339,10 +364,7 @@ protein_rollup:
   #   - Uses median pairwise peptide ratios between samples
   #   - Good when relative quantification is more reliable than absolute
   #
-  # sum: Simple sum of all peptide intensities
-  #   - Fast but sensitive to outliers
-  #
-  method: "median_polish"
+  method: "sum"
   
   # Top-N specific settings (used when method: topn)
   topn:

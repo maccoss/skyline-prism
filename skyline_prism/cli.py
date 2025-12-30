@@ -231,119 +231,6 @@ def cmd_merge(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_normalize(args: argparse.Namespace) -> int:
-    """Run normalization pipeline."""
-    logger = logging.getLogger(__name__)
-
-    config = load_config(Path(args.config) if args.config else None)
-
-    # Load data
-    input_path = Path(args.input)
-    data = load_unified_data(input_path)
-
-    logger.info(f"Loaded {len(data)} rows from {input_path}")
-
-    # Run normalization
-    result = normalize_pipeline(
-        data,
-        sample_type_col=config['data'].get('sample_type_column', 'sample_type'),
-        precursor_col=config['data'].get('peptide_column', 'precursor_id'),
-        abundance_col=config['data'].get('abundance_column', 'abundance'),
-        rt_col=config['data'].get('rt_column', 'retention_time'),
-        replicate_col=config['data'].get('sample_column', 'replicate_name'),
-        batch_col=config['data'].get('batch_column', 'batch'),
-        rt_correction=config['rt_correction'].get('enabled', True),
-        global_method=config['global_normalization'].get('method', 'median'),
-        spline_df=config['rt_correction'].get('spline_df', 5),
-        per_batch=config['rt_correction'].get('per_batch', True),
-    )
-
-    # Save normalized peptides
-    output_path = Path(args.output)
-    result.normalized_data.to_parquet(output_path, index=False)
-    logger.info(f"Saved normalized peptides to {output_path}")
-
-    # Log processing steps
-    for step in result.method_log:
-        logger.info(f"  {step}")
-
-    return 0
-
-
-def cmd_rollup(args: argparse.Namespace) -> int:
-    """Roll up peptides to proteins."""
-    logger = logging.getLogger(__name__)
-
-    config = load_config(Path(args.config) if args.config else None)
-
-    # Load peptide data
-    data = load_unified_data(Path(args.input))
-
-    # Build peptide-protein mapping
-    pep_to_prot, prot_to_pep, prot_to_name = build_peptide_protein_map(
-        data,
-        peptide_col=config['data'].get('peptide_column', 'peptide_modified'),
-        protein_col=config['data'].get('protein_column', 'protein_ids'),
-    )
-
-    # Compute protein groups
-    protein_groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
-
-    # Export protein groups
-    if args.groups_output:
-        export_protein_groups(protein_groups, args.groups_output)
-
-    # Roll up to proteins
-    protein_df, polish_results, topn_results = rollup_to_proteins(
-        data,
-        protein_groups,
-        abundance_col=config['data'].get('abundance_column', 'abundance'),
-        sample_col=config['data'].get('sample_column', 'replicate_name'),
-        peptide_col=config['data'].get('peptide_column', 'peptide_modified'),
-        method=config['protein_rollup'].get('method', 'median_polish'),
-        min_peptides=config['protein_rollup'].get('min_peptides', 3),
-        shared_peptide_handling=config['parsimony'].get(
-            'shared_peptide_handling', 'all_groups'
-        ),
-        topn_n=config['protein_rollup'].get('topn', {}).get('n', 3),
-        topn_selection=config['protein_rollup'].get('topn', {}).get(
-            'selection', 'median_abundance'
-        ),
-    )
-
-    # Save protein data
-    output_path = Path(args.output)
-    protein_df.to_parquet(output_path)
-    logger.info(f"Saved {len(protein_df)} proteins to {output_path}")
-
-    return 0
-
-
-def cmd_validate(args: argparse.Namespace) -> int:
-    """Validate normalization quality."""
-    logging.getLogger(__name__)
-
-    before_data = load_unified_data(Path(args.before))
-    after_data = load_unified_data(Path(args.after))
-
-    metrics = validate_correction(
-        before_data,
-        after_data,
-        sample_type_col=args.sample_type_col,
-        abundance_col_before=args.abundance_before,
-        abundance_col_after=args.abundance_after,
-    )
-
-    if args.report:
-        generate_qc_report(
-            metrics,
-            normalization_log=['Loaded from files'],  # TODO: pass actual log
-            output_path=args.report,
-        )
-
-    return 0 if metrics.passed else 1
-
-
 def generate_pipeline_metadata(
     config: dict,
     data: pd.DataFrame,
@@ -861,11 +748,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     topn_count = config['transition_rollup'].get('topn_count', 3)
     topn_selection = config['transition_rollup'].get('topn_selection', 'correlation')
     topn_weighting = config['transition_rollup'].get('topn_weighting', 'sqrt')
+    
+    # Get parallel processing parameters
+    n_workers = config.get('processing', {}).get('n_workers', 1)
+    peptide_batch_size = config.get('processing', {}).get('peptide_batch_size', 1000)
 
     if rollup_method == "topn":
         logger.info(f"  Top-N count: {topn_count}")
         logger.info(f"  Selection method: {topn_selection}")
         logger.info(f"  Weighting: {topn_weighting}")
+    
+    if n_workers != 1:
+        logger.info(f"  Parallel workers: {n_workers if n_workers > 0 else 'all CPUs'}")
 
     transition_config = ChunkedRollupConfig(
         peptide_col=peptide_col,
@@ -881,6 +775,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         topn_count=topn_count,
         topn_selection=topn_selection,
         topn_weighting=topn_weighting,
+        n_workers=n_workers,
+        peptide_batch_size=peptide_batch_size,
     )
 
     peptide_rollup_path = output_dir / 'peptides_rollup.2.parquet'
@@ -1523,6 +1419,411 @@ def cmd_qc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config_template(args: argparse.Namespace) -> int:
+    """Output an annotated configuration template file.
+
+    This command generates a comprehensive, fully-annotated YAML configuration
+    template that serves as a starting point for new PRISM analyses.
+
+    The template includes:
+    - All configuration options with default values
+    - Detailed comments explaining each option
+    - Guidance on when to change settings from defaults
+    """
+    if args.minimal:
+        template = get_minimal_config_template()
+    else:
+        template = get_full_config_template()
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.write_text(template)
+        print(f"Configuration template written to: {output_path}")
+    else:
+        print(template)
+
+    return 0
+
+
+def get_minimal_config_template() -> str:
+    """Return a minimal config template with commonly-changed options."""
+    return '''\
+# PRISM Minimal Configuration Template
+# =====================================
+# This template includes only the most commonly-changed options.
+# For all options, run: prism config-template
+#
+# Usage: prism run -i data.csv -o output/ -c this_config.yaml
+
+# =============================================================================
+# Sample Type Detection (IMPORTANT - customize for your naming convention)
+# =============================================================================
+sample_annotations:
+  # Patterns to identify inter-experiment reference samples
+  # (used for learning technical variation)
+  reference_pattern:
+    - "-Pool_"
+    - "_Pool_"
+    - "CommercialPool"
+
+  # Patterns to identify intra-experiment QC samples
+  # (used for validating corrections)
+  qc_pattern:
+    - "-QC_"
+    - "_QC_"
+    - "StudyPool"
+
+# =============================================================================
+# Protein Parsimony (REQUIRED - path to your search FASTA)
+# =============================================================================
+parsimony:
+  # Path to the FASTA database used for the original search
+  fasta_path: "/path/to/your/search_database.fasta"
+  
+  # Strategy for shared peptides: all_groups, unique_only, razor
+  shared_peptide_handling: "all_groups"
+
+# =============================================================================
+# Processing Options
+# =============================================================================
+processing:
+  # Number of parallel workers (0 = all CPUs, 1 = single-threaded)
+  n_workers: 1
+
+transition_rollup:
+  # Method: sum (default), median_polish, adaptive, topn
+  method: "sum"
+  
+  # Minimum transitions required per peptide
+  min_transitions: 3
+
+protein_rollup:
+  # Method: sum (default), median_polish, topn, ibaq, maxlfq
+  method: "sum"
+
+# =============================================================================
+# Output Options
+# =============================================================================
+output:
+  # File format: parquet, csv, tsv
+  format: "parquet"
+  
+  # Include residuals for outlier analysis
+  include_residuals: true
+
+qc_report:
+  enabled: true
+  save_plots: true
+  embed_plots: true
+'''
+
+
+def get_full_config_template() -> str:
+    """Return the full annotated config template."""
+    return '''\
+# =============================================================================
+# PRISM Configuration Template
+# =============================================================================
+# Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+#
+# Normalization and batch correction for LC-MS proteomics data exported from
+# Skyline, with robust protein quantification using Tukey median polish and
+# reference-anchored batch correction.
+#
+# This template includes ALL configuration options with detailed documentation.
+# Copy this file and modify for your experiment.
+#
+# Usage:
+#   prism run -i skyline_report.csv -o output_dir/ -c config.yaml
+#
+# For a minimal template with only common options, run:
+#   prism config-template --minimal
+#
+# See https://github.com/maccoss/skyline-prism for full documentation.
+# =============================================================================
+
+# =============================================================================
+# Data Column Mapping
+# =============================================================================
+# Map your Skyline report column names to PRISM internal names.
+# These are the defaults for standard Skyline exports.
+#
+# IMPORTANT: Verify these match your Skyline report column headers.
+
+data:
+  # Abundance measurement column (usually from transitions)
+  abundance_column: "Area"
+  
+  # Retention time column
+  rt_column: "Retention Time"
+  
+  # Peptide identification (modified sequence distinguishes peptidoforms)
+  peptide_column: "Peptide Modified Sequence"
+  
+  # Protein identification
+  protein_column: "Protein Accession"
+  protein_name_column: "Protein Name"
+  
+  # Sample identification
+  sample_column: "Replicate Name"
+
+# =============================================================================
+# Sample Type Detection
+# =============================================================================
+# Patterns to automatically identify sample types from replicate names.
+# These are substring matches (case-sensitive) checked in order.
+#
+# Sample types:
+# - reference: Inter-experiment reference (e.g., commercial plasma pool)
+#              Used for learning technical variation (RT correction, etc.)
+# - qc: Intra-experiment QC (e.g., pooled study samples)
+#       Used for validating corrections without overfitting
+# - experimental: All other samples
+
+sample_annotations:
+  # Inter-experiment reference samples
+  # CUSTOMIZE these patterns for your sample naming convention
+  reference_pattern:
+    - "-Pool_"
+    - "_Pool_"
+    - "GoldenWest"
+    - "CommercialPool"
+    - "InterExpRef"
+  
+  # Intra-experiment QC samples
+  qc_pattern:
+    - "-QC_"
+    - "_QC_"
+    - "StudyPool"
+    - "IntraPool"
+
+# =============================================================================
+# Batch Estimation
+# =============================================================================
+# When batch information is not provided in metadata, PRISM estimates batches
+# from acquisition timestamps or source document names.
+#
+# TIP: Include "Result File > Acquired Time" in your Skyline report for best
+# automatic batch detection.
+
+batch_estimation:
+  # Expected samples per batch (for validation)
+  min_samples_per_batch: 12
+  max_samples_per_batch: 100
+  
+  # IQR multiplier for detecting batch breaks from time gaps
+  # Higher = fewer batch breaks detected
+  gap_iqr_multiplier: 1.5
+  
+  # Force a specific number of batches (null = automatic)
+  n_batches: null
+
+# =============================================================================
+# Sample Outlier Detection
+# =============================================================================
+# Detect samples with abnormally low signal (potential failed injections).
+# Detection is one-sided (only flags low outliers, not high).
+
+sample_outlier_detection:
+  enabled: true
+  
+  # Action when outliers detected: "report" (log only) or "exclude"
+  action: "report"
+  
+  # Detection method: "iqr" or "fold_median"
+  method: "iqr"
+  
+  # IQR multiplier (for iqr method): lower = more aggressive detection
+  iqr_multiplier: 1.5
+  
+  # Fold threshold (for fold_median method): e.g., 0.1 = 10% of median
+  fold_threshold: 0.1
+
+# =============================================================================
+# Processing Performance
+# =============================================================================
+# Parallel processing settings. Adjust based on your machine.
+
+processing:
+  # Number of parallel workers for peptide rollup
+  #   1 = single-threaded (lowest memory, recommended for most cases)
+  #   0 = use all available CPUs
+  #   N = use N worker processes
+  n_workers: 1
+  
+  # Peptides per batch (larger = faster but more memory)
+  peptide_batch_size: 1000
+
+# =============================================================================
+# Transition to Peptide Rollup
+# =============================================================================
+# Aggregate transition-level data to peptide-level quantities.
+# Only used if input is transition-level data from Skyline.
+
+transition_rollup:
+  enabled: true
+  
+  # Rollup method:
+  #   sum          - Simple sum of fragment intensities (default, robust)
+  #   median_polish - Tukey median polish (robust to interference)
+  #   adaptive     - Learned weights based on intensity, m/z, shape correlation
+  #   topn         - Select top N transitions by correlation
+  method: "sum"
+  
+  # Include MS1 precursor signal? (false = MS2 only, recommended)
+  use_ms1: false
+  
+  # Minimum transitions required per peptide
+  min_transitions: 3
+  
+  # Top-N method parameters (only used if method: topn)
+  topn_count: 3
+  topn_selection: "correlation"  # or "intensity"
+  topn_weighting: "sqrt"         # or "sum"
+  
+  # Adaptive method parameters (only used if method: adaptive)
+  learn_weights: false
+  adaptive_rollup:
+    beta_relative_intensity: 0.0
+    beta_mz: 0.0
+    beta_shape_corr: 0.0
+    beta_shape_corr_outlier: 0.0
+    shape_corr_low_threshold: 0.7
+    min_improvement_pct: 5.0
+
+# =============================================================================
+# RT-Aware Normalization (DISABLED BY DEFAULT)
+# =============================================================================
+# Correct RT-dependent technical variation using spline models fit to
+# reference samples.
+#
+# NOTE: Disabled by default. Search engines (DIA-NN, etc.) often apply
+# per-file RT calibration that doesn't generalize between samples.
+
+rt_correction:
+  enabled: false
+  method: "spline"
+  spline_df: 5
+  per_batch: true
+  min_peptides_per_bin: 10
+
+# =============================================================================
+# Global Normalization
+# =============================================================================
+# Correct for overall sample loading differences.
+
+global_normalization:
+  # Method:
+  #   median   - Subtract sample median (recommended)
+  #   vsn      - Variance Stabilizing Normalization
+  #   quantile - Force identical distributions (aggressive)
+  #   none     - Skip normalization
+  method: "median"
+  
+  # VSN parameters (only used if method: vsn)
+  vsn_params:
+    optimize_params: false
+
+# =============================================================================
+# Batch Correction
+# =============================================================================
+# Remove systematic batch effects using ComBat (empirical Bayes).
+
+batch_correction:
+  enabled: true
+  method: "combat"
+
+# =============================================================================
+# Protein Parsimony
+# =============================================================================
+# Handle shared peptides that map to multiple proteins.
+#
+# IMPORTANT: Requires the FASTA database used for the original search.
+
+parsimony:
+  # Path to search FASTA database (REQUIRED)
+  fasta_path: null  # e.g., "/path/to/uniprot_human_reviewed.fasta"
+  
+  # Strategy for shared peptides:
+  #   all_groups  - Apply to all protein groups (recommended)
+  #   unique_only - Only use peptides unique to one protein
+  #   razor       - Assign to group with most peptides (MaxQuant-style)
+  shared_peptide_handling: "all_groups"
+
+# =============================================================================
+# Protein Rollup
+# =============================================================================
+# Combine peptides into protein-level quantities.
+
+protein_rollup:
+  # Method:
+  #   sum           - Simple sum (default)
+  #   median_polish - Tukey median polish (robust to outliers)
+  #   topn          - Average of top N most intense peptides
+  #   ibaq          - Intensity-Based Absolute Quantification
+  #   maxlfq        - Maximum LFQ algorithm (MaxQuant-style)
+  method: "sum"
+  
+  # Minimum peptides required per protein
+  min_peptides: 2
+  
+  # Top-N parameters (if method: topn)
+  topn:
+    n: 3
+    selection: "median_abundance"
+  
+  # iBAQ parameters (if method: ibaq)
+  ibaq:
+    fasta_path: null
+    enzyme: "trypsin"
+    missed_cleavages: 0
+    min_peptide_length: 6
+    max_peptide_length: 30
+  
+  # Median polish parameters
+  median_polish:
+    max_iterations: 20
+    convergence_tolerance: 0.0001
+
+# =============================================================================
+# Output Options
+# =============================================================================
+
+output:
+  # File format: parquet (recommended), csv, tsv
+  format: "parquet"
+  
+  # Include median polish residuals for outlier analysis
+  include_residuals: true
+  
+  # Compress output files
+  compress: true
+
+# =============================================================================
+# QC Report
+# =============================================================================
+# HTML report with diagnostic plots for quality assessment.
+
+qc_report:
+  enabled: true
+  filename: "qc_report.html"
+  
+  # Save individual PNG plots
+  save_plots: true
+  
+  # Embed plots in HTML (makes file self-contained but larger)
+  embed_plots: true
+  
+  # Plots to include
+  plots:
+    intensity_distribution: true
+    pca_comparison: true
+    control_correlation: true
+    cv_distribution: true
+    rt_correction: true
+'''
+
+
 def main() -> int:
     """Provide main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -1581,36 +1882,13 @@ def main() -> int:
 
     # Merge command - utility for combining reports
     merge_parser = subparsers.add_parser(
-        'merge', help='Merge multiple Skyline reports into one file'
+        'merge', help='Merge multiple Skyline reports into one parquet file'
     )
     merge_parser.add_argument('reports', nargs='+', help='Skyline report files')
     merge_parser.add_argument('-o', '--output', required=True, help='Output parquet path')
     merge_parser.add_argument('-m', '--metadata', help='Sample metadata TSV')
     merge_parser.add_argument('--no-partition', action='store_true',
                              help='Do not partition by batch')
-
-    # Legacy commands (kept for backwards compatibility)
-    norm_parser = subparsers.add_parser('normalize', help='(Legacy) Run normalization only')
-    norm_parser.add_argument('-i', '--input', required=True, help='Input parquet')
-    norm_parser.add_argument('-o', '--output', required=True, help='Output parquet')
-    norm_parser.add_argument('-c', '--config', help='Configuration YAML')
-
-    rollup_parser = subparsers.add_parser(
-        'rollup', help='(Legacy) Roll up peptides to proteins'
-    )
-    rollup_parser.add_argument('-i', '--input', required=True, help='Input peptide parquet')
-    rollup_parser.add_argument('-o', '--output', required=True, help='Output protein parquet')
-    rollup_parser.add_argument('-g', '--groups-output', help='Output protein groups TSV')
-    rollup_parser.add_argument('-c', '--config', help='Configuration YAML')
-
-    # Validate command
-    val_parser = subparsers.add_parser('validate', help='Validate normalization quality')
-    val_parser.add_argument('--before', required=True, help='Data before normalization')
-    val_parser.add_argument('--after', required=True, help='Data after normalization')
-    val_parser.add_argument('--report', help='Output HTML report path')
-    val_parser.add_argument('--sample-type-col', default='sample_type')
-    val_parser.add_argument('--abundance-before', default='abundance')
-    val_parser.add_argument('--abundance-after', default='abundance_normalized')
 
     # QC report command - regenerate QC report from existing output
     qc_parser = subparsers.add_parser(
@@ -1633,6 +1911,23 @@ def main() -> int:
         help='Do not embed plots in HTML (link to files instead)'
     )
 
+    # Config template command - output annotated config template
+    config_parser = subparsers.add_parser(
+        'config-template',
+        help='Output an annotated configuration template file',
+        description='Generate a fully-annotated configuration template YAML file. '
+                    'This is the recommended starting point for configuring a new analysis.'
+    )
+    config_parser.add_argument(
+        '-o', '--output',
+        help='Output file path (default: print to stdout)'
+    )
+    config_parser.add_argument(
+        '--minimal',
+        action='store_true',
+        help='Output minimal config with only commonly-changed options'
+    )
+
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -1641,14 +1936,10 @@ def main() -> int:
         return cmd_run(args)
     elif args.command == 'merge':
         return cmd_merge(args)
-    elif args.command == 'normalize':
-        return cmd_normalize(args)
-    elif args.command == 'rollup':
-        return cmd_rollup(args)
-    elif args.command == 'validate':
-        return cmd_validate(args)
     elif args.command == 'qc':
         return cmd_qc(args)
+    elif args.command == 'config-template':
+        return cmd_config_template(args)
     else:
         parser.print_help()
         return 1

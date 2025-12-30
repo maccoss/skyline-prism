@@ -80,26 +80,25 @@ prism qc -d output_dir/
 
 This reads the processed parquet files and regenerates the QC report without re-running the full pipeline.
 
-### Alternative: Step-by-step commands
+### Generate a configuration template
 
-For more control, you can run individual steps:
+Generate an annotated configuration file template:
 
 ```bash
-# Merge multiple Skyline reports
+# Full template with all options documented
+prism config-template -o config.yaml
+
+# Minimal template with only common options
+prism config-template --minimal -o config.yaml
+```
+
+### Merge multiple Skyline reports
+
+```bash
 prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.tsv
-
-# Run normalization only (legacy)
-prism normalize -i unified_data.parquet -o normalized_peptides.parquet -c config.yaml
-
-# Roll up to proteins only (legacy)
-prism rollup -i normalized_peptides.parquet -o proteins.parquet -g protein_groups.tsv
 ```
 
-### Validate results
-
-```bash
-prism validate --before unified_data.parquet --after normalized_peptides.parquet --report qc_report.html
-```
+### QC report contents
 
 The QC report includes:
 
@@ -229,7 +228,7 @@ parsimony:
 
 # Protein rollup (peptide → protein aggregation)
 protein_rollup:
-  method: "median_polish"  # default, recommended
+  method: "sum"  # default; alternatives: median_polish, topn, ibaq, maxlfq
 
 # QC report generation
 qc_report:
