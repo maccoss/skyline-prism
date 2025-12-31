@@ -2127,7 +2127,10 @@ def plot_cv_comparison_wide(
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
 
-    fig.suptitle(f"{title} ({control_type.capitalize()} Samples)", fontsize=14, fontweight="bold")
+    if title:
+        fig.suptitle(
+            f"{title} ({control_type.capitalize()} Samples)", fontsize=14, fontweight="bold"
+        )
     plt.tight_layout()
 
     if save_path:
@@ -2396,7 +2399,10 @@ def plot_cv_three_stage(
         ax.set_ylabel("Number of Features", fontsize=11)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f"{title} ({control_type.capitalize()} Samples)", fontsize=14, fontweight="bold")
+    if title:
+        fig.suptitle(
+            f"{title} ({control_type.capitalize()} Samples)", fontsize=14, fontweight="bold"
+        )
     plt.tight_layout()
 
     if save_path:

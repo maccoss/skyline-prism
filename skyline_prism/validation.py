@@ -866,7 +866,7 @@ def generate_comprehensive_qc_report(
                             sample_cols,
                             sample_types=sample_types,
                             control_type="reference",
-                            title="Peptide CV Distribution (Reference)",
+                            title="",
                             show_plot=False,
                         )
                     else:
@@ -876,7 +876,7 @@ def generate_comprehensive_qc_report(
                             sample_cols,
                             sample_types=sample_types,
                             control_type="reference",
-                            title="Peptide CV Distribution (Reference)",
+                            title="",
                             show_plot=False,
                         )
                     if fig is not None:
@@ -902,7 +902,7 @@ def generate_comprehensive_qc_report(
                             sample_cols,
                             sample_types=sample_types,
                             control_type="qc",
-                            title="Peptide CV Distribution (QC)",
+                            title="",
                             show_plot=False,
                         )
                     else:
@@ -912,7 +912,7 @@ def generate_comprehensive_qc_report(
                             sample_cols,
                             sample_types=sample_types,
                             control_type="qc",
-                            title="Peptide CV Distribution (QC)",
+                            title="",
                             show_plot=False,
                         )
                     if fig is not None:
@@ -1110,7 +1110,7 @@ def generate_comprehensive_qc_report(
                         sample_cols,
                         sample_types=sample_types,
                         control_type="reference",
-                        title="Protein CV Distribution (Reference)",
+                        title="",
                         show_plot=False,
                     )
                     if fig is not None:
@@ -1134,7 +1134,7 @@ def generate_comprehensive_qc_report(
                         sample_cols,
                         sample_types=sample_types,
                         control_type="qc",
-                        title="Protein CV Distribution (QC)",
+                        title="",
                         show_plot=False,
                     )
                     if fig is not None:
@@ -1345,6 +1345,7 @@ def generate_comprehensive_qc_report(
         processing_date = pipeline_metadata.get("processing_date", "N/A")
         pipeline_version = pipeline_metadata.get("pipeline_version", "N/A")
         processing_params = pipeline_metadata.get("processing_parameters", {})
+        stats = pipeline_metadata.get("statistics", {})
 
         # Get computer name
         try:
@@ -1441,22 +1442,24 @@ def generate_comprehensive_qc_report(
             <h3 style="margin-top: 0; color: #0066cc;">Dataset Summary</h3>
             <table style="margin: 10px 0; width: auto;">
                 <tr>
-                    <td><strong>Peptides:</strong></td>
-                    <td>{len(peptide_corrected):,}</td>
-                    <td style="padding-left: 30px;"><strong>Proteins:</strong></td>
-                    <td>{len(protein_corrected):,}</td>
-                </tr>
-                <tr>
                     <td><strong>Total Samples:</strong></td>
                     <td>{len(sample_cols)}</td>
                     <td style="padding-left: 30px;"><strong>Experimental:</strong></td>
                     <td>{len([c for c in sample_cols if sample_types.get(c) == "experimental"])}</td>
-                </tr>
-                <tr>
-                    <td><strong>Reference Samples:</strong></td>
+                    <td style="padding-left: 30px;"><strong>Reference Samples:</strong></td>
                     <td>{len([c for c in sample_cols if sample_types.get(c) == "reference"])}</td>
                     <td style="padding-left: 30px;"><strong>QC Samples:</strong></td>
                     <td>{len([c for c in sample_cols if sample_types.get(c) == "qc"])}</td>
+                </tr>
+                <tr>
+                    <td><strong>Transitions:</strong></td>
+                    <td>{stats.get("n_transitions", "N/A") if stats else "N/A"}</td>
+                    <td style="padding-left: 30px;"><strong>Peptides:</strong></td>
+                    <td>{len(peptide_corrected):,}</td>
+                    <td style="padding-left: 30px;"><strong>Proteins:</strong></td>
+                    <td>{len(protein_corrected):,}</td>
+                    <td></td>
+                    <td></td>
                 </tr>
             </table>
         </div>

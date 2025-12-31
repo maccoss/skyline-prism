@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyarrow.parquet as pq
 import yaml
+
+from . import __version__
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -613,6 +616,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("=" * 60)
 
     metadata_df = None
+    n_transitions = 0  # Track total transition rows for metadata
+
     if len(csv_inputs) >= 1:
         batch_names = [p.stem for p in csv_inputs]
         merged_parquet_path = output_dir / "merged_data.parquet"
@@ -631,6 +636,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     logger.info("  Source files match - using cached parquet")
                     use_cached = True
                     transition_parquet = merged_parquet_path
+                    n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
                     method_log.append("Reused cached merged parquet (source files unchanged)")
                     # Try to load existing metadata if available
                     existing_metadata = output_dir / "sample_metadata.tsv"
@@ -651,6 +657,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 merged_parquet_path,
                 batch_names=batch_names,
             )
+            n_transitions = total_rows
             method_log.append(f"Merged {len(csv_inputs)} reports ({total_rows:,} rows)")
             transition_parquet = merged_path
 
@@ -667,7 +674,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 method_log.append(f"Generated sample metadata: {metadata_path}")
 
     elif len(parquet_inputs) >= 1:
+        merged_parquet_path = parquet_inputs[0]  # treat input as "merged"
         transition_parquet = parquet_inputs[0]
+        n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
         logger.info(f"Using existing parquet: {transition_parquet}")
         method_log.append(f"Input parquet: {transition_parquet}")
 
@@ -1489,7 +1498,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Generate pipeline metadata
     metadata = {
-        "pipeline_version": "0.3.0",
+        "pipeline_version": __version__,
         "processing_date": datetime.now(timezone.utc).isoformat(),
         "source_files": [str(p) for p in input_paths],
         "processing_parameters": {
@@ -1505,7 +1514,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             },
             "batch_correction": {
                 "enabled": batch_correction_enabled,
-                "method": "combat_reference_anchored",
+                "method": config.get("batch_correction", {}).get("method", "combat"),
             },
         },
         "method_log": method_log,
@@ -1517,6 +1526,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "statistics": {
             "n_samples": len(samples),
             "n_peptides": peptide_result.n_peptides,
+            "n_transitions": n_transitions,
             "n_proteins": protein_result.n_proteins,
             "n_protein_groups": len(protein_groups),
         },
@@ -2151,7 +2161,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 

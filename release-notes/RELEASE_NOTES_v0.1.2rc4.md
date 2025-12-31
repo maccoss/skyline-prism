@@ -23,6 +23,10 @@ This release focuses on performance improvements for large datasets and fixes th
 
 - **Adaptive Fallback Logic**: Fixed issue where meaningless all-zero adaptive parameters were logged when falling back to sum method.
 - **Duplicate Warnings**: Removed duplicate "Falling back to sum" warnings that appeared in both transition_rollup.py and cli.py.
+- **Incorrect Pipeline Version**: Fixed issue where the QC report incorrectly listed version "0.3.0" instead of the actual installed version (0.1.2rc4).
+- **Incorrect Batch Correction Method**: Fixed issue where "combat_reference_anchored" was hardcoded in metadata even when using standard "combat".
+- **QC Report Layout**: Updated "Dataset Summary" table to show "Transitions" count and improved layout (Samples/Transitions/Peptides/Proteins).
+- **Redundant Plot Titles**: Removed internal titles from CV distribution plots in QC report to avoid redundancy with section headers.
 
 ## Testing
 

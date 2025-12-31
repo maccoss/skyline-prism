@@ -125,10 +125,8 @@ transition_rollup:
   # Default: true when method=adaptive, false otherwise
   learn_adaptive_weights: true
   adaptive_rollup:
-    beta_relative_intensity: 0.0
-    beta_mz: 0.0
-    beta_shape_corr: 0.0
-    beta_shape_corr_outlier: 0.0
+    beta_mz: 0.1288
+    beta_shape_corr_outlier: -0.1304
     shape_corr_low_threshold: 0.7
     min_improvement_pct: 0.1
 
