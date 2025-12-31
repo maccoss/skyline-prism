@@ -4,17 +4,17 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for retention time-aware normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish.
+**PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for retention time-aware normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using a number of different methods.
 
 ## Key Features
 
-- **Robust quantification with Tukey median polish**: Default method for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
+- **Robust quantification with Tukey median polish**: Can be used for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
 - **Reference-anchored ComBat batch correction**: Full implementation of empirical Bayes batch correction with automatic QC evaluation using reference/QC samples
 - **Dual-control validation**: Uses intra-experiment QC samples to validate that corrections work without overfitting
 - **Sample outlier detection**: Automatic detection of samples with abnormally low signal (failed injections, degradation) with optional exclusion
 - **Flexible protein inference**: Multiple strategies for handling shared peptides (all_groups, unique_only, razor)
 - **Two-arm normalization pipeline**: Separate paths for peptide-level and protein-level output, with batch correction applied at the appropriate level
-- **Optional RT correction**: Reference-anchored RT correction is available but disabled by default (search engine RT calibration may not generalize between samples)
+- **Local RT and Global peptide normalization**: Normalizes to the median loess fit of the signal abundance across RT. Evaluated using QC and reference samples.
 
 ## Installation
 
