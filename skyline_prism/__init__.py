@@ -6,7 +6,7 @@ with ComBat batch correction and robust protein quantification.
 See: https://skyline.ms for more information about Skyline.
 """
 
-__version__ = "0.1.2rc3"
+__version__ = "0.1.2rc4"
 
 __all__ = [
     # batch_correction

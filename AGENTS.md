@@ -157,25 +157,33 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 
 ### Adaptive Rollup (Learned Transition Weighting)
 
-For transition→peptide aggregation, the adaptive method learns optimal weighting parameters:
+For transition→peptide aggregation, the adaptive method learns optimal weighting parameters to minimize CV:
 
 **Weight Formula** (`AdaptiveRollupParams`):
 ```
-w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)
+w_t = exp(beta_mz * normalized_mz + beta_shape_outlier * outlier_frac)
 ```
 
 Where:
-- `log2(I) - center`: Log2 intensity centered by the peptide's mean log2 intensity
-- `mz_norm`: Product m/z normalized to [0, 1] range
-- `shape_corr`: Shape correlation from Skyline (median across samples)
+- `normalized_mz`: Product m/z normalized to [0, 1] range
+- `outlier_frac`: Fraction of samples where shape correlation < threshold (indicates interference)
 
-Key insight: When all betas = 0, weights = 1 for all transitions (equivalent to simple sum). This provides a principled baseline.
+**Key insight:** When all betas = 0, weights = 1 for all transitions (equivalent to simple sum). The optimizer only uses learned weights if they improve CV.
 
-**Constraint**: `beta_log_intensity >= 0` (higher intensity should not decrease weight)
+**What gets optimized:**
+- `beta_mz`: Higher m/z fragments may have better signal (positive = favor high m/z)
+- `beta_shape_corr_outlier`: Transitions with frequent interference should be down-weighted (negative = penalize)
+
+**The peptide abundance calculation:**
+```
+Peptide_abundance = log2(Σ weight_t × intensity_t)
+```
+
+The transition intensities are the VALUES being summed. The learned weights adjust how much each transition contributes based on its quality metrics (m/z and interference level).
 
 **Learning process**:
 1. Parameters optimized on reference samples by minimizing median CV (L-BFGS-B optimizer)
-2. Validated on QC samples to prevent overfitting
+2. Validated on QC samples (held-out) to prevent overfitting
 3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
 
 **Implementation**:
@@ -187,14 +195,12 @@ Key insight: When all betas = 0, weights = 1 for all transitions (equivalent to 
 ```yaml
 transition_rollup:
   method: "adaptive"
-  learn_adaptive_weights: true  # Learn from reference samples (default when method=adaptive)
+  learn_adaptive_weights: true
   adaptive_rollup:
-    beta_relative_intensity: 0.0  # Weight for relative intensity within peptide
-    beta_mz: 0.0                  # Weight for normalized m/z
-    beta_shape_corr: 0.0          # Weight for median shape correlation
-    beta_shape_corr_outlier: 0.0  # Penalty for high outlier fraction
+    beta_mz: 0.0                  # Starting value (optimized automatically)
+    beta_shape_corr_outlier: 0.0  # Starting value (optimized automatically)
     shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation
-    min_improvement_pct: 5.0      # Required improvement over sum
+    min_improvement_pct: 0.1      # Required improvement over sum
 ```
 
 ## Development Guidelines

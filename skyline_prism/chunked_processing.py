@@ -660,7 +660,7 @@ def rollup_transitions_sorted(
     config: ChunkedRollupConfig,
     samples: list[str] | None = None,
     save_residuals: bool = True,
-    sort_buffer_mb: int = 2048,
+    sort_buffer_mb: int = 8192,
 ) -> StreamingRollupResult:
     """Roll up transitions to peptides using sorted streaming.
 
@@ -668,8 +668,12 @@ def rollup_transitions_sorted(
     files because it first sorts the parquet by peptide, then streams through
     in a single pass.
 
+    For very large datasets (>10GB), DuckDB is configured with:
+    - Memory limit (sort_buffer_mb) to prevent OOM
+    - Temp directory for disk spilling (external sort)
+
     Steps:
-    1. Sort parquet by peptide (writes temp sorted file)
+    1. Sort parquet by peptide (uses disk spilling if needed)
     2. Stream through sorted file, processing each peptide as it completes
     3. Write output incrementally
 
@@ -679,7 +683,8 @@ def rollup_transitions_sorted(
         config: Rollup configuration
         samples: List of sample names (if None, extracted from data)
         save_residuals: Whether to save residuals to separate file
-        sort_buffer_mb: Memory budget for sorting in MB
+        sort_buffer_mb: Memory budget for DuckDB sorting (default 8GB).
+            For very large files, DuckDB will spill to disk if needed.
 
     Returns:
         StreamingRollupResult with output paths and statistics
@@ -698,13 +703,28 @@ def rollup_transitions_sorted(
     logger.info(f"  Sorting by {config.peptide_col}...")
 
     # Read, sort, write
-    # For very large files, this should use an external sort
-    # For now, use DuckDB if available, else in-memory
+    # For very large files, use DuckDB with external sorting (disk spilling)
     try:
         import duckdb
 
         logger.info("  Using DuckDB for efficient sorting...")
+
+        # Configure DuckDB for large file handling:
+        # - Use temp directory for spilling (external sort)
+        # - Limit memory usage to sort_buffer_mb
+        temp_dir = output_path.parent / ".duckdb_temp"
+        temp_dir.mkdir(exist_ok=True)
+
         conn = duckdb.connect()
+        # Set memory limit for sorting (enables disk spilling for large datasets)
+        conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
+        # Set temp directory for external sorting
+        conn.execute(f"SET temp_directory='{temp_dir}'")
+        # Enable progress bar for long operations
+        conn.execute("SET enable_progress_bar=true")
+
+        logger.info(f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}")
+
         conn.execute(f"""
             COPY (
                 SELECT * FROM read_parquet('{parquet_path}')
@@ -712,6 +732,13 @@ def rollup_transitions_sorted(
             ) TO '{sorted_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """)
         conn.close()
+
+        # Clean up temp directory
+        import shutil
+
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     except ImportError:
         logger.warning("  DuckDB not available, using PyArrow (may be slower)...")
         table = pq.read_table(parquet_path)

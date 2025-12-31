@@ -353,26 +353,46 @@ counts = get_theoretical_peptide_counts(
 
 ### Adaptive Rollup with Learned Weights
 
-For transition→peptide rollup, the `adaptive` method learns optimal weighting parameters from reference samples:
+For transition→peptide rollup, the `adaptive` method learns optimal weighting parameters from reference samples to minimize CV:
 
 ```yaml
 transition_rollup:
   method: "adaptive"
-  learn_variance_model: true  # Learns from reference samples
+  learn_adaptive_weights: true
   adaptive_rollup:
-    beta_log_intensity: 0.5   # Weight for log2 intensity (must be >= 0)
-    beta_mz: 0.0              # Weight for normalized m/z
-    beta_shape_corr: 1.0      # Weight for shape correlation
-    min_improvement_pct: 5.0  # Required improvement over sum to use adaptive weights
+    beta_mz: 0.0                  # Starting value (optimized automatically)
+    beta_shape_corr_outlier: 0.0  # Starting value (optimized automatically)
+    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation
+    min_improvement_pct: 0.1      # Required improvement over sum to use adaptive weights
 ```
 
-The weight formula is: `w_t = exp(beta_intensity * (log2(I) - center) + beta_mz * mz_norm + beta_shape * shape_corr)`
+**The weight formula:**
 
-Key insight: When all betas are 0, weights equal 1 for all transitions, equivalent to simple sum. This provides a principled baseline where the optimizer can choose "no weighting" if it doesn't help.
+```
+w_t = exp(beta_mz * normalized_mz + beta_shape_outlier * outlier_frac)
+```
+
+Where:
+- `normalized_mz`: m/z normalized to [0,1] range
+- `outlier_frac`: Fraction of samples where shape correlation < threshold (indicates interference)
+
+**Key insight:** When all betas are 0, all weights equal 1 (simple sum baseline). The optimizer only uses learned weights if they improve CV.
+
+**What gets optimized:**
+- `beta_mz`: Higher m/z fragments may have better signal (positive = favor high m/z)
+- `beta_shape_corr_outlier`: Transitions with frequent interference (low shape correlation) should be down-weighted (negative = penalize)
+
+**The peptide abundance calculation:**
+
+```
+Peptide_abundance = log2(Σ weight_t × intensity_t)
+```
+
+The transition intensities are the VALUES being summed. The learned weights adjust how much each transition contributes based on its quality metrics (m/z and interference level).
 
 **Learning process:**
 1. Parameters are optimized on reference samples by minimizing median CV
-2. Results are validated on QC samples to prevent overfitting
+2. Results are validated on QC samples (held-out) to prevent overfitting
 3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
 
 **Note:** For very large cohorts (hundreds to thousands of samples), consider [directLFQ](https://github.com/MannLabs/directlfq) which uses a different "intensity trace" algorithm with linear runtime scaling. Our `maxlfq` implementation uses the original pairwise ratio approach which scales quadratically with sample count.

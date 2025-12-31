@@ -830,16 +830,47 @@ def cmd_run(args: argparse.Namespace) -> int:
                 logger.info(f"    Reference samples: {len(ref_samples)}")
                 logger.info(f"    QC samples: {len(pool_samples)}")
 
-                # Load transition data for learning (sample of data)
+                # Load transition data for learning - only needed columns
+                import time
+
                 import duckdb
+
+                logger.info("    Loading training data...")
+                load_start = time.time()
 
                 learn_con = duckdb.connect()
                 sample_list_sql = ",".join(f"'{s}'" for s in ref_samples + pool_samples)
+
+                # Only select columns needed for adaptive learning
+                needed_cols = [
+                    peptide_col,
+                    transition_col,
+                    sample_col,
+                    abundance_col,
+                    "Product Mz",
+                    "Shape Correlation",
+                    "Product Charge",
+                    "Precursor Charge",
+                ]
+                # Filter to columns that exist
+                col_check = learn_con.execute(f"""
+                    SELECT column_name FROM (
+                        DESCRIBE SELECT * FROM read_parquet('{transition_parquet}') LIMIT 0
+                    )
+                """).fetchdf()
+                available_cols = set(col_check["column_name"].tolist())
+                select_cols = [c for c in needed_cols if c in available_cols]
+                select_sql = ", ".join(f'"{c}"' for c in select_cols)
+
                 learn_df = learn_con.execute(f"""
-                    SELECT *
+                    SELECT {select_sql}
                     FROM read_parquet('{transition_parquet}')
                     WHERE "{sample_col}" IN ({sample_list_sql})
                 """).fetchdf()
+                learn_con.close()
+
+                load_time = time.time() - load_start
+                logger.info(f"    Loaded {len(learn_df):,} rows in {load_time:.1f}s")
 
                 # Data is already in LINEAR scale from merged parquet
                 # (log transform happens in rollup, not in merge)
@@ -873,26 +904,19 @@ def cmd_run(args: argparse.Namespace) -> int:
                 else:
                     logger.warning(f"  {learn_result.fallback_reason}")
                     logger.warning("  Using sum method as fallback")
-                    # Fallback to sum (all betas = 0)
-                    adaptive_params = AdaptiveRollupParams(
-                        beta_log_intensity=0.0,
-                        beta_sqrt_intensity=0.0,
-                        beta_relative_intensity=0.0,
-                        beta_mz=0.0,
-                        beta_shape_corr=0.0,
-                        beta_shape_corr_max=0.0,
-                        beta_shape_corr_outlier=0.0,
-                    )
+                    # Switch to sum method (faster than adaptive with all zeros)
+                    rollup_method = "sum"
+                    adaptive_params = None
             else:
                 logger.warning(f"  Not enough reference samples for learning ({len(ref_samples)})")
                 logger.info("  Using default parameters")
 
-        logger.info(
-            f"  Adaptive params: rel_int={adaptive_params.beta_relative_intensity:.3f}, "
-            f"mz={adaptive_params.beta_mz:.3f}, "
-            f"shape_med={adaptive_params.beta_shape_corr:.3f}, "
-            f"shape_out={adaptive_params.beta_shape_corr_outlier:.3f}"
-        )
+        # Only log adaptive params if actually using adaptive method
+        if rollup_method == "adaptive" and adaptive_params is not None:
+            logger.info(
+                f"  Adaptive params: mz={adaptive_params.beta_mz:.3f}, "
+                f"shape_outlier={adaptive_params.beta_shape_corr_outlier:.3f}"
+            )
 
     # Get topn method parameters
     topn_count = config["transition_rollup"].get("topn_count", 3)
@@ -1764,7 +1788,7 @@ sample_annotations:
 parsimony:
   # Path to the FASTA database used for the original search
   fasta_path: "/path/to/your/search_database.fasta"
-  
+
   # Strategy for shared peptides: all_groups, unique_only, razor
   shared_peptide_handling: "all_groups"
 
@@ -1778,7 +1802,7 @@ processing:
 transition_rollup:
   # Method: sum (default), median_polish, adaptive, topn
   method: "sum"
-  
+
   # Minimum transitions required per peptide
   min_transitions: 3
 
@@ -1798,7 +1822,7 @@ protein_rollup:
 output:
   # File format: parquet, csv, tsv
   format: "parquet"
-  
+
   # Include residuals for outlier analysis
   include_residuals: true
 
@@ -1844,17 +1868,17 @@ def get_full_config_template() -> str:
 data:
   # Abundance measurement column (usually from transitions)
   abundance_column: "Area"
-  
+
   # Retention time column
   rt_column: "Retention Time"
-  
+
   # Peptide identification (modified sequence distinguishes peptidoforms)
   peptide_column: "Peptide Modified Sequence"
-  
+
   # Protein identification
   protein_column: "Protein Accession"
   protein_name_column: "Protein Name"
-  
+
   # Sample identification
   sample_column: "Replicate Name"
 
@@ -1880,7 +1904,7 @@ sample_annotations:
     - "GoldenWest"
     - "CommercialPool"
     - "InterExpRef"
-  
+
   # Intra-experiment QC samples
   qc_pattern:
     - "-QC_"
@@ -1901,11 +1925,11 @@ batch_estimation:
   # Expected samples per batch (for validation)
   min_samples_per_batch: 12
   max_samples_per_batch: 100
-  
+
   # IQR multiplier for detecting batch breaks from time gaps
   # Higher = fewer batch breaks detected
   gap_iqr_multiplier: 1.5
-  
+
   # Force a specific number of batches (null = automatic)
   n_batches: null
 
@@ -1917,16 +1941,16 @@ batch_estimation:
 
 sample_outlier_detection:
   enabled: true
-  
+
   # Action when outliers detected: "report" (log only) or "exclude"
   action: "report"
-  
+
   # Detection method: "iqr" or "fold_median"
   method: "iqr"
-  
+
   # IQR multiplier (for iqr method): lower = more aggressive detection
   iqr_multiplier: 1.5
-  
+
   # Fold threshold (for fold_median method): e.g., 0.1 = 10% of median
   fold_threshold: 0.1
 
@@ -1941,7 +1965,7 @@ processing:
   #   0 = use all available CPUs
   #   N = use N worker processes
   n_workers: 1
-  
+
   # Peptides per batch (larger = faster but more memory)
   peptide_batch_size: 1000
 
@@ -1953,35 +1977,38 @@ processing:
 
 transition_rollup:
   enabled: true
-  
+
   # Rollup method:
   #   sum          - Simple sum of fragment intensities (default, robust)
   #   median_polish - Tukey median polish (robust to interference)
   #   adaptive     - Learned weights based on intensity, m/z, shape correlation
   #   topn         - Select top N transitions by correlation
   method: "adaptive"
-  
+
   # Include MS1 precursor signal? (false = MS2 only, recommended)
   use_ms1: false
-  
+
   # Minimum transitions required per peptide
   min_transitions: 3
-  
+
   # Top-N method parameters (only used if method: topn)
   topn_count: 3
   topn_selection: "correlation"  # or "intensity"
   topn_weighting: "sqrt"         # or "sum"
-  
+
   # Adaptive method parameters (only used if method: adaptive)
-  # When true, learns optimal weights from reference samples by minimizing CV
-  # Default: true when method=adaptive, false otherwise
+  # The optimizer learns beta_mz and beta_shape_corr_outlier from reference samples
+  # by minimizing CV. These weights adjust transition contributions based on:
+  #   - beta_mz: Higher m/z transitions may have better signal (positive = favor high m/z)
+  #   - beta_shape_corr_outlier: Down-weight transitions with interference (negative = penalize)
   learn_adaptive_weights: true
   adaptive_rollup:
-    beta_relative_intensity: 0.0
+    # Starting values for optimization (usually left at 0)
     beta_mz: 0.0
-    beta_shape_corr: 0.0
     beta_shape_corr_outlier: 0.0
+    # Threshold for "low" shape correlation (transitions often below this have interference)
     shape_corr_low_threshold: 0.7
+    # Minimum improvement required to use learned weights vs simple sum
     min_improvement_pct: 0.1
 
 # =============================================================================
@@ -2007,7 +2034,7 @@ global_normalization:
     frac: 0.3
     # Number of RT grid points for interpolation
     n_grid_points: 100
-  
+
   # VSN parameters (only used if method: vsn)
   vsn_params:
     optimize_params: false
@@ -2031,7 +2058,7 @@ batch_correction:
 parsimony:
   # Path to search FASTA database (REQUIRED)
   fasta_path: null  # e.g., "/path/to/uniprot_human_reviewed.fasta"
-  
+
   # Strategy for shared peptides:
   #   all_groups  - Apply to all protein groups (recommended)
   #   unique_only - Only use peptides unique to one protein
@@ -2051,15 +2078,15 @@ protein_rollup:
   #   ibaq          - Intensity-Based Absolute Quantification
   #   maxlfq        - Maximum LFQ algorithm (MaxQuant-style)
   method: "sum"
-  
+
   # Minimum peptides required per protein
   min_peptides: 2
-  
+
   # Top-N parameters (if method: topn)
   topn:
     n: 3
     selection: "median_abundance"
-  
+
   # iBAQ parameters (if method: ibaq)
   ibaq:
     fasta_path: null
@@ -2067,7 +2094,7 @@ protein_rollup:
     missed_cleavages: 0
     min_peptide_length: 6
     max_peptide_length: 30
-  
+
   # Median polish parameters
   median_polish:
     max_iterations: 20
@@ -2080,10 +2107,10 @@ protein_rollup:
 output:
   # File format: parquet (recommended), csv, tsv
   format: "parquet"
-  
+
   # Include median polish residuals for outlier analysis
   include_residuals: true
-  
+
   # Compress output files
   compress: true
 
@@ -2095,13 +2122,13 @@ output:
 qc_report:
   enabled: true
   filename: "qc_report.html"
-  
+
   # Save individual PNG plots
   save_plots: true
-  
+
   # Embed plots in HTML (makes file self-contained but larger)
   embed_plots: true
-  
+
   # Plots to include
   plots:
     intensity_distribution: true

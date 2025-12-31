@@ -571,50 +571,56 @@ def _precompute_adaptive_metrics(
 
     # ========================================================================
     # Build results dict using efficient groupby iteration
+    # OPTIMIZED: Use groupby().apply() instead of .loc[] lookups
     # ========================================================================
 
-    # Set index on trans_stats for fast lookup
-    trans_stats_indexed = trans_stats.set_index(peptide_col)
-
     # Define column names for extraction
+    mz_col_agg = f"{mz_col}_first" if has_mz else None
     shape_med_col = f"{shape_corr_col}_median" if has_shape_corr else None
     shape_max_col = f"{shape_corr_col}_max" if has_shape_corr else None
     shape_low_col = "shape_low_mean" if has_shape_corr else None
 
     results = {}
 
-    # Use groupby on trans_stats for efficient iteration
-    for peptide in valid_peptides:
-        try:
-            # Fast index-based lookup
-            pep_stats = trans_stats_indexed.loc[[peptide]]
-        except KeyError:
+    # Group trans_stats by peptide and iterate efficiently
+    # This avoids the slow .loc[[peptide]] lookup pattern
+    trans_stats_grouped = trans_stats.groupby(peptide_col, sort=False)
+
+    # Also group intensity_pivot by peptide for fast access
+    # intensity_pivot has MultiIndex (peptide, transition) - reset to get peptide column
+    intensity_df = intensity_pivot.reset_index()
+
+    # Group by peptide for efficient iteration
+    intensity_grouped = {
+        name: group for name, group in intensity_df.groupby(peptide_col, sort=False)
+    }
+
+    # Convert valid_peptides to set for O(1) lookup (avoid .values on every iteration)
+    valid_peptides_set = set(valid_peptides)
+
+    for peptide, pep_stats in trans_stats_grouped:
+        if peptide not in valid_peptides_set:
             continue
 
         n_trans = len(pep_stats)
 
         # Get intensity matrix for this peptide (LINEAR scale)
-        try:
-            intensity_linear = intensity_pivot.loc[peptide].values.astype(float)
-        except KeyError:
+        pep_intensity = intensity_grouped.get(peptide)
+        if pep_intensity is None:
             continue
+        # Get just the sample columns (already a DataFrame)
+        intensity_linear = pep_intensity[unique_sample_batches].values.astype(float)
 
-        # Handle case where only one transition (returns Series not DataFrame)
+        # Handle case where only one transition (returns 1D array)
         if intensity_linear.ndim == 1:
             intensity_linear = intensity_linear.reshape(1, -1)
 
         # Extract pre-computed metrics (using .values for speed)
         mean_log_intensity = pep_stats[log_int_col].values
 
-        # Compute RELATIVE intensity within this peptide:
-        # relative_intensity = mean_linear / max(mean_linear)
-        # Range [0, 1] where 1.0 = most intense transition in this peptide
-        mean_linear = np.nanmean(intensity_linear, axis=1)  # mean across samples
-        max_mean_linear = np.nanmax(mean_linear)
-        if max_mean_linear > 0:
-            relative_intensity = mean_linear / max_mean_linear
-        else:
-            relative_intensity = np.ones(n_trans)  # All zeros -> equal weights
+        # Note: relative_intensity is NOT computed because beta_relative_intensity
+        # is not optimized (empirically always 0). When beta=0, this term has no effect.
+        # We pass None and the weight function handles it.
 
         if has_mz:
             mz_values = pep_stats[mz_col_agg].fillna(0).values
@@ -633,7 +639,7 @@ def _precompute_adaptive_metrics(
         results[peptide] = _AdaptivePrecomputedPeptide(
             intensity_linear=intensity_linear,
             mean_log_intensity=mean_log_intensity,
-            relative_intensity=relative_intensity,
+            relative_intensity=None,  # Not computed - beta_relative_intensity=0
             mz_values=mz_values,
             median_shape_corr=median_shape_corr,
             max_shape_corr=max_shape_corr,
@@ -688,25 +694,29 @@ def _rollup_with_adaptive_params(
         # Normalize weights
         weight_sum = weights.sum()
         if not np.isfinite(weight_sum) or weight_sum <= 0:
-            # Fallback to equal weights if sum is invalid
             normalized_weights = np.ones(metrics.n_transitions)
         else:
             normalized_weights = weights * (metrics.n_transitions / weight_sum)
 
-        # Weighted sum in linear space for each sample
-        # Use raw linear values (zeros stay zero, no 2^0=1 issue)
-        linear_matrix = metrics.intensity_linear
-        abundances = np.zeros(len(sample_names))
+        # Vectorized weighted sum across all samples at once
+        linear_matrix = metrics.intensity_linear  # shape: (n_transitions, n_samples)
 
-        for i in range(len(sample_names)):
-            col = linear_matrix[:, i]
-            # Valid means not NaN and not negative
-            valid = np.isfinite(col) & (col >= 0)
-            if valid.sum() >= min_transitions:
-                weighted_sum = (normalized_weights[valid] * col[valid]).sum()
-                abundances[i] = np.log2(max(weighted_sum, 1.0))
-            else:
-                abundances[i] = np.nan
+        # Create mask for valid values (not NaN and non-negative)
+        valid_mask = np.isfinite(linear_matrix) & (linear_matrix >= 0)
+
+        # Count valid transitions per sample
+        valid_counts = valid_mask.sum(axis=0)
+
+        # Apply weights only to valid values (set invalid to 0)
+        weighted_matrix = np.where(
+            valid_mask, linear_matrix * normalized_weights[:, np.newaxis], 0.0
+        )
+        weighted_sums = weighted_matrix.sum(axis=0)
+
+        # Compute log2 abundances, NaN where insufficient transitions
+        abundances = np.where(
+            valid_counts >= min_transitions, np.log2(np.maximum(weighted_sums, 1.0)), np.nan
+        )
 
         results[peptide] = abundances
 
@@ -939,29 +949,28 @@ def learn_adaptive_weights(
     logger.info(f"  Pre-computed {len(ref_metrics)} peptides")
     logger.info(f"  m/z range: [{norm_params.mz_min:.1f}, {norm_params.mz_max:.1f}]")
     logger.info(f"  Log2 intensity center: {norm_params.log_intensity_center:.2f}")
-    logger.info("  Relative intensity: computed per-peptide [0, 1]")
+    # Note: relative_intensity is not computed (beta=0, always ends up unused)
     logger.info(f"  Shape corr low threshold: {norm_params.shape_corr_low_threshold:.3f}")
 
     # Track optimization - keep the BEST parameters found, not just where optimizer stops
     iteration_count = [0]
     best_cv = [reference_cv_sum]
-    best_params = [np.array([0.0, 0.0, 0.0])]  # Start with zeros (sum baseline)
+    best_params = [np.array([0.0, 0.0])]  # Start with zeros (sum baseline)
 
     def objective(beta_array):
         """Objective: minimize median CV on reference samples."""
-        # Optimizing 3 parameters:
-        # [0] beta_relative_intensity >= 0
-        # [1] beta_mz (unconstrained)
-        # [2] beta_shape_corr_outlier (penalize high outlier fraction)
-        # Note: beta_shape_corr (median) is NOT optimized - fixed at 0.0
+        # Optimizing 2 parameters only:
+        # [0] beta_mz (unconstrained)
+        # [1] beta_shape_corr_outlier (penalize high outlier fraction)
+        # Note: beta_relative_intensity is NOT optimized - empirically always 0
         params = AdaptiveRollupParams(
-            beta_log_intensity=0.0,  # Deprecated, not optimized
-            beta_sqrt_intensity=0.0,  # Deprecated, not optimized
-            beta_relative_intensity=max(0.0, beta_array[0]),
-            beta_mz=beta_array[1],
-            beta_shape_corr=0.0,  # Not optimized - fixed at 0.0
-            beta_shape_corr_max=0.0,  # Not optimized - kept for future use
-            beta_shape_corr_outlier=beta_array[2],
+            beta_log_intensity=0.0,  # Deprecated
+            beta_sqrt_intensity=0.0,  # Deprecated
+            beta_relative_intensity=0.0,  # Not optimized - always ends up 0
+            beta_mz=beta_array[0],
+            beta_shape_corr=0.0,  # Not optimized
+            beta_shape_corr_max=0.0,  # Not optimized
+            beta_shape_corr_outlier=beta_array[1],
             mz_min=norm_params.mz_min,
             mz_max=norm_params.mz_max,
             log_intensity_center=norm_params.log_intensity_center,
@@ -980,22 +989,20 @@ def learn_adaptive_weights(
         except Exception:
             return 1.0
 
-    # Initial parameters: all zeros (simple sum baseline)
-    # Note: beta_log_intensity, beta_shape_corr, and beta_shape_corr_max are not optimized
+    # Initial parameters: zeros (simple sum baseline)
+    # Note: Only optimizing beta_mz and beta_shape_corr_outlier
     x0 = [
-        initial_params.beta_relative_intensity,
         initial_params.beta_mz,
         initial_params.beta_shape_corr_outlier,
     ]
 
-    # Bounds for 3 parameters
+    # Bounds for 2 parameters
     bounds = [
-        (0.0, 1.0),  # beta_relative_intensity (must be non-negative)
         (-1.0, 1.0),  # beta_mz (unconstrained)
         (-1.0, 0.0),  # beta_shape_corr_outlier (penalize high outlier fraction)
     ]
 
-    logger.info("  Optimizing 3 beta coefficients...")
+    logger.info("  Optimizing 2 beta coefficients (mz, shape_outlier)...")
     result = minimize(
         objective,
         x0,
@@ -1019,11 +1026,11 @@ def learn_adaptive_weights(
     learned_params = AdaptiveRollupParams(
         beta_log_intensity=0.0,  # Deprecated
         beta_sqrt_intensity=0.0,  # Deprecated
-        beta_relative_intensity=max(0.0, opt[0]),
-        beta_mz=opt[1],
-        beta_shape_corr=0.0,  # Not optimized - fixed at 0.0
+        beta_relative_intensity=0.0,  # Not optimized - empirically always 0
+        beta_mz=opt[0],
+        beta_shape_corr=0.0,  # Not optimized
         beta_shape_corr_max=0.0,  # Not optimized
-        beta_shape_corr_outlier=opt[2],
+        beta_shape_corr_outlier=opt[1],
         mz_min=norm_params.mz_min,
         mz_max=norm_params.mz_max,
         log_intensity_center=norm_params.log_intensity_center,
@@ -1036,8 +1043,7 @@ def learn_adaptive_weights(
     ref_abundances_adaptive = _rollup_with_adaptive_params(ref_metrics, learned_params)
     reference_cv_adaptive = _compute_median_cv_for_adaptive(ref_abundances_adaptive)
 
-    logger.info("  Learned parameters (3 features):")
-    logger.info(f"    beta_relative_intensity: {learned_params.beta_relative_intensity:.4f}")
+    logger.info("  Learned parameters (2 features):")
     logger.info(f"    beta_mz: {learned_params.beta_mz:.4f}")
     logger.info(f"    beta_shape_corr_outlier: {learned_params.beta_shape_corr_outlier:.4f}")
     logger.info(f"  Reference CV: {reference_cv_sum:.4f} -> {reference_cv_adaptive:.4f}")
@@ -1052,11 +1058,29 @@ def learn_adaptive_weights(
     # Validate on QC samples
     qc_cv_adaptive = np.nan
     qc_improvement_pct = 0.0
-    use_adaptive_weights = True
+    use_adaptive_weights = False
     fallback_reason = None
 
-    if len(qc_samples) >= 2:
-        # Pre-compute metrics for QC samples
+    # Decision logic:
+    # 1. If no improvement on reference (all betas = 0), adaptive = sum, skip QC validation
+    # 2. If reference improved, validate on QC to check generalization
+    # 3. QC validation is where we decide if learned weights actually help
+
+    if improvement_pct < initial_params.min_improvement_pct:
+        # No improvement found during optimization - all betas are ~0
+        # In this case, adaptive rollup = sum rollup (mathematically identical)
+        # So QC validation would give the same result - skip it to save time
+        fallback_reason = (
+            f"No improvement found: reference CV unchanged "
+            f"({improvement_pct:.1f}% < {initial_params.min_improvement_pct}% threshold)"
+        )
+        qc_cv_adaptive = qc_cv_sum  # Same as sum since all betas = 0
+        logger.info("  No improvement on reference - skipping QC validation")
+
+    elif len(qc_samples) >= 2:
+        # Reference showed improvement, now validate on QC samples
+        # This is where we check if the learned weights generalize
+        logger.info("  Validating learned parameters on QC samples...")
         qc_metrics, _ = _precompute_adaptive_metrics(
             data,
             qc_samples,
@@ -1079,30 +1103,36 @@ def learn_adaptive_weights(
             qc_improvement_pct = (qc_cv_sum - qc_cv_adaptive) / qc_cv_sum * 100
             logger.info(f"  QC improvement: {qc_improvement_pct:.1f}%")
 
-        # Decision: use adaptive weights or fall back to sum?
-        # Require improvement on BOTH reference and QC
-        if improvement_pct < initial_params.min_improvement_pct:
-            use_adaptive_weights = False
+        # Decision based on QC validation (the main criterion)
+        if qc_improvement_pct >= initial_params.min_improvement_pct:
+            # QC shows improvement - use adaptive weights
+            use_adaptive_weights = True
+            logger.info("  Using adaptive weights (validated on QC samples)")
+        elif qc_cv_adaptive > qc_cv_sum * 1.05:
+            # QC got worse by more than 5% - reject
             fallback_reason = (
-                f"Reference improvement ({improvement_pct:.1f}%) below threshold "
+                f"QC CV increased ({qc_cv_sum:.4f} -> {qc_cv_adaptive:.4f}), "
+                f"learned weights don't generalize"
+            )
+        else:
+            # QC shows no significant improvement
+            fallback_reason = (
+                f"QC improvement ({qc_improvement_pct:.1f}%) below threshold "
                 f"({initial_params.min_improvement_pct}%)"
             )
-        elif qc_cv_adaptive > qc_cv_sum * 1.05:  # QC got worse by more than 5%
-            use_adaptive_weights = False
-            fallback_reason = f"QC CV increased from {qc_cv_sum:.4f} to {qc_cv_adaptive:.4f}"
     else:
+        # No QC samples for validation - fall back to reference-based decision
         logger.warning("  Not enough QC samples for validation")
-        # Without QC validation, require higher improvement threshold
-        if improvement_pct < initial_params.min_improvement_pct:
-            use_adaptive_weights = False
+        if improvement_pct >= initial_params.min_improvement_pct:
+            use_adaptive_weights = True
+            logger.info("  Using adaptive weights (no QC validation available)")
+        else:
             fallback_reason = (
                 f"Reference improvement ({improvement_pct:.1f}%) below threshold "
-                f"({initial_params.min_improvement_pct}%) and no QC validation"
+                f"and no QC validation available"
             )
 
-    if use_adaptive_weights:
-        logger.info("  Using adaptive weights")
-    else:
+    if not use_adaptive_weights and fallback_reason:
         logger.warning(f"  Falling back to sum: {fallback_reason}")
 
     return AdaptiveRollupResult(
@@ -1173,8 +1203,7 @@ def rollup_peptide_topn(
     n_select = min(n_transitions, n_available)
     selected_transitions = scores.nlargest(n_select).index.tolist()
 
-    # Subset to selected transitions only
-    selected_intensity = intensity_matrix.loc[selected_transitions]
+    # Subset to selected transitions only (linear for weighting/aggregation)
     selected_linear = linear_intensity.loc[selected_transitions]
 
     # Step 3: Compute weights
