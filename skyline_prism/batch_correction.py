@@ -14,7 +14,6 @@ References:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -49,8 +48,8 @@ class ComBatResult:
 def _check_inputs(
     data: np.ndarray,
     batch: np.ndarray,
-    covar_mod: Optional[np.ndarray] = None,
-) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    covar_mod: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Validate and prepare inputs for ComBat.
 
     Args:
@@ -74,9 +73,7 @@ def _check_inputs(
     n_features, n_samples = data.shape
 
     if len(batch) != n_samples:
-        raise ValueError(
-            f"Batch length ({len(batch)}) must match number of samples ({n_samples})"
-        )
+        raise ValueError(f"Batch length ({len(batch)}) must match number of samples ({n_samples})")
 
     # Check for batches with single samples
     unique_batches, batch_counts = np.unique(batch, return_counts=True)
@@ -101,9 +98,9 @@ def _check_inputs(
 
 def _make_design_matrix(
     batch: np.ndarray,
-    covar_mod: Optional[np.ndarray] = None,
-    ref_batch: Optional[Union[int, str]] = None,
-) -> tuple[np.ndarray, list[np.ndarray], int, Optional[int]]:
+    covar_mod: np.ndarray | None = None,
+    ref_batch: int | str | None = None,
+) -> tuple[np.ndarray, list[np.ndarray], int, int | None]:
     """Construct the design matrix for ComBat.
 
     Args:
@@ -161,9 +158,7 @@ def _make_design_matrix(
     # Check for confounding
     rank = np.linalg.matrix_rank(design)
     if rank < design.shape[1]:
-        logger.warning(
-            "Design matrix is rank deficient. Covariates may be confounded with batch."
-        )
+        logger.warning("Design matrix is rank deficient. Covariates may be confounded with batch.")
 
     return design, batches, n_batch, ref_idx
 
@@ -173,7 +168,7 @@ def _calculate_mean_var(
     design: np.ndarray,
     batches: list[np.ndarray],
     n_batch: int,
-    ref_idx: Optional[int] = None,
+    ref_idx: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Calculate B_hat, grand mean, and pooled variance.
 
@@ -449,7 +444,7 @@ def _it_sol(
         # Update delta
         # Sum of squared residuals after removing gamma effect
         residuals = s_data_batch - g_new.reshape(-1, 1)
-        sum_sq = np.sum(residuals ** 2, axis=1)
+        sum_sq = np.sum(residuals**2, axis=1)
         d_new = _postvar(sum_sq, n, a, b)
 
         # Check convergence
@@ -517,8 +512,8 @@ def _adjust_data(
     batches: list[np.ndarray],
     var_pooled: np.ndarray,
     stand_mean: np.ndarray,
-    ref_idx: Optional[int] = None,
-    data_orig: Optional[np.ndarray] = None,
+    ref_idx: int | None = None,
+    data_orig: np.ndarray | None = None,
 ) -> np.ndarray:
     """Apply batch correction to standardized data.
 
@@ -563,13 +558,13 @@ def _adjust_data(
 
 
 def combat(
-    data: Union[np.ndarray, pd.DataFrame],
-    batch: Union[np.ndarray, list, pd.Series],
-    covar_mod: Optional[Union[np.ndarray, pd.DataFrame]] = None,
+    data: np.ndarray | pd.DataFrame,
+    batch: np.ndarray | list | pd.Series,
+    covar_mod: np.ndarray | pd.DataFrame | None = None,
     par_prior: bool = True,
     mean_only: bool = False,
-    ref_batch: Optional[Union[int, str]] = None,
-) -> Union[np.ndarray, pd.DataFrame]:
+    ref_batch: int | str | None = None,
+) -> np.ndarray | pd.DataFrame:
     """Adjust for batch effects using ComBat (empirical Bayes).
 
     ComBat removes batch effects while preserving biological variation.
@@ -640,18 +635,13 @@ def combat(
     zero_var_mask = row_vars == 0
     if np.any(zero_var_mask):
         n_zero = np.sum(zero_var_mask)
-        logger.warning(
-            f"Found {n_zero} features with zero variance; "
-            "these will not be adjusted."
-        )
+        logger.warning(f"Found {n_zero} features with zero variance; these will not be adjusted.")
         # Keep original data for zero-variance features
         data_orig_zero = data_array[zero_var_mask, :].copy()
         data_array = data_array[~zero_var_mask, :]
 
     # Build design matrix
-    design, batches, n_batch, ref_idx = _make_design_matrix(
-        batch, covar_mod, ref_batch
-    )
+    design, batches, n_batch, ref_idx = _make_design_matrix(batch, covar_mod, ref_batch)
     logger.info(f"Found {n_batch} batches")
 
     n_batches = [len(b) for b in batches]
@@ -673,9 +663,7 @@ def combat(
 
     # Fit batch effects
     logger.info("Fitting L/S model and finding priors")
-    gamma_hat, delta_hat = _fit_batch_effects(
-        s_data, design, batches, n_batch, mean_only
-    )
+    gamma_hat, delta_hat = _fit_batch_effects(s_data, design, batches, n_batch, mean_only)
 
     # Compute priors
     gamma_bar, t2, a_prior, b_prior = _compute_priors(gamma_hat, delta_hat, mean_only)
@@ -691,8 +679,7 @@ def combat(
                 # Simple posterior mean for gamma
                 n_i = len(batch_idx)
                 gamma_star[i, :] = _postmean(
-                    gamma_hat[i, :], gamma_bar[i], n_i,
-                    np.ones(gamma_hat.shape[1]), t2[i]
+                    gamma_hat[i, :], gamma_bar[i], n_i, np.ones(gamma_hat.shape[1]), t2[i]
                 )
                 delta_star[i, :] = np.ones(delta_hat.shape[1])
             else:
@@ -725,8 +712,7 @@ def combat(
     # Adjust data
     logger.info("Adjusting the data")
     bayes_data = _adjust_data(
-        s_data, gamma_star, delta_star, batches,
-        var_pooled, stand_mean, ref_idx, data_array
+        s_data, gamma_star, delta_star, batches, var_pooled, stand_mean, ref_idx, data_array
     )
 
     # Restore zero-variance features
@@ -745,14 +731,14 @@ def combat(
 
 def combat_from_long(
     data: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    feature_col: str = 'precursor_id',
-    sample_col: str = 'replicate_name',
-    batch_col: str = 'batch',
-    covar_cols: Optional[list[str]] = None,
+    abundance_col: str = "abundance",
+    feature_col: str = "precursor_id",
+    sample_col: str = "replicate_name",
+    batch_col: str = "batch",
+    covar_cols: list[str] | None = None,
     par_prior: bool = True,
     mean_only: bool = False,
-    ref_batch: Optional[Union[int, str]] = None,
+    ref_batch: int | str | None = None,
 ) -> pd.DataFrame:
     """Apply ComBat to data in long format (as used in skyline-prism).
 
@@ -780,7 +766,7 @@ def combat_from_long(
         index=feature_col,
         columns=sample_col,
         values=abundance_col,
-        aggfunc='first'  # Should be unique
+        aggfunc="first",  # Should be unique
     )
 
     # Get batch labels in same order as columns
@@ -792,34 +778,26 @@ def combat_from_long(
     covar_mod = None
     if covar_cols:
         covar_data = data[[sample_col] + covar_cols].drop_duplicates()
-        covar_mod = pd.get_dummies(
-            covar_data.set_index(sample_col)[covar_cols],
-            drop_first=True
-        )
+        covar_mod = pd.get_dummies(covar_data.set_index(sample_col)[covar_cols], drop_first=True)
         covar_mod = covar_mod.loc[wide.columns].values
 
     # Apply ComBat
     corrected_wide = combat(
-        wide, batch,
+        wide,
+        batch,
         covar_mod=covar_mod,
         par_prior=par_prior,
         mean_only=mean_only,
-        ref_batch=ref_batch
+        ref_batch=ref_batch,
     )
 
     # Melt back to long format
     corrected_long = corrected_wide.reset_index().melt(
-        id_vars=[feature_col],
-        var_name=sample_col,
-        value_name=f'{abundance_col}_batch_corrected'
+        id_vars=[feature_col], var_name=sample_col, value_name=f"{abundance_col}_batch_corrected"
     )
 
     # Merge with original data
-    result = data.merge(
-        corrected_long,
-        on=[feature_col, sample_col],
-        how='left'
-    )
+    result = data.merge(corrected_long, on=[feature_col, sample_col], how="left")
 
     return result
 
@@ -928,12 +906,12 @@ def evaluate_batch_correction(
     data: pd.DataFrame,
     abundance_before: str,
     abundance_after: str,
-    sample_type_col: str = 'sample_type',
-    feature_col: str = 'precursor_id',
-    sample_col: str = 'replicate_name',
-    batch_col: str = 'batch',
-    reference_type: str = 'reference',
-    qc_type: str = 'qc',
+    sample_type_col: str = "sample_type",
+    feature_col: str = "precursor_id",
+    sample_col: str = "replicate_name",
+    batch_col: str = "batch",
+    reference_type: str = "reference",
+    qc_type: str = "qc",
     max_overfitting_ratio: float = 2.0,
     min_qc_improvement: float = 0.0,
 ) -> BatchCorrectionEvaluation:
@@ -983,8 +961,7 @@ def evaluate_batch_correction(
     n_reference = data.loc[reference_mask, sample_col].nunique()
     n_qc = data.loc[qc_mask, sample_col].nunique()
 
-    logger.info(f"Evaluating batch correction with {n_reference} reference "
-                f"and {n_qc} QC samples")
+    logger.info(f"Evaluating batch correction with {n_reference} reference and {n_qc} QC samples")
 
     if n_reference < 2:
         warnings.append(f"Only {n_reference} reference samples - cannot calculate CV")
@@ -998,12 +975,8 @@ def evaluate_batch_correction(
     ref_cv_after = _calculate_sample_cv(
         data, reference_mask, abundance_after, feature_col, sample_col
     )
-    qc_cv_before = _calculate_sample_cv(
-        data, qc_mask, abundance_before, feature_col, sample_col
-    )
-    qc_cv_after = _calculate_sample_cv(
-        data, qc_mask, abundance_after, feature_col, sample_col
-    )
+    qc_cv_before = _calculate_sample_cv(data, qc_mask, abundance_before, feature_col, sample_col)
+    qc_cv_after = _calculate_sample_cv(data, qc_mask, abundance_after, feature_col, sample_col)
 
     # Calculate improvements (positive = better)
     ref_improvement = (ref_cv_before - ref_cv_after) / ref_cv_before if ref_cv_before > 0 else 0
@@ -1028,8 +1001,7 @@ def evaluate_batch_correction(
     if qc_improvement < min_qc_improvement:
         passed = False
         warnings.append(
-            f"QC CV did not improve ({qc_improvement:.1%} vs "
-            f"required {min_qc_improvement:.1%})"
+            f"QC CV did not improve ({qc_improvement:.1%} vs required {min_qc_improvement:.1%})"
         )
 
     if np.isfinite(overfitting_ratio) and overfitting_ratio > max_overfitting_ratio:
@@ -1041,14 +1013,10 @@ def evaluate_batch_correction(
 
     if qc_cv_after > qc_cv_before * 1.1:  # QC got worse by >10%
         passed = False
-        warnings.append(
-            f"QC CV increased from {qc_cv_before:.3f} to {qc_cv_after:.3f}"
-        )
+        warnings.append(f"QC CV increased from {qc_cv_before:.3f} to {qc_cv_after:.3f}")
 
-    logger.info(f"Reference CV: {ref_cv_before:.3f} -> {ref_cv_after:.3f} "
-                f"({ref_improvement:+.1%})")
-    logger.info(f"QC CV: {qc_cv_before:.3f} -> {qc_cv_after:.3f} "
-                f"({qc_improvement:+.1%})")
+    logger.info(f"Reference CV: {ref_cv_before:.3f} -> {ref_cv_after:.3f} ({ref_improvement:+.1%})")
+    logger.info(f"QC CV: {qc_cv_before:.3f} -> {qc_cv_after:.3f} ({qc_improvement:+.1%})")
     logger.info(f"Batch variance: {batch_var_before:.4f} -> {batch_var_after:.4f}")
     logger.info(f"Evaluation {'PASSED' if passed else 'FAILED'}")
 
@@ -1069,18 +1037,18 @@ def evaluate_batch_correction(
 
 def combat_with_reference_samples(
     data: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    feature_col: str = 'precursor_id',
-    sample_col: str = 'replicate_name',
-    batch_col: str = 'batch',
-    sample_type_col: str = 'sample_type',
-    reference_type: str = 'reference',
-    qc_type: str = 'qc',
+    abundance_col: str = "abundance",
+    feature_col: str = "precursor_id",
+    sample_col: str = "replicate_name",
+    batch_col: str = "batch",
+    sample_type_col: str = "sample_type",
+    reference_type: str = "reference",
+    qc_type: str = "qc",
     par_prior: bool = True,
     mean_only: bool = False,
     evaluate: bool = True,
     fallback_on_failure: bool = True,
-) -> tuple[pd.DataFrame, Optional[BatchCorrectionEvaluation]]:
+) -> tuple[pd.DataFrame, BatchCorrectionEvaluation | None]:
     """Apply ComBat with automatic evaluation using reference/QC samples.
 
     This is the recommended entry point for batch correction in PRISM workflows.
@@ -1147,7 +1115,7 @@ def combat_with_reference_samples(
             evaluation = evaluate_batch_correction(
                 corrected,
                 abundance_before=abundance_col,
-                abundance_after=f'{abundance_col}_batch_corrected',
+                abundance_after=f"{abundance_col}_batch_corrected",
                 sample_type_col=sample_type_col,
                 feature_col=feature_col,
                 sample_col=sample_col,
@@ -1163,16 +1131,13 @@ def combat_with_reference_samples(
                 )
             if not has_qc:
                 logger.warning(
-                    f"No samples with {sample_type_col}='{qc_type}' found - "
-                    "skipping evaluation"
+                    f"No samples with {sample_type_col}='{qc_type}' found - skipping evaluation"
                 )
 
     # Handle fallback if evaluation failed
-    corrected_col = f'{abundance_col}_batch_corrected'
+    corrected_col = f"{abundance_col}_batch_corrected"
     if fallback_on_failure and evaluation is not None and not evaluation.passed:
-        logger.warning(
-            "Batch correction failed QC validation - falling back to uncorrected data"
-        )
+        logger.warning("Batch correction failed QC validation - falling back to uncorrected data")
         for warning in evaluation.warnings:
             logger.warning(f"  - {warning}")
 
@@ -1180,8 +1145,6 @@ def combat_with_reference_samples(
         corrected[corrected_col] = corrected[abundance_col]
 
         # Add a flag indicating fallback was used
-        evaluation.warnings.append(
-            "FALLBACK: Using uncorrected data due to QC failure"
-        )
+        evaluation.warnings.append("FALLBACK: Using uncorrected data due to QC failure")
 
     return corrected, evaluation

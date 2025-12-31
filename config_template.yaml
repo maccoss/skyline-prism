@@ -233,54 +233,44 @@ transition_rollup:
     min_improvement_pct: 5.0      # Min improvement over sum to use adaptive weights
 
 # =============================================================================
-# Stage 1: RT-Aware Normalization (DISABLED BY DEFAULT)
-# =============================================================================
-# Reference-anchored correction for RT-dependent technical variation.
-#
-# NOTE: RT correction is DISABLED by default. DIA-NN and other search engines
-# apply per-file RT calibration that may not generalize between reference and
-# experimental samples, making spline-based RT correction unreliable.
-#
-# The implementation is preserved for future experimentation.
-
-rt_correction:
-  enabled: false  # Disabled by default - see note above
-  
-  # Method: spline, loess, ruv, combat_rt
-  method: "spline"
-  
-  # Degrees of freedom for spline (higher = more flexible)
-  spline_df: 5
-  
-  # Fit separate models per batch (recommended if enabled)
-  per_batch: true
-  
-  # Minimum peptides per RT bin for robust estimation
-  min_peptides_per_bin: 10
-
-# =============================================================================
-# Stage 2: Global Normalization
+# Stage 1: Global Normalization
 # =============================================================================
 # Address overall sample loading differences.
 
 global_normalization:
-  # Method: median, vsn, quantile, none
+  # Method: median, rt_lowess, vsn, quantile, none
   #
-  # median   - Subtract sample median; shifts all samples to common baseline
-  #            Simple, robust, and preserves original log2 scale
-  #            RECOMMENDED for most proteomics experiments
+  # median    - Subtract sample median; shifts all samples to common baseline
+  #             Simple, robust, and preserves original log2 scale
+  #             RECOMMENDED for most proteomics experiments
   #
-  # vsn      - Variance Stabilizing Normalization using arcsinh transformation
-  #            Stabilizes variance across intensity range (heteroscedasticity)
-  #            Output is on arcsinh-transformed scale, NOT log2
-  #            Use when low-abundance proteins show high variance
+  # rt_lowess - RT-dependent normalization using lowess smoothing
+  #             Fits lowess curve (abundance vs RT) for each sample,
+  #             then normalizes all samples to the global median curve.
+  #             Corrects for RT-dependent systematic effects (e.g., gradient
+  #             issues, ion suppression). Takes ~1 min for 238 samples.
+  #             Use when batch effects vary with retention time.
   #
-  # quantile - Forces identical sample distributions
-  #            Strong normalization that may over-correct
+  # vsn       - Variance Stabilizing Normalization using arcsinh transformation
+  #             Stabilizes variance across intensity range (heteroscedasticity)
+  #             Output is on arcsinh-transformed scale, NOT log2
+  #             Use when low-abundance proteins show high variance
   #
-  # none     - Skip global normalization
+  # quantile  - Forces identical sample distributions
+  #             Strong normalization that may over-correct
+  #
+  # none      - Skip global normalization
   #
   method: "median"
+
+  # RT-lowess parameters (only used when method: rt_lowess)
+  rt_lowess:
+    # Lowess smoothing fraction (0.0-1.0)
+    # Lower = more flexible curve, higher = smoother curve
+    # Default 0.3 is a good balance for typical LC-MS gradients
+    frac: 0.3
+    # Number of RT grid points for interpolation
+    n_grid_points: 100
 
   # VSN parameters (only used when method: vsn)
   vsn_params:
@@ -457,6 +447,3 @@ qc_report:
     # Shows precision improvement for reference and QC samples
     # Generated separately for reference and pool sample types
     cv_distribution: true
-    
-    # RT-dependent residuals (only if RT correction is enabled)
-    rt_correction: true

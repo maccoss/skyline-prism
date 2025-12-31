@@ -57,9 +57,7 @@ def sample_long_data():
                     "replicate_name": samp,
                     "abundance": intensity,
                     "sample_type": (
-                        "reference"
-                        if samp_idx < 2
-                        else ("qc" if samp_idx < 4 else "experimental")
+                        "reference" if samp_idx < 2 else ("qc" if samp_idx < 4 else "experimental")
                     ),
                 }
             )
@@ -223,9 +221,7 @@ class TestCorrelationHeatmap:
         # Should have 4 control samples (2 reference + 2 qc)
         assert corr_matrix.shape == (4, 4)
         # Diagonal should be 1.0
-        np.testing.assert_array_almost_equal(
-            np.diag(corr_matrix.values), np.ones(4), decimal=5
-        )
+        np.testing.assert_array_almost_equal(np.diag(corr_matrix.values), np.ones(4), decimal=5)
         plt.close(fig)
 
     @pytest.mark.skipif(not HAS_SEABORN, reason="seaborn not installed")
@@ -406,9 +402,7 @@ def sample_data_with_rt():
                     "abundance": intensity,
                     "retention_time": rt,
                     "sample_type": (
-                        "reference"
-                        if samp_idx < 2
-                        else ("qc" if samp_idx < 4 else "experimental")
+                        "reference" if samp_idx < 2 else ("qc" if samp_idx < 4 else "experimental")
                     ),
                 }
             )
@@ -496,3 +490,198 @@ class TestRTResiduals:
         assert fig is None
         assert len(df) == 0
 
+
+# =============================================================================
+# RT-Lowess Visualization Tests
+# =============================================================================
+
+
+@pytest.fixture
+def sample_wide_data_with_rt():
+    """Create sample wide-format data with retention time for RT-lowess tests."""
+    np.random.seed(42)
+
+    n_peptides = 100
+    sample_names = [f"Sample_{i}" for i in range(10)]
+
+    # Create peptide IDs and RT values
+    data = {
+        "Peptide Modified Sequence Unimod Ids": [f"Peptide_{i}" for i in range(n_peptides)],
+        "mean_rt": np.linspace(5, 60, n_peptides),  # RTs from 5 to 60 min
+    }
+
+    # Add sample abundance columns (log2 scale)
+    for i, sample in enumerate(sample_names):
+        base_abundance = 15 + np.random.normal(0, 0.5, n_peptides)  # Log2 scale ~32k
+        # Add RT-dependent bias per sample
+        rt_bias = 0.3 * np.sin(data["mean_rt"] / 10 * np.pi) * (i - 5) / 5
+        data[sample] = base_abundance + rt_bias + np.random.normal(0, 0.3, n_peptides)
+
+    return pd.DataFrame(data), sample_names
+
+
+@pytest.fixture
+def sample_batches():
+    """Create sample to batch mapping."""
+    return {f"Sample_{i}": f"Batch_{i // 5}" for i in range(10)}
+
+
+@pytest.fixture
+def sample_lowess_curves(sample_wide_data_with_rt):
+    """Create mock lowess curves for testing."""
+    df, sample_names = sample_wide_data_with_rt
+    rt_grid = np.linspace(df["mean_rt"].min(), df["mean_rt"].max(), 100)
+
+    # Create mock curves
+    sample_curves = {}
+    for i, sample in enumerate(sample_names):
+        # Create sample-specific curve with RT-dependent variation
+        curve = 16 + 0.5 * np.sin(rt_grid / 10 * np.pi) + 0.2 * (i - 5) / 5
+        sample_curves[sample] = curve
+
+    # Global curve is median
+    all_curves = np.array(list(sample_curves.values()))
+    global_curve = np.median(all_curves, axis=0)
+
+    return sample_curves, global_curve, rt_grid
+
+
+class TestRTLowessVisualization:
+    """Tests for RT-lowess visualization functions."""
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_lowess_overlay_comparison(self, sample_lowess_curves, sample_batches):
+        """Test RT-lowess overlay comparison plot."""
+        from skyline_prism.visualization import plot_rt_lowess_overlay_comparison
+
+        sample_curves, global_curve, rt_grid = sample_lowess_curves
+
+        fig = plot_rt_lowess_overlay_comparison(
+            sample_curves,
+            global_curve,
+            rt_grid,
+            sample_batches=sample_batches,
+            show_plot=False,
+        )
+
+        assert fig is not None
+        assert len(fig.axes) == 2  # Two panels: before/after
+        plt.close(fig)
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_lowess_overlay_without_batches(self, sample_lowess_curves):
+        """Test RT-lowess overlay without batch information."""
+        from skyline_prism.visualization import plot_rt_lowess_overlay_comparison
+
+        sample_curves, global_curve, rt_grid = sample_lowess_curves
+
+        fig = plot_rt_lowess_overlay_comparison(
+            sample_curves,
+            global_curve,
+            rt_grid,
+            sample_batches=None,
+            show_plot=False,
+        )
+
+        assert fig is not None
+        plt.close(fig)
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_bin_boxplot_comparison(self, sample_wide_data_with_rt, sample_batches):
+        """Test RT bin boxplot comparison plot."""
+        from skyline_prism.visualization import plot_rt_bin_boxplot_comparison
+
+        df, sample_names = sample_wide_data_with_rt
+
+        # Create "normalized" version (slightly less variation)
+        df_after = df.copy()
+        for sample in sample_names:
+            df_after[sample] = df[sample] - (df[sample].mean() - df[sample_names].values.mean())
+
+        fig = plot_rt_bin_boxplot_comparison(
+            df,
+            df_after,
+            sample_names,
+            rt_col="mean_rt",
+            sample_batches=sample_batches,
+            n_bins=8,
+            show_plot=False,
+        )
+
+        assert fig is not None
+        assert len(fig.axes) == 2
+        plt.close(fig)
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_bin_cv_comparison(self, sample_wide_data_with_rt):
+        """Test RT bin CV comparison plot."""
+        from skyline_prism.visualization import plot_rt_bin_cv_comparison
+
+        df, sample_names = sample_wide_data_with_rt
+
+        # Create sample types
+        sample_types = {
+            sample: "reference" if i < 2 else ("qc" if i < 4 else "experimental")
+            for i, sample in enumerate(sample_names)
+        }
+
+        # Create "normalized" version
+        df_after = df.copy()
+
+        fig = plot_rt_bin_cv_comparison(
+            df,
+            df_after,
+            sample_names,
+            rt_col="mean_rt",
+            sample_types=sample_types,
+            n_bins=8,
+            show_plot=False,
+        )
+
+        assert fig is not None
+        assert len(fig.axes) == 2  # Reference and QC panels
+        plt.close(fig)
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_bin_cv_insufficient_samples(self, sample_wide_data_with_rt):
+        """Test RT bin CV with insufficient control samples."""
+        from skyline_prism.visualization import plot_rt_bin_cv_comparison
+
+        df, sample_names = sample_wide_data_with_rt
+
+        # Only 1 reference and 1 QC - should show "insufficient" message
+        sample_types = {
+            sample: "reference" if i == 0 else ("qc" if i == 1 else "experimental")
+            for i, sample in enumerate(sample_names)
+        }
+
+        fig = plot_rt_bin_cv_comparison(
+            df,
+            df,
+            sample_names,
+            sample_types=sample_types,
+            show_plot=False,
+        )
+
+        assert fig is not None
+        plt.close(fig)
+
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
+    def test_plot_rt_lowess_overlay_save(self, sample_lowess_curves, tmp_path):
+        """Test saving RT-lowess overlay plot."""
+        from skyline_prism.visualization import plot_rt_lowess_overlay_comparison
+
+        sample_curves, global_curve, rt_grid = sample_lowess_curves
+        save_path = tmp_path / "rt_lowess_overlay.png"
+
+        fig = plot_rt_lowess_overlay_comparison(
+            sample_curves,
+            global_curve,
+            rt_grid,
+            save_path=str(save_path),
+            show_plot=False,
+        )
+
+        assert save_path.exists()
+        assert save_path.stat().st_size > 0
+        plt.close(fig)

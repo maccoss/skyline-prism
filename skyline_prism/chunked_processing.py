@@ -128,7 +128,7 @@ def _process_single_peptide(
     """
     # Filter out MS1 precursor ions - only use MS2 fragment ions for rollup
     if config.exclude_precursor:
-        pep_data = pep_data[~pep_data[config.transition_col].str.startswith('precursor')]
+        pep_data = pep_data[~pep_data[config.transition_col].str.startswith("precursor")]
 
     # Create unique transition ID combining Fragment Ion + Precursor Charge + Product Charge
     # This ensures transitions from different precursor charges are kept separate
@@ -195,9 +195,7 @@ def _process_single_peptide(
             residual_var = result.residuals.var().mean()
             uncertainties = {s: np.sqrt(residual_var) for s in samples}
             # Store residuals for output
-            residuals = {
-                str(t): result.residuals.loc[t].to_dict() for t in result.residuals.index
-            }
+            residuals = {str(t): result.residuals.loc[t].to_dict() for t in result.residuals.index}
         else:
             abundances = {s: np.nan for s in samples}
             uncertainties = {s: np.nan for s in samples}
@@ -228,9 +226,7 @@ def _process_single_peptide(
                 index=intensity_matrix.index, columns=samples
             ).fillna(0.0)  # Missing = low correlation
         else:
-            shape_corr_matrix = pd.DataFrame(
-                1.0, index=intensity_matrix.index, columns=samples
-            )
+            shape_corr_matrix = pd.DataFrame(1.0, index=intensity_matrix.index, columns=samples)
 
         abund_series, uncert_series, _, n_used = rollup_peptide_topn(
             intensity_matrix,
@@ -259,9 +255,7 @@ def _process_single_peptide(
                 index=intensity_matrix.index, columns=samples
             ).fillna(1.0)
         else:
-            shape_corr_matrix = pd.DataFrame(
-                1.0, index=intensity_matrix.index, columns=samples
-            )
+            shape_corr_matrix = pd.DataFrame(1.0, index=intensity_matrix.index, columns=samples)
 
         # Get m/z values per transition
         if config.mz_col in pep_data.columns:
@@ -306,10 +300,10 @@ def _worker_process_batch(
     args: tuple[dict[str, pd.DataFrame], list[str], dict],
 ) -> list[dict]:
     """Worker function for parallel peptide processing.
-    
+
     Takes a tuple of (peptide_data_dict, samples, config_dict) and returns
     a list of result dictionaries (easily picklable).
-    
+
     This function is designed to be pickle-able for multiprocessing.
     """
     peptide_data_dict, samples, config_dict = args
@@ -321,14 +315,16 @@ def _worker_process_batch(
     for peptide, pep_data in peptide_data_dict.items():
         result = _process_single_peptide(pep_data, peptide, samples, config)
         # Convert to dict for pickling
-        results.append({
-            "peptide": result.peptide,
-            "abundances": result.abundances,
-            "uncertainties": result.uncertainties,
-            "n_transitions": result.n_transitions,
-            "residuals": result.residuals,
-            "mean_rt": result.mean_rt,
-        })
+        results.append(
+            {
+                "peptide": result.peptide,
+                "abundances": result.abundances,
+                "uncertainties": result.uncertainties,
+                "n_transitions": result.n_transitions,
+                "residuals": result.residuals,
+                "mean_rt": result.mean_rt,
+            }
+        )
     return results
 
 
@@ -540,7 +536,9 @@ def rollup_transitions_streaming(
             # Process when we have enough batches for all workers
             if len(batches_to_process) >= n_workers:
                 with ProcessPoolExecutor(max_workers=n_workers) as executor:
-                    futures = [executor.submit(_worker_process_batch, b) for b in batches_to_process]
+                    futures = [
+                        executor.submit(_worker_process_batch, b) for b in batches_to_process
+                    ]
                     for future in as_completed(futures):
                         try:
                             batch_results = future.result()
@@ -581,7 +579,9 @@ def rollup_transitions_streaming(
 
         # Process remaining batches
         if batches_to_process:
-            with ProcessPoolExecutor(max_workers=min(n_workers, len(batches_to_process))) as executor:
+            with ProcessPoolExecutor(
+                max_workers=min(n_workers, len(batches_to_process))
+            ) as executor:
                 futures = [executor.submit(_worker_process_batch, b) for b in batches_to_process]
                 for future in as_completed(futures):
                     try:
@@ -614,7 +614,9 @@ def rollup_transitions_streaming(
 
     logger.info(f"  Completed: {n_peptides:,} peptides processed")
     if n_filtered > 0:
-        logger.info(f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions")
+        logger.info(
+            f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions"
+        )
 
     # Write peptide output
 
@@ -629,7 +631,7 @@ def rollup_transitions_streaming(
     # Convert sample columns from log2 to linear before writing output
     # This is required by the PRISM specification and for downstream analysis
     if len(sample_cols) > 0:
-        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2 ** x)
+        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2**x)
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
     logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
 
@@ -785,7 +787,7 @@ def rollup_transitions_sorted(
         chunk_size = max(1, len(peptide_items) // n_workers)
         chunks = []
         for i in range(0, len(peptide_items), chunk_size):
-            chunk_dict = dict(peptide_items[i:i + chunk_size])
+            chunk_dict = dict(peptide_items[i : i + chunk_size])
             chunks.append((chunk_dict, samples, config_dict))
 
         with ProcessPoolExecutor(max_workers=min(n_workers, len(chunks))) as executor:
@@ -891,7 +893,9 @@ def rollup_transitions_sorted(
 
     logger.info(f"  Completed: {n_peptides:,} peptides processed")
     if n_filtered > 0:
-        logger.info(f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions")
+        logger.info(
+            f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions"
+        )
 
     # Clean up temp file (use missing_ok=True in case it was already removed)
     sorted_path.unlink(missing_ok=True)
@@ -906,7 +910,7 @@ def rollup_transitions_sorted(
     peptide_df = peptide_df[meta_cols + sample_cols]
     # Convert sample columns from log2 to linear before writing output
     if len(sample_cols) > 0:
-        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2 ** x)
+        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2**x)
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
     logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
 
@@ -1052,9 +1056,7 @@ def _process_single_protein(
         result = tukey_median_polish(matrix)
         abundances = result.col_effects.to_dict()
         # Store residuals
-        residuals = {
-            str(p): result.residuals.loc[p].to_dict() for p in result.residuals.index
-        }
+        residuals = {str(p): result.residuals.loc[p].to_dict() for p in result.residuals.index}
     elif config.method == "topn":
         # Top N by median abundance, then sum in linear space
         median_per_peptide = matrix.median(axis=1)
@@ -1209,7 +1211,7 @@ def rollup_proteins_streaming(
     protein_df = protein_df[meta_cols + sample_cols]
     # Convert sample columns from log2 to linear before writing output
     if len(sample_cols) > 0:
-        protein_df[sample_cols] = protein_df[sample_cols].apply(lambda x: 2 ** x)
+        protein_df[sample_cols] = protein_df[sample_cols].apply(lambda x: 2**x)
     protein_df.to_parquet(output_path, compression="zstd", index=False)
     logger.info(f"  Wrote protein abundances: {output_path} (linear scale)")
 

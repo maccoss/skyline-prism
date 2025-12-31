@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pyarrow as pa
@@ -36,81 +35,86 @@ LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024
 # These match the exact column headers from Skyline report exports
 SKYLINE_STANDARD_COLUMNS = {
     # Core columns for PRISM processing
-    'protein_name': 'Protein',  # Protein display name
-    'protein_accession': 'Protein Accession',  # Protein accession (UniProt, etc.)
-    'protein_gene': 'Protein Gene',  # Gene name
-    'peptide_sequence': 'Peptide',  # Unmodified sequence
-    'peptide_modified': 'Peptide Modified Sequence',  # With modifications
-    'precursor_charge': 'Precursor Charge',
-    'precursor_mz': 'Precursor Mz',
-    'fragment_ion': 'Fragment Ion',  # y7, b5, precursor, etc.
-    'product_charge': 'Product Charge',
-    'product_mz': 'Product Mz',
-    'area': 'Area',  # Transition peak area
-    'retention_time': 'Retention Time',
-    'replicate_name': 'Replicate Name',
-    'batch_name': 'Batch Name',  # Skyline's batch column
+    "protein_name": "Protein",  # Protein display name
+    "protein_accession": "Protein Accession",  # Protein accession (UniProt, etc.)
+    "protein_gene": "Protein Gene",  # Gene name
+    "peptide_sequence": "Peptide",  # Unmodified sequence
+    "peptide_modified": "Peptide Modified Sequence",  # With modifications
+    "precursor_charge": "Precursor Charge",
+    "precursor_mz": "Precursor Mz",
+    "fragment_ion": "Fragment Ion",  # y7, b5, precursor, etc.
+    "product_charge": "Product Charge",
+    "product_mz": "Product Mz",
+    "area": "Area",  # Transition peak area
+    "retention_time": "Retention Time",
+    "replicate_name": "Replicate Name",
+    "batch_name": "Batch Name",  # Skyline's batch column
     # Quality metrics
-    'detection_qvalue': 'Detection Q Value',
-    'idotp': 'Isotope Dot Product',
-    'fwhm': 'Fwhm',
-    'shape_correlation': 'Shape Correlation',
-    'coeluting': 'Coeluting',
-    'truncated': 'Truncated',
+    "detection_qvalue": "Detection Q Value",
+    "idotp": "Isotope Dot Product",
+    "fwhm": "Fwhm",
+    "shape_correlation": "Shape Correlation",
+    "coeluting": "Coeluting",
+    "truncated": "Truncated",
     # File info
-    'file_name': 'File Name',
-    'tic_area': 'Total Ion Current Area',
-    'acquired_time': 'Acquired Time',
+    "file_name": "File Name",
+    "tic_area": "Total Ion Current Area",
+    "acquired_time": "Acquired Time",
 }
 
 # Default column names - users should use these Skyline names in config
 # or override with their actual column names
 DEFAULT_COLUMNS = {
-    'abundance': 'Area',
-    'rt': 'Retention Time',
-    'peptide': 'Peptide Modified Sequence',
-    'protein': 'Protein Accession',
-    'protein_name': 'Protein',
-    'sample': 'Replicate Name',
-    'transition': 'Fragment Ion',
-    'batch': 'Batch Name',
+    "abundance": "Area",
+    "rt": "Retention Time",
+    "peptide": "Peptide Modified Sequence",
+    "protein": "Protein Accession",
+    "protein_name": "Protein",
+    "sample": "Replicate Name",
+    "transition": "Fragment Ion",
+    "batch": "Batch Name",
 }
 
 # Required columns for processing (using Skyline names)
 REQUIRED_COLUMNS = [
-    'Protein Accession',
-    'Peptide Modified Sequence',
-    'Replicate Name',
+    "Protein Accession",
+    "Peptide Modified Sequence",
+    "Replicate Name",
 ]
 
 # At least one of these abundance columns required
-ABUNDANCE_COLUMNS = ['Area', 'Total Area Fragment', 'Total Area MS1']
+ABUNDANCE_COLUMNS = ["Area", "Total Area Fragment", "Total Area MS1"]
 
 # Sample metadata column name alternatives (Skyline conventions + PRISM conventions)
 # Order matters - first match is used
-METADATA_REPLICATE_COLUMNS = ['sample', 'Replicate Name', 'ReplicateName', 'File Name']
-METADATA_SAMPLE_TYPE_COLUMNS = ['sample_type', 'Sample Type', 'SampleType']
-METADATA_BATCH_COLUMNS = ['batch', 'Batch', 'Batch Name']  # Skyline uses 'Batch Name'
+METADATA_REPLICATE_COLUMNS = ["sample", "Replicate Name", "ReplicateName", "File Name"]
+METADATA_SAMPLE_TYPE_COLUMNS = ["sample_type", "Sample Type", "SampleType"]
+METADATA_BATCH_COLUMNS = ["batch", "Batch", "Batch Name"]  # Skyline uses 'Batch Name'
 
 # Skyline Sample Type to PRISM sample_type mapping
 # Skyline options: Unknown, Standard, Quality Control, Solvent, Blank, Double Blank
 SKYLINE_SAMPLE_TYPE_MAP = {
-    'Unknown': 'experimental',
-    'Standard': 'reference',
-    'Quality Control': 'qc',
+    "Unknown": "experimental",
+    "Standard": "reference",
+    "Quality Control": "qc",
     # Others are typically excluded from analysis
-    'Solvent': 'blank',
-    'Blank': 'blank',
-    'Double Blank': 'blank',
+    "Solvent": "blank",
+    "Blank": "blank",
+    "Double Blank": "blank",
 }
 
-VALID_SAMPLE_TYPES = {'experimental', 'qc', 'reference', 'blank'}
+VALID_SAMPLE_TYPES = {"experimental", "qc", "reference", "blank"}
 
 # Default patterns for classifying samples by name
 # These can be overridden in config
 DEFAULT_SAMPLE_TYPE_PATTERNS = {
-    'reference': ['-Pool_', '-Pool', '_Pool_', '_Pool'],  # Reference samples (e.g., commercial plasma pool)
-    'qc': ['-Carl_', '-Carl', '_QC_', '_QC', '-QC_', '-QC'],  # Intra-experiment QC
+    "reference": [
+        "-Pool_",
+        "-Pool",
+        "_Pool_",
+        "_Pool",
+    ],  # Reference samples (e.g., commercial plasma pool)
+    "qc": ["-Carl_", "-Carl", "_QC_", "_QC", "-QC_", "-QC"],  # Intra-experiment QC
     # Everything else is experimental
 }
 
@@ -132,19 +136,19 @@ def classify_sample_by_name(
 
     """
     if reference_patterns is None:
-        reference_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['reference']
+        reference_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS["reference"]
     if qc_patterns is None:
-        qc_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS['qc']
+        qc_patterns = DEFAULT_SAMPLE_TYPE_PATTERNS["qc"]
 
     for pattern in reference_patterns:
         if pattern in sample_name:
-            return 'reference'
+            return "reference"
 
     for pattern in qc_patterns:
         if pattern in sample_name:
-            return 'qc'
+            return "qc"
 
-    return 'experimental'
+    return "experimental"
 
 
 def generate_sample_metadata(
@@ -172,27 +176,27 @@ def generate_sample_metadata(
     rows = []
     for batch_name, sample_names in samples_by_batch.items():
         for sample_name in sorted(sample_names):
-            sample_type = classify_sample_by_name(
-                sample_name, reference_patterns, qc_patterns
-            )
+            sample_type = classify_sample_by_name(sample_name, reference_patterns, qc_patterns)
             # Create unique sample_id combining sample name and batch
             # This ensures samples with the same name in different batches
             # are treated as separate replicates
             sample_id = f"{sample_name}__@__{batch_name}"
-            rows.append({
-                'sample_id': sample_id,
-                'sample': sample_name,
-                'sample_type': sample_type,
-                'batch': batch_name,
-            })
+            rows.append(
+                {
+                    "sample_id": sample_id,
+                    "sample": sample_name,
+                    "sample_type": sample_type,
+                    "batch": batch_name,
+                }
+            )
 
     df = pd.DataFrame(rows)
 
     # Log summary
     logger.info("Generated sample metadata:")
-    for batch in df['batch'].unique():
-        batch_df = df[df['batch'] == batch]
-        counts = batch_df['sample_type'].value_counts().to_dict()
+    for batch in df["batch"].unique():
+        batch_df = df[df["batch"] == batch]
+        counts = batch_df["sample_type"].value_counts().to_dict()
         logger.info(f"  {batch}: {counts}")
 
     return df
@@ -213,7 +217,9 @@ class ValidationResult:
 
     def __str__(self) -> str:
         if self.is_valid:
-            return f"Valid: {self.filepath.name} ({self.n_rows} rows, {self.n_replicates} replicates)"
+            return (
+                f"Valid: {self.filepath.name} ({self.n_rows} rows, {self.n_replicates} replicates)"
+            )
         else:
             issues = []
             if self.missing_required:
@@ -238,7 +244,7 @@ class MergeResult:
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Keep columns as-is - no renaming.
-    
+
     Previously this renamed Skyline columns to internal names. Now we preserve
     the original Skyline column names throughout the pipeline.
     """
@@ -281,7 +287,7 @@ def convert_skyline_csv_to_parquet(
 
     # Detect delimiter
     suffix = csv_path.suffix.lower()
-    delimiter = '\t' if suffix in ['.tsv', '.txt'] else ','
+    delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
 
     # PyArrow CSV read options for streaming
     read_options = pa_csv.ReadOptions(
@@ -310,7 +316,7 @@ def convert_skyline_csv_to_parquet(
     batch_count = 0
 
     # Use Skyline's standard column name for replicate
-    replicate_col = 'Replicate Name'
+    replicate_col = "Replicate Name"
 
     for batch in reader:
         batch_count += 1
@@ -328,14 +334,12 @@ def convert_skyline_csv_to_parquet(
         # Add batch column if specified (using Skyline's naming convention)
         if batch_name:
             batch = batch.append_column(
-                'Batch',
-                pa.array([batch_name] * len(batch), type=pa.string())
+                "Batch", pa.array([batch_name] * len(batch), type=pa.string())
             )
 
         # Add source_document column
         batch = batch.append_column(
-            'Source Document',
-            pa.array([csv_path.stem] * len(batch), type=pa.string())
+            "Source Document", pa.array([csv_path.stem] * len(batch), type=pa.string())
         )
 
         # Initialize writer with first batch's schema
@@ -343,7 +347,7 @@ def convert_skyline_csv_to_parquet(
             writer = pq.ParquetWriter(
                 output_path,
                 batch.schema,
-                compression='zstd',
+                compression="zstd",
                 compression_level=3,
             )
 
@@ -405,8 +409,8 @@ def compute_file_fingerprint(
     md5_hash = None
     if compute_md5:
         md5 = hashlib.md5()
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192 * 1024), b''):  # 8MB chunks
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192 * 1024), b""):  # 8MB chunks
                 md5.update(chunk)
         md5_hash = md5.hexdigest()
 
@@ -436,13 +440,15 @@ def compute_source_fingerprints(
     fingerprints = []
     for fp in file_paths:
         fingerprint = compute_file_fingerprint(fp, compute_md5=compute_md5)
-        fingerprints.append({
-            'path': fingerprint.path,
-            'filename': fingerprint.filename,
-            'size': fingerprint.size,
-            'mtime_iso': fingerprint.mtime_iso,
-            'md5': fingerprint.md5,
-        })
+        fingerprints.append(
+            {
+                "path": fingerprint.path,
+                "filename": fingerprint.filename,
+                "size": fingerprint.size,
+                "mtime_iso": fingerprint.mtime_iso,
+                "md5": fingerprint.md5,
+            }
+        )
     return fingerprints
 
 
@@ -473,7 +479,7 @@ def verify_source_fingerprints(
         return False, reasons
 
     # Build lookup by filename for matching
-    stored_by_name = {fp['filename']: fp for fp in stored_fingerprints}
+    stored_by_name = {fp["filename"]: fp for fp in stored_fingerprints}
 
     for current_path in current_files:
         current_path = Path(current_path).resolve()
@@ -492,7 +498,7 @@ def verify_source_fingerprints(
 
         # Check size
         current_size = current_path.stat().st_size
-        if current_size != stored['size']:
+        if current_size != stored["size"]:
             reasons.append(
                 f"Size mismatch for {filename}: "
                 f"{current_size:,} bytes vs {stored['size']:,} bytes stored"
@@ -500,10 +506,8 @@ def verify_source_fingerprints(
             continue
 
         # Check mtime
-        current_mtime = datetime.fromtimestamp(
-            current_path.stat().st_mtime, tz=timezone.utc
-        )
-        stored_mtime = datetime.fromisoformat(stored['mtime_iso'])
+        current_mtime = datetime.fromtimestamp(current_path.stat().st_mtime, tz=timezone.utc)
+        stored_mtime = datetime.fromisoformat(stored["mtime_iso"])
         if current_mtime != stored_mtime:
             reasons.append(
                 f"Modification time mismatch for {filename}: "
@@ -512,12 +516,11 @@ def verify_source_fingerprints(
             continue
 
         # Optional strict MD5 check
-        if strict and stored.get('md5'):
+        if strict and stored.get("md5"):
             current_fp = compute_file_fingerprint(current_path, compute_md5=True)
-            if current_fp.md5 != stored['md5']:
+            if current_fp.md5 != stored["md5"]:
                 reasons.append(
-                    f"MD5 mismatch for {filename}: "
-                    f"{current_fp.md5} vs {stored['md5']} stored"
+                    f"MD5 mismatch for {filename}: {current_fp.md5} vs {stored['md5']} stored"
                 )
 
     return len(reasons) == 0, reasons
@@ -537,12 +540,12 @@ def get_parquet_source_fingerprints(parquet_path: Path) -> list[dict] | None:
 
     """
     # First check for sidecar JSON file (preferred for large files)
-    sidecar_path = parquet_path.with_suffix('.fingerprints.json')
+    sidecar_path = parquet_path.with_suffix(".fingerprints.json")
     if sidecar_path.exists():
         try:
             with open(sidecar_path) as f:
                 data = json.load(f)
-                return data.get('source_fingerprints')
+                return data.get("source_fingerprints")
         except Exception as e:
             logger.debug(f"Could not read fingerprints from sidecar {sidecar_path}: {e}")
 
@@ -550,8 +553,8 @@ def get_parquet_source_fingerprints(parquet_path: Path) -> list[dict] | None:
     try:
         pf = pq.ParquetFile(parquet_path)
         metadata = pf.schema_arrow.metadata
-        if metadata and b'prism_source_fingerprints' in metadata:
-            fingerprints_json = metadata[b'prism_source_fingerprints'].decode('utf-8')
+        if metadata and b"prism_source_fingerprints" in metadata:
+            fingerprints_json = metadata[b"prism_source_fingerprints"].decode("utf-8")
             return json.loads(fingerprints_json)
     except Exception as e:
         logger.debug(f"Could not read fingerprints from {parquet_path}: {e}")
@@ -598,21 +601,17 @@ def merge_skyline_reports_streaming(
 
     # Compute source file fingerprints for cache validation
     logger.info("Computing source file fingerprints...")
-    fingerprints = compute_source_fingerprints(
-        report_paths, compute_md5=compute_fingerprint_md5
-    )
+    fingerprints = compute_source_fingerprints(report_paths, compute_md5=compute_fingerprint_md5)
 
     total_size_gb = sum(p.stat().st_size for p in report_paths) / 1e9
-    logger.info(
-        f"Merging {len(report_paths)} reports ({total_size_gb:.1f} GB total) to Parquet..."
-    )
+    logger.info(f"Merging {len(report_paths)} reports ({total_size_gb:.1f} GB total) to Parquet...")
 
     all_samples: dict[str, set[str]] = {}
     total_rows = 0
     writer: pq.ParquetWriter | None = None
 
     # Use Skyline's standard column name for replicate
-    replicate_col = 'Replicate Name'
+    replicate_col = "Replicate Name"
 
     for csv_path, batch_name in zip(report_paths, batch_names):
         csv_path = Path(csv_path)
@@ -621,7 +620,7 @@ def merge_skyline_reports_streaming(
 
         # Detect delimiter
         suffix = csv_path.suffix.lower()
-        delimiter = '\t' if suffix in ['.tsv', '.txt'] else ','
+        delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
 
         read_options = pa_csv.ReadOptions(
             use_threads=True,
@@ -657,10 +656,10 @@ def merge_skyline_reports_streaming(
 
             # Add batch and source columns (using Skyline naming conventions)
             batch = batch.append_column(
-                'Batch', pa.array([batch_name] * len(batch), type=pa.string())
+                "Batch", pa.array([batch_name] * len(batch), type=pa.string())
             )
             batch = batch.append_column(
-                'Source Document', pa.array([csv_path.stem] * len(batch), type=pa.string())
+                "Source Document", pa.array([csv_path.stem] * len(batch), type=pa.string())
             )
 
             # Create unique Sample ID combining Replicate Name and Batch
@@ -673,17 +672,14 @@ def merge_skyline_reports_streaming(
                     f"{rep}__@__{batch_name}" if rep is not None else None
                     for rep in rep_array.to_pylist()
                 ]
-                batch = batch.append_column(
-                    'Sample ID', pa.array(sample_ids, type=pa.string())
-                )
+                batch = batch.append_column("Sample ID", pa.array(sample_ids, type=pa.string()))
 
             # Normalize schema: cast timestamp columns to string for consistency
             # Different CSV files may parse date/time columns differently
             # (e.g., "Acquired Time" may be timestamp in one file, string in another)
             # Only rebuild batch if there are actually timestamp columns to convert
             timestamp_cols = [
-                i for i, fld in enumerate(batch.schema)
-                if pa.types.is_timestamp(fld.type)
+                i for i, fld in enumerate(batch.schema) if pa.types.is_timestamp(fld.type)
             ]
             if timestamp_cols:
                 # Build new schema with timestamps converted to strings
@@ -696,17 +692,14 @@ def merge_skyline_reports_streaming(
                         fld = pa.field(fld.name, pa.string())
                     new_fields.append(fld)
                     new_arrays.append(col)
-                batch = pa.RecordBatch.from_arrays(
-                    new_arrays,
-                    schema=pa.schema(new_fields)
-                )
+                batch = pa.RecordBatch.from_arrays(new_arrays, schema=pa.schema(new_fields))
 
             # Initialize or append to writer
             if writer is None:
                 writer = pq.ParquetWriter(
                     output_path,
                     batch.schema,
-                    compression='zstd',
+                    compression="zstd",
                     compression_level=3,
                 )
 
@@ -746,12 +739,12 @@ def _add_fingerprints_to_parquet(parquet_path: Path, fingerprints: list[dict]) -
 
     """
     # Write fingerprints to sidecar JSON file
-    sidecar_path = parquet_path.with_suffix('.fingerprints.json')
+    sidecar_path = parquet_path.with_suffix(".fingerprints.json")
     fingerprint_data = {
-        'prism_version': '0.2.0',
-        'source_fingerprints': fingerprints,
+        "prism_version": "0.2.0",
+        "source_fingerprints": fingerprints,
     }
-    with open(sidecar_path, 'w') as f:
+    with open(sidecar_path, "w") as f:
         json.dump(fingerprint_data, f, indent=2)
     logger.info(f"  Wrote fingerprints to {sidecar_path.name}")
 
@@ -771,7 +764,7 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
 
     # Detect delimiter
     suffix = filepath.suffix.lower()
-    sep = '\t' if suffix in ['.tsv', '.txt'] else ','
+    sep = "\t" if suffix in [".tsv", ".txt"] else ","
 
     try:
         # Read just the header first
@@ -791,9 +784,9 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
             result.is_valid = False
 
         # Warnings for missing optional columns
-        if 'idotp' not in df_head.columns:
+        if "idotp" not in df_head.columns:
             result.warnings.append("No isotope dot product column - quality filtering limited")
-        if 'detection_qvalue' not in df_head.columns:
+        if "detection_qvalue" not in df_head.columns:
             result.warnings.append("No detection Q-value column")
 
         # If valid, get some stats
@@ -802,11 +795,11 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
             df_full = _standardize_columns(df_full)
             result.n_rows = len(df_full)
             # Use Skyline column name (standardize_columns no longer renames)
-            replicate_col = 'Replicate Name'
+            replicate_col = "Replicate Name"
             if replicate_col in df_full.columns:
                 result.n_replicates = df_full[replicate_col].nunique()
-            elif 'replicate_name' in df_full.columns:
-                result.n_replicates = df_full['replicate_name'].nunique()
+            elif "replicate_name" in df_full.columns:
+                result.n_replicates = df_full["replicate_name"].nunique()
             else:
                 result.n_replicates = 0
 
@@ -818,9 +811,7 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
 
 
 def load_skyline_report(
-    filepath: Path,
-    source_name: Optional[str] = None,
-    validate: bool = True
+    filepath: Path, source_name: str | None = None, validate: bool = True
 ) -> pd.DataFrame:
     """Load a single Skyline report with standardized column names.
 
@@ -845,7 +836,7 @@ def load_skyline_report(
 
     # Detect delimiter
     suffix = filepath.suffix.lower()
-    sep = '\t' if suffix in ['.tsv', '.txt'] else ','
+    sep = "\t" if suffix in [".tsv", ".txt"] else ","
 
     # Load data
     df = pd.read_csv(filepath, sep=sep)
@@ -854,19 +845,19 @@ def load_skyline_report(
     # Add source tracking
     if source_name is None:
         source_name = filepath.stem
-    df['source_document'] = source_name
+    df["source_document"] = source_name
 
     # Create precursor_id if not present
-    if 'precursor_id' not in df.columns:
-        df['precursor_id'] = df['peptide_modified'] + '_' + df['precursor_charge'].astype(str)
+    if "precursor_id" not in df.columns:
+        df["precursor_id"] = df["peptide_modified"] + "_" + df["precursor_charge"].astype(str)
 
     # Determine primary abundance column
-    if 'abundance_fragment' in df.columns and df['abundance_fragment'].notna().any():
-        df['abundance'] = df['abundance_fragment']
-        df['abundance_type'] = 'fragment'
-    elif 'abundance_ms1' in df.columns and df['abundance_ms1'].notna().any():
-        df['abundance'] = df['abundance_ms1']
-        df['abundance_type'] = 'ms1'
+    if "abundance_fragment" in df.columns and df["abundance_fragment"].notna().any():
+        df["abundance"] = df["abundance_fragment"]
+        df["abundance_type"] = "fragment"
+    elif "abundance_ms1" in df.columns and df["abundance_ms1"].notna().any():
+        df["abundance"] = df["abundance_ms1"]
+        df["abundance_type"] = "ms1"
     else:
         raise ValueError("No valid abundance data found")
 
@@ -899,7 +890,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
 
     # Detect delimiter
     suffix = filepath.suffix.lower()
-    sep = '\t' if suffix in ['.tsv', '.txt'] else ','
+    sep = "\t" if suffix in [".tsv", ".txt"] else ","
 
     meta = pd.read_csv(filepath, sep=sep)
 
@@ -908,8 +899,8 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     for col_name in METADATA_REPLICATE_COLUMNS:
         if col_name in meta.columns:
             replicate_col = col_name
-            if col_name != 'sample':
-                meta = meta.rename(columns={col_name: 'sample'})
+            if col_name != "sample":
+                meta = meta.rename(columns={col_name: "sample"})
                 logger.info(f"Renamed '{col_name}' column to 'sample'")
             break
     if replicate_col is None:
@@ -922,8 +913,8 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     for col_name in METADATA_SAMPLE_TYPE_COLUMNS:
         if col_name in meta.columns:
             sample_type_col = col_name
-            if col_name != 'sample_type':
-                meta = meta.rename(columns={col_name: 'sample_type'})
+            if col_name != "sample_type":
+                meta = meta.rename(columns={col_name: "sample_type"})
                 logger.info(f"Renamed '{col_name}' column to 'sample_type'")
             break
     if sample_type_col is None:
@@ -933,26 +924,24 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
 
     # Normalize batch column to 'batch' (Skyline uses 'Batch Name')
     for batch_col in METADATA_BATCH_COLUMNS:
-        if batch_col in meta.columns and batch_col != 'batch':
-            meta = meta.rename(columns={batch_col: 'batch'})
+        if batch_col in meta.columns and batch_col != "batch":
+            meta = meta.rename(columns={batch_col: "batch"})
             logger.info(f"Renamed '{batch_col}' column to 'batch'")
             break
 
     # Map Skyline sample types to PRISM types
-    original_types = meta['sample_type'].unique()
+    original_types = meta["sample_type"].unique()
     skyline_types = set(original_types) & set(SKYLINE_SAMPLE_TYPE_MAP.keys())
     if skyline_types:
         logger.info(f"Mapping Skyline sample types: {list(skyline_types)}")
-        meta['sample_type'] = meta['sample_type'].map(
-            lambda x: SKYLINE_SAMPLE_TYPE_MAP.get(x, x)
-        )
+        meta["sample_type"] = meta["sample_type"].map(lambda x: SKYLINE_SAMPLE_TYPE_MAP.get(x, x))
 
     # Note if batch column is missing (will be estimated later)
-    if 'batch' not in meta.columns:
+    if "batch" not in meta.columns:
         logger.info("No batch column in metadata - batches will be estimated")
 
     # Validate sample_type values
-    invalid_types = set(meta['sample_type'].unique()) - VALID_SAMPLE_TYPES
+    invalid_types = set(meta["sample_type"].unique()) - VALID_SAMPLE_TYPES
     if invalid_types:
         raise ValueError(
             f"Invalid sample_type values: {invalid_types}. "
@@ -963,30 +952,24 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     # Check for duplicate sample names within the same batch
     # (duplicates across batches are allowed - e.g., the same reference/pool sample
     # run in multiple batches)
-    if 'batch' in meta.columns:
-        duplicates = (
-            meta.groupby(['sample', 'batch'])
-            .size()
-            .reset_index(name='count')
-        )
-        duplicates = duplicates[duplicates['count'] > 1]
+    if "batch" in meta.columns:
+        duplicates = meta.groupby(["sample", "batch"]).size().reset_index(name="count")
+        duplicates = duplicates[duplicates["count"] > 1]
         if not duplicates.empty:
-            dup_list = duplicates[['sample', 'batch']].values.tolist()
+            dup_list = duplicates[["sample", "batch"]].values.tolist()
             raise ValueError(f"Duplicate sample entries within batch: {dup_list}")
     else:
-        duplicates = meta[meta['sample'].duplicated()]['sample'].tolist()
+        duplicates = meta[meta["sample"].duplicated()]["sample"].tolist()
         if duplicates:
             raise ValueError(f"Duplicate sample entries: {duplicates}")
 
     # Ensure RunOrder is numeric if present
-    if 'RunOrder' in meta.columns:
-        meta['RunOrder'] = pd.to_numeric(meta['RunOrder'], errors='coerce')
-        if meta['RunOrder'].isna().any():
+    if "RunOrder" in meta.columns:
+        meta["RunOrder"] = pd.to_numeric(meta["RunOrder"], errors="coerce")
+        if meta["RunOrder"].isna().any():
             raise ValueError("RunOrder must be numeric")
     else:
-        logger.info(
-            "No RunOrder column in metadata - will be calculated from acquired_time"
-        )
+        logger.info("No RunOrder column in metadata - will be calculated from acquired_time")
 
     return meta
 
@@ -994,7 +977,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
 def merge_skyline_reports(
     report_paths: list[Path],
     output_path: Path,
-    sample_metadata: Optional[pd.DataFrame] = None,
+    sample_metadata: pd.DataFrame | None = None,
     partition_by_batch: bool = True,
 ) -> MergeResult:
     """Merge multiple Skyline reports into unified parquet.
@@ -1033,7 +1016,7 @@ def merge_skyline_reports(
         dfs.append(df)
 
         # Track which replicates came from which file
-        for rep in df['replicate_name'].unique():
+        for rep in df["replicate_name"].unique():
             if rep in result.replicate_sources:
                 result.warnings.append(
                     f"Replicate '{rep}' appears in multiple files: "
@@ -1046,74 +1029,60 @@ def merge_skyline_reports(
     # Join sample metadata
     if sample_metadata is not None:
         # Standardize column name for join
-        meta = sample_metadata.rename(columns={'ReplicateName': 'replicate_name'})
+        meta = sample_metadata.rename(columns={"ReplicateName": "replicate_name"})
 
         # Check for unmatched replicates
-        data_reps = set(merged['replicate_name'].unique())
-        meta_reps = set(meta['replicate_name'].unique())
+        data_reps = set(merged["replicate_name"].unique())
+        meta_reps = set(meta["replicate_name"].unique())
 
         unmatched_data = data_reps - meta_reps
         if unmatched_data:
-            result.warnings.append(
-                f"Replicates in data but not metadata: {unmatched_data}"
-            )
+            result.warnings.append(f"Replicates in data but not metadata: {unmatched_data}")
 
         unmatched_meta = meta_reps - data_reps
         if unmatched_meta:
-            result.warnings.append(
-                f"Replicates in metadata but not data: {unmatched_meta}"
-            )
+            result.warnings.append(f"Replicates in metadata but not data: {unmatched_meta}")
 
         # Merge
-        merge_cols = ['replicate_name', 'SampleType']
-        rename_map = {'SampleType': 'sample_type'}
+        merge_cols = ["replicate_name", "SampleType"]
+        rename_map = {"SampleType": "sample_type"}
 
-        if 'Batch' in meta.columns:
-            merge_cols.append('Batch')
-            rename_map['Batch'] = 'batch'
-        if 'RunOrder' in meta.columns:
-            merge_cols.append('RunOrder')
-            rename_map['RunOrder'] = 'run_order'
+        if "Batch" in meta.columns:
+            merge_cols.append("Batch")
+            rename_map["Batch"] = "batch"
+        if "RunOrder" in meta.columns:
+            merge_cols.append("RunOrder")
+            rename_map["RunOrder"] = "run_order"
 
-        merged = merged.merge(
-            meta[merge_cols],
-            on='replicate_name',
-            how='left'
-        )
+        merged = merged.merge(meta[merge_cols], on="replicate_name", how="left")
         merged = merged.rename(columns=rename_map)
 
         # Calculate run_order from acquired_time if not provided
-        if 'run_order' not in merged.columns and 'acquired_time' in merged.columns:
+        if "run_order" not in merged.columns and "acquired_time" in merged.columns:
             logger.info("Calculating run_order from acquired_time")
             # Get unique replicate/acquired_time pairs
             rep_times = (
-                merged[['replicate_name', 'acquired_time']]
+                merged[["replicate_name", "acquired_time"]]
                 .drop_duplicates()
-                .sort_values('acquired_time')
+                .sort_values("acquired_time")
             )
-            rep_times['run_order'] = range(1, len(rep_times) + 1)
+            rep_times["run_order"] = range(1, len(rep_times) + 1)
             merged = merged.merge(
-                rep_times[['replicate_name', 'run_order']],
-                on='replicate_name',
-                how='left'
+                rep_times[["replicate_name", "run_order"]], on="replicate_name", how="left"
             )
 
     # Compute stats
     result.n_rows = len(merged)
-    result.n_replicates = merged['replicate_name'].nunique()
-    result.n_precursors = merged['precursor_id'].nunique()
+    result.n_replicates = merged["replicate_name"].nunique()
+    result.n_precursors = merged["precursor_id"].nunique()
 
     # Write parquet
     logger.info(f"Writing parquet to {output_path}...")
 
-    if partition_by_batch and 'batch' in merged.columns:
+    if partition_by_batch and "batch" in merged.columns:
         # Partitioned write
         table = pa.Table.from_pandas(merged)
-        pq.write_to_dataset(
-            table,
-            root_path=str(output_path),
-            partition_cols=['batch']
-        )
+        pq.write_to_dataset(table, root_path=str(output_path), partition_cols=["batch"])
     else:
         # Single file
         merged.to_parquet(output_path, index=False)
@@ -1152,19 +1121,18 @@ def identify_internal_qcs(df: pd.DataFrame) -> tuple[set[str], set[str]]:
 
     """
     # PRTC identification - look for protein name/id patterns
-    prtc_mask = (
-        df['protein_names'].str.contains('PRTC', case=False, na=False) |
-        df['protein_ids'].str.contains('PRTC', case=False, na=False)
-    )
-    prtc_ids = set(df.loc[prtc_mask, 'precursor_id'].unique())
+    prtc_mask = df["protein_names"].str.contains("PRTC", case=False, na=False) | df[
+        "protein_ids"
+    ].str.contains("PRTC", case=False, na=False)
+    prtc_ids = set(df.loc[prtc_mask, "precursor_id"].unique())
 
     # Enolase identification - yeast enolase 1
-    eno_patterns = ['ENO1_YEAST', 'P00924', 'enolase']
+    eno_patterns = ["ENO1_YEAST", "P00924", "enolase"]
     eno_mask = pd.Series(False, index=df.index)
     for pattern in eno_patterns:
-        eno_mask |= df['protein_names'].str.contains(pattern, case=False, na=False)
-        eno_mask |= df['protein_ids'].str.contains(pattern, case=False, na=False)
-    eno_ids = set(df.loc[eno_mask, 'precursor_id'].unique())
+        eno_mask |= df["protein_names"].str.contains(pattern, case=False, na=False)
+        eno_mask |= df["protein_ids"].str.contains(pattern, case=False, na=False)
+    eno_ids = set(df.loc[eno_mask, "precursor_id"].unique())
 
     return prtc_ids, eno_ids
 
@@ -1180,18 +1148,16 @@ class BatchEstimationResult:
     details: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
-        return (
-            f"BatchEstimation: {self.n_batches} batches via '{self.method}'"
-        )
+        return f"BatchEstimation: {self.n_batches} batches via '{self.method}'"
 
 
 def estimate_batches(
     df: pd.DataFrame,
-    metadata: Optional[pd.DataFrame] = None,
+    metadata: pd.DataFrame | None = None,
     min_samples_per_batch: int = 12,
     max_samples_per_batch: int = 100,
     gap_iqr_multiplier: float = 1.5,
-    n_batches_fallback: Optional[int] = None,
+    n_batches_fallback: int | None = None,
 ) -> BatchEstimationResult:
     """Estimate batch assignments when not provided in metadata.
 
@@ -1221,60 +1187,56 @@ def estimate_batches(
 
     """
     # Get unique replicates with their properties
-    replicate_info = df.groupby('replicate_name').first().reset_index()
+    replicate_info = df.groupby("replicate_name").first().reset_index()
     n_replicates = len(replicate_info)
 
     result = BatchEstimationResult(
         batch_column=pd.Series(dtype=str),
-        method='unknown',
+        method="unknown",
         n_batches=0,
     )
 
     # Priority 1: Metadata file with Batch column (supports 'Batch' or 'Batch Name')
     if metadata is not None:
         batch_col = None
-        for col in ['Batch', 'Batch Name']:
+        for col in ["Batch", "Batch Name"]:
             if col in metadata.columns:
                 batch_col = col
                 break
 
         if batch_col is not None:
-            meta_batches = metadata.set_index('ReplicateName')[batch_col]
-            if replicate_info['replicate_name'].isin(meta_batches.index).all():
-                result.batch_column = replicate_info['replicate_name'].map(meta_batches)
-                result.method = 'metadata'
+            meta_batches = metadata.set_index("ReplicateName")[batch_col]
+            if replicate_info["replicate_name"].isin(meta_batches.index).all():
+                result.batch_column = replicate_info["replicate_name"].map(meta_batches)
+                result.method = "metadata"
                 result.n_batches = result.batch_column.nunique()
-                result.details['source'] = 'User-provided metadata file'
-                result.details['column_name'] = batch_col
+                result.details["source"] = "User-provided metadata file"
+                result.details["column_name"] = batch_col
                 logger.info(f"Batch assignment from metadata: {result.n_batches} batches")
                 return result
             else:
-                missing = set(replicate_info['replicate_name']) - set(meta_batches.index)
-                result.warnings.append(
-                    f"Metadata missing batch for replicates: {missing}"
-                )
+                missing = set(replicate_info["replicate_name"]) - set(meta_batches.index)
+                result.warnings.append(f"Metadata missing batch for replicates: {missing}")
 
     # Priority 2: Source document (different Skyline files = different batches)
-    if 'source_document' in replicate_info.columns:
-        source_docs = replicate_info['source_document'].unique()
+    if "source_document" in replicate_info.columns:
+        source_docs = replicate_info["source_document"].unique()
         if len(source_docs) > 1:
-            result.batch_column = replicate_info['source_document'].copy()
-            result.method = 'source_document'
+            result.batch_column = replicate_info["source_document"].copy()
+            result.method = "source_document"
             result.n_batches = len(source_docs)
-            result.details['source_documents'] = list(source_docs)
-            logger.info(
-                f"Batch assignment from source documents: {result.n_batches} batches"
-            )
+            result.details["source_documents"] = list(source_docs)
+            logger.info(f"Batch assignment from source documents: {result.n_batches} batches")
             return result
 
     # Priority 3: Acquisition time gaps (IQR-based outlier detection)
-    if 'acquired_time' in replicate_info.columns:
-        acq_times = pd.to_datetime(replicate_info['acquired_time'], errors='coerce')
+    if "acquired_time" in replicate_info.columns:
+        acq_times = pd.to_datetime(replicate_info["acquired_time"], errors="coerce")
         if acq_times.notna().sum() > 1:
             # Sort by acquisition time
             sorted_idx = acq_times.sort_values().index
             sorted_times = acq_times.loc[sorted_idx]
-            sorted_replicates = replicate_info.loc[sorted_idx, 'replicate_name']
+            sorted_replicates = replicate_info.loc[sorted_idx, "replicate_name"]
 
             # Calculate gaps between consecutive acquisitions (in minutes)
             gaps = sorted_times.diff()
@@ -1308,27 +1270,22 @@ def estimate_batches(
                     batch_numbers = batch_numbers.fillna(0).astype(int)
 
                     # Create batch labels
-                    batch_labels = 'batch_' + (batch_numbers + 1).astype(str)
+                    batch_labels = "batch_" + (batch_numbers + 1).astype(str)
 
                     # Map back to replicate names
                     batch_map = dict(zip(sorted_replicates, batch_labels))
-                    result.batch_column = replicate_info['replicate_name'].map(
-                        batch_map
-                    )
-                    result.method = 'acquisition_gap'
+                    result.batch_column = replicate_info["replicate_name"].map(batch_map)
+                    result.method = "acquisition_gap"
                     result.n_batches = result.batch_column.nunique()
-                    result.details['median_gap_minutes'] = float(median_gap)
-                    result.details['q1_minutes'] = float(q1)
-                    result.details['q3_minutes'] = float(q3)
-                    result.details['iqr_minutes'] = float(iqr)
-                    result.details['threshold_minutes'] = float(threshold_minutes)
-                    result.details['gap_locations'] = list(
-                        sorted_replicates[large_gaps].values
-                    )
+                    result.details["median_gap_minutes"] = float(median_gap)
+                    result.details["q1_minutes"] = float(q1)
+                    result.details["q3_minutes"] = float(q3)
+                    result.details["iqr_minutes"] = float(iqr)
+                    result.details["threshold_minutes"] = float(threshold_minutes)
+                    result.details["gap_locations"] = list(sorted_replicates[large_gaps].values)
                     # Include the actual gap sizes at break points
-                    result.details['gap_sizes_at_breaks'] = [
-                        float(gaps_minutes.loc[idx])
-                        for idx in large_gaps[large_gaps].index
+                    result.details["gap_sizes_at_breaks"] = [
+                        float(gaps_minutes.loc[idx]) for idx in large_gaps[large_gaps].index
                     ]
 
                     # Validate batch sizes
@@ -1345,8 +1302,7 @@ def estimate_batches(
                         )
 
                     logger.info(
-                        f"Batch assignment from acquisition gaps: "
-                        f"{result.n_batches} batches"
+                        f"Batch assignment from acquisition gaps: {result.n_batches} batches"
                     )
                     return result
 
@@ -1356,66 +1312,59 @@ def estimate_batches(
     else:
         # Estimate reasonable number of batches
         n_batches = max(1, n_replicates // ((min_samples_per_batch + max_samples_per_batch) // 2))
-        n_batches = min(n_batches, n_replicates // min_samples_per_batch) if n_replicates >= min_samples_per_batch else 1
+        n_batches = (
+            min(n_batches, n_replicates // min_samples_per_batch)
+            if n_replicates >= min_samples_per_batch
+            else 1
+        )
 
     if n_batches <= 1:
         # Single batch - all samples together (batch correction will be skipped)
-        result.batch_column = pd.Series(
-            ['batch_1'] * n_replicates,
-            index=replicate_info.index
-        )
-        result.method = 'single_batch'
+        result.batch_column = pd.Series(["batch_1"] * n_replicates, index=replicate_info.index)
+        result.method = "single_batch"
         result.n_batches = 1
-        result.details['reason'] = (
-            'No batch boundaries detected - single Skyline document, '
-            'no acquisition time gaps, and no forced batch division'
+        result.details["reason"] = (
+            "No batch boundaries detected - single Skyline document, "
+            "no acquisition time gaps, and no forced batch division"
         )
-        logger.info(
-            "Single batch detected - batch correction will be skipped"
-        )
+        logger.info("Single batch detected - batch correction will be skipped")
         return result
 
     # Sort by acquisition time if available, otherwise by replicate name
-    if 'acquired_time' in replicate_info.columns:
-        acq_times = pd.to_datetime(replicate_info['acquired_time'], errors='coerce')
+    if "acquired_time" in replicate_info.columns:
+        acq_times = pd.to_datetime(replicate_info["acquired_time"], errors="coerce")
         if acq_times.notna().sum() > 0:
             sort_col = acq_times
         else:
-            sort_col = replicate_info['replicate_name']
+            sort_col = replicate_info["replicate_name"]
     else:
-        sort_col = replicate_info['replicate_name']
+        sort_col = replicate_info["replicate_name"]
 
     sorted_idx = sort_col.sort_values().index
-    sorted_replicates = replicate_info.loc[sorted_idx, 'replicate_name'].reset_index(
-        drop=True
-    )
+    sorted_replicates = replicate_info.loc[sorted_idx, "replicate_name"].reset_index(drop=True)
 
     # Divide into equal batches
     batch_assignments = pd.cut(
         range(len(sorted_replicates)),
         bins=n_batches,
-        labels=[f'batch_{i+1}' for i in range(n_batches)]
+        labels=[f"batch_{i + 1}" for i in range(n_batches)],
     )
     batch_map = dict(zip(sorted_replicates, batch_assignments))
-    result.batch_column = replicate_info['replicate_name'].map(batch_map)
-    result.method = 'equal_division'
+    result.batch_column = replicate_info["replicate_name"].map(batch_map)
+    result.method = "equal_division"
     result.n_batches = n_batches
-    result.details['samples_per_batch'] = n_replicates // n_batches
+    result.details["samples_per_batch"] = n_replicates // n_batches
     result.warnings.append(
         f"No batch information available - divided {n_replicates} samples "
         f"into {n_batches} equal batches by acquisition order"
     )
 
-    logger.info(
-        f"Batch assignment by equal division: {result.n_batches} batches"
-    )
+    logger.info(f"Batch assignment by equal division: {result.n_batches} batches")
     return result
 
 
 def apply_batch_estimation(
-    df: pd.DataFrame,
-    metadata: Optional[pd.DataFrame] = None,
-    **kwargs
+    df: pd.DataFrame, metadata: pd.DataFrame | None = None, **kwargs
 ) -> tuple[pd.DataFrame, BatchEstimationResult]:
     """Apply batch estimation to a DataFrame if batch column is missing.
 
@@ -1429,12 +1378,12 @@ def apply_batch_estimation(
 
     """
     # Check if batch already assigned
-    if 'batch' in df.columns and df['batch'].notna().all():
+    if "batch" in df.columns and df["batch"].notna().all():
         # Already has batch - create a result reflecting this
         result = BatchEstimationResult(
-            batch_column=df.groupby('replicate_name')['batch'].first(),
-            method='existing',
-            n_batches=df['batch'].nunique(),
+            batch_column=df.groupby("replicate_name")["batch"].first(),
+            method="existing",
+            n_batches=df["batch"].nunique(),
         )
         return df, result
 
@@ -1442,11 +1391,13 @@ def apply_batch_estimation(
     result = estimate_batches(df, metadata=metadata, **kwargs)
 
     # Apply to DataFrame
-    batch_map = dict(zip(
-        df.groupby('replicate_name').first().reset_index()['replicate_name'],
-        result.batch_column
-    ))
+    batch_map = dict(
+        zip(
+            df.groupby("replicate_name").first().reset_index()["replicate_name"],
+            result.batch_column,
+        )
+    )
     df = df.copy()
-    df['batch'] = df['replicate_name'].map(batch_map)
+    df["batch"] = df["replicate_name"].map(batch_map)
 
     return df, result

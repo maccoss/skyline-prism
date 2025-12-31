@@ -1,12 +1,19 @@
 """Normalization module with RT-aware correction."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+
+try:
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+
+    HAS_LOWESS = True
+except ImportError:
+    HAS_LOWESS = False
 
 from .batch_correction import combat_with_reference_samples
 
@@ -18,9 +25,9 @@ class RTCorrectionResult:
     """Result of RT-aware correction."""
 
     corrected_data: pd.DataFrame
-    correction_factors: pd.DataFrame   # RT × sample correction values
-    rt_model: dict                     # Model parameters per sample
-    reference_stats: pd.DataFrame      # Per-peptide stats from reference
+    correction_factors: pd.DataFrame  # RT × sample correction values
+    rt_model: dict  # Model parameters per sample
+    reference_stats: pd.DataFrame  # Per-peptide stats from reference
 
 
 @dataclass
@@ -28,18 +35,200 @@ class NormalizationResult:
     """Result of full normalization pipeline."""
 
     normalized_data: pd.DataFrame
-    rt_correction: Optional[RTCorrectionResult]
-    global_factors: pd.Series          # Per-sample normalization factors
+    rt_correction: RTCorrectionResult | None
+    global_factors: pd.Series  # Per-sample normalization factors
     method_log: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RTLowessResult:
+    """Result of RT-lowess normalization."""
+
+    normalized_df: pd.DataFrame
+    sample_curves: dict[str, np.ndarray | None]  # Per-sample lowess curves on RT grid
+    global_curve: np.ndarray  # Median curve across all samples
+    rt_grid: np.ndarray  # RT grid points
+    frac: float  # Lowess fraction used
+
+
+# =============================================================================
+# RT-Lowess Normalization
+# =============================================================================
+
+
+def fit_all_sample_lowess(
+    peptide_df: pd.DataFrame,
+    sample_cols: list[str],
+    rt_col: str = "mean_rt",
+    rt_grid: np.ndarray | None = None,
+    frac: float = 0.3,
+    delta_frac: float = 0.01,
+) -> tuple[dict[str, np.ndarray | None], np.ndarray]:
+    """Fit lowess for all samples and return curves on RT grid.
+
+    This fits lowess ONCE per sample and caches the result.
+    Uses delta parameter for speed (skip points close together).
+
+    Args:
+        peptide_df: Wide-format DataFrame with peptide_col, mean_rt, and sample columns.
+                    Values should be in LOG2 scale.
+        sample_cols: List of sample column names
+        rt_col: Column containing retention time
+        rt_grid: RT grid points for interpolation (if None, created automatically)
+        frac: Lowess smoothing fraction (0.3 = 30% of data)
+        delta_frac: Fraction of RT range for delta parameter (speedup)
+
+    Returns:
+        Tuple of (sample_curves dict, rt_grid array)
+
+    """
+    if not HAS_LOWESS:
+        raise ImportError(
+            "statsmodels is required for RT-lowess normalization. "
+            "Install with: pip install statsmodels"
+        )
+
+    rt_values = peptide_df[rt_col].values
+    rt_min, rt_max = np.nanmin(rt_values), np.nanmax(rt_values)
+
+    if rt_grid is None:
+        rt_grid = np.linspace(rt_min, rt_max, 100)
+
+    # Delta = skip points within delta RT of each other (speedup)
+    rt_range = rt_max - rt_min
+    delta = rt_range * delta_frac
+
+    sample_curves: dict[str, np.ndarray | None] = {}
+
+    for sample in sample_cols:
+        # Get RT and abundance (log2) for this sample
+        abund_values = peptide_df[sample].values
+        valid_mask = ~np.isnan(abund_values) & ~np.isnan(rt_values)
+
+        if valid_mask.sum() < 20:
+            sample_curves[sample] = None
+            continue
+
+        rt_valid = rt_values[valid_mask]
+        abund_valid = abund_values[valid_mask]
+
+        # Sort by RT
+        sort_idx = np.argsort(rt_valid)
+        rt_sorted = rt_valid[sort_idx]
+        abund_sorted = abund_valid[sort_idx]
+
+        # Fit lowess with delta for speed
+        smoothed = lowess(abund_sorted, rt_sorted, frac=frac, delta=delta, return_sorted=True)
+
+        # Interpolate to grid
+        curve_at_grid = np.interp(
+            rt_grid, smoothed[:, 0], smoothed[:, 1], left=np.nan, right=np.nan
+        )
+        sample_curves[sample] = curve_at_grid
+
+    return sample_curves, rt_grid
+
+
+def apply_rt_lowess_normalization(
+    peptide_df: pd.DataFrame,
+    sample_cols: list[str],
+    rt_col: str = "mean_rt",
+    frac: float = 0.3,
+    n_grid_points: int = 100,
+) -> RTLowessResult:
+    """Apply RT-lowess normalization to align all samples to global median curve.
+
+    This normalizes RT-dependent systematic variation by:
+    1. Fitting lowess to log2(abundance) vs RT for each sample
+    2. Computing the global median lowess curve across all samples
+    3. Adjusting each sample so its RT profile matches the global median
+
+    The correction at each RT is: sample_lowess(RT) - global_lowess(RT)
+    This is subtracted from the original abundance.
+
+    Args:
+        peptide_df: Wide-format DataFrame with peptide_col, mean_rt, and sample columns.
+                    Values must be in LOG2 scale.
+        sample_cols: List of sample column names
+        rt_col: Column containing retention time
+        frac: Lowess smoothing fraction (default 0.3)
+        n_grid_points: Number of RT grid points for interpolation
+
+    Returns:
+        RTLowessResult with normalized DataFrame and diagnostic info
+
+    """
+    logger.info("Applying RT-lowess normalization...")
+
+    rt_values = peptide_df[rt_col].values
+    rt_min, rt_max = np.nanmin(rt_values), np.nanmax(rt_values)
+    rt_grid = np.linspace(rt_min, rt_max, n_grid_points)
+
+    # Step 1: Fit lowess for all samples
+    logger.info(f"  Fitting lowess for {len(sample_cols)} samples (frac={frac})...")
+    sample_curves, rt_grid = fit_all_sample_lowess(
+        peptide_df, sample_cols, rt_col=rt_col, rt_grid=rt_grid, frac=frac
+    )
+
+    n_valid = sum(1 for c in sample_curves.values() if c is not None)
+    logger.info(f"  {n_valid}/{len(sample_cols)} samples had enough data for lowess fit")
+
+    # Step 2: Compute global median curve
+    valid_curves = [c for c in sample_curves.values() if c is not None]
+    curves_array = np.array(valid_curves)
+    global_curve = np.nanmedian(curves_array, axis=0)
+
+    # Step 3: Apply corrections
+    logger.info("  Applying RT corrections...")
+    result_df = peptide_df.copy()
+
+    for sample in sample_cols:
+        sample_curve = sample_curves.get(sample)
+        if sample_curve is None:
+            continue
+
+        # Get RT values for all peptides
+        sample_rts = peptide_df[rt_col].values
+
+        # Vectorized interpolation: get sample and global lowess values at each RT
+        sample_vals = np.interp(sample_rts, rt_grid, sample_curve)
+        global_vals = np.interp(sample_rts, rt_grid, global_curve)
+
+        # Correction = sample_lowess - global_lowess
+        corrections = sample_vals - global_vals
+
+        # Apply: normalized = original - correction
+        result_df[sample] = peptide_df[sample] - corrections
+
+    # Compute summary stats
+    max_correction = 0.0
+    for sample in sample_cols:
+        sample_curve = sample_curves.get(sample)
+        if sample_curve is not None:
+            diff = np.abs(sample_curve - global_curve)
+            max_correction = max(max_correction, np.nanmax(diff))
+
+    logger.info(
+        f"  RT-lowess normalization complete. "
+        f"Max correction: {max_correction:.2f} log2 ({2**max_correction:.2f}x linear)"
+    )
+
+    return RTLowessResult(
+        normalized_df=result_df,
+        sample_curves=sample_curves,
+        global_curve=global_curve,
+        rt_grid=rt_grid,
+        frac=frac,
+    )
 
 
 def compute_reference_statistics(
     data: pd.DataFrame,
     reference_mask: pd.Series,
-    precursor_col: str = 'precursor_id',
-    abundance_col: str = 'abundance',
-    rt_col: str = 'retention_time',
-    replicate_col: str = 'replicate_name',
+    precursor_col: str = "precursor_id",
+    abundance_col: str = "abundance",
+    rt_col: str = "retention_time",
+    replicate_col: str = "replicate_name",
 ) -> pd.DataFrame:
     """Compute per-peptide statistics from reference replicates.
 
@@ -61,19 +250,21 @@ def compute_reference_statistics(
     """
     ref_data = data.loc[reference_mask]
 
-    stats = ref_data.groupby(precursor_col).agg({
-        abundance_col: ['mean', 'std', 'count'],
-        rt_col: 'median',
-    })
+    stats = ref_data.groupby(precursor_col).agg(
+        {
+            abundance_col: ["mean", "std", "count"],
+            rt_col: "median",
+        }
+    )
 
     # Flatten column names
-    stats.columns = ['mean_abundance', 'std_abundance', 'n_observations', 'median_rt']
+    stats.columns = ["mean_abundance", "std_abundance", "n_observations", "median_rt"]
 
     # Calculate CV
-    stats['cv'] = stats['std_abundance'] / stats['mean_abundance']
+    stats["cv"] = stats["std_abundance"] / stats["mean_abundance"]
 
     # Replace inf/nan CV with 0
-    stats['cv'] = stats['cv'].replace([np.inf, -np.inf], np.nan).fillna(0)
+    stats["cv"] = stats["cv"].replace([np.inf, -np.inf], np.nan).fillna(0)
 
     logger.info(f"Computed statistics for {len(stats)} precursors from reference")
     logger.info(f"Median CV across reference: {stats['cv'].median():.3f}")
@@ -85,7 +276,7 @@ def fit_rt_spline(
     rt: np.ndarray,
     residuals: np.ndarray,
     df: int = 5,
-    smooth: Optional[float] = None,
+    smooth: float | None = None,
 ) -> Callable:
     """Fit a smoothing spline to RT vs residuals.
 
@@ -143,16 +334,17 @@ def _fit_binned_correction(
     bin_medians = np.zeros(n_bins)
 
     for i in range(n_bins):
-        mask = (rt >= bins[i]) & (rt < bins[i+1])
+        mask = (rt >= bins[i]) & (rt < bins[i + 1])
         if mask.sum() > 0:
             bin_medians[i] = np.median(residuals[mask])
 
     # Interpolate between bin centers
     return interpolate.interp1d(
-        bin_centers, bin_medians,
-        kind='linear',
+        bin_centers,
+        bin_medians,
+        kind="linear",
         bounds_error=False,
-        fill_value=(bin_medians[0], bin_medians[-1])
+        fill_value=(bin_medians[0], bin_medians[-1]),
     )
 
 
@@ -160,11 +352,11 @@ def rt_correction_from_reference(
     data: pd.DataFrame,
     reference_stats: pd.DataFrame,
     reference_mask: pd.Series,
-    precursor_col: str = 'precursor_id',
-    abundance_col: str = 'abundance',
-    rt_col: str = 'retention_time',
-    replicate_col: str = 'replicate_name',
-    batch_col: Optional[str] = 'batch',
+    precursor_col: str = "precursor_id",
+    abundance_col: str = "abundance",
+    rt_col: str = "retention_time",
+    replicate_col: str = "replicate_name",
+    batch_col: str | None = "batch",
     spline_df: int = 5,
     per_batch: bool = True,
 ) -> RTCorrectionResult:
@@ -195,17 +387,17 @@ def rt_correction_from_reference(
 
     # Get reference mean abundance per precursor
     data = data.merge(
-        reference_stats[['mean_abundance', 'median_rt']],
+        reference_stats[["mean_abundance", "median_rt"]],
         left_on=precursor_col,
         right_index=True,
-        how='left'
+        how="left",
     )
 
     # Calculate residuals (observed - reference mean)
-    data['residual'] = data[abundance_col] - data['mean_abundance']
+    data["residual"] = data[abundance_col] - data["mean_abundance"]
 
     # Use reference RT for consistency
-    data['rt_for_model'] = data['median_rt']
+    data["rt_for_model"] = data["median_rt"]
 
     # Get samples and batches
     samples = data[replicate_col].unique()
@@ -226,63 +418,64 @@ def rt_correction_from_reference(
                 logger.warning(f"No reference samples in batch {batch}")
                 continue
 
-            rt_values = ref_data['rt_for_model'].values
-            residuals = ref_data['residual'].values
+            rt_values = ref_data["rt_for_model"].values
+            residuals = ref_data["residual"].values
 
             # Fit spline
             spline = fit_rt_spline(rt_values, residuals, df=spline_df)
 
             # Store model
-            rt_models[f'batch_{batch}'] = {
-                'spline': spline,
-                'rt_range': (rt_values.min(), rt_values.max()),
+            rt_models[f"batch_{batch}"] = {
+                "spline": spline,
+                "rt_range": (rt_values.min(), rt_values.max()),
             }
 
             # Apply to all samples in this batch
             batch_samples = data.loc[batch_mask, replicate_col].unique()
             for sample in batch_samples:
                 sample_mask = data[replicate_col] == sample
-                sample_rts = data.loc[sample_mask, 'rt_for_model'].values
+                sample_rts = data.loc[sample_mask, "rt_for_model"].values
                 correction_factors[sample] = spline(sample_rts)
 
     else:
         # Global model from all reference samples
         ref_data = data.loc[reference_mask]
 
-        rt_values = ref_data['rt_for_model'].values
-        residuals = ref_data['residual'].values
+        rt_values = ref_data["rt_for_model"].values
+        residuals = ref_data["residual"].values
 
         spline = fit_rt_spline(rt_values, residuals, df=spline_df)
-        rt_models['global'] = {
-            'spline': spline,
-            'rt_range': (rt_values.min(), rt_values.max()),
+        rt_models["global"] = {
+            "spline": spline,
+            "rt_range": (rt_values.min(), rt_values.max()),
         }
 
         # Apply to all samples
         for sample in samples:
             sample_mask = data[replicate_col] == sample
-            sample_rts = data.loc[sample_mask, 'rt_for_model'].values
+            sample_rts = data.loc[sample_mask, "rt_for_model"].values
             correction_factors[sample] = spline(sample_rts)
 
     # Apply corrections
-    data['rt_correction'] = 0.0
+    data["rt_correction"] = 0.0
     for sample, corrections in correction_factors.items():
         sample_mask = data[replicate_col] == sample
-        data.loc[sample_mask, 'rt_correction'] = corrections
+        data.loc[sample_mask, "rt_correction"] = corrections
 
-    data['abundance_rt_corrected'] = data[abundance_col] - data['rt_correction']
+    data["abundance_rt_corrected"] = data[abundance_col] - data["rt_correction"]
 
     # Clean up temporary columns
     corrected_data = data.drop(
-        columns=['residual', 'rt_for_model', 'mean_abundance', 'median_rt'],
-        errors='ignore'
+        columns=["residual", "rt_for_model", "mean_abundance", "median_rt"], errors="ignore"
     )
 
     # Build correction factors DataFrame
-    cf_df = pd.DataFrame({
-        sample: data.loc[data[replicate_col] == sample, 'rt_correction'].values
-        for sample in samples
-    })
+    cf_df = pd.DataFrame(
+        {
+            sample: data.loc[data[replicate_col] == sample, "rt_correction"].values
+            for sample in samples
+        }
+    )
 
     return RTCorrectionResult(
         corrected_data=corrected_data,
@@ -294,8 +487,8 @@ def rt_correction_from_reference(
 
 def median_normalize(
     data: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    replicate_col: str = 'replicate_name',
+    abundance_col: str = "abundance",
+    replicate_col: str = "replicate_name",
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Apply median centering normalization.
 
@@ -324,18 +517,18 @@ def median_normalize(
     norm_factors = sample_medians - global_median
 
     # Apply
-    data['norm_factor'] = data[replicate_col].map(norm_factors)
-    data[f'{abundance_col}_normalized'] = data[abundance_col] - data['norm_factor']
+    data["norm_factor"] = data[replicate_col].map(norm_factors)
+    data[f"{abundance_col}_normalized"] = data[abundance_col] - data["norm_factor"]
 
     logger.info(f"Median normalization: max shift = {norm_factors.abs().max():.3f}")
 
-    return data.drop(columns=['norm_factor']), norm_factors
+    return data.drop(columns=["norm_factor"]), norm_factors
 
 
 def vsn_normalize(
     data: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    replicate_col: str = 'replicate_name',
+    abundance_col: str = "abundance",
+    replicate_col: str = "replicate_name",
     optimize_params: bool = False,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Apply Variance Stabilizing Normalization (VSN) using arcsinh transformation.
@@ -408,7 +601,7 @@ def vsn_normalize(
                 return 1e6
 
             # Try multiple starting points
-            best_a, best_score = 1.0 / np.median(data_clean), float('inf')
+            best_a, best_score = 1.0 / np.median(data_clean), float("inf")
 
             starting_points = [
                 [1.0, 0.0],
@@ -423,8 +616,8 @@ def vsn_normalize(
                     result = optimize.minimize(
                         variance_heterogeneity,
                         start,
-                        method='Nelder-Mead',
-                        options={'maxiter': 500},
+                        method="Nelder-Mead",
+                        options={"maxiter": 500},
                     )
                     if result.success and result.fun < best_score:
                         best_a = result.x[0]
@@ -454,7 +647,7 @@ def vsn_normalize(
 
         transformed, a_param = vsn_transform_sample(values, optimize=optimize_params)
 
-        data.loc[sample_mask, f'{abundance_col}_normalized'] = transformed
+        data.loc[sample_mask, f"{abundance_col}_normalized"] = transformed
         vsn_params[sample] = a_param
 
     logger.info(f"VSN normalization applied (optimize_params={optimize_params})")
@@ -464,9 +657,9 @@ def vsn_normalize(
 
 def quantile_normalize(
     data: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    replicate_col: str = 'replicate_name',
-    precursor_col: str = 'precursor_id',
+    abundance_col: str = "abundance",
+    replicate_col: str = "replicate_name",
+    precursor_col: str = "precursor_id",
 ) -> pd.DataFrame:
     """Apply quantile normalization.
 
@@ -490,7 +683,7 @@ def quantile_normalize(
     )
 
     # Rank each column
-    ranks = matrix.rank(method='average')
+    ranks = matrix.rank(method="average")
 
     # Get sorted values per column, compute row means
     sorted_vals = np.sort(matrix.values, axis=0)
@@ -499,44 +692,34 @@ def quantile_normalize(
     # Map ranks back to mean values
     n_rows = len(rank_means)
     normalized = ranks.apply(
-        lambda col: np.interp(
-            col.values,
-            np.arange(1, n_rows + 1),
-            rank_means
-        )
+        lambda col: np.interp(col.values, np.arange(1, n_rows + 1), rank_means)
     )
 
     # Melt back to long format
     normalized = normalized.reset_index().melt(
-        id_vars=[precursor_col],
-        var_name=replicate_col,
-        value_name=f'{abundance_col}_normalized'
+        id_vars=[precursor_col], var_name=replicate_col, value_name=f"{abundance_col}_normalized"
     )
 
     # Merge back
-    data = data.merge(
-        normalized,
-        on=[precursor_col, replicate_col],
-        how='left'
-    )
+    data = data.merge(normalized, on=[precursor_col, replicate_col], how="left")
 
     return data
 
 
 def normalize_pipeline(
     data: pd.DataFrame,
-    sample_type_col: str = 'sample_type',
-    precursor_col: str = 'precursor_id',
-    abundance_col: str = 'abundance',
-    rt_col: str = 'retention_time',
-    replicate_col: str = 'replicate_name',
-    batch_col: str = 'batch',
+    sample_type_col: str = "sample_type",
+    precursor_col: str = "precursor_id",
+    abundance_col: str = "abundance",
+    rt_col: str = "retention_time",
+    replicate_col: str = "replicate_name",
+    batch_col: str = "batch",
     rt_correction: bool = True,
-    global_method: str = 'median',
+    global_method: str = "median",
     spline_df: int = 5,
     per_batch: bool = True,
     batch_correction: bool = False,
-    batch_correction_params: Optional[dict] = None,
+    batch_correction_params: dict | None = None,
 ) -> NormalizationResult:
     """Run full normalization pipeline.
 
@@ -569,7 +752,7 @@ def normalize_pipeline(
     data = data.copy()
 
     # Identify reference samples
-    reference_mask = data[sample_type_col] == 'reference'
+    reference_mask = data[sample_type_col] == "reference"
     n_reference = data.loc[reference_mask, replicate_col].nunique()
     logger.info(f"Found {n_reference} reference replicates")
 
@@ -578,7 +761,8 @@ def normalize_pipeline(
 
     # Step 1: Compute reference statistics
     ref_stats = compute_reference_statistics(
-        data, reference_mask,
+        data,
+        reference_mask,
         precursor_col=precursor_col,
         abundance_col=abundance_col,
         rt_col=rt_col,
@@ -592,7 +776,9 @@ def normalize_pipeline(
 
     if rt_correction:
         rt_result = rt_correction_from_reference(
-            data, ref_stats, reference_mask,
+            data,
+            ref_stats,
+            reference_mask,
             precursor_col=precursor_col,
             abundance_col=abundance_col,
             rt_col=rt_col,
@@ -602,11 +788,11 @@ def normalize_pipeline(
             per_batch=per_batch,
         )
         data = rt_result.corrected_data
-        working_abundance = 'abundance_rt_corrected'
+        working_abundance = "abundance_rt_corrected"
         method_log.append(f"Applied RT correction (df={spline_df}, per_batch={per_batch})")
 
     # Step 3: Global normalization
-    if global_method == 'median':
+    if global_method == "median":
         data, norm_factors = median_normalize(
             data,
             abundance_col=working_abundance,
@@ -614,7 +800,7 @@ def normalize_pipeline(
         )
         method_log.append("Applied median normalization")
 
-    elif global_method == 'vsn':
+    elif global_method == "vsn":
         data, norm_factors = vsn_normalize(
             data,
             abundance_col=working_abundance,
@@ -623,7 +809,7 @@ def normalize_pipeline(
         )
         method_log.append("Applied VSN (variance stabilizing) normalization")
 
-    elif global_method == 'quantile':
+    elif global_method == "quantile":
         data = quantile_normalize(
             data,
             abundance_col=working_abundance,
@@ -633,7 +819,7 @@ def normalize_pipeline(
         norm_factors = pd.Series()  # Quantile norm doesn't have simple factors
         method_log.append("Applied quantile normalization")
 
-    elif global_method == 'none':
+    elif global_method == "none":
         norm_factors = pd.Series()
         method_log.append("No global normalization applied")
 
@@ -651,19 +837,19 @@ def normalize_pipeline(
                 logger.warning(f"Only {n_batches} batch(es) found - skipping batch correction")
             else:
                 # Determine which abundance column to use
-                if 'abundance_normalized' in data.columns:
-                    input_abundance = 'abundance_normalized'
-                elif 'abundance_rt_corrected' in data.columns:
-                    input_abundance = 'abundance_rt_corrected'
+                if "abundance_normalized" in data.columns:
+                    input_abundance = "abundance_normalized"
+                elif "abundance_rt_corrected" in data.columns:
+                    input_abundance = "abundance_rt_corrected"
                 else:
                     input_abundance = abundance_col
 
                 # Get ComBat parameters
                 combat_params = batch_correction_params or {}
-                par_prior = combat_params.get('par_prior', True)
-                mean_only = combat_params.get('mean_only', False)
-                evaluate = combat_params.get('evaluate', True)
-                fallback_on_failure = combat_params.get('fallback_on_failure', True)
+                par_prior = combat_params.get("par_prior", True)
+                mean_only = combat_params.get("mean_only", False)
+                evaluate = combat_params.get("evaluate", True)
+                fallback_on_failure = combat_params.get("fallback_on_failure", True)
 
                 logger.info(f"Applying ComBat batch correction across {n_batches} batches")
 
@@ -683,8 +869,8 @@ def normalize_pipeline(
                     )
 
                     # Store batch-corrected values
-                    corrected_col = f'{input_abundance}_batch_corrected'
-                    data['abundance_batch_corrected'] = combat_result[corrected_col]
+                    corrected_col = f"{input_abundance}_batch_corrected"
+                    data["abundance_batch_corrected"] = combat_result[corrected_col]
 
                     # Log results
                     if evaluation is not None:

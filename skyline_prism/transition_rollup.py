@@ -121,11 +121,11 @@ class AdaptiveRollupParams:
     beta_shape_corr_outlier: float = 0.0
 
     # Feature normalization parameters (learned from data)
-    mz_min: float = 0.0      # Minimum m/z for normalization
-    mz_max: float = 2000.0   # Maximum m/z for normalization
+    mz_min: float = 0.0  # Minimum m/z for normalization
+    mz_max: float = 2000.0  # Maximum m/z for normalization
     log_intensity_center: float = 15.0  # Centering value for log2(intensity)
     sqrt_intensity_center: float = 100.0  # Centering value for sqrt(intensity)
-    sqrt_intensity_scale: float = 100.0   # Scale for sqrt(intensity) normalization
+    sqrt_intensity_scale: float = 100.0  # Scale for sqrt(intensity) normalization
 
     # Fixed threshold for counting "low" shape correlations
     # Fraction of samples with shape_corr < this threshold is used as a feature
@@ -133,7 +133,7 @@ class AdaptiveRollupParams:
     shape_corr_low_threshold: float = 0.5
 
     # Fallback settings
-    fallback_to_sum: bool = True      # Fall back to sum if no improvement
+    fallback_to_sum: bool = True  # Fall back to sum if no improvement
     min_improvement_pct: float = 0.1  # Minimum CV improvement required
 
 
@@ -145,15 +145,15 @@ class AdaptiveRollupResult:
     and decision on whether to use learned weights or fall back to sum.
     """
 
-    params: AdaptiveRollupParams         # Learned (or default) parameters
-    use_adaptive_weights: bool           # Whether to use learned weights
-    reference_cv_sum: float              # CV with simple sum (baseline)
-    reference_cv_adaptive: float         # CV with learned weights
-    qc_cv_sum: float                     # QC CV with simple sum
-    qc_cv_adaptive: float                # QC CV with learned weights
-    improvement_pct: float               # Relative improvement on reference
-    qc_improvement_pct: float            # Relative improvement on QC
-    fallback_reason: str | None          # Reason for fallback if applicable
+    params: AdaptiveRollupParams  # Learned (or default) parameters
+    use_adaptive_weights: bool  # Whether to use learned weights
+    reference_cv_sum: float  # CV with simple sum (baseline)
+    reference_cv_adaptive: float  # CV with learned weights
+    qc_cv_sum: float  # QC CV with simple sum
+    qc_cv_adaptive: float  # QC CV with learned weights
+    improvement_pct: float  # Relative improvement on reference
+    qc_improvement_pct: float  # Relative improvement on QC
+    fallback_reason: str | None  # Reason for fallback if applicable
 
 
 def compute_adaptive_weights(
@@ -281,9 +281,7 @@ def rollup_peptide_adaptive(
     mz_aligned = mz_values.reindex(intensity_matrix.index).fillna(0).values
 
     # Compute weights
-    weights = compute_adaptive_weights(
-        mean_log_intensity, mz_aligned, median_shape_corr, params
-    )
+    weights = compute_adaptive_weights(mean_log_intensity, mz_aligned, median_shape_corr, params)
 
     # Normalize weights to sum to n_transitions (preserves sum magnitude)
     weight_sum = weights.sum()
@@ -294,7 +292,7 @@ def rollup_peptide_adaptive(
         normalized_weights = weights * (n_transitions / weight_sum)
 
     # Convert to linear space for aggregation
-    linear_matrix = 2 ** intensity_matrix
+    linear_matrix = 2**intensity_matrix
 
     abundances = pd.Series(index=intensity_matrix.columns, dtype=float)
     uncertainties = pd.Series(index=intensity_matrix.columns, dtype=float)
@@ -428,9 +426,7 @@ def _precompute_adaptive_metrics(
 
     # Filter out MS1 precursor ions if requested (default behavior)
     if exclude_precursor and transition_col in filtered.columns:
-        filtered = filtered[
-            ~filtered[transition_col].astype(str).str.startswith('precursor')
-        ]
+        filtered = filtered[~filtered[transition_col].astype(str).str.startswith("precursor")]
 
     # Create composite sample identifier if batch column exists and there are duplicates
     if batch_col and batch_col in filtered.columns:
@@ -441,10 +437,10 @@ def _precompute_adaptive_metrics(
 
         if has_dups:
             # Create composite key: "sample::batch"
-            filtered['_sample_batch'] = (
-                filtered[sample_col].astype(str) + '::' + filtered[batch_col].astype(str)
+            filtered["_sample_batch"] = (
+                filtered[sample_col].astype(str) + "::" + filtered[batch_col].astype(str)
             )
-            composite_col = '_sample_batch'
+            composite_col = "_sample_batch"
             unique_sample_batches = filtered[composite_col].unique().tolist()
         else:
             composite_col = sample_col
@@ -466,22 +462,23 @@ def _precompute_adaptive_metrics(
     # Create unique transition identifier including precursor and product charge
     # A transition is defined by precursor m/z -> product m/z combination
     # y19+2 from precursor 3+ and y19+2 from precursor 4+ are DIFFERENT transitions
-    product_charge_col = 'Product Charge'
-    precursor_charge_col = 'Precursor Charge'
+    product_charge_col = "Product Charge"
+    precursor_charge_col = "Precursor Charge"
     if product_charge_col in filtered.columns and precursor_charge_col in filtered.columns:
         # Full transition ID: FragmentIon_ProductCharge_PrecursorCharge
-        filtered['_transition_id'] = (
-            filtered[transition_col].astype(str) + '_' +
-            filtered[product_charge_col].astype(str) + '_' +
-            filtered[precursor_charge_col].astype(str)
+        filtered["_transition_id"] = (
+            filtered[transition_col].astype(str)
+            + "_"
+            + filtered[product_charge_col].astype(str)
+            + "_"
+            + filtered[precursor_charge_col].astype(str)
         )
-        trans_id_col = '_transition_id'
+        trans_id_col = "_transition_id"
     elif product_charge_col in filtered.columns:
-        filtered['_transition_id'] = (
-            filtered[transition_col].astype(str) + '_' +
-            filtered[product_charge_col].astype(str)
+        filtered["_transition_id"] = (
+            filtered[transition_col].astype(str) + "_" + filtered[product_charge_col].astype(str)
         )
-        trans_id_col = '_transition_id'
+        trans_id_col = "_transition_id"
     else:
         trans_id_col = transition_col
 
@@ -490,12 +487,12 @@ def _precompute_adaptive_metrics(
     # We'll handle zeros properly in the weighted sum calculation
     intensity_vals = filtered[abundance_col].values.astype(float)
     # Clip to 1 for log2 calculation (for means/metrics), but mark zeros
-    filtered['_intensity_is_zero'] = intensity_vals <= 0
-    filtered['_log2_intensity'] = np.log2(np.maximum(intensity_vals, 1.0))
-    filtered['_sqrt_intensity'] = np.sqrt(np.maximum(intensity_vals, 0.0))
+    filtered["_intensity_is_zero"] = intensity_vals <= 0
+    filtered["_log2_intensity"] = np.log2(np.maximum(intensity_vals, 1.0))
+    filtered["_sqrt_intensity"] = np.sqrt(np.maximum(intensity_vals, 0.0))
 
     if has_shape_corr:
-        filtered['_shape_low'] = (
+        filtered["_shape_low"] = (
             filtered[shape_corr_col].fillna(1.0) < shape_corr_low_threshold
         ).astype(float)
 
@@ -504,19 +501,19 @@ def _precompute_adaptive_metrics(
 
     # Build aggregation dict - compute all metrics in ONE groupby
     agg_dict = {
-        '_log2_intensity': ['mean', 'first'],  # mean for metric, first for sample values
-        '_sqrt_intensity': 'mean',
+        "_log2_intensity": ["mean", "first"],  # mean for metric, first for sample values
+        "_sqrt_intensity": "mean",
     }
     if has_mz:
-        agg_dict[mz_col] = 'first'  # m/z is constant per transition
+        agg_dict[mz_col] = "first"  # m/z is constant per transition
     if has_shape_corr:
-        agg_dict[shape_corr_col] = ['median', 'max']
-        agg_dict['_shape_low'] = 'mean'  # Mean of 0/1 = fraction below threshold
+        agg_dict[shape_corr_col] = ["median", "max"]
+        agg_dict["_shape_low"] = "mean"  # Mean of 0/1 = fraction below threshold
 
     # Aggregate per transition (across all samples)
     trans_stats = filtered.groupby(group_cols, sort=False).agg(agg_dict)
     # Flatten column names: ('_log2_intensity', 'mean') -> 'log2_intensity_mean'
-    trans_stats.columns = ['_'.join(col).lstrip('_') for col in trans_stats.columns]
+    trans_stats.columns = ["_".join(col).lstrip("_") for col in trans_stats.columns]
     trans_stats = trans_stats.reset_index()
 
     # Count transitions per peptide to filter by min_transitions
@@ -528,7 +525,7 @@ def _precompute_adaptive_metrics(
 
     # Compute normalization bounds from aggregated stats
     if has_mz:
-        mz_col_agg = f'{mz_col}_first'
+        mz_col_agg = f"{mz_col}_first"
         valid_mz = trans_stats[mz_col_agg][trans_stats[mz_col_agg] > 0]
         mz_min = float(valid_mz.min()) if len(valid_mz) > 0 else 0.0
         mz_max = float(valid_mz.max()) if len(valid_mz) > 0 else 2000.0
@@ -536,7 +533,7 @@ def _precompute_adaptive_metrics(
         mz_min, mz_max = 0.0, 2000.0
 
     # Column names after flattening: 'log2_intensity_mean', 'sqrt_intensity_mean'
-    log_int_col = 'log2_intensity_mean'
+    log_int_col = "log2_intensity_mean"
     valid_log_int = trans_stats[log_int_col].dropna()
     log_intensity_center = float(valid_log_int.median()) if len(valid_log_int) > 0 else 15.0
 
@@ -563,7 +560,7 @@ def _precompute_adaptive_metrics(
         index=[peptide_col, trans_id_col],
         columns=composite_col,
         values=abundance_col,  # Raw linear values, not log2
-        aggfunc='first',
+        aggfunc="first",
     )
 
     # Ensure all samples present
@@ -580,10 +577,9 @@ def _precompute_adaptive_metrics(
     trans_stats_indexed = trans_stats.set_index(peptide_col)
 
     # Define column names for extraction
-    shape_med_col = f'{shape_corr_col}_median' if has_shape_corr else None
-    shape_max_col = f'{shape_corr_col}_max' if has_shape_corr else None
-    shape_low_col = 'shape_low_mean' if has_shape_corr else None
-
+    shape_med_col = f"{shape_corr_col}_median" if has_shape_corr else None
+    shape_max_col = f"{shape_corr_col}_max" if has_shape_corr else None
+    shape_low_col = "shape_low_mean" if has_shape_corr else None
 
     results = {}
 
@@ -714,7 +710,7 @@ def _rollup_with_adaptive_params(
 
         results[peptide] = abundances
 
-    return pd.DataFrame.from_dict(results, orient='index', columns=sample_names)
+    return pd.DataFrame.from_dict(results, orient="index", columns=sample_names)
 
 
 def _compute_median_cv_for_adaptive(abundances: pd.DataFrame) -> float:
@@ -731,7 +727,7 @@ def _compute_median_cv_for_adaptive(abundances: pd.DataFrame) -> float:
         return np.nan
 
     # Convert to linear scale
-    linear = 2 ** abundances
+    linear = 2**abundances
 
     # Calculate CV per peptide (across samples)
     means = linear.mean(axis=1)
@@ -788,7 +784,7 @@ def _rollup_all_peptides_sum_for_adaptive(
     # Filter out MS1 precursor ions if requested (default behavior)
     if exclude_precursor and transition_col in filtered_data.columns:
         filtered_data = filtered_data[
-            ~filtered_data[transition_col].astype(str).str.startswith('precursor')
+            ~filtered_data[transition_col].astype(str).str.startswith("precursor")
         ]
 
     # Create composite sample identifier if batch column exists and there are duplicates
@@ -800,10 +796,10 @@ def _rollup_all_peptides_sum_for_adaptive(
 
         if has_dups:
             # Create composite key: "sample::batch"
-            filtered_data['_sample_batch'] = (
-                filtered_data[sample_col] + '::' + filtered_data[batch_col].astype(str)
+            filtered_data["_sample_batch"] = (
+                filtered_data[sample_col] + "::" + filtered_data[batch_col].astype(str)
             )
-            composite_col = '_sample_batch'
+            composite_col = "_sample_batch"
             # Get unique sample-batch combinations for the requested samples
             unique_sample_batches = filtered_data[composite_col].unique().tolist()
         else:
@@ -815,19 +811,17 @@ def _rollup_all_peptides_sum_for_adaptive(
 
     # Vectorized: sum and count transitions per peptide x sample using groupby
     # This replaces the per-peptide loop with a single groupby operation
-    grouped = filtered_data.groupby([peptide_col, composite_col])[abundance_col].agg(['sum', 'count'])
+    grouped = filtered_data.groupby([peptide_col, composite_col])[abundance_col].agg(
+        ["sum", "count"]
+    )
     grouped = grouped.reset_index()
-    grouped.columns = [peptide_col, 'sample', 'abundance_sum', 'n_transitions']
+    grouped.columns = [peptide_col, "sample", "abundance_sum", "n_transitions"]
 
     # Apply minimum transitions filter
-    grouped.loc[grouped['n_transitions'] < min_transitions, 'abundance_sum'] = np.nan
+    grouped.loc[grouped["n_transitions"] < min_transitions, "abundance_sum"] = np.nan
 
     # Pivot to peptide x sample matrix
-    peptide_abundances = grouped.pivot(
-        index=peptide_col,
-        columns='sample',
-        values='abundance_sum'
-    )
+    peptide_abundances = grouped.pivot(index=peptide_col, columns="sample", values="abundance_sum")
 
     # Ensure all samples are present in correct order
     for sample in unique_sample_batches:
@@ -932,8 +926,14 @@ def learn_adaptive_weights(
     # Pre-compute metrics for reference samples
     logger.info("  Pre-computing metrics for reference samples...")
     ref_metrics, norm_params = _precompute_adaptive_metrics(
-        data, reference_samples, peptide_col, transition_col,
-        sample_col, abundance_col, mz_col, shape_corr_col,
+        data,
+        reference_samples,
+        peptide_col,
+        transition_col,
+        sample_col,
+        abundance_col,
+        mz_col,
+        shape_corr_col,
         shape_corr_low_threshold=initial_params.shape_corr_low_threshold,
     )
     logger.info(f"  Pre-computed {len(ref_metrics)} peptides")
@@ -990,9 +990,9 @@ def learn_adaptive_weights(
 
     # Bounds for 3 parameters
     bounds = [
-        (0.0, 1.0),     # beta_relative_intensity (must be non-negative)
-        (-1.0, 1.0),    # beta_mz (unconstrained)
-        (-1.0, 0.0),    # beta_shape_corr_outlier (penalize high outlier fraction)
+        (0.0, 1.0),  # beta_relative_intensity (must be non-negative)
+        (-1.0, 1.0),  # beta_mz (unconstrained)
+        (-1.0, 0.0),  # beta_shape_corr_outlier (penalize high outlier fraction)
     ]
 
     logger.info("  Optimizing 3 beta coefficients...")
@@ -1058,8 +1058,14 @@ def learn_adaptive_weights(
     if len(qc_samples) >= 2:
         # Pre-compute metrics for QC samples
         qc_metrics, _ = _precompute_adaptive_metrics(
-            data, qc_samples, peptide_col, transition_col,
-            sample_col, abundance_col, mz_col, shape_corr_col,
+            data,
+            qc_samples,
+            peptide_col,
+            transition_col,
+            sample_col,
+            abundance_col,
+            mz_col,
+            shape_corr_col,
             shape_corr_low_threshold=learned_params.shape_corr_low_threshold,
         )
 
@@ -1083,9 +1089,7 @@ def learn_adaptive_weights(
             )
         elif qc_cv_adaptive > qc_cv_sum * 1.05:  # QC got worse by more than 5%
             use_adaptive_weights = False
-            fallback_reason = (
-                f"QC CV increased from {qc_cv_sum:.4f} to {qc_cv_adaptive:.4f}"
-            )
+            fallback_reason = f"QC CV increased from {qc_cv_sum:.4f} to {qc_cv_adaptive:.4f}"
     else:
         logger.warning("  Not enough QC samples for validation")
         # Without QC validation, require higher improvement threshold
@@ -1155,7 +1159,7 @@ def rollup_peptide_topn(
         )
 
     # Convert to linear for intensity calculations
-    linear_intensity = 2 ** intensity_matrix
+    linear_intensity = 2**intensity_matrix
 
     # Step 1: Score and rank transitions
     if selection_method == "correlation":
@@ -1364,8 +1368,7 @@ def rollup_transitions_to_peptides(
 
             # Roll up using adaptive weights
             abundances, uncertainties, weights, n_used = rollup_peptide_adaptive(
-                intensity_matrix, mz_values, shape_corr_matrix,
-                adaptive_params, min_transitions
+                intensity_matrix, mz_values, shape_corr_matrix, adaptive_params, min_transitions
             )
             all_weights[peptide] = weights
 
@@ -1393,4 +1396,3 @@ def rollup_transitions_to_peptides(
         n_transitions_used=n_transitions_used,
         median_polish_results=all_median_polish_results if all_median_polish_results else None,
     )
-

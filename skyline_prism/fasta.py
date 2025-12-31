@@ -11,7 +11,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -26,32 +25,24 @@ logger = logging.getLogger(__name__)
 # cleave_after=True means cleave C-terminal to match; False means N-terminal
 ENZYME_RULES: dict[str, tuple[str, bool]] = {
     # Trypsin: cleave after K or R, unless followed by P
-    'trypsin': (r'[KR](?!P)', True),
-
+    "trypsin": (r"[KR](?!P)", True),
     # Trypsin/P: cleave after K or R, even if followed by P
-    'trypsin/p': (r'[KR]', True),
-
+    "trypsin/p": (r"[KR]", True),
     # Lys-C: cleave after K
-    'lysc': (r'K', True),
-
+    "lysc": (r"K", True),
     # Lys-N: cleave before K
-    'lysn': (r'K', False),
-
+    "lysn": (r"K", False),
     # Arg-C: cleave after R
-    'argc': (r'R', True),
-
+    "argc": (r"R", True),
     # Asp-N: cleave before D
-    'aspn': (r'D', False),
-
+    "aspn": (r"D", False),
     # Glu-C (V8): cleave after E (and sometimes D)
-    'gluc': (r'E', True),
-
+    "gluc": (r"E", True),
     # Chymotrypsin: cleave after F, Y, W, L (not followed by P)
-    'chymotrypsin': (r'[FYWL](?!P)', True),
-
+    "chymotrypsin": (r"[FYWL](?!P)", True),
     # No enzyme (non-specific) - returns all possible peptides
     # Handled separately
-    'nonspecific': (r'.', True),
+    "nonspecific": (r".", True),
 }
 
 
@@ -59,11 +50,11 @@ ENZYME_RULES: dict[str, tuple[str, bool]] = {
 class ProteinEntry:
     """A protein entry from a FASTA file."""
 
-    accession: str          # Primary accession (e.g., P04406)
-    name: str               # Entry name (e.g., G3P_HUMAN)
-    gene_name: Optional[str]  # Gene name if available
-    description: str        # Full description line
-    sequence: str           # Amino acid sequence
+    accession: str  # Primary accession (e.g., P04406)
+    name: str  # Entry name (e.g., G3P_HUMAN)
+    gene_name: str | None  # Gene name if available
+    description: str  # Full description line
+    sequence: str  # Amino acid sequence
 
     @property
     def length(self) -> int:
@@ -74,6 +65,7 @@ class ProteinEntry:
 # =============================================================================
 # FASTA Parsing
 # =============================================================================
+
 
 def parse_fasta(fasta_path: str | Path) -> dict[str, ProteinEntry]:
     """Parse a FASTA file and return protein entries.
@@ -106,18 +98,19 @@ def parse_fasta(fasta_path: str | Path) -> dict[str, ProteinEntry]:
 
     # Detect if gzipped
     open_func = open
-    if fasta_path.suffix == '.gz':
+    if fasta_path.suffix == ".gz":
         import gzip
+
         open_func = gzip.open
 
-    with open_func(fasta_path, 'rt') as f:
+    with open_func(fasta_path, "rt") as f:
         for line in f:
             line = line.strip()
 
-            if line.startswith('>'):
+            if line.startswith(">"):
                 # Save previous entry
                 if current_header is not None:
-                    entry = _parse_header(current_header, ''.join(current_sequence))
+                    entry = _parse_header(current_header, "".join(current_sequence))
                     if entry.accession not in proteins:
                         proteins[entry.accession] = entry
                     else:
@@ -127,11 +120,11 @@ def parse_fasta(fasta_path: str | Path) -> dict[str, ProteinEntry]:
                 current_sequence = []
             elif line and current_header is not None:
                 # Sequence line - remove any whitespace
-                current_sequence.append(line.replace(' ', ''))
+                current_sequence.append(line.replace(" ", ""))
 
         # Don't forget the last entry
         if current_header is not None:
-            entry = _parse_header(current_header, ''.join(current_sequence))
+            entry = _parse_header(current_header, "".join(current_sequence))
             if entry.accession not in proteins:
                 proteins[entry.accession] = entry
 
@@ -150,7 +143,7 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
     description = header
 
     # Try UniProt format: >sp|P04406|G3P_HUMAN Description
-    uniprot_match = re.match(r'^([sptr]{2})\|([^|]+)\|([^\s]+)\s*(.*)', header)
+    uniprot_match = re.match(r"^([sptr]{2})\|([^|]+)\|([^\s]+)\s*(.*)", header)
     if uniprot_match:
         # db_type = uniprot_match.group(1)  # sp or tr
         accession = uniprot_match.group(2)
@@ -158,7 +151,7 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
         description = uniprot_match.group(4) or name
 
         # Extract gene name from OS= or GN= fields
-        gn_match = re.search(r'GN=(\S+)', header)
+        gn_match = re.search(r"GN=(\S+)", header)
         if gn_match:
             gene_name = gn_match.group(1)
 
@@ -172,9 +165,9 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
 
     # Try NCBI format: >NP_001256799.1 description [species]
     # or >gi|123|ref|NP_001256799.1| description
-    ncbi_gi_match = re.match(r'^gi\|(\d+)\|[^|]+\|([^|]+)\|?\s*(.*)', header)
+    ncbi_gi_match = re.match(r"^gi\|(\d+)\|[^|]+\|([^|]+)\|?\s*(.*)", header)
     if ncbi_gi_match:
-        accession = ncbi_gi_match.group(2).strip('|')
+        accession = ncbi_gi_match.group(2).strip("|")
         description = ncbi_gi_match.group(3) or accession
         return ProteinEntry(
             accession=accession,
@@ -184,7 +177,7 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
             sequence=sequence,
         )
 
-    ncbi_match = re.match(r'^(\S+)\s*(.*)', header)
+    ncbi_match = re.match(r"^(\S+)\s*(.*)", header)
     if ncbi_match:
         accession = ncbi_match.group(1)
         description = ncbi_match.group(2) or accession
@@ -213,9 +206,10 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
 # In-Silico Digestion
 # =============================================================================
 
+
 def digest_protein(
     sequence: str,
-    enzyme: str = 'trypsin',
+    enzyme: str = "trypsin",
     missed_cleavages: int = 2,
     min_length: int = 6,
     max_length: int = 30,
@@ -235,14 +229,11 @@ def digest_protein(
     """
     enzyme = enzyme.lower()
 
-    if enzyme == 'nonspecific':
+    if enzyme == "nonspecific":
         return _digest_nonspecific(sequence, min_length, max_length)
 
     if enzyme not in ENZYME_RULES:
-        raise ValueError(
-            f"Unknown enzyme: {enzyme}. "
-            f"Available: {', '.join(ENZYME_RULES.keys())}"
-        )
+        raise ValueError(f"Unknown enzyme: {enzyme}. Available: {', '.join(ENZYME_RULES.keys())}")
 
     pattern, cleave_after = ENZYME_RULES[enzyme]
 
@@ -262,7 +253,7 @@ def digest_protein(
 
     for i in range(len(sites) - 1):
         for j in range(i + 1, min(i + 2 + missed_cleavages, len(sites))):
-            peptide = sequence[sites[i]:sites[j]]
+            peptide = sequence[sites[i] : sites[j]]
 
             if min_length <= len(peptide) <= max_length:
                 peptides.add(peptide)
@@ -284,14 +275,14 @@ def _digest_nonspecific(
 
     for start in range(seq_len):
         for length in range(min_length, min(max_length + 1, seq_len - start + 1)):
-            peptides.add(sequence[start:start + length])
+            peptides.add(sequence[start : start + length])
 
     return peptides
 
 
 def digest_fasta(
     proteins: dict[str, ProteinEntry],
-    enzyme: str = 'trypsin',
+    enzyme: str = "trypsin",
     missed_cleavages: int = 2,
     min_length: int = 6,
     max_length: int = 30,
@@ -344,7 +335,7 @@ def digest_fasta(
 def get_theoretical_peptide_counts(
     fasta_path: str | Path,
     protein_accessions: set[str] | None = None,
-    enzyme: str = 'trypsin',
+    enzyme: str = "trypsin",
     missed_cleavages: int = 0,
     min_length: int = 6,
     max_length: int = 30,
@@ -410,30 +401,25 @@ def get_theoretical_peptide_counts(
 # These cover Skyline, MaxQuant, Spectronaut, DIA-NN, etc.
 MODIFICATION_PATTERNS = [
     # Skyline/Panorama: C[+57.021464] or M[+15.994915]
-    r'\[[\+\-]?\d+\.?\d*\]',
-
+    r"\[[\+\-]?\d+\.?\d*\]",
     # UniMod format: (UniMod:4) or [UniMod:35]
-    r'\(UniMod:\d+\)',
-    r'\[UniMod:\d+\]',
-
+    r"\(UniMod:\d+\)",
+    r"\[UniMod:\d+\]",
     # MaxQuant: (ox), (ac), (ph), etc.
-    r'\([a-zA-Z]{2,4}\)',
-
+    r"\([a-zA-Z]{2,4}\)",
     # ProForma: [Oxidation], [Carbamidomethyl]
-    r'\[[A-Za-z]+\]',
-
+    r"\[[A-Za-z]+\]",
     # Numeric in parentheses: M(16) C(57)
-    r'\(\d+\.?\d*\)',
-
+    r"\(\d+\.?\d*\)",
     # Plus/minus mass in parentheses: (+15.99) (-18.01)
-    r'\([\+\-]\d+\.?\d*\)',
+    r"\([\+\-]\d+\.?\d*\)",
 ]
 
 # Compiled regex for stripping modifications
-_MOD_PATTERN = re.compile('|'.join(MODIFICATION_PATTERNS))
+_MOD_PATTERN = re.compile("|".join(MODIFICATION_PATTERNS))
 
 # Pattern for terminal modifications like n[+42.011] or c[-17.03]
-_TERMINAL_MOD_PATTERN = re.compile(r'^[nc]\[[\+\-]?\d+\.?\d*\]|[nc]\[[\+\-]?\d+\.?\d*\]$')
+_TERMINAL_MOD_PATTERN = re.compile(r"^[nc]\[[\+\-]?\d+\.?\d*\]|[nc]\[[\+\-]?\d+\.?\d*\]$")
 
 
 def strip_modifications(modified_sequence: str) -> str:
@@ -457,14 +443,14 @@ def strip_modifications(modified_sequence: str) -> str:
 
     """
     # Remove terminal modifications first
-    sequence = _TERMINAL_MOD_PATTERN.sub('', modified_sequence)
+    sequence = _TERMINAL_MOD_PATTERN.sub("", modified_sequence)
 
     # Remove all other modifications
-    sequence = _MOD_PATTERN.sub('', sequence)
+    sequence = _MOD_PATTERN.sub("", sequence)
 
     # Remove any remaining non-amino-acid characters
     # Keep only uppercase letters (standard amino acids)
-    sequence = ''.join(c for c in sequence if c.isupper())
+    sequence = "".join(c for c in sequence if c.isupper())
 
     return sequence
 
@@ -490,7 +476,7 @@ def normalize_for_matching(
     normalized = strip_modifications(sequence).upper()
 
     if handle_il_ambiguity:
-        normalized = normalized.replace('I', 'L')
+        normalized = normalized.replace("I", "L")
 
     return normalized
 
@@ -537,7 +523,7 @@ def build_peptide_protein_map_from_fasta(
     for accession, entry in proteins.items():
         seq = entry.sequence.upper()
         if handle_il_ambiguity:
-            seq = seq.replace('I', 'L')
+            seq = seq.replace("I", "L")
         protein_sequences[accession] = seq
 
     # Map detected peptides to proteins by substring search
@@ -587,7 +573,7 @@ def build_peptide_protein_map_from_fasta(
 
 def get_detected_peptides_from_data(
     data: pd.DataFrame,
-    peptide_col: str = 'peptide_modified',
+    peptide_col: str = "peptide_modified",
 ) -> set[str]:
     """Extract unique peptide sequences from a data frame.
 
@@ -608,6 +594,7 @@ def get_detected_peptides_from_data(
 # =============================================================================
 # Protein Name Lookup
 # =============================================================================
+
 
 def build_protein_name_map(
     proteins: dict[str, ProteinEntry],

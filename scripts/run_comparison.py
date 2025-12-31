@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Comparison test for different transition and protein rollup methods."""
+
 import json
 import re
 import subprocess
@@ -53,8 +54,8 @@ def create_config_file(
 transition_rollup:
   method: "{transition_method}"
   topn_count: {topn_count or 3}
-  topn_selection: "{topn_selection or 'correlation'}"
-  topn_weighting: "{topn_weighting or 'sum'}"
+  topn_selection: "{topn_selection or "correlation"}"
+  topn_weighting: "{topn_weighting or "sum"}"
   min_transitions: 3
   use_ms1: false
 
@@ -110,17 +111,22 @@ def run_config(
 
     # Build command
     cmd = [
-        "prism", "run",
-        "-i", str(INPUT_FILE),
-        "-o", str(output_dir),
-        "-m", str(METADATA_FILE),
-        "-c", str(config_path),
+        "prism",
+        "run",
+        "-i",
+        str(INPUT_FILE),
+        "-o",
+        str(output_dir),
+        "-m",
+        str(METADATA_FILE),
+        "-c",
+        str(config_path),
     ]
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Running: {name}")
     print(f"Config: {config_path}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Run the command
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -133,30 +139,22 @@ def run_config(
     protein_cv = None
 
     # Parse patterns like "Reference CV (median): XX.X%"
-    pep_match = re.search(
-        r"Peptide.*Reference CV.*?(\d+\.?\d*)%", output, re.IGNORECASE
-    )
+    pep_match = re.search(r"Peptide.*Reference CV.*?(\d+\.?\d*)%", output, re.IGNORECASE)
     if pep_match:
         peptide_cv = float(pep_match.group(1))
 
-    prot_match = re.search(
-        r"Protein.*Reference CV.*?(\d+\.?\d*)%", output, re.IGNORECASE
-    )
+    prot_match = re.search(r"Protein.*Reference CV.*?(\d+\.?\d*)%", output, re.IGNORECASE)
     if prot_match:
         protein_cv = float(prot_match.group(1))
 
     # Alternative parsing - look for the final summary
     if peptide_cv is None:
-        match = re.search(
-            r"Reference median CV: (\d+\.?\d*)%.*peptide", output, re.IGNORECASE
-        )
+        match = re.search(r"Reference median CV: (\d+\.?\d*)%.*peptide", output, re.IGNORECASE)
         if match:
             peptide_cv = float(match.group(1))
 
     if protein_cv is None:
-        match = re.search(
-            r"Reference median CV: (\d+\.?\d*)%.*protein", output, re.IGNORECASE
-        )
+        match = re.search(r"Reference median CV: (\d+\.?\d*)%.*protein", output, re.IGNORECASE)
         if match:
             protein_cv = float(match.group(1))
 
@@ -220,19 +218,20 @@ def main():
             print(f"  Protein CV: {result['protein_cv']}%")
         except Exception as e:
             print(f"  ERROR: {e}")
-            results.append({
-                "name": config[0],
-                "error": str(e),
-                "success": False,
-            })
+            results.append(
+                {
+                    "name": config[0],
+                    "error": str(e),
+                    "success": False,
+                }
+            )
 
     # Summary table
     print("\n" + "=" * 80)
     print("SUMMARY OF RESULTS")
     print("=" * 80)
     header = (
-        f"{'Configuration':<25} {'Transition':<12} {'Protein':<12} "
-        f"{'Pep CV':<10} {'Prot CV':<10}"
+        f"{'Configuration':<25} {'Transition':<12} {'Protein':<12} {'Pep CV':<10} {'Prot CV':<10}"
     )
     print(header)
     print("-" * 80)
@@ -249,8 +248,7 @@ def main():
             pep_cv = f"{r['peptide_cv']:.1f}%" if r.get("peptide_cv") else "N/A"
             prot_cv = f"{r['protein_cv']:.1f}%" if r.get("protein_cv") else "N/A"
 
-            print(f"{r['name']:<25} {trans_desc:<12} {prot_desc:<12} "
-                  f"{pep_cv:<10} {prot_cv:<10}")
+            print(f"{r['name']:<25} {trans_desc:<12} {prot_desc:<12} {pep_cv:<10} {prot_cv:<10}")
         else:
             print(f"{r['name']:<25} FAILED")
 

@@ -20,15 +20,15 @@ class ProteinGroup:
     """Represents a protein group after parsimony analysis."""
 
     group_id: str
-    leading_protein: str              # Representative accession
-    leading_protein_name: str         # Gene name or description
-    member_proteins: list[str]        # All indistinguishable proteins
-    subsumed_proteins: list[str]      # Proteins whose peptides are subset
+    leading_protein: str  # Representative accession
+    leading_protein_name: str  # Gene name or description
+    member_proteins: list[str]  # All indistinguishable proteins
+    subsumed_proteins: list[str]  # Proteins whose peptides are subset
 
-    peptides: set[str]                # Peptides assigned by parsimony (unique + razor)
-    unique_peptides: set[str]         # Peptides only in this group (before parsimony)
-    razor_peptides: set[str]          # Shared peptides assigned here by parsimony
-    all_mapped_peptides: set[str]     # ALL peptides that map to this protein (shared or not)
+    peptides: set[str]  # Peptides assigned by parsimony (unique + razor)
+    unique_peptides: set[str]  # Peptides only in this group (before parsimony)
+    razor_peptides: set[str]  # Shared peptides assigned here by parsimony
+    all_mapped_peptides: set[str]  # ALL peptides that map to this protein (shared or not)
 
     @property
     def n_peptides(self) -> int:
@@ -49,26 +49,26 @@ class ProteinGroup:
     def to_dict(self) -> dict:
         """Convert to dictionary for DataFrame export."""
         return {
-            'GroupID': self.group_id,
-            'LeadingProtein': self.leading_protein,
-            'LeadingName': self.leading_protein_name,
-            'MemberProteins': ';'.join(self.member_proteins),
-            'SubsumedProteins': ';'.join(self.subsumed_proteins),
-            'NPeptides': self.n_peptides,
-            'NUniquePeptides': self.n_unique_peptides,
-            'NRazorPeptides': self.n_razor_peptides,
-            'NAllMappedPeptides': self.n_all_mapped_peptides,
-            'UniquePeptides': ';'.join(sorted(self.unique_peptides)),
-            'RazorPeptides': ';'.join(sorted(self.razor_peptides)),
-            'AllPeptides': ';'.join(sorted(self.peptides)),
+            "GroupID": self.group_id,
+            "LeadingProtein": self.leading_protein,
+            "LeadingName": self.leading_protein_name,
+            "MemberProteins": ";".join(self.member_proteins),
+            "SubsumedProteins": ";".join(self.subsumed_proteins),
+            "NPeptides": self.n_peptides,
+            "NUniquePeptides": self.n_unique_peptides,
+            "NRazorPeptides": self.n_razor_peptides,
+            "NAllMappedPeptides": self.n_all_mapped_peptides,
+            "UniquePeptides": ";".join(sorted(self.unique_peptides)),
+            "RazorPeptides": ";".join(sorted(self.razor_peptides)),
+            "AllPeptides": ";".join(sorted(self.peptides)),
         }
 
 
 def build_peptide_protein_map(
     df: pd.DataFrame,
-    peptide_col: str = 'peptide_sequence',
-    protein_col: str = 'protein_ids',
-    protein_name_col: str = 'protein_names',
+    peptide_col: str = "peptide_sequence",
+    protein_col: str = "protein_ids",
+    protein_name_col: str = "protein_names",
 ) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
     """Build bidirectional mapping between peptides and proteins.
 
@@ -95,15 +95,15 @@ def build_peptide_protein_map(
         peptide = row[peptide_col]
 
         # Handle semicolon-separated protein lists
-        proteins_str = str(row[protein_col]) if pd.notna(row[protein_col]) else ''
-        names_str = str(row[protein_name_col]) if pd.notna(row[protein_name_col]) else ''
+        proteins_str = str(row[protein_col]) if pd.notna(row[protein_col]) else ""
+        names_str = str(row[protein_name_col]) if pd.notna(row[protein_name_col]) else ""
 
-        proteins = [p.strip() for p in proteins_str.split(';') if p.strip()]
-        names = [n.strip() for n in names_str.split(';') if n.strip()]
+        proteins = [p.strip() for p in proteins_str.split(";") if p.strip()]
+        names = [n.strip() for n in names_str.split(";") if n.strip()]
 
         # Pad names if fewer than proteins
         while len(names) < len(proteins):
-            names.append(proteins[len(names)] if len(names) < len(proteins) else '')
+            names.append(proteins[len(names)] if len(names) < len(proteins) else "")
 
         for protein, name in zip(proteins, names):
             peptide_to_proteins[peptide].add(protein)
@@ -117,7 +117,7 @@ def build_peptide_protein_map(
 def build_peptide_protein_map_from_fasta(
     df: pd.DataFrame,
     fasta_path: str,
-    peptide_col: str = 'peptide_sequence',
+    peptide_col: str = "peptide_sequence",
     handle_il_ambiguity: bool = True,
 ) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
     """Build peptide-protein mapping from FASTA database.
@@ -173,7 +173,7 @@ def build_peptide_protein_map_from_fasta(
 
     logger.info(
         f"FASTA mapping complete:\n"
-        f"  Peptides matched: {n_mapped}/{n_total} ({100*n_mapped/n_total:.1f}%)\n"
+        f"  Peptides matched: {n_mapped}/{n_total} ({100 * n_mapped / n_total:.1f}%)\n"
         f"  Proteins identified: {len(protein_to_peptides)}\n"
         f"  Unique peptides: {n_unique}, Shared peptides: {n_shared}"
     )
@@ -181,9 +181,7 @@ def build_peptide_protein_map_from_fasta(
     return peptide_to_proteins, protein_to_peptides, protein_to_name
 
 
-def _find_subsumable_proteins(
-    protein_to_peptides: dict[str, set[str]]
-) -> dict[str, str]:
+def _find_subsumable_proteins(protein_to_peptides: dict[str, set[str]]) -> dict[str, str]:
     """Find proteins whose peptides are a subset of another protein's peptides.
 
     Returns:
@@ -196,7 +194,7 @@ def _find_subsumable_proteins(
     for i, prot_a in enumerate(proteins):
         peps_a = protein_to_peptides[prot_a]
 
-        for prot_b in proteins[i+1:]:
+        for prot_b in proteins[i + 1 :]:
             peps_b = protein_to_peptides[prot_b]
 
             if peps_a < peps_b:  # A is proper subset of B
@@ -208,9 +206,7 @@ def _find_subsumable_proteins(
     return subsumed
 
 
-def _find_indistinguishable_proteins(
-    protein_to_peptides: dict[str, set[str]]
-) -> list[set[str]]:
+def _find_indistinguishable_proteins(protein_to_peptides: dict[str, set[str]]) -> list[set[str]]:
     """Find sets of proteins with identical peptide sets.
 
     Returns:
@@ -249,8 +245,10 @@ def compute_protein_groups(
         List of ProteinGroup objects
 
     """
-    logger.info(f"Starting parsimony with {len(protein_to_peptides)} proteins, "
-                f"{len(peptide_to_proteins)} peptides")
+    logger.info(
+        f"Starting parsimony with {len(protein_to_peptides)} proteins, "
+        f"{len(peptide_to_proteins)} peptides"
+    )
 
     # Step 1: Find and remove subsumable proteins
     subsumed_by = _find_subsumable_proteins(protein_to_peptides)
@@ -338,7 +336,7 @@ def compute_protein_groups(
         # Prioritize by: 1) unique peptide count, 2) alphabetical
 
         best_can = None
-        best_score = (-1, '')
+        best_score = (-1, "")
 
         for can in canonical_proteins:
             # How many remaining shared peptides would this protein get?
@@ -396,7 +394,7 @@ def compute_protein_groups(
         leading = members[0]
 
         group = ProteinGroup(
-            group_id=f"PG{i+1:04d}",
+            group_id=f"PG{i + 1:04d}",
             leading_protein=leading,
             leading_protein_name=protein_to_name.get(leading, leading),
             member_proteins=members,
@@ -426,14 +424,14 @@ def export_protein_groups(
     """
     rows = [g.to_dict() for g in groups]
     df = pd.DataFrame(rows)
-    df.to_csv(output_path, sep='\t', index=False)
+    df.to_csv(output_path, sep="\t", index=False)
     logger.info(f"Exported {len(groups)} protein groups to {output_path}")
 
 
 def annotate_peptides_with_groups(
     df: pd.DataFrame,
     groups: list[ProteinGroup],
-    peptide_col: str = 'peptide_sequence',
+    peptide_col: str = "peptide_sequence",
 ) -> pd.DataFrame:
     """Add protein group assignment to peptide data.
 
@@ -455,18 +453,18 @@ def annotate_peptides_with_groups(
     for group in groups:
         for pep in group.unique_peptides:
             peptide_to_group[pep] = group.group_id
-            peptide_to_type[pep] = 'unique'
+            peptide_to_type[pep] = "unique"
         for pep in group.razor_peptides:
             peptide_to_group[pep] = group.group_id
-            peptide_to_type[pep] = 'razor'
+            peptide_to_type[pep] = "razor"
 
     # Add columns
     df = df.copy()
-    df['protein_group_id'] = df[peptide_col].map(peptide_to_group)
-    df['peptide_type'] = df[peptide_col].map(peptide_to_type)
+    df["protein_group_id"] = df[peptide_col].map(peptide_to_group)
+    df["peptide_type"] = df[peptide_col].map(peptide_to_type)
 
     # Log unmapped peptides
-    unmapped = df['protein_group_id'].isna().sum()
+    unmapped = df["protein_group_id"].isna().sum()
     if unmapped > 0:
         logger.warning(f"{unmapped} rows have unmapped peptides")
 
@@ -474,8 +472,7 @@ def annotate_peptides_with_groups(
 
 
 def compute_peptide_weights(
-    groups: list[ProteinGroup],
-    method: str = 'unique_count'
+    groups: list[ProteinGroup], method: str = "unique_count"
 ) -> dict[str, dict[str, float]]:
     """Compute weights for distributed peptide assignment.
 
@@ -504,20 +501,18 @@ def compute_peptide_weights(
     weights: dict[str, dict[str, float]] = {}
 
     for pep, gps in shared.items():
-        if method == 'uniform':
+        if method == "uniform":
             w = 1.0 / len(gps)
             weights[pep] = {g.group_id: w for g in gps}
 
-        elif method == 'unique_count':
+        elif method == "unique_count":
             total_unique = sum(g.n_unique_peptides for g in gps)
             if total_unique == 0:
                 # Fall back to uniform
                 w = 1.0 / len(gps)
                 weights[pep] = {g.group_id: w for g in gps}
             else:
-                weights[pep] = {
-                    g.group_id: g.n_unique_peptides / total_unique for g in gps
-                }
+                weights[pep] = {g.group_id: g.n_unique_peptides / total_unique for g in gps}
 
     # Non-shared peptides get weight 1.0
     for group in groups:

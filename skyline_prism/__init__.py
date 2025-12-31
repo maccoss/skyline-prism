@@ -46,6 +46,9 @@ __all__ = [
     "parse_fasta",
     "strip_modifications",
     # normalization
+    "RTLowessResult",
+    "apply_rt_lowess_normalization",
+    "fit_all_sample_lowess",
     "median_normalize",
     "normalize_pipeline",
     "quantile_normalize",
@@ -144,6 +147,9 @@ from .fasta import (
     strip_modifications,
 )
 from .normalization import (
+    RTLowessResult,
+    apply_rt_lowess_normalization,
+    fit_all_sample_lowess,
     median_normalize,
     normalize_pipeline,
     quantile_normalize,

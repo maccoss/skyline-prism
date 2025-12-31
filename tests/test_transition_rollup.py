@@ -128,7 +128,9 @@ class TestAdaptiveRollupParams:
         assert params.mz_max == 2000.0
         assert params.log_intensity_center == 15.0
         assert params.fallback_to_sum is True
-        assert params.min_improvement_pct == 0.1  # Low threshold since optimization can't go negative
+        assert (
+            params.min_improvement_pct == 0.1
+        )  # Low threshold since optimization can't go negative
 
     def test_custom_values(self):
         """Test custom parameter initialization."""
@@ -157,9 +159,7 @@ class TestComputeAdaptiveWeights:
 
     def test_zero_betas_equal_weights(self):
         """When all betas are zero, all weights should be equal (=1)."""
-        params = AdaptiveRollupParams(
-            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0
-        )
+        params = AdaptiveRollupParams(beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0)
         log_intensity = np.array([10.0, 12.0, 14.0, 16.0])
         mz_values = np.array([400.0, 600.0, 800.0, 1000.0])
         shape_corr = np.array([0.9, 0.95, 0.8, 0.99])
@@ -171,7 +171,9 @@ class TestComputeAdaptiveWeights:
     def test_higher_intensity_higher_weight(self):
         """Higher intensity should have higher weight when beta_log_intensity > 0."""
         params = AdaptiveRollupParams(
-            beta_log_intensity=1.0, beta_mz=0.0, beta_shape_corr=0.0,
+            beta_log_intensity=1.0,
+            beta_mz=0.0,
+            beta_shape_corr=0.0,
             log_intensity_center=14.0,  # Center at 14
         )
         log_intensity = np.array([10.0, 14.0, 18.0])  # Below, at, and above center
@@ -187,9 +189,7 @@ class TestComputeAdaptiveWeights:
 
     def test_shape_corr_increases_weight(self):
         """Higher shape correlation should increase weight when beta_shape_corr > 0."""
-        params = AdaptiveRollupParams(
-            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=2.0
-        )
+        params = AdaptiveRollupParams(beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=2.0)
         log_intensity = np.array([14.0, 14.0, 14.0])
         mz_values = np.array([500.0, 500.0, 500.0])
         shape_corr = np.array([0.5, 0.75, 1.0])
@@ -202,8 +202,11 @@ class TestComputeAdaptiveWeights:
     def test_mz_affects_weight(self):
         """M/z should affect weight when beta_mz != 0."""
         params = AdaptiveRollupParams(
-            beta_log_intensity=0.0, beta_mz=1.0, beta_shape_corr=0.0,
-            mz_min=400.0, mz_max=1000.0,  # Define range for normalization
+            beta_log_intensity=0.0,
+            beta_mz=1.0,
+            beta_shape_corr=0.0,
+            mz_min=400.0,
+            mz_max=1000.0,  # Define range for normalization
         )
         log_intensity = np.array([14.0, 14.0, 14.0])
         mz_values = np.array([400.0, 700.0, 1000.0])  # Low, mid, high m/z
@@ -291,9 +294,7 @@ class TestRollupPeptideAdaptive:
         self, sample_intensity_matrix, sample_mz_values, sample_shape_corr_matrix
     ):
         """When all betas are 0, result should equal simple sum."""
-        params = AdaptiveRollupParams(
-            beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0
-        )
+        params = AdaptiveRollupParams(beta_log_intensity=0.0, beta_mz=0.0, beta_shape_corr=0.0)
 
         abund_adaptive, _, _, _ = rollup_peptide_adaptive(
             sample_intensity_matrix,
@@ -306,9 +307,7 @@ class TestRollupPeptideAdaptive:
         linear = 2**sample_intensity_matrix
         expected = np.log2(linear.sum(axis=0))
 
-        np.testing.assert_array_almost_equal(
-            abund_adaptive.values, expected.values, decimal=10
-        )
+        np.testing.assert_array_almost_equal(abund_adaptive.values, expected.values, decimal=10)
 
 
 class TestLearnAdaptiveWeights:
@@ -445,14 +444,16 @@ class TestAdaptiveZeroBetasEqualsSum:
                     intensity = base_intensity * sample_factor * trans_factor
                     shape_corr = 0.7 + 0.3 * np.random.random()
 
-                    data_rows.append({
-                        "Peptide Modified Sequence": peptide,
-                        "Fragment Ion": frag_ion,
-                        "Replicate Name": sample,
-                        "Area": intensity,
-                        "Product Mz": mz,
-                        "Shape Correlation": shape_corr,
-                    })
+                    data_rows.append(
+                        {
+                            "Peptide Modified Sequence": peptide,
+                            "Fragment Ion": frag_ion,
+                            "Replicate Name": sample,
+                            "Area": intensity,
+                            "Product Mz": mz,
+                            "Shape Correlation": shape_corr,
+                        }
+                    )
 
         return pd.DataFrame(data_rows)
 
@@ -514,7 +515,9 @@ class TestAdaptiveZeroBetasEqualsSum:
 
         # All weights should be exactly 1.0
         np.testing.assert_array_almost_equal(
-            weights.values, np.ones(len(weights)), decimal=10,
+            weights.values,
+            np.ones(len(weights)),
+            decimal=10,
             err_msg="Weights should all be 1.0 when betas are 0",
         )
 

@@ -11,7 +11,6 @@ Supports:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -44,10 +43,10 @@ class MedianPolishResult:
     To convert col_effects to linear scale: 2 ** col_effects
     """
 
-    overall: float                    # Grand effect (μ) - log2 scale
-    row_effects: pd.Series            # Peptide/transition effects (α) - log2 scale
-    col_effects: pd.Series            # Sample abundances (μ + β) - log2 scale
-    residuals: pd.DataFrame           # Residual matrix (rows × samples) - log2 scale
+    overall: float  # Grand effect (μ) - log2 scale
+    row_effects: pd.Series  # Peptide/transition effects (α) - log2 scale
+    col_effects: pd.Series  # Sample abundances (μ + β) - log2 scale
+    residuals: pd.DataFrame  # Residual matrix (rows × samples) - log2 scale
     n_iterations: int
     converged: bool
 
@@ -65,37 +64,44 @@ class MedianPolishResult:
         """
         residuals_arr = self.residuals.values
 
-        return pd.DataFrame({
-            'residual_mean': np.nanmean(residuals_arr, axis=1),
-            'residual_std': np.nanstd(residuals_arr, axis=1),
-            'residual_mad': np.nanmedian(np.abs(residuals_arr - np.nanmedian(residuals_arr, axis=1, keepdims=True)), axis=1),
-            'residual_max_abs': np.nanmax(np.abs(residuals_arr), axis=1),
-        }, index=self.residuals.index)
+        return pd.DataFrame(
+            {
+                "residual_mean": np.nanmean(residuals_arr, axis=1),
+                "residual_std": np.nanstd(residuals_arr, axis=1),
+                "residual_mad": np.nanmedian(
+                    np.abs(residuals_arr - np.nanmedian(residuals_arr, axis=1, keepdims=True)),
+                    axis=1,
+                ),
+                "residual_max_abs": np.nanmax(np.abs(residuals_arr), axis=1),
+            },
+            index=self.residuals.index,
+        )
 
 
 @dataclass
 class AggregationResult:
     """Result of quality-weighted aggregation."""
 
-    abundances: pd.Series             # Aggregated abundances per sample
-    uncertainties: pd.Series          # Uncertainty estimates per sample (log-scale std)
-    n_signals_used: pd.Series         # Number of signals contributing per sample
-    weights_used: Optional[pd.DataFrame] = None  # Weights applied (for diagnostics)
+    abundances: pd.Series  # Aggregated abundances per sample
+    uncertainties: pd.Series  # Uncertainty estimates per sample (log-scale std)
+    n_signals_used: pd.Series  # Number of signals contributing per sample
+    weights_used: pd.DataFrame | None = None  # Weights applied (for diagnostics)
 
 
 @dataclass
 class TopNResult:
     """Result of top-N peptide rollup."""
 
-    abundances: pd.Series             # Protein abundances per sample
-    selected_peptides: list[str]      # List of peptide IDs that were selected
-    n_available: int                  # How many peptides were available
-    selection_method: str             # 'median_abundance' or 'frequency'
+    abundances: pd.Series  # Protein abundances per sample
+    selected_peptides: list[str]  # List of peptide IDs that were selected
+    n_available: int  # How many peptides were available
+    selection_method: str  # 'median_abundance' or 'frequency'
 
 
 # ============================================================================
 # Quality-Weighted Aggregation
 # ============================================================================
+
 
 @dataclass
 class VarianceModelParams:
@@ -140,9 +146,9 @@ class VarianceModelParams:
 
 def estimate_signal_variance(
     intensity: np.ndarray,
-    shape_correlation: Optional[np.ndarray] = None,
-    coeluting: Optional[np.ndarray] = None,
-    params: Optional[VarianceModelParams] = None,
+    shape_correlation: np.ndarray | None = None,
+    coeluting: np.ndarray | None = None,
+    params: VarianceModelParams | None = None,
 ) -> np.ndarray:
     """Estimate variance for each signal based on intensity and quality metrics.
 
@@ -170,11 +176,7 @@ def estimate_signal_variance(
 
     # Base variance from noise model
     # var = α·I + β·I² + γ
-    variance = (
-        params.alpha * intensity +
-        params.beta * np.square(intensity) +
-        params.gamma
-    )
+    variance = params.alpha * intensity + params.beta * np.square(intensity) + params.gamma
 
     # Quality penalty from shape correlation
     if shape_correlation is not None:
@@ -194,9 +196,9 @@ def estimate_signal_variance(
 
 def estimate_log_variance(
     intensity: np.ndarray,
-    shape_correlation: Optional[np.ndarray] = None,
-    coeluting: Optional[np.ndarray] = None,
-    params: Optional[VarianceModelParams] = None,
+    shape_correlation: np.ndarray | None = None,
+    coeluting: np.ndarray | None = None,
+    params: VarianceModelParams | None = None,
 ) -> np.ndarray:
     """Estimate variance of log-transformed signal.
 
@@ -219,7 +221,7 @@ def estimate_log_variance(
 
     # Delta method: var(log(S)) ≈ var(S) / S²
     # For log2: var(log2(S)) = var(ln(S)) / ln(2)² = var(S) / (S² · ln(2)²)
-    log2_variance = variance / (np.square(intensity) * np.log(2)**2)
+    log2_variance = variance / (np.square(intensity) * np.log(2) ** 2)
 
     return log2_variance
 
@@ -227,12 +229,12 @@ def estimate_log_variance(
 def learn_variance_params_from_reference(
     data: pd.DataFrame,
     reference_mask: pd.Series,
-    precursor_col: str = 'precursor_id',
-    transition_col: str = 'fragment_ion',
-    abundance_col: str = 'abundance',
-    sample_col: str = 'replicate_name',
-    shape_correlation_col: Optional[str] = 'shape_correlation',
-    coeluting_col: Optional[str] = 'coeluting',
+    precursor_col: str = "precursor_id",
+    transition_col: str = "fragment_ion",
+    abundance_col: str = "abundance",
+    sample_col: str = "replicate_name",
+    shape_correlation_col: str | None = "shape_correlation",
+    coeluting_col: str | None = "coeluting",
     n_iterations: int = 50,
 ) -> VarianceModelParams:
     """Learn optimal variance model parameters by minimizing CV on reference samples.
@@ -323,9 +325,9 @@ def learn_variance_params_from_reference(
                 weighted_coel = None
 
             summary[trans] = {
-                'median_intensity': median_int,
-                'weighted_shape_corr': weighted_corr,
-                'weighted_coeluting': weighted_coel,
+                "median_intensity": median_int,
+                "weighted_shape_corr": weighted_corr,
+                "weighted_coeluting": weighted_coel,
             }
 
         transition_summaries[prec] = summary
@@ -351,15 +353,17 @@ def learn_variance_params_from_reference(
                 continue
 
             # Compute variance and weights for each transition
-            intensities = np.array([trans_summary[t]['median_intensity'] for t in transitions])
+            intensities = np.array([trans_summary[t]["median_intensity"] for t in transitions])
 
             if has_shape_corr:
-                corrs = np.array([trans_summary[t]['weighted_shape_corr'] for t in transitions])
+                corrs = np.array([trans_summary[t]["weighted_shape_corr"] for t in transitions])
             else:
                 corrs = None
 
             if has_coeluting:
-                coeluting_arr = np.array([trans_summary[t]['weighted_coeluting'] > 0.5 for t in transitions])
+                coeluting_arr = np.array(
+                    [trans_summary[t]["weighted_coeluting"] > 0.5 for t in transitions]
+                )
             else:
                 coeluting_arr = None
 
@@ -367,7 +371,7 @@ def learn_variance_params_from_reference(
             variances = estimate_signal_variance(intensities, corrs, coeluting_arr, params)
 
             # Convert to log-scale variance
-            log_var = variances / (np.square(intensities) * np.log(2)**2)
+            log_var = variances / (np.square(intensities) * np.log(2) ** 2)
 
             # Weights (inverse variance, normalized)
             weights = 1.0 / log_var
@@ -376,10 +380,7 @@ def learn_variance_params_from_reference(
             # Get the transition matrix for this precursor in reference samples
             prec_data = ref_data[ref_data[precursor_col] == prec]
             matrix = prec_data.pivot_table(
-                index=transition_col,
-                columns=sample_col,
-                values=abundance_col,
-                aggfunc='first'
+                index=transition_col, columns=sample_col, values=abundance_col, aggfunc="first"
             )
 
             # Ensure transition order matches
@@ -399,21 +400,23 @@ def learn_variance_params_from_reference(
         return np.median(cvs)
 
     # Initial parameters (log scale)
-    x0 = np.array([
-        0.0,   # log(alpha) = log(1)
-        -4.6,  # log(beta) = log(0.01)
-        4.6,   # log(gamma) = log(100)
-        0.0,   # log(delta) = log(1)
-        2.0,   # shape_corr_exponent
-        2.3,   # log(coelution_penalty) = log(10)
-    ])
+    x0 = np.array(
+        [
+            0.0,  # log(alpha) = log(1)
+            -4.6,  # log(beta) = log(0.01)
+            4.6,  # log(gamma) = log(100)
+            0.0,  # log(delta) = log(1)
+            2.0,  # shape_corr_exponent
+            2.3,  # log(coelution_penalty) = log(10)
+        ]
+    )
 
     # Optimize
     result = minimize(
         compute_weighted_cv,
         x0,
-        method='Nelder-Mead',
-        options={'maxiter': n_iterations, 'disp': False}
+        method="Nelder-Mead",
+        options={"maxiter": n_iterations, "disp": False},
     )
 
     # Extract optimized parameters
@@ -430,12 +433,16 @@ def learn_variance_params_from_reference(
     initial_cv = compute_weighted_cv(x0)
     final_cv = compute_weighted_cv(opt)
 
-    logger.info(f"Learned variance parameters: α={learned_params.alpha:.3f}, "
-                f"β={learned_params.beta:.4f}, γ={learned_params.gamma:.1f}")
+    logger.info(
+        f"Learned variance parameters: α={learned_params.alpha:.3f}, "
+        f"β={learned_params.beta:.4f}, γ={learned_params.gamma:.1f}"
+    )
     logger.info(f"Reference CV: {initial_cv:.4f} → {final_cv:.4f}")
     if has_shape_corr:
-        logger.info(f"  Shape correlation: δ={learned_params.delta:.3f}, "
-                    f"exponent={learned_params.shape_corr_exponent:.2f}")
+        logger.info(
+            f"  Shape correlation: δ={learned_params.delta:.3f}, "
+            f"exponent={learned_params.shape_corr_exponent:.2f}"
+        )
     if has_coeluting:
         logger.info(f"  Coelution penalty: {learned_params.coelution_penalty:.1f}x")
 
@@ -465,7 +472,7 @@ def quality_weighted_aggregate(
 
     """
     # Inverse variance weights
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         inv_var = 1.0 / variances
         inv_var = np.where(np.isfinite(inv_var), inv_var, 0)
 
@@ -479,7 +486,7 @@ def quality_weighted_aggregate(
     sum_weighted = np.nansum(weighted_vals, axis=axis)
 
     # Aggregated value and variance
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         aggregated = sum_weighted / sum_weights
         aggregated_var = 1.0 / sum_weights
 
@@ -492,9 +499,9 @@ def quality_weighted_aggregate(
 
 def aggregate_transitions_quality_weighted(
     transition_matrix: pd.DataFrame,
-    shape_correlation: Optional[pd.DataFrame] = None,
-    coeluting: Optional[pd.DataFrame] = None,
-    params: Optional[VarianceModelParams] = None,
+    shape_correlation: pd.DataFrame | None = None,
+    coeluting: pd.DataFrame | None = None,
+    params: VarianceModelParams | None = None,
     min_transitions: int = 3,
     max_variance_ratio: float = 100.0,
 ) -> AggregationResult:
@@ -592,14 +599,13 @@ def aggregate_transitions_quality_weighted(
 
     # Convert to log-scale variance (per transition)
     log_variance_per_transition = transition_variance / (
-        np.square(median_intensity_per_transition) * np.log(2)**2
+        np.square(median_intensity_per_transition) * np.log(2) ** 2
     )
 
     # Cap extreme variance ratios
     min_var = np.nanmin(log_variance_per_transition)
     log_variance_per_transition = np.minimum(
-        log_variance_per_transition,
-        min_var * max_variance_ratio
+        log_variance_per_transition, min_var * max_variance_ratio
     )
 
     # Inverse variance weights (one per transition, applied to all replicates)
@@ -620,7 +626,7 @@ def aggregate_transitions_quality_weighted(
     weights_df = pd.DataFrame(
         np.tile(weights[:, np.newaxis], (1, n_samples)),
         index=transition_matrix.index,
-        columns=transition_matrix.columns
+        columns=transition_matrix.columns,
     )
 
     return AggregationResult(
@@ -709,8 +715,8 @@ def tukey_median_polish(
     # Wrap results
     result = MedianPolishResult(
         overall=overall,
-        row_effects=pd.Series(row_effects, index=row_idx, name='peptide_effect'),
-        col_effects=pd.Series(col_effects_original_scale, index=col_idx, name='protein_abundance'),
+        row_effects=pd.Series(row_effects, index=row_idx, name="peptide_effect"),
+        col_effects=pd.Series(col_effects_original_scale, index=col_idx, name="protein_abundance"),
         residuals=pd.DataFrame(residuals, index=row_idx, columns=col_idx),
         n_iterations=iteration + 1,
         converged=converged,
@@ -728,7 +734,7 @@ def tukey_median_polish(
 def rollup_top_n(
     matrix: pd.DataFrame,
     n: int = 3,
-    selection: str = 'median_abundance',
+    selection: str = "median_abundance",
 ) -> TopNResult:
     """Rollup using average of top N peptides selected GLOBALLY across all samples.
 
@@ -766,25 +772,25 @@ def rollup_top_n(
         )
 
     # Calculate ranking metrics for each peptide
-    peptide_stats = pd.DataFrame({
-        'median_abundance': matrix.median(axis=1),
-        'frequency': matrix.notna().sum(axis=1),
-    })
+    peptide_stats = pd.DataFrame(
+        {
+            "median_abundance": matrix.median(axis=1),
+            "frequency": matrix.notna().sum(axis=1),
+        }
+    )
 
     # Select top N peptides based on selection method
-    if selection == 'frequency':
+    if selection == "frequency":
         # Primary: frequency (more samples = better)
         # Secondary: median abundance (tie-breaker)
         peptide_stats = peptide_stats.sort_values(
-            by=['frequency', 'median_abundance'],
-            ascending=[False, False]
+            by=["frequency", "median_abundance"], ascending=[False, False]
         )
     else:  # median_abundance (default)
         # Primary: median abundance (higher = more reliably quantified)
         # Secondary: frequency (tie-breaker)
         peptide_stats = peptide_stats.sort_values(
-            by=['median_abundance', 'frequency'],
-            ascending=[False, False]
+            by=["median_abundance", "frequency"], ascending=[False, False]
         )
 
     # Take top N peptides
@@ -880,7 +886,7 @@ def rollup_maxlfq(
     overall_median = matrix.median().median()
     abundances = abundances + overall_median
 
-    return pd.Series(abundances, index=samples, name='protein_abundance')
+    return pd.Series(abundances, index=samples, name="protein_abundance")
 
 
 def rollup_directlfq(
@@ -937,22 +943,23 @@ def rollup_sum(matrix: pd.DataFrame) -> pd.Series:
 # Transition to Peptide Rollup
 # ============================================================================
 
+
 def rollup_transitions_to_peptides(
     data: pd.DataFrame,
-    transition_col: str = 'FragmentIon',
-    precursor_col: str = 'precursor_id',
-    abundance_col: str = 'Area',
-    sample_col: str = 'replicate_name',
-    method: str = 'median_polish',
-    shape_correlation_col: Optional[str] = 'ShapeCorrelation',
-    coeluting_col: Optional[str] = 'Coeluting',
+    transition_col: str = "FragmentIon",
+    precursor_col: str = "precursor_id",
+    abundance_col: str = "Area",
+    sample_col: str = "replicate_name",
+    method: str = "median_polish",
+    shape_correlation_col: str | None = "ShapeCorrelation",
+    coeluting_col: str | None = "Coeluting",
     use_ms1: bool = False,
-    ms1_col: Optional[str] = 'Ms1Area',
+    ms1_col: str | None = "Ms1Area",
     min_transitions: int = 3,
-    variance_params: Optional[VarianceModelParams] = None,
-    reference_mask: Optional[pd.Series] = None,
+    variance_params: VarianceModelParams | None = None,
+    reference_mask: pd.Series | None = None,
     learn_params: bool = False,
-) -> tuple[pd.DataFrame, dict, Optional[VarianceModelParams]]:
+) -> tuple[pd.DataFrame, dict, VarianceModelParams | None]:
     """Combine transitions into peptide-level quantities.
 
     Methods:
@@ -991,14 +998,16 @@ def rollup_transitions_to_peptides(
     learned_params = None
 
     # Learn variance parameters if requested
-    if method == 'quality_weighted' and learn_params and reference_mask is not None:
+    if method == "quality_weighted" and learn_params and reference_mask is not None:
         learned_params = learn_variance_params_from_reference(
             data,
             reference_mask,
             precursor_col=precursor_col,
             abundance_col=abundance_col,
             sample_col=sample_col,
-            shape_correlation_col=shape_correlation_col if shape_correlation_col in data.columns else None,
+            shape_correlation_col=shape_correlation_col
+            if shape_correlation_col in data.columns
+            else None,
             coeluting_col=coeluting_col if coeluting_col in data.columns else None,
         )
         variance_params = learned_params
@@ -1016,15 +1025,14 @@ def rollup_transitions_to_peptides(
         if not use_ms1 and ms1_col in prec_data.columns:
             # Filter out MS1 rows if they're in the transition data
             # (depends on how Skyline exports - MS1 might be separate or marked)
-            if 'precursor' in prec_data[transition_col].str.lower().values:
-                prec_data = prec_data[~prec_data[transition_col].str.lower().str.contains('precursor')]
+            if "precursor" in prec_data[transition_col].str.lower().values:
+                prec_data = prec_data[
+                    ~prec_data[transition_col].str.lower().str.contains("precursor")
+                ]
 
         # Pivot to matrix: transitions × samples
         matrix = prec_data.pivot_table(
-            index=transition_col,
-            columns=sample_col,
-            values=abundance_col,
-            aggfunc='first'
+            index=transition_col, columns=sample_col, values=abundance_col, aggfunc="first"
         )
 
         # Ensure all samples present
@@ -1037,21 +1045,18 @@ def rollup_transitions_to_peptides(
         shape_corr_matrix = None
         coeluting_matrix = None
 
-        if method == 'quality_weighted':
+        if method == "quality_weighted":
             if shape_correlation_col and shape_correlation_col in prec_data.columns:
                 shape_corr_matrix = prec_data.pivot_table(
                     index=transition_col,
                     columns=sample_col,
                     values=shape_correlation_col,
-                    aggfunc='first'
+                    aggfunc="first",
                 ).reindex(index=matrix.index, columns=matrix.columns)
 
             if coeluting_col and coeluting_col in prec_data.columns:
                 coeluting_matrix = prec_data.pivot_table(
-                    index=transition_col,
-                    columns=sample_col,
-                    values=coeluting_col,
-                    aggfunc='first'
+                    index=transition_col, columns=sample_col, values=coeluting_col, aggfunc="first"
                 ).reindex(index=matrix.index, columns=matrix.columns)
 
         # Apply rollup method
@@ -1060,7 +1065,7 @@ def rollup_transitions_to_peptides(
             abundances = matrix.median(axis=0)
             uncertainties = pd.Series(np.nan, index=samples)
 
-        elif method == 'median_polish':
+        elif method == "median_polish":
             if len(matrix) >= 2:
                 result = tukey_median_polish(matrix)
                 abundances = result.col_effects
@@ -1072,14 +1077,14 @@ def rollup_transitions_to_peptides(
                 abundances = matrix.iloc[0]
                 uncertainties = pd.Series(np.nan, index=samples)
 
-        elif method == 'sum':
+        elif method == "sum":
             # Sum transitions (linear scale)
             linear = np.power(2, matrix)
             summed = linear.sum(axis=0, skipna=True)
             abundances = np.log2(summed)
             uncertainties = pd.Series(np.nan, index=samples)
 
-        elif method == 'quality_weighted':
+        elif method == "quality_weighted":
             result = aggregate_transitions_quality_weighted(
                 matrix,
                 shape_correlation=shape_corr_matrix,
@@ -1096,19 +1101,24 @@ def rollup_transitions_to_peptides(
 
         # Store results
         for sample in samples:
-            peptide_results.append({
-                precursor_col: precursor,
-                sample_col: sample,
-                'abundance': abundances.get(sample, np.nan),
-                'uncertainty': uncertainties.get(sample, np.nan),
-            })
+            peptide_results.append(
+                {
+                    precursor_col: precursor,
+                    sample_col: sample,
+                    "abundance": abundances.get(sample, np.nan),
+                    "uncertainty": uncertainties.get(sample, np.nan),
+                }
+            )
 
     result_df = pd.DataFrame(peptide_results)
 
     logger.info(f"Rolled up {len(precursors)} precursors from transitions")
-    if method == 'quality_weighted':
-        n_with_quality = sum(1 for r in rollup_details.values()
-                           if isinstance(r, AggregationResult) and r.weights_used is not None)
+    if method == "quality_weighted":
+        n_with_quality = sum(
+            1
+            for r in rollup_details.values()
+            if isinstance(r, AggregationResult) and r.weights_used is not None
+        )
         logger.info(f"Quality weighting applied to {n_with_quality} precursors")
 
     return result_df, rollup_details, learned_params
@@ -1118,17 +1128,18 @@ def rollup_transitions_to_peptides(
 # Peptide to Protein Rollup
 # ============================================================================
 
+
 def rollup_to_proteins(
     peptide_data: pd.DataFrame,
     protein_groups: list,  # List[ProteinGroup]
-    abundance_col: str = 'abundance',
-    sample_col: str = 'replicate_name',
-    peptide_col: str = 'peptide_modified',
-    method: str = 'median_polish',
-    shared_peptide_handling: str = 'all_groups',
-    n_theoretical_peptides: Optional[dict[str, int]] = None,  # For iBAQ
+    abundance_col: str = "abundance",
+    sample_col: str = "replicate_name",
+    peptide_col: str = "peptide_modified",
+    method: str = "median_polish",
+    shared_peptide_handling: str = "all_groups",
+    n_theoretical_peptides: dict[str, int] | None = None,  # For iBAQ
     topn_n: int = 3,
-    topn_selection: str = 'median_abundance',
+    topn_selection: str = "median_abundance",
     min_peptides: int = 3,
 ) -> tuple[pd.DataFrame, dict[str, MedianPolishResult], dict[str, TopNResult]]:
     """Aggregate peptide abundances to protein group level.
@@ -1182,8 +1193,9 @@ def rollup_to_proteins(
         - Dict of TopNResult per protein (if method='topn')
 
     """
-    logger.info(f"Rolling up to proteins using {method}, "
-                f"shared peptide handling: {shared_peptide_handling}")
+    logger.info(
+        f"Rolling up to proteins using {method}, shared peptide handling: {shared_peptide_handling}"
+    )
 
     # Build peptide -> groups mapping based on handling strategy
     peptide_to_groups: dict[str, set[str]] = {}
@@ -1192,9 +1204,9 @@ def rollup_to_proteins(
     for group in protein_groups:
         group_id = group.group_id
 
-        if shared_peptide_handling == 'unique_only':
+        if shared_peptide_handling == "unique_only":
             peptides = group.unique_peptides
-        elif shared_peptide_handling == 'razor':
+        elif shared_peptide_handling == "razor":
             peptides = group.peptides  # Parsimony already assigned razor peptides
         else:  # 'all_groups' - default
             # Include ALL peptides that originally mapped to this protein
@@ -1236,10 +1248,7 @@ def rollup_to_proteins(
 
         # Pivot to matrix form
         matrix = group_data.pivot_table(
-            index=peptide_col,
-            columns=sample_col,
-            values=abundance_col,
-            aggfunc='first'
+            index=peptide_col, columns=sample_col, values=abundance_col, aggfunc="first"
         )
 
         # Ensure all samples present
@@ -1284,26 +1293,26 @@ def rollup_to_proteins(
 
         else:
             # >= 3 peptides: Apply requested rollup method
-            if method == 'median_polish':
+            if method == "median_polish":
                 result = tukey_median_polish(matrix)
                 protein_abundances[group_id] = result.col_effects
                 polish_results[group_id] = result
 
-            elif method == 'topn':
+            elif method == "topn":
                 result = rollup_top_n(matrix, n=topn_n, selection=topn_selection)
                 protein_abundances[group_id] = result.abundances
                 topn_results[group_id] = result
 
-            elif method == 'ibaq':
+            elif method == "ibaq":
                 if n_theoretical_peptides is None:
                     raise ValueError("n_theoretical_peptides required for iBAQ method")
                 n_theor = n_theoretical_peptides.get(group_id, n_peptides)
                 protein_abundances[group_id] = rollup_ibaq(matrix, n_theor)
 
-            elif method == 'maxlfq':
+            elif method == "maxlfq":
                 protein_abundances[group_id] = rollup_maxlfq(matrix)
 
-            elif method == 'directlfq':
+            elif method == "directlfq":
                 protein_abundances[group_id] = rollup_directlfq(matrix)
 
             else:
@@ -1318,48 +1327,47 @@ def rollup_to_proteins(
 
     # Combine into DataFrame
     protein_df = pd.DataFrame(protein_abundances).T
-    protein_df.index.name = 'protein_group_id'
+    protein_df.index.name = "protein_group_id"
 
     # Build CV peptides DataFrame (per-sample values)
     cv_df = pd.DataFrame(protein_cv_peptides).T
-    cv_df.index.name = 'protein_group_id'
+    cv_df.index.name = "protein_group_id"
 
     # Build uncertainty DataFrame (per-sample values)
     unc_df = pd.DataFrame(protein_uncertainties).T
-    unc_df.index.name = 'protein_group_id'
+    unc_df.index.name = "protein_group_id"
 
     # Add protein metadata
     group_metadata = {
         g.group_id: {
-            'leading_protein': g.leading_protein,
-            'leading_name': g.leading_protein_name,
-            'n_peptides': g.n_peptides,
-            'n_unique_peptides': g.n_unique_peptides,
-            'qc_flag': protein_qc_flags.get(g.group_id),
+            "leading_protein": g.leading_protein,
+            "leading_name": g.leading_protein_name,
+            "n_peptides": g.n_peptides,
+            "n_unique_peptides": g.n_unique_peptides,
+            "qc_flag": protein_qc_flags.get(g.group_id),
         }
         for g in protein_groups
     }
 
-    for col in ['leading_protein', 'leading_name', 'n_peptides', 'n_unique_peptides', 'qc_flag']:
+    for col in ["leading_protein", "leading_name", "n_peptides", "n_unique_peptides", "qc_flag"]:
         protein_df[col] = protein_df.index.map(
             lambda x, c=col: group_metadata.get(x, {}).get(c, np.nan)
         )
 
     # Add low_confidence flag for proteins with < min_peptides
-    protein_df['low_confidence'] = protein_df['n_peptides'] < min_peptides
+    protein_df["low_confidence"] = protein_df["n_peptides"] < min_peptides
 
     # Log summary of low-confidence proteins
-    n_low_conf = protein_df['low_confidence'].sum()
+    n_low_conf = protein_df["low_confidence"].sum()
     if n_low_conf > 0:
         logger.info(
-            f"  {n_low_conf} proteins have < {min_peptides} peptides "
-            f"(flagged as low_confidence)"
+            f"  {n_low_conf} proteins have < {min_peptides} peptides (flagged as low_confidence)"
         )
 
     # Attach CV and uncertainty DataFrames as attributes for downstream use
     # These can be merged into long format by the caller when constructing output
-    protein_df.attrs['cv_peptides'] = cv_df
-    protein_df.attrs['uncertainties'] = unc_df
+    protein_df.attrs["cv_peptides"] = cv_df
+    protein_df.attrs["uncertainties"] = unc_df
 
     logger.info(f"Rolled up to {len(protein_df)} proteins")
 
@@ -1394,8 +1402,7 @@ def flag_outlier_peptides(
 
         # Calculate MAD per peptide across samples
         peptide_mads = residuals.apply(
-            lambda row: np.nanmedian(np.abs(row - np.nanmedian(row))),
-            axis=1
+            lambda row: np.nanmedian(np.abs(row - np.nanmedian(row))), axis=1
         )
 
         # Overall MAD for this protein
@@ -1420,13 +1427,15 @@ def flag_outlier_peptides(
             # MAD score for this peptide
             mad_score = peptide_mads[peptide] / overall_mad
 
-            rows.append({
-                'protein_group_id': group_id,
-                'peptide': peptide,
-                'mad_score': mad_score,
-                'outlier_fraction': outlier_fraction,
-                'is_outlier': outlier_fraction > 0.5 or mad_score > threshold,
-            })
+            rows.append(
+                {
+                    "protein_group_id": group_id,
+                    "peptide": peptide,
+                    "mad_score": mad_score,
+                    "outlier_fraction": outlier_fraction,
+                    "is_outlier": outlier_fraction > 0.5 or mad_score > threshold,
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -1470,34 +1479,45 @@ def extract_peptide_residuals(
 
         # Melt residuals to long format
         residuals_long = result.residuals.reset_index().melt(
-            id_vars=[result.residuals.index.name or 'index'],
-            var_name='replicate_name',
-            value_name='residual'
+            id_vars=[result.residuals.index.name or "index"],
+            var_name="replicate_name",
+            value_name="residual",
         )
-        residuals_long.rename(columns={result.residuals.index.name or 'index': 'peptide'}, inplace=True)
+        residuals_long.rename(
+            columns={result.residuals.index.name or "index": "peptide"}, inplace=True
+        )
 
         # Add protein group and row effects
-        residuals_long['protein_group_id'] = group_id
-        residuals_long['row_effect'] = residuals_long['peptide'].map(result.row_effects)
+        residuals_long["protein_group_id"] = group_id
+        residuals_long["row_effect"] = residuals_long["peptide"].map(result.row_effects)
 
         # Add summary statistics
-        for col in ['residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs']:
-            residuals_long[col] = residuals_long['peptide'].map(row_summary[col])
+        for col in ["residual_mean", "residual_std", "residual_mad", "residual_max_abs"]:
+            residuals_long[col] = residuals_long["peptide"].map(row_summary[col])
 
         rows.append(residuals_long)
 
     if not rows:
-        return pd.DataFrame(columns=[
-            'protein_group_id', 'peptide', 'replicate_name', 'residual',
-            'row_effect', 'residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs'
-        ])
+        return pd.DataFrame(
+            columns=[
+                "protein_group_id",
+                "peptide",
+                "replicate_name",
+                "residual",
+                "row_effect",
+                "residual_mean",
+                "residual_std",
+                "residual_mad",
+                "residual_max_abs",
+            ]
+        )
 
     return pd.concat(rows, ignore_index=True)
 
 
 def extract_transition_residuals(
     transition_rollup_result,  # TransitionRollupResult
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Extract transition residuals from transition rollup results in long format.
 
     This function extracts the raw residuals from transition-to-peptide median
@@ -1530,19 +1550,21 @@ def extract_transition_residuals(
 
         # Melt residuals to long format
         residuals_long = result.residuals.reset_index().melt(
-            id_vars=[result.residuals.index.name or 'index'],
-            var_name='replicate_name',
-            value_name='residual'
+            id_vars=[result.residuals.index.name or "index"],
+            var_name="replicate_name",
+            value_name="residual",
         )
-        residuals_long.rename(columns={result.residuals.index.name or 'index': 'transition'}, inplace=True)
+        residuals_long.rename(
+            columns={result.residuals.index.name or "index": "transition"}, inplace=True
+        )
 
         # Add peptide and row effects
-        residuals_long['peptide'] = peptide
-        residuals_long['row_effect'] = residuals_long['transition'].map(result.row_effects)
+        residuals_long["peptide"] = peptide
+        residuals_long["row_effect"] = residuals_long["transition"].map(result.row_effects)
 
         # Add summary statistics
-        for col in ['residual_mean', 'residual_std', 'residual_mad', 'residual_max_abs']:
-            residuals_long[col] = residuals_long['transition'].map(row_summary[col])
+        for col in ["residual_mean", "residual_std", "residual_mad", "residual_max_abs"]:
+            residuals_long[col] = residuals_long["transition"].map(row_summary[col])
 
         rows.append(residuals_long)
 
@@ -1554,7 +1576,7 @@ def extract_transition_residuals(
 
 def extract_quality_weights(
     rollup_details: dict[str, AggregationResult],
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Extract quality weights from transition rollup results in long format.
 
     When using quality_weighted transition rollup, this function extracts
@@ -1589,18 +1611,15 @@ def extract_quality_weights(
 
         # Melt to long format
         weights_long = weights_df.reset_index().melt(
-            id_vars=[weights_df.index.name or 'index'],
-            var_name='replicate_name',
-            value_name='weight'
+            id_vars=[weights_df.index.name or "index"],
+            var_name="replicate_name",
+            value_name="weight",
         )
-        weights_long.rename(
-            columns={weights_df.index.name or 'index': 'transition'},
-            inplace=True
-        )
+        weights_long.rename(columns={weights_df.index.name or "index": "transition"}, inplace=True)
 
         # Add peptide and n_signals_used
-        weights_long['peptide'] = precursor
-        weights_long['n_signals_used'] = weights_long['replicate_name'].map(result.n_signals_used)
+        weights_long["peptide"] = precursor
+        weights_long["n_signals_used"] = weights_long["replicate_name"].map(result.n_signals_used)
 
         rows.append(weights_long)
 
@@ -1637,20 +1656,28 @@ def extract_topn_selections(
 
     for group_id, result in topn_results.items():
         for rank, peptide in enumerate(result.selected_peptides, start=1):
-            rows.append({
-                'protein_group_id': group_id,
-                'peptide': peptide,
-                'selection_rank': rank,
-                'selection_method': result.selection_method,
-                'n_available': result.n_available,
-                'n_selected': len(result.selected_peptides),
-            })
+            rows.append(
+                {
+                    "protein_group_id": group_id,
+                    "peptide": peptide,
+                    "selection_rank": rank,
+                    "selection_method": result.selection_method,
+                    "n_available": result.n_available,
+                    "n_selected": len(result.selected_peptides),
+                }
+            )
 
     if not rows:
-        return pd.DataFrame(columns=[
-            'protein_group_id', 'peptide', 'selection_rank',
-            'selection_method', 'n_available', 'n_selected'
-        ])
+        return pd.DataFrame(
+            columns=[
+                "protein_group_id",
+                "peptide",
+                "selection_rank",
+                "selection_method",
+                "n_available",
+                "n_selected",
+            ]
+        )
 
     return pd.DataFrame(rows)
 
@@ -1658,6 +1685,7 @@ def extract_topn_selections(
 # ============================================================================
 # Protein-Level Batch Correction
 # ============================================================================
+
 
 @dataclass
 class ProteinBatchCorrectionResult:
@@ -1672,7 +1700,7 @@ class ProteinBatchCorrectionResult:
     """
 
     corrected_data: pd.DataFrame
-    evaluation: Optional[BatchCorrectionEvaluation]
+    evaluation: BatchCorrectionEvaluation | None
     used_fallback: bool
     method_log: list[str]
 
@@ -1680,11 +1708,11 @@ class ProteinBatchCorrectionResult:
 def batch_correct_proteins(
     protein_data: pd.DataFrame,
     sample_metadata: pd.DataFrame,
-    sample_col: str = 'replicate_name',
-    batch_col: str = 'batch',
-    sample_type_col: str = 'sample_type',
-    reference_type: str = 'reference',
-    qc_type: str = 'qc',
+    sample_col: str = "replicate_name",
+    batch_col: str = "batch",
+    sample_type_col: str = "sample_type",
+    reference_type: str = "reference",
+    qc_type: str = "qc",
     par_prior: bool = True,
     mean_only: bool = False,
     evaluate: bool = True,
@@ -1732,18 +1760,20 @@ def batch_correct_proteins(
     method_log = []
 
     # Extract abundance columns (exclude metadata columns)
-    metadata_cols = ['leading_protein', 'leading_name', 'n_peptides',
-                     'n_unique_peptides', 'protein_group_id']
+    metadata_cols = [
+        "leading_protein",
+        "leading_name",
+        "n_peptides",
+        "n_unique_peptides",
+        "protein_group_id",
+    ]
     sample_cols = [c for c in protein_data.columns if c not in metadata_cols]
 
     # Get abundance matrix (proteins × samples)
     abundance_matrix = protein_data[sample_cols].copy()
 
     # Map samples to batches
-    sample_to_batch = dict(zip(
-        sample_metadata[sample_col],
-        sample_metadata[batch_col]
-    ))
+    sample_to_batch = dict(zip(sample_metadata[sample_col], sample_metadata[batch_col]))
     batch_labels = [sample_to_batch.get(s) for s in sample_cols]
 
     # Check we have valid batches
@@ -1797,15 +1827,10 @@ def batch_correct_proteins(
 
     if evaluate:
         # Get sample type mapping
-        sample_to_type = dict(zip(
-            sample_metadata[sample_col],
-            sample_metadata[sample_type_col]
-        ))
+        sample_to_type = dict(zip(sample_metadata[sample_col], sample_metadata[sample_type_col]))
 
-        reference_cols = [s for s in sample_cols
-                         if sample_to_type.get(s) == reference_type]
-        qc_cols = [s for s in sample_cols
-                    if sample_to_type.get(s) == qc_type]
+        reference_cols = [s for s in sample_cols if sample_to_type.get(s) == reference_type]
+        qc_cols = [s for s in sample_cols if sample_to_type.get(s) == qc_type]
 
         if len(reference_cols) >= 2 and len(qc_cols) >= 2:
             # Calculate CVs before and after
@@ -1826,17 +1851,13 @@ def batch_correct_proteins(
             if qc_improvement > 0:
                 overfitting_ratio = ref_improvement / qc_improvement
             elif ref_improvement > 0:
-                overfitting_ratio = float('inf')
+                overfitting_ratio = float("inf")
             else:
                 overfitting_ratio = 1.0
 
             # Calculate batch variance
-            batch_var_before = np.var([
-                abundance_matrix[sample_cols].mean().values
-            ])
-            batch_var_after = np.var([
-                corrected_df[sample_cols].mean().values
-            ])
+            batch_var_before = np.var([abundance_matrix[sample_cols].mean().values])
+            batch_var_after = np.var([corrected_df[sample_cols].mean().values])
 
             # Determine pass/fail
             warnings = []
@@ -1844,9 +1865,7 @@ def batch_correct_proteins(
 
             if qc_cv_after > qc_cv_before * 1.1:
                 passed = False
-                warnings.append(
-                    f"QC CV increased: {qc_cv_before:.3f} -> {qc_cv_after:.3f}"
-                )
+                warnings.append(f"QC CV increased: {qc_cv_before:.3f} -> {qc_cv_after:.3f}")
 
             if overfitting_ratio > 2.0:
                 passed = False
@@ -1876,9 +1895,7 @@ def batch_correct_proteins(
 
             # Handle fallback
             if fallback_on_failure and not passed:
-                logger.warning(
-                    "Protein-level batch correction failed QC - using uncorrected data"
-                )
+                logger.warning("Protein-level batch correction failed QC - using uncorrected data")
                 for w in warnings:
                     logger.warning(f"  - {w}")
 
@@ -1892,15 +1909,15 @@ def batch_correct_proteins(
                 logger.info("Protein-level batch correction passed QC")
                 method_log.append("QC PASSED")
             else:
-                logger.warning("Protein-level batch correction failed QC but keeping corrected data")
+                logger.warning(
+                    "Protein-level batch correction failed QC but keeping corrected data"
+                )
                 method_log.append("QC FAILED (keeping corrected data)")
         else:
             logger.warning(
                 f"Cannot evaluate: {len(reference_cols)} reference, {len(qc_cols)} QC samples"
             )
-            method_log.append(
-                "Evaluation skipped: need >=2 reference and QC samples"
-            )
+            method_log.append("Evaluation skipped: need >=2 reference and QC samples")
 
     # Reconstruct full DataFrame with metadata
     result_df = protein_data.copy()
@@ -1919,15 +1936,15 @@ def protein_output_pipeline(
     peptide_data: pd.DataFrame,
     protein_groups: list,
     sample_metadata: pd.DataFrame,
-    abundance_col: str = 'abundance',
-    sample_col: str = 'replicate_name',
-    peptide_col: str = 'peptide_modified',
-    batch_col: str = 'batch',
-    sample_type_col: str = 'sample_type',
-    rollup_method: str = 'median_polish',
-    shared_peptide_handling: str = 'all_groups',
+    abundance_col: str = "abundance",
+    sample_col: str = "replicate_name",
+    peptide_col: str = "peptide_modified",
+    batch_col: str = "batch",
+    sample_type_col: str = "sample_type",
+    rollup_method: str = "median_polish",
+    shared_peptide_handling: str = "all_groups",
     batch_correction: bool = True,
-    batch_correction_params: Optional[dict] = None,
+    batch_correction_params: dict | None = None,
     min_peptides: int = 3,
 ) -> tuple[pd.DataFrame, dict, ProteinBatchCorrectionResult]:
     """Complete protein output pipeline: rollup then batch correction.
@@ -1984,12 +2001,11 @@ def protein_output_pipeline(
             sample_col=sample_col,
             batch_col=batch_col,
             sample_type_col=sample_type_col,
-            par_prior=params.get('par_prior', True),
-            mean_only=params.get('mean_only', False),
-            evaluate=params.get('evaluate', True),
-            fallback_on_failure=params.get('fallback_on_failure', True),
+            par_prior=params.get("par_prior", True),
+            mean_only=params.get("mean_only", False),
+            evaluate=params.get("evaluate", True),
+            fallback_on_failure=params.get("fallback_on_failure", True),
         )
         protein_df = batch_result.corrected_data
 
     return protein_df, polish_results, batch_result
-

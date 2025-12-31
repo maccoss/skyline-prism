@@ -82,7 +82,7 @@ class TestDesignMatrix:
 
     def test_string_batches(self):
         """Test with string batch labels."""
-        batch = np.array(['A', 'A', 'B', 'B', 'B'])
+        batch = np.array(["A", "A", "B", "B", "B"])
         design, batches, n_batch, ref_idx = _make_design_matrix(batch)
 
         assert n_batch == 2
@@ -136,7 +136,7 @@ class TestComBatCore:
         batch3 = np.random.normal(-1, 0.8, (n_features, n_samples_per_batch))
 
         data = np.hstack([batch1, batch2, batch3])
-        batch = np.array([1]*5 + [2]*5 + [3]*5)
+        batch = np.array([1] * 5 + [2] * 5 + [3] * 5)
 
         return data, batch
 
@@ -200,10 +200,7 @@ class TestComBatCore:
 
         # Reference batch should be unchanged
         ref_mask = batch == 1
-        np.testing.assert_array_almost_equal(
-            corrected[:, ref_mask],
-            data[:, ref_mask]
-        )
+        np.testing.assert_array_almost_equal(corrected[:, ref_mask], data[:, ref_mask])
 
     def test_combat_nonparametric(self, synthetic_data):
         """Test non-parametric estimation."""
@@ -221,8 +218,8 @@ class TestComBatWithPandas:
         np.random.seed(42)
         data = pd.DataFrame(
             np.random.randn(50, 9),
-            index=[f'gene_{i}' for i in range(50)],
-            columns=[f'sample_{i}' for i in range(9)]
+            index=[f"gene_{i}" for i in range(50)],
+            columns=[f"sample_{i}" for i in range(9)],
         )
         batch = np.array([1, 1, 1, 2, 2, 3, 3, 3, 3])
 
@@ -250,35 +247,37 @@ class TestComBatFromLong:
         np.random.seed(42)
 
         # Create long-format data
-        features = [f'peptide_{i}' for i in range(20)]
-        samples = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
-        batches = ['B1', 'B1', 'B1', 'B2', 'B2', 'B2']
+        features = [f"peptide_{i}" for i in range(20)]
+        samples = ["S1", "S2", "S3", "S4", "S5", "S6"]
+        batches = ["B1", "B1", "B1", "B2", "B2", "B2"]
 
         rows = []
         for feat in features:
             for i, samp in enumerate(samples):
                 # Add batch effect to B2
-                batch_effect = 2.0 if batches[i] == 'B2' else 0.0
+                batch_effect = 2.0 if batches[i] == "B2" else 0.0
                 abundance = np.random.randn() + batch_effect
-                rows.append({
-                    'precursor_id': feat,
-                    'replicate_name': samp,
-                    'batch': batches[i],
-                    'abundance': abundance
-                })
+                rows.append(
+                    {
+                        "precursor_id": feat,
+                        "replicate_name": samp,
+                        "batch": batches[i],
+                        "abundance": abundance,
+                    }
+                )
 
         df = pd.DataFrame(rows)
 
         # Apply ComBat
         result = combat_from_long(
             df,
-            abundance_col='abundance',
-            feature_col='precursor_id',
-            sample_col='replicate_name',
-            batch_col='batch'
+            abundance_col="abundance",
+            feature_col="precursor_id",
+            sample_col="replicate_name",
+            batch_col="batch",
         )
 
-        assert 'abundance_batch_corrected' in result.columns
+        assert "abundance_batch_corrected" in result.columns
         assert len(result) == len(df)
 
 
@@ -396,17 +395,19 @@ class TestReferenceValues:
         # Batch 3: samples 5-8, mean ~4, std ~1
         # Each column is a sample's values across all genes
         n_genes = 1000
-        matrix = np.column_stack([
-            np.random.normal(loc=3, scale=1, size=n_genes),
-            np.random.normal(loc=3, scale=1, size=n_genes),
-            np.random.normal(loc=3, scale=1, size=n_genes),
-            np.random.normal(loc=2, scale=0.6, size=n_genes),
-            np.random.normal(loc=2, scale=0.6, size=n_genes),
-            np.random.normal(loc=4, scale=1, size=n_genes),
-            np.random.normal(loc=4, scale=1, size=n_genes),
-            np.random.normal(loc=4, scale=1, size=n_genes),
-            np.random.normal(loc=4, scale=1, size=n_genes),
-        ])  # genes x samples (1000 x 9)
+        matrix = np.column_stack(
+            [
+                np.random.normal(loc=3, scale=1, size=n_genes),
+                np.random.normal(loc=3, scale=1, size=n_genes),
+                np.random.normal(loc=3, scale=1, size=n_genes),
+                np.random.normal(loc=2, scale=0.6, size=n_genes),
+                np.random.normal(loc=2, scale=0.6, size=n_genes),
+                np.random.normal(loc=4, scale=1, size=n_genes),
+                np.random.normal(loc=4, scale=1, size=n_genes),
+                np.random.normal(loc=4, scale=1, size=n_genes),
+                np.random.normal(loc=4, scale=1, size=n_genes),
+            ]
+        )  # genes x samples (1000 x 9)
 
         batch = np.array([1, 1, 1, 2, 2, 3, 3, 3, 3])
         return matrix, batch
@@ -476,39 +477,48 @@ class TestBatchCorrectionEvaluation:
 
             # Experimental samples (different biology per sample)
             for exp_idx in range(3):
-                sample_name = f'exp_b{batch_id}_{exp_idx}'
+                sample_name = f"exp_b{batch_id}_{exp_idx}"
                 bio_effect = np.random.randn(n_features) * 0.3
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'peptide_{feat_idx}',
-                        'replicate_name': sample_name,
-                        'batch': batch_id,
-                        'sample_type': 'experimental',
-                        'abundance': 10 + batch_offset + bio_effect[feat_idx] + np.random.randn() * 0.1
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"peptide_{feat_idx}",
+                            "replicate_name": sample_name,
+                            "batch": batch_id,
+                            "sample_type": "experimental",
+                            "abundance": 10
+                            + batch_offset
+                            + bio_effect[feat_idx]
+                            + np.random.randn() * 0.1,
+                        }
+                    )
 
             # Reference sample (same material, should be identical across batches)
-            ref_name = f'ref_b{batch_id}'
+            ref_name = f"ref_b{batch_id}"
             for feat_idx in range(n_features):
-                samples.append({
-                    'precursor_id': f'peptide_{feat_idx}',
-                    'replicate_name': ref_name,
-                    'batch': batch_id,
-                    'sample_type': 'reference',
-                    'abundance': 10 + batch_offset + np.random.randn() * 0.05  # Low noise
-                })
+                samples.append(
+                    {
+                        "precursor_id": f"peptide_{feat_idx}",
+                        "replicate_name": ref_name,
+                        "batch": batch_id,
+                        "sample_type": "reference",
+                        "abundance": 10 + batch_offset + np.random.randn() * 0.05,  # Low noise
+                    }
+                )
 
             # QC sample (same QC material per batch, different between batches)
-            qc_name = f'qc_b{batch_id}'
+            qc_name = f"qc_b{batch_id}"
             qc_offset = np.random.randn() * 0.1  # Small QC-specific variation
             for feat_idx in range(n_features):
-                samples.append({
-                    'precursor_id': f'peptide_{feat_idx}',
-                    'replicate_name': qc_name,
-                    'batch': batch_id,
-                    'sample_type': 'qc',
-                    'abundance': 10 + batch_offset + qc_offset + np.random.randn() * 0.05
-                })
+                samples.append(
+                    {
+                        "precursor_id": f"peptide_{feat_idx}",
+                        "replicate_name": qc_name,
+                        "batch": batch_id,
+                        "sample_type": "qc",
+                        "abundance": 10 + batch_offset + qc_offset + np.random.randn() * 0.05,
+                    }
+                )
 
         return pd.DataFrame(samples)
 
@@ -519,30 +529,32 @@ class TestBatchCorrectionEvaluation:
         # Apply ComBat
         corrected = combat_from_long(
             evaluation_data,
-            abundance_col='abundance',
-            feature_col='precursor_id',
-            sample_col='replicate_name',
-            batch_col='batch',
+            abundance_col="abundance",
+            feature_col="precursor_id",
+            sample_col="replicate_name",
+            batch_col="batch",
         )
 
         # Evaluate
         evaluation = evaluate_batch_correction(
             corrected,
-            abundance_before='abundance',
-            abundance_after='abundance_batch_corrected',
-            sample_type_col='sample_type',
-            feature_col='precursor_id',
-            sample_col='replicate_name',
-            batch_col='batch',
+            abundance_before="abundance",
+            abundance_after="abundance_batch_corrected",
+            sample_type_col="sample_type",
+            feature_col="precursor_id",
+            sample_col="replicate_name",
+            batch_col="batch",
         )
 
         # Reference CV should improve (same material across batches)
-        assert evaluation.reference_improvement > 0, \
+        assert evaluation.reference_improvement > 0, (
             f"Reference CV should improve, got {evaluation.reference_improvement:.3f}"
+        )
 
         # Pool CV should not get dramatically worse
-        assert evaluation.qc_cv_after <= evaluation.qc_cv_before * 1.5, \
+        assert evaluation.qc_cv_after <= evaluation.qc_cv_before * 1.5, (
             f"Pool CV increased too much: {evaluation.qc_cv_before:.3f} -> {evaluation.qc_cv_after:.3f}"
+        )
 
     def test_combat_with_reference_samples(self, evaluation_data):
         """Test the combined combat + evaluation function."""
@@ -550,18 +562,18 @@ class TestBatchCorrectionEvaluation:
 
         corrected, evaluation = combat_with_reference_samples(
             evaluation_data,
-            abundance_col='abundance',
-            feature_col='precursor_id',
-            sample_col='replicate_name',
-            batch_col='batch',
-            sample_type_col='sample_type',
+            abundance_col="abundance",
+            feature_col="precursor_id",
+            sample_col="replicate_name",
+            batch_col="batch",
+            sample_type_col="sample_type",
         )
 
-        assert 'abundance_batch_corrected' in corrected.columns
+        assert "abundance_batch_corrected" in corrected.columns
         assert evaluation is not None
-        assert hasattr(evaluation, 'passed')
-        assert hasattr(evaluation, 'reference_cv_before')
-        assert hasattr(evaluation, 'qc_cv_before')
+        assert hasattr(evaluation, "passed")
+        assert hasattr(evaluation, "reference_cv_before")
+        assert hasattr(evaluation, "qc_cv_before")
 
     def test_evaluation_detects_overfitting(self):
         """Test that evaluation flags potential overfitting."""
@@ -582,34 +594,39 @@ class TestBatchCorrectionEvaluation:
             # Reference - will "improve" dramatically
             for rep in range(3):
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'ref_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'reference',
-                        'abundance': 10 + batch_offset,
-                        'abundance_batch_corrected': 10.0,  # Perfect correction
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"ref_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "reference",
+                            "abundance": 10 + batch_offset,
+                            "abundance_batch_corrected": 10.0,  # Perfect correction
+                        }
+                    )
 
             # Pool - gets worse
             for rep in range(3):
                 for feat_idx in range(n_features):
                     original = 10 + batch_offset + np.random.randn() * 0.1
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'qc_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'qc',
-                        'abundance': original,
-                        'abundance_batch_corrected': original + np.random.randn() * 0.5,  # More noise
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"qc_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "qc",
+                            "abundance": original,
+                            "abundance_batch_corrected": original
+                            + np.random.randn() * 0.5,  # More noise
+                        }
+                    )
 
         df = pd.DataFrame(samples)
 
         evaluation = evaluate_batch_correction(
             df,
-            abundance_before='abundance',
-            abundance_after='abundance_batch_corrected',
+            abundance_before="abundance",
+            abundance_after="abundance_batch_corrected",
         )
 
         # Should detect that QC got worse
@@ -620,16 +637,16 @@ class TestBatchCorrectionEvaluation:
         from skyline_prism.batch_correction import combat_with_reference_samples
 
         # Remove QC samples
-        data_no_qc = evaluation_data[evaluation_data['sample_type'] != 'qc'].copy()
+        data_no_qc = evaluation_data[evaluation_data["sample_type"] != "qc"].copy()
 
         corrected, evaluation = combat_with_reference_samples(
             data_no_qc,
-            abundance_col='abundance',
-            sample_type_col='sample_type',
+            abundance_col="abundance",
+            sample_type_col="sample_type",
         )
 
         # Should still return corrected data, but no evaluation
-        assert 'abundance_batch_corrected' in corrected.columns
+        assert "abundance_batch_corrected" in corrected.columns
         assert evaluation is None
 
     def test_batch_correction_evaluation_dataclass(self):
@@ -647,7 +664,7 @@ class TestBatchCorrectionEvaluation:
             batch_variance_before=0.25,
             batch_variance_after=0.05,
             passed=False,
-            warnings=['Possible overfitting'],
+            warnings=["Possible overfitting"],
         )
 
         assert evaluation.reference_cv_before == 0.15
@@ -671,43 +688,47 @@ class TestBatchCorrectionEvaluation:
             # Reference samples
             for rep in range(3):
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'ref_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'reference',
-                        'abundance': 10 + batch_offset + np.random.randn() * 0.05,
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"ref_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "reference",
+                            "abundance": 10 + batch_offset + np.random.randn() * 0.05,
+                        }
+                    )
 
             # QC samples - very consistent within batch
             for rep in range(3):
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'qc_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'qc',
-                        'abundance': 10 + batch_offset + np.random.randn() * 0.02,
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"qc_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "qc",
+                            "abundance": 10 + batch_offset + np.random.randn() * 0.02,
+                        }
+                    )
 
         df = pd.DataFrame(samples)
 
         # Apply with fallback enabled
         corrected, evaluation = combat_with_reference_samples(
             df,
-            abundance_col='abundance',
+            abundance_col="abundance",
             fallback_on_failure=True,
         )
 
         # If evaluation failed, the corrected values should equal original
         if evaluation is not None and not evaluation.passed:
             # Check that fallback message is in warnings
-            assert any('FALLBACK' in w for w in evaluation.warnings)
+            assert any("FALLBACK" in w for w in evaluation.warnings)
 
             # Corrected values should match original (within floating point)
             np.testing.assert_array_almost_equal(
-                corrected['abundance_batch_corrected'].values,
-                corrected['abundance'].values,
+                corrected["abundance_batch_corrected"].values,
+                corrected["abundance"].values,
             )
 
     def test_fallback_disabled_keeps_bad_correction(self):
@@ -724,36 +745,40 @@ class TestBatchCorrectionEvaluation:
 
             for rep in range(3):
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'ref_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'reference',
-                        'abundance': 10 + batch_offset + np.random.randn() * 0.1,
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"ref_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "reference",
+                            "abundance": 10 + batch_offset + np.random.randn() * 0.1,
+                        }
+                    )
 
             for rep in range(3):
                 for feat_idx in range(n_features):
-                    samples.append({
-                        'precursor_id': f'pep_{feat_idx}',
-                        'replicate_name': f'qc_b{batch_id}_{rep}',
-                        'batch': batch_id,
-                        'sample_type': 'qc',
-                        'abundance': 10 + batch_offset + np.random.randn() * 0.05,
-                    })
+                    samples.append(
+                        {
+                            "precursor_id": f"pep_{feat_idx}",
+                            "replicate_name": f"qc_b{batch_id}_{rep}",
+                            "batch": batch_id,
+                            "sample_type": "qc",
+                            "abundance": 10 + batch_offset + np.random.randn() * 0.05,
+                        }
+                    )
 
         df = pd.DataFrame(samples)
 
         # Apply with fallback disabled
         corrected, evaluation = combat_with_reference_samples(
             df,
-            abundance_col='abundance',
+            abundance_col="abundance",
             fallback_on_failure=False,
         )
 
         # Corrected values should NOT equal original (ComBat was applied)
         # Even if evaluation failed, we keep the corrected values
         assert not np.allclose(
-            corrected['abundance_batch_corrected'].values,
-            corrected['abundance'].values,
+            corrected["abundance_batch_corrected"].values,
+            corrected["abundance"].values,
         )
