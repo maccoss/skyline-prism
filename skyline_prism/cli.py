@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pyarrow.parquet as pq
 import yaml
 
 from . import __version__
@@ -29,6 +28,7 @@ from .data_io import (
     generate_sample_metadata,
     get_parquet_source_fingerprints,
     load_sample_metadata,
+    load_sample_metadata_files,
     merge_skyline_reports,
     merge_skyline_reports_streaming,
     verify_source_fingerprints,
@@ -85,6 +85,254 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
         root_logger.info(f"Logging to: {log_file}")
 
 
+# Sample ID separator used when merging batches
+SAMPLE_ID_SEPARATOR = "__@__"
+
+
+def sample_id_to_replicate_name(sample_id: str) -> str:
+    """Extract Replicate Name from Sample ID.
+
+    Sample ID format: "ReplicateName__@__BatchName"
+    Returns the ReplicateName part.
+
+    If the Sample ID doesn't contain the separator, returns it unchanged
+    (it's already a Replicate Name).
+    """
+    if SAMPLE_ID_SEPARATOR in sample_id:
+        return sample_id.split(SAMPLE_ID_SEPARATOR)[0]
+    return sample_id
+
+
+def build_sample_type_map(
+    sample_cols: list[str],
+    metadata_df: pd.DataFrame,
+) -> dict[str, str]:
+    """Build a mapping from data column names to sample types.
+
+    Handles the case where data columns are Sample IDs (with batch suffix)
+    but metadata uses Replicate Names (without batch suffix).
+
+    Args:
+        sample_cols: Column names from the data (may be Sample IDs or Replicate Names)
+        metadata_df: Metadata DataFrame with 'sample' and 'sample_type' columns
+
+    Returns:
+        Dict mapping each sample_col to its sample_type
+
+    """
+    if metadata_df is None or "sample_type" not in metadata_df.columns:
+        return {}
+
+    # Get sample column name from metadata (normalized to 'sample')
+    if "sample" not in metadata_df.columns:
+        return {}
+
+    # Build reverse lookup: replicate_name -> sample_type
+    meta_lookup = dict(zip(metadata_df["sample"], metadata_df["sample_type"]))
+
+    # Map data columns to sample types
+    # Try direct match first, then try extracting replicate name from sample ID
+    result = {}
+    for col in sample_cols:
+        if col in meta_lookup:
+            result[col] = meta_lookup[col]
+        else:
+            # Try extracting replicate name from Sample ID format
+            replicate_name = sample_id_to_replicate_name(col)
+            if replicate_name in meta_lookup:
+                result[col] = meta_lookup[replicate_name]
+
+    return result
+
+
+def build_sample_batch_map(
+    sample_cols: list[str],
+    metadata_df: pd.DataFrame,
+) -> dict[str, str]:
+    """Build a mapping from data column names to batch names.
+
+    Handles the case where data columns are Sample IDs (with batch suffix)
+    but metadata uses Replicate Names (without batch suffix).
+
+    Args:
+        sample_cols: Column names from the data (may be Sample IDs or Replicate Names)
+        metadata_df: Metadata DataFrame with 'sample' and 'batch' columns
+
+    Returns:
+        Dict mapping each sample_col to its batch
+
+    """
+    if metadata_df is None or "batch" not in metadata_df.columns:
+        return {}
+
+    if "sample" not in metadata_df.columns:
+        return {}
+
+    # Build reverse lookup: replicate_name -> batch
+    meta_lookup = dict(zip(metadata_df["sample"], metadata_df["batch"]))
+
+    # Map data columns to batches
+    result = {}
+    for col in sample_cols:
+        if col in meta_lookup:
+            result[col] = meta_lookup[col]
+        else:
+            # Try extracting replicate name from Sample ID format
+            replicate_name = sample_id_to_replicate_name(col)
+            if replicate_name in meta_lookup:
+                result[col] = meta_lookup[replicate_name]
+
+    return result
+
+
+def estimate_batches_from_parquet(
+    parquet_path: Path,
+    sample_cols: list[str],
+    method: str = "auto",
+    n_batches: int | None = None,
+    gap_iqr_multiplier: float = 1.5,
+) -> dict[str, str]:
+    """Estimate batch assignments from acquisition times in parquet file.
+
+    Args:
+        parquet_path: Path to transition parquet file
+        sample_cols: Sample column names (may be Sample IDs)
+        method: Estimation method:
+            - "auto": Try gap detection, fall back to fixed if no gaps
+            - "fixed": Divide into n_batches equal batches by acquisition time
+            - "gap": Only use gap detection (return empty if no gaps found)
+        n_batches: Number of batches for fixed method (required if method="fixed")
+        gap_iqr_multiplier: IQR multiplier for gap detection
+
+    Returns:
+        Dict mapping sample_col -> batch label
+
+    """
+    import duckdb
+
+    con = duckdb.connect()
+
+    # Get unique samples with acquisition times
+    # Try both Sample ID and Replicate Name columns
+    try:
+        result = con.execute(f"""
+            SELECT DISTINCT "Sample ID", "Replicate Name", "Acquired Time"
+            FROM read_parquet('{parquet_path}')
+            WHERE "Acquired Time" IS NOT NULL
+        """).fetchdf()
+    except Exception:
+        # Fall back to just Replicate Name if Sample ID doesn't exist
+        try:
+            result = con.execute(f"""
+                SELECT DISTINCT "Replicate Name", "Acquired Time"
+                FROM read_parquet('{parquet_path}')
+                WHERE "Acquired Time" IS NOT NULL
+            """).fetchdf()
+            result["Sample ID"] = result["Replicate Name"]
+        except Exception:
+            con.close()
+            logger.warning("Cannot estimate batches: 'Acquired Time' column not found")
+            return {}
+    con.close()
+
+    if len(result) < 2:
+        logger.warning("Cannot estimate batches: insufficient samples with acquisition times")
+        return {}
+
+    # Parse acquisition times and sort
+    import pandas as pd
+
+    result["acquired_time"] = pd.to_datetime(result["Acquired Time"], errors="coerce")
+    result = result.dropna(subset=["acquired_time"]).sort_values("acquired_time")
+
+    if len(result) < 2:
+        return {}
+
+    # Build mapping from sample_col to batch
+    sample_to_batch = {}
+
+    if method == "fixed" and n_batches is not None and n_batches > 1:
+        # Divide into N equal batches by acquisition order
+        n_samples = len(result)
+        batch_size = n_samples // n_batches
+        remainder = n_samples % n_batches
+
+        batch_assignments = []
+        for i in range(n_batches):
+            # Distribute remainder across first batches
+            size = batch_size + (1 if i < remainder else 0)
+            batch_assignments.extend([f"batch_{i + 1}"] * size)
+
+        # Assign batches based on sorted order
+        for idx, (_, row) in enumerate(result.iterrows()):
+            sample_id = row.get("Sample ID") or row.get("Replicate Name")
+            rep_name = row.get("Replicate Name") or sample_id
+            batch = batch_assignments[idx]
+            # Map both Sample ID and Replicate Name
+            sample_to_batch[sample_id] = batch
+            if rep_name != sample_id:
+                sample_to_batch[rep_name] = batch
+
+        logger.info(f"  Estimated {n_batches} batches by acquisition time (fixed division)")
+
+    elif method in ["auto", "gap"]:
+        # Detect gaps in acquisition times
+        gaps = result["acquired_time"].diff().dt.total_seconds() / 60  # minutes
+
+        # IQR-based outlier detection for gaps
+        q1 = gaps.dropna().quantile(0.25)
+        q3 = gaps.dropna().quantile(0.75)
+        iqr = q3 - q1
+        threshold = q3 + gap_iqr_multiplier * iqr
+        # Ensure threshold is reasonable (at least 10% above median)
+        median_gap = gaps.dropna().median()
+        threshold = max(threshold, median_gap * 1.1)
+
+        # Find batch breaks
+        is_break = gaps > threshold
+        batch_num = is_break.fillna(False).cumsum() + 1
+
+        n_detected = batch_num.max()
+
+        if n_detected > 1:
+            # Assign batches based on gap detection
+            for idx, (_, row) in enumerate(result.iterrows()):
+                sample_id = row.get("Sample ID") or row.get("Replicate Name")
+                rep_name = row.get("Replicate Name") or sample_id
+                batch = f"batch_{batch_num.iloc[idx]}"
+                sample_to_batch[sample_id] = batch
+                if rep_name != sample_id:
+                    sample_to_batch[rep_name] = batch
+
+            logger.info(f"  Estimated {n_detected} batches from acquisition time gaps")
+            logger.info(f"    Gap threshold: {threshold:.1f} min (median: {median_gap:.1f} min)")
+        elif method == "auto" and n_batches is not None and n_batches > 1:
+            # Fall back to fixed division
+            return estimate_batches_from_parquet(
+                parquet_path,
+                sample_cols,
+                method="fixed",
+                n_batches=n_batches,
+                gap_iqr_multiplier=gap_iqr_multiplier,
+            )
+        else:
+            logger.info("  No significant acquisition time gaps detected")
+            return {}
+
+    # Map sample_cols to their batch assignments
+    result_map = {}
+    for col in sample_cols:
+        if col in sample_to_batch:
+            result_map[col] = sample_to_batch[col]
+        else:
+            # Try extracting replicate name from Sample ID
+            rep_name = sample_id_to_replicate_name(col)
+            if rep_name in sample_to_batch:
+                result_map[col] = sample_to_batch[rep_name]
+
+    return result_map
+
+
 # Known configuration keys for validation
 # This helps detect typos in config files
 KNOWN_CONFIG_KEYS = {
@@ -107,6 +355,7 @@ KNOWN_CONFIG_KEYS = {
         "experimental_pattern",
     },
     "batch_estimation": {
+        "method",  # "auto", "fixed", or "gap"
         "min_samples_per_batch",
         "max_samples_per_batch",
         "gap_iqr_multiplier",
@@ -257,7 +506,7 @@ def load_config(config_path: Path | None) -> dict:
 
     unknown_keys = []
     if config_path and config_path.exists():
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f)
 
         # Validate config keys before merging (logging happens later)
@@ -368,8 +617,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge multiple Skyline reports."""
-    logger = logging.getLogger(__name__)
-
     report_paths = [Path(p) for p in args.reports]
     output_path = Path(args.output)
 
@@ -686,8 +933,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Load explicit metadata if provided
     if args.metadata:
-        metadata_df = load_sample_metadata(Path(args.metadata))
-        method_log.append(f"Loaded metadata: {args.metadata}")
+        metadata_paths = [Path(p) for p in args.metadata]
+        metadata_df = load_sample_metadata_files(metadata_paths)
+        if len(metadata_paths) == 1:
+            method_log.append(f"Loaded metadata: {args.metadata[0]}")
+        else:
+            method_log.append(f"Loaded and merged metadata from {len(metadata_paths)} files")
 
     # -------------------------------------------------------------------------
     # Stage 1 (continued): Auto-detect column names from data
@@ -861,6 +1112,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "Product Charge",
                     "Precursor Charge",
                 ]
+                # Also include Replicate Name if we're using Sample ID
+                # (needed for matching metadata sample names)
+                if sample_col == "Sample ID":
+                    needed_cols.append("Replicate Name")
                 # Filter to columns that exist
                 col_check = learn_con.execute(f"""
                     SELECT column_name FROM (
@@ -871,10 +1126,27 @@ def cmd_run(args: argparse.Namespace) -> int:
                 select_cols = [c for c in needed_cols if c in available_cols]
                 select_sql = ", ".join(f'"{c}"' for c in select_cols)
 
+                # Determine which column to use for filtering
+                # Metadata sample names may match Replicate Name, not Sample ID
+                # (Sample ID often includes batch suffix like "__@__batchname")
+                filter_col = sample_col
+                if sample_col == "Sample ID" and "Replicate Name" in available_cols:
+                    # Check if metadata samples match Replicate Name values
+                    # by checking if any ref/qc sample exists in Replicate Name
+                    test_sample = (ref_samples + pool_samples)[0] if ref_samples else None
+                    if test_sample:
+                        test_result = learn_con.execute(f"""
+                            SELECT COUNT(*) FROM read_parquet('{transition_parquet}')
+                            WHERE "Replicate Name" = '{test_sample}' LIMIT 1
+                        """).fetchone()[0]
+                        if test_result > 0:
+                            filter_col = "Replicate Name"
+                            logger.info("    Using 'Replicate Name' for sample filtering")
+
                 learn_df = learn_con.execute(f"""
                     SELECT {select_sql}
                     FROM read_parquet('{transition_parquet}')
-                    WHERE "{sample_col}" IN ({sample_list_sql})
+                    WHERE "{filter_col}" IN ({sample_list_sql})
                 """).fetchdf()
                 learn_con.close()
 
@@ -890,7 +1162,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     qc_samples=pool_samples,
                     peptide_col=peptide_col,
                     transition_col=transition_col,
-                    sample_col=sample_col,
+                    sample_col=filter_col,  # Use filter_col since samples match this column
                     abundance_col=abundance_col,
                     mz_col="Product Mz",
                     shape_corr_col="Shape Correlation",
@@ -1110,12 +1382,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         return ref_cv, qc_cv
 
     # Build sample_to_type mapping for CV logging
-    sample_to_type = {}
-    if metadata_df is not None and "sample_type" in metadata_df.columns:
-        meta_sample_col = "sample_id" if "sample_id" in metadata_df.columns else "sample"
-        if meta_sample_col not in metadata_df.columns:
-            meta_sample_col = "replicate_name"
-        sample_to_type = dict(zip(metadata_df[meta_sample_col], metadata_df["sample_type"]))
+    # Uses build_sample_type_map to handle Sample ID vs Replicate Name mismatch
+    sample_to_type = build_sample_type_map(sample_cols, metadata_df)
 
     if norm_method == "rt_lowess":
         # RT-lowess normalization: align all samples to global median lowess curve
@@ -1219,21 +1487,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info("Stage 2c: Peptide ComBat Batch Correction")
         logger.info("-" * 60)
 
-        # Get batch info from metadata
-        batch_col = "batch"
-        sample_type_col = "sample_type"
-        # Use sample_id (unique across batches) if available, else sample/replicate_name
-        if "sample_id" in metadata_df.columns:
-            meta_sample_col = "sample_id"
-        elif "sample" in metadata_df.columns:
-            meta_sample_col = "sample"
-        else:
-            meta_sample_col = "replicate_name"
+        # Get batch info from metadata using helper function
+        # This handles Sample ID vs Replicate Name mismatch
+        sample_to_batch = build_sample_batch_map(sample_cols, metadata_df)
 
-        if batch_col in metadata_df.columns:
-            # Build sample -> batch mapping
-            sample_to_batch = dict(zip(metadata_df[meta_sample_col], metadata_df[batch_col]))
-
+        if sample_to_batch:
             # Check if all sample columns have batch info
             batches = [sample_to_batch.get(s) for s in sample_cols]
             n_batches = len(set(b for b in batches if b is not None))
@@ -1244,11 +1502,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 from .batch_correction import combat
 
                 # Get sample types for reference-anchored ComBat
-                sample_to_type = {}
-                if sample_type_col in metadata_df.columns:
-                    sample_to_type = dict(
-                        zip(metadata_df[meta_sample_col], metadata_df[sample_type_col])
-                    )
+                sample_to_type = build_sample_type_map(sample_cols, metadata_df)
 
                 # Prepare data for ComBat (features x samples matrix)
                 data_matrix = peptide_df[sample_cols].values
@@ -1281,7 +1535,59 @@ def cmd_run(args: argparse.Namespace) -> int:
                             f"QC median CV: {qc_cv.median():.1f}%"
                         )
         else:
-            logger.warning("No batch column in metadata - skipping batch correction")
+            # No batch column in metadata - try to estimate batches
+            batch_est_config = config.get("batch_estimation", {})
+            est_method = batch_est_config.get("method", "auto")
+            est_n_batches = batch_est_config.get("n_batches")
+            gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
+
+            logger.info("  No batch column in metadata - estimating from acquisition times...")
+
+            sample_to_batch = estimate_batches_from_parquet(
+                transition_parquet,
+                sample_cols,
+                method=est_method,
+                n_batches=est_n_batches,
+                gap_iqr_multiplier=gap_iqr,
+            )
+
+            if sample_to_batch:
+                batches = [sample_to_batch.get(s) for s in sample_cols]
+                n_batches = len(set(b for b in batches if b is not None))
+
+                if n_batches >= 2:
+                    from .batch_correction import combat
+
+                    sample_to_type = build_sample_type_map(sample_cols, metadata_df)
+                    data_matrix = peptide_df[sample_cols].values
+                    batch_labels = [sample_to_batch.get(s, "unknown") for s in sample_cols]
+
+                    logger.info(f"  Applying ComBat across {n_batches} estimated batches...")
+
+                    corrected_matrix = combat(data_matrix, batch_labels)
+
+                    for i, col in enumerate(sample_cols):
+                        peptide_df[col] = corrected_matrix[:, i]
+
+                    method_log.append(f"Peptide ComBat: {n_batches} estimated batches")
+
+                    if sample_to_type:
+                        ref_cols = [c for c in sample_cols if sample_to_type.get(c) == "reference"]
+                        qc_cols = [c for c in sample_cols if sample_to_type.get(c) == "qc"]
+
+                        if ref_cols and qc_cols:
+                            ref_linear = 2 ** peptide_df[ref_cols]
+                            qc_linear = 2 ** peptide_df[qc_cols]
+                            ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
+                            qc_cv = (qc_linear.std(axis=1) / qc_linear.mean(axis=1)) * 100
+                            logger.info(
+                                f"  Reference median CV: {ref_cv.median():.1f}%, "
+                                f"QC median CV: {qc_cv.median():.1f}%"
+                            )
+                else:
+                    logger.warning(f"Only {n_batches} batch estimated - skipping correction")
+            else:
+                logger.warning("Could not estimate batches - skipping batch correction")
     elif batch_correction_enabled:
         logger.warning("No metadata available - skipping batch correction")
     else:
@@ -1545,27 +1851,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info("Stage 5b: Generating QC Report")
         logger.info("-" * 60)
 
-        # Build sample types mapping
-        sample_types_map = {}
-        if metadata_df is not None:
-            # Use sample_id (unique across batches) if available
-            if "sample_id" in metadata_df.columns:
-                meta_sample_col = "sample_id"
-            elif "sample" in metadata_df.columns:
-                meta_sample_col = "sample"
-            else:
-                meta_sample_col = "replicate_name"
-            if "sample_type" in metadata_df.columns:
-                sample_types_map = dict(
-                    zip(metadata_df[meta_sample_col], metadata_df["sample_type"])
-                )
+        # Build sample types mapping (handles Sample ID vs Replicate Name mismatch)
+        sample_types_map = build_sample_type_map(sample_cols, metadata_df)
         qc_report_path = output_dir / qc_config.get("filename", "qc_report.html")
 
         try:
             # Build sample_batches mapping for RT-lowess plots
-            sample_batches_map = None
-            if metadata_df is not None and "batch" in metadata_df.columns:
-                sample_batches_map = dict(zip(metadata_df[meta_sample_col], metadata_df["batch"]))
+            sample_batches_map = build_sample_batch_map(sample_cols, metadata_df) or None
 
             generate_comprehensive_qc_report(
                 peptide_raw=peptide_pre_norm_df,
@@ -1925,23 +2217,26 @@ sample_annotations:
 # =============================================================================
 # Batch Estimation
 # =============================================================================
-# When batch information is not provided in metadata, PRISM estimates batches
-# from acquisition timestamps or source document names.
+# When batch information is not provided in metadata, PRISM can estimate batches
+# from acquisition timestamps.
 #
 # TIP: Include "Result File > Acquired Time" in your Skyline report for best
 # automatic batch detection.
 
 batch_estimation:
-  # Expected samples per batch (for validation)
-  min_samples_per_batch: 12
-  max_samples_per_batch: 100
+  # Estimation method:
+  #   "auto"  - Try gap detection first, fall back to fixed if no gaps found
+  #   "fixed" - Divide evenly into n_batches by acquisition time order
+  #   "gap"   - Only use gap detection (skip batch correction if no gaps)
+  method: "auto"
 
-  # IQR multiplier for detecting batch breaks from time gaps
-  # Higher = fewer batch breaks detected
-  gap_iqr_multiplier: 1.5
-
-  # Force a specific number of batches (null = automatic)
+  # Number of batches for "fixed" method (required for fixed, optional fallback for auto)
+  # Set to null to disable fixed-count batch estimation
   n_batches: null
+
+  # IQR multiplier for gap detection (lower = more sensitive to time gaps)
+  # A gap > Q3 + (gap_iqr_multiplier * IQR) is considered a batch break
+  gap_iqr_multiplier: 1.5
 
 # =============================================================================
 # Sample Outlier Detection
@@ -2191,8 +2486,9 @@ def main() -> int:
     run_parser.add_argument(
         "-m",
         "--metadata",
-        help="Sample metadata TSV (optional - "
-        "will auto-generate from sample names if not provided)",
+        nargs="+",
+        help="Sample metadata file(s) (CSV or TSV). Multiple files will be "
+        "merged. If not provided, metadata is auto-generated from sample names.",
     )
     run_parser.add_argument(
         "--reference-pattern",

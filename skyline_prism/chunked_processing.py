@@ -769,6 +769,7 @@ def rollup_transitions_sorted(
     residual_rows = []
     n_peptides = 0
     n_filtered = 0
+    last_logged_count = 0  # Track last logged value to avoid duplicate logs
 
     current_peptide = None
     current_data = []
@@ -899,8 +900,11 @@ def rollup_transitions_sorted(
                 current_peptide = peptide
                 current_data = []
 
-                if n_peptides > 0 and n_peptides % config.progress_interval == 0:
-                    logger.info(f"  Processed {n_peptides:,} peptides...")
+                # Log progress (avoid duplicate logs for same count)
+                progress_check = (n_peptides // config.progress_interval) * config.progress_interval
+                if progress_check > 0 and progress_check > last_logged_count:
+                    logger.info(f"  Processed {progress_check:,} peptides...")
+                    last_logged_count = progress_check
 
                 # In parallel mode, process batch when it reaches target size
                 if use_parallel and len(pending_peptides) >= config.peptide_batch_size:

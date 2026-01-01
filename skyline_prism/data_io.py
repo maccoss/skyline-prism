@@ -87,7 +87,7 @@ ABUNDANCE_COLUMNS = ["Area", "Total Area Fragment", "Total Area MS1"]
 
 # Sample metadata column name alternatives (Skyline conventions + PRISM conventions)
 # Order matters - first match is used
-METADATA_REPLICATE_COLUMNS = ["sample", "Replicate Name", "ReplicateName", "File Name"]
+METADATA_REPLICATE_COLUMNS = ["sample", "Replicate Name", "ReplicateName", "Replicate", "File Name"]
 METADATA_SAMPLE_TYPE_COLUMNS = ["sample_type", "Sample Type", "SampleType"]
 METADATA_BATCH_COLUMNS = ["batch", "Batch", "Batch Name"]  # Skyline uses 'Batch Name'
 
@@ -972,6 +972,73 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
         logger.info("No RunOrder column in metadata - will be calculated from acquired_time")
 
     return meta
+
+
+def load_sample_metadata_files(filepaths: list[Path]) -> pd.DataFrame:
+    """Load and merge multiple sample metadata files.
+
+    Loads each metadata file individually, validates them, and concatenates
+    them into a single DataFrame. All files must have compatible columns.
+
+    Args:
+        filepaths: List of paths to metadata files (CSV or TSV)
+
+    Returns:
+        Merged DataFrame with all samples from all files
+
+    Raises:
+        ValueError: If files have incompatible columns or validation fails
+
+    """
+    if not filepaths:
+        raise ValueError("No metadata files provided")
+
+    if len(filepaths) == 1:
+        return load_sample_metadata(filepaths[0])
+
+    logger.info(f"Loading and merging {len(filepaths)} metadata files...")
+
+    dfs = []
+    for filepath in filepaths:
+        filepath = Path(filepath)
+        logger.info(f"  Loading {filepath.name}...")
+        df = load_sample_metadata(filepath)
+        dfs.append(df)
+
+    # Check that all DataFrames have compatible columns
+    # Use the first file's columns as reference
+    ref_cols = set(dfs[0].columns)
+    for i, df in enumerate(dfs[1:], start=2):
+        other_cols = set(df.columns)
+        if ref_cols != other_cols:
+            missing = ref_cols - other_cols
+            extra = other_cols - ref_cols
+            msg = f"Metadata file {filepaths[i - 1].name} has incompatible columns."
+            if missing:
+                msg += f" Missing: {missing}."
+            if extra:
+                msg += f" Extra: {extra}."
+            # Only warn, don't fail - we'll use intersection of columns
+            logger.warning(msg)
+
+    # Concatenate all DataFrames
+    merged = pd.concat(dfs, ignore_index=True)
+
+    # Check for duplicates across files
+    if "batch" in merged.columns:
+        duplicates = merged.groupby(["sample", "batch"]).size().reset_index(name="count")
+        duplicates = duplicates[duplicates["count"] > 1]
+        if not duplicates.empty:
+            dup_list = duplicates[["sample", "batch"]].values.tolist()
+            raise ValueError(f"Duplicate sample entries across files within same batch: {dup_list}")
+    else:
+        duplicates = merged[merged["sample"].duplicated()]["sample"].tolist()
+        if duplicates:
+            raise ValueError(f"Duplicate sample entries across files: {duplicates}")
+
+    logger.info(f"  Merged {len(merged)} samples from {len(filepaths)} files")
+
+    return merged
 
 
 def merge_skyline_reports(

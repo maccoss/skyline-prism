@@ -27,6 +27,33 @@ This release focuses on performance improvements for large datasets and fixes th
 - **Incorrect Batch Correction Method**: Fixed issue where "combat_reference_anchored" was hardcoded in metadata even when using standard "combat".
 - **QC Report Layout**: Updated "Dataset Summary" table to show "Transitions" count and improved layout (Samples/Transitions/Peptides/Proteins).
 - **Redundant Plot Titles**: Removed internal titles from CV distribution plots in QC report to avoid redundancy with section headers.
+- **Sample ID vs Replicate Name Mismatch**: Fixed sample matching throughout the pipeline when data uses `Sample ID` format (ReplicateName__@__BatchName) but metadata uses `Replicate Name`. Added helper functions for consistent ID mapping.
+- **Duplicate Progress Logging**: Fixed streaming peptide rollup logging the same progress message multiple times.
+- **QC Report Sample Types**: Fixed Reference and QC samples not appearing correctly in QC report plots due to ID mismatch.
+
+## New Features
+
+### Automatic Batch Estimation
+When metadata doesn't include a `batch` column, PRISM can now estimate batches from acquisition times:
+- **Fixed mode**: Divide samples evenly into N batches by acquisition time order
+- **Gap detection**: Detect natural batch breaks from time gaps between runs
+- **Auto mode**: Try gap detection first, fall back to fixed if no gaps found
+
+```yaml
+batch_estimation:
+  method: "fixed"  # "auto", "fixed", or "gap"
+  n_batches: 5     # For fixed mode
+  gap_iqr_multiplier: 1.5  # For gap detection
+```
+
+### Multiple Metadata Files
+The `-m/--metadata` argument now accepts multiple files which are automatically merged:
+```bash
+prism run -i data.csv -m batch1_meta.csv batch2_meta.csv -o output/
+```
+
+### Replicate Column Support
+Metadata files can now use `Replicate` as a column name (in addition to existing `Replicate Name`, `sample`, etc.).
 
 ## Testing
 
@@ -34,6 +61,10 @@ This release focuses on performance improvements for large datasets and fixes th
   - Tests for skipping QC validation when no improvement found
   - Tests for proper fallback flags and reasons
   - Tests for min_improvement_pct threshold behavior
+- **New tests in test_data_io.py**:
+  - `TestLoadSampleMetadataReplicateColumn` - Tests for `Replicate` column support
+  - `TestLoadSampleMetadataFiles` - Tests for multiple metadata file merging
+  - `TestSampleIdHelpers` - Tests for Sample ID to Replicate Name conversion helpers
 
 ## Installation
 

@@ -37,6 +37,9 @@ pip install -e ".[dev,viz]"
 ```bash
 # Run complete PRISM pipeline (recommended)
 prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.tsv
+
+# Multiple metadata files are automatically merged
+prism run -i data.csv -o output/ -c config.yaml -m batch1_meta.csv batch2_meta.csv
 ```
 
 This produces:
@@ -246,11 +249,25 @@ qc_report:
 
 ## Automatic Batch Estimation
 
-If batch information is not provided in the metadata file, PRISM will automatically estimate batch assignments using the following priority:
+If batch information is not provided in the metadata file, PRISM can automatically estimate batch assignments from acquisition times. Three estimation methods are available:
 
-1. **Source documents**: Different Skyline CSV/TSV files are treated as different batches
-2. **Acquisition time gaps**: Large gaps between runs (>3× median gap) indicate batch boundaries
-3. **Equal division**: Samples are divided into approximately equal batches
+- **`auto`** (default): Try gap detection first, fall back to fixed if no gaps found
+- **`fixed`**: Divide samples evenly into N batches by acquisition time order
+- **`gap`**: Only use gap detection (skip batch correction if no gaps found)
+
+```yaml
+batch_estimation:
+  method: "auto"           # "auto", "fixed", or "gap"
+  n_batches: null          # Number of batches for "fixed" mode (or auto fallback)
+  gap_iqr_multiplier: 1.5  # For gap detection: lower = more sensitive
+```
+
+**Example** (divide into 5 artificial batches for drift correction):
+```yaml
+batch_estimation:
+  method: "fixed"
+  n_batches: 5
+```
 
 To enable time-based batch estimation, include `Result File > Acquired Time` in your Skyline report. See [SPECIFICATION.md](SPECIFICATION.md#batch-estimation) for details.
 

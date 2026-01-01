@@ -581,6 +581,15 @@ Based on current usage and known issues:
 - Added comprehensive scale handling tests (`tests/test_scale_handling.py`)
 - Test count increased from 182 to 196
 
+**December 31, 2024:**
+
+- Added automatic batch estimation from acquisition times (`batch_estimation` config)
+- Added support for multiple metadata files (`-m file1.csv file2.csv`)
+- Added `Replicate` as accepted column name in metadata
+- Fixed Sample ID vs Replicate Name mismatch throughout pipeline (helper functions)
+- Fixed QC report sample type detection (Reference/QC now appear correctly in plots)
+- Fixed duplicate progress logging in streaming peptide rollup
+
 ## Not Yet Implemented
 
 ### directLFQ

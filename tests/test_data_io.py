@@ -468,3 +468,267 @@ class TestMergeStreamingSchemaNormalization:
         assert len(sample_ids) == 2  # Pool_001 in Plate1 and Pool_001 in Plate2
         assert any("Plate1" in sid for sid in sample_ids)
         assert any("Plate2" in sid for sid in sample_ids)
+
+
+class TestLoadSampleMetadataReplicateColumn:
+    """Tests for 'Replicate' column support (without 'Name' suffix)."""
+
+    def test_replicate_column_accepted(self, tmp_path):
+        """Test that 'Replicate' column is accepted as sample identifier."""
+        metadata_file = tmp_path / "metadata.csv"
+        df = pd.DataFrame(
+            {
+                "Replicate": ["Sample1", "Sample2", "Pool1", "Ref1"],
+                "Sample Type": ["Unknown", "Unknown", "Quality Control", "Standard"],
+            }
+        )
+        df.to_csv(metadata_file, index=False)
+
+        result = load_sample_metadata(metadata_file)
+
+        # Check column was normalized to 'sample'
+        assert "sample" in result.columns
+        assert len(result) == 4
+        assert set(result["sample"].unique()) == {"Sample1", "Sample2", "Pool1", "Ref1"}
+
+    def test_replicate_column_with_batch(self, tmp_path):
+        """Test 'Replicate' column with batch information."""
+        metadata_file = tmp_path / "metadata.csv"
+        df = pd.DataFrame(
+            {
+                "Replicate": ["Sample1", "Sample2", "QC1", "Ref1"],
+                "Sample Type": ["Unknown", "Unknown", "Quality Control", "Standard"],
+                "Batch Name": ["batch1", "batch1", "batch1", "batch1"],
+            }
+        )
+        df.to_csv(metadata_file, index=False)
+
+        result = load_sample_metadata(metadata_file)
+
+        assert "sample" in result.columns
+        assert "sample_type" in result.columns
+        assert "batch" in result.columns
+        # Check Skyline types were mapped
+        assert set(result["sample_type"].unique()) == {"experimental", "qc", "reference"}
+
+
+class TestLoadSampleMetadataFiles:
+    """Tests for loading and merging multiple metadata files."""
+
+    def test_single_file(self, tmp_path):
+        """Test that single file is loaded correctly."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        metadata_file = tmp_path / "metadata.csv"
+        df = pd.DataFrame(
+            {
+                "Replicate": ["Sample1", "Sample2"],
+                "Sample Type": ["Unknown", "Unknown"],
+            }
+        )
+        df.to_csv(metadata_file, index=False)
+
+        result = load_sample_metadata_files([metadata_file])
+
+        assert len(result) == 2
+        assert "sample" in result.columns
+
+    def test_merge_two_files(self, tmp_path):
+        """Test merging two metadata files."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        # Create first file
+        meta1 = tmp_path / "batch1_metadata.csv"
+        df1 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_A1", "Sample_A2", "QC_1"],
+                "Sample Type": ["Unknown", "Unknown", "Quality Control"],
+            }
+        )
+        df1.to_csv(meta1, index=False)
+
+        # Create second file
+        meta2 = tmp_path / "batch2_metadata.csv"
+        df2 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_B1", "Sample_B2", "Ref_1"],
+                "Sample Type": ["Unknown", "Unknown", "Standard"],
+            }
+        )
+        df2.to_csv(meta2, index=False)
+
+        result = load_sample_metadata_files([meta1, meta2])
+
+        assert len(result) == 6
+        assert set(result["sample"].unique()) == {
+            "Sample_A1",
+            "Sample_A2",
+            "QC_1",
+            "Sample_B1",
+            "Sample_B2",
+            "Ref_1",
+        }
+        assert set(result["sample_type"].unique()) == {"experimental", "qc", "reference"}
+
+    def test_merge_detects_duplicates(self, tmp_path):
+        """Test that duplicate samples across files are detected."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        # Create first file
+        meta1 = tmp_path / "batch1_metadata.csv"
+        df1 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_A1", "Sample_A2"],
+                "Sample Type": ["Unknown", "Unknown"],
+            }
+        )
+        df1.to_csv(meta1, index=False)
+
+        # Create second file with duplicate sample name
+        meta2 = tmp_path / "batch2_metadata.csv"
+        df2 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_A1", "Sample_B2"],  # Sample_A1 is duplicate
+                "Sample Type": ["Unknown", "Unknown"],
+            }
+        )
+        df2.to_csv(meta2, index=False)
+
+        with pytest.raises(ValueError, match="[Dd]uplicate"):
+            load_sample_metadata_files([meta1, meta2])
+
+    def test_merge_three_files(self, tmp_path):
+        """Test merging three metadata files."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        files = []
+        for i in range(3):
+            meta_file = tmp_path / f"batch{i + 1}_metadata.csv"
+            df = pd.DataFrame(
+                {
+                    "Replicate": [f"Sample_{i + 1}_a", f"Sample_{i + 1}_b"],
+                    "Sample Type": ["Unknown", "Unknown"],
+                }
+            )
+            df.to_csv(meta_file, index=False)
+            files.append(meta_file)
+
+        result = load_sample_metadata_files(files)
+
+        assert len(result) == 6
+        assert len(result["sample"].unique()) == 6
+
+    def test_merge_preserves_extra_columns(self, tmp_path):
+        """Test that extra columns are preserved when merging."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        # Create files with extra columns
+        meta1 = tmp_path / "batch1_metadata.csv"
+        df1 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_A1"],
+                "Sample Type": ["Unknown"],
+                "Condition": ["Treatment"],
+                "Dose": [100],
+            }
+        )
+        df1.to_csv(meta1, index=False)
+
+        meta2 = tmp_path / "batch2_metadata.csv"
+        df2 = pd.DataFrame(
+            {
+                "Replicate": ["Sample_B1"],
+                "Sample Type": ["Unknown"],
+                "Condition": ["Control"],
+                "Dose": [0],
+            }
+        )
+        df2.to_csv(meta2, index=False)
+
+        result = load_sample_metadata_files([meta1, meta2])
+
+        assert len(result) == 2
+        assert "Condition" in result.columns
+        assert "Dose" in result.columns
+
+    def test_empty_list_raises_error(self, tmp_path):
+        """Test that empty file list raises error."""
+        from skyline_prism.data_io import load_sample_metadata_files
+
+        with pytest.raises(ValueError, match="No metadata files"):
+            load_sample_metadata_files([])
+
+
+class TestSampleIdHelpers:
+    """Tests for Sample ID to Replicate Name conversion helpers."""
+
+    def test_sample_id_to_replicate_name(self):
+        """Test extracting Replicate Name from Sample ID."""
+        from skyline_prism.cli import sample_id_to_replicate_name
+
+        # With separator
+        assert sample_id_to_replicate_name("Sample_A1__@__Batch1") == "Sample_A1"
+        assert (
+            sample_id_to_replicate_name("DOE-Col1-EVs-451-004__@__2025-12-DOE")
+            == "DOE-Col1-EVs-451-004"
+        )
+
+        # Without separator (already a Replicate Name)
+        assert sample_id_to_replicate_name("Sample_A1") == "Sample_A1"
+        assert sample_id_to_replicate_name("DOE-Col1-EVs-451-004") == "DOE-Col1-EVs-451-004"
+
+    def test_build_sample_type_map_direct_match(self):
+        """Test build_sample_type_map with direct matching sample names."""
+        from skyline_prism.cli import build_sample_type_map
+
+        metadata_df = pd.DataFrame(
+            {
+                "sample": ["Sample_A1", "Sample_A2", "QC_1", "Ref_1"],
+                "sample_type": ["experimental", "experimental", "qc", "reference"],
+            }
+        )
+
+        sample_cols = ["Sample_A1", "Sample_A2", "QC_1", "Ref_1"]
+        result = build_sample_type_map(sample_cols, metadata_df)
+
+        assert result["Sample_A1"] == "experimental"
+        assert result["QC_1"] == "qc"
+        assert result["Ref_1"] == "reference"
+
+    def test_build_sample_type_map_with_sample_id(self):
+        """Test build_sample_type_map with Sample ID format columns."""
+        from skyline_prism.cli import build_sample_type_map
+
+        # Metadata uses Replicate Names
+        metadata_df = pd.DataFrame(
+            {
+                "sample": ["Sample_A1", "Sample_A2", "QC_1", "Ref_1"],
+                "sample_type": ["experimental", "experimental", "qc", "reference"],
+            }
+        )
+
+        # Data columns are Sample IDs (with batch suffix)
+        sample_cols = [
+            "Sample_A1__@__Batch1",
+            "Sample_A2__@__Batch1",
+            "QC_1__@__Batch1",
+            "Ref_1__@__Batch1",
+        ]
+        result = build_sample_type_map(sample_cols, metadata_df)
+
+        assert result["Sample_A1__@__Batch1"] == "experimental"
+        assert result["QC_1__@__Batch1"] == "qc"
+        assert result["Ref_1__@__Batch1"] == "reference"
+
+    def test_build_sample_type_map_empty_metadata(self):
+        """Test build_sample_type_map with None or empty metadata."""
+        from skyline_prism.cli import build_sample_type_map
+
+        sample_cols = ["Sample_A1", "Sample_A2"]
+
+        # None metadata
+        assert build_sample_type_map(sample_cols, None) == {}
+
+        # Missing sample_type column
+        metadata_df = pd.DataFrame({"sample": ["Sample_A1", "Sample_A2"]})
+        assert build_sample_type_map(sample_cols, metadata_df) == {}
