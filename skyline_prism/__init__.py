@@ -6,7 +6,7 @@ with ComBat batch correction and robust protein quantification.
 See: https://skyline.ms for more information about Skyline.
 """
 
-__version__ = "0.1.2rc4"
+__version__ = "0.1.2"
 
 __all__ = [
     # batch_correction
@@ -208,5 +208,8 @@ from .visualization import (
     plot_normalization_comparison_wide,
     plot_pca,
     plot_pca_wide,
+    plot_rt_correction_comparison,
+    plot_rt_correction_per_sample,
+    plot_rt_residuals,
     plot_sample_correlation_matrix,
 )

@@ -583,6 +583,7 @@ Based on current usage and known issues:
 
 **December 31, 2024:**
 
+- **Released v0.1.2**
 - Added automatic batch estimation from acquisition times (`batch_estimation` config)
 - Added support for multiple metadata files (`-m file1.csv file2.csv`)
 - Added `Replicate` as accepted column name in metadata
