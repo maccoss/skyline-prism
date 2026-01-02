@@ -36,6 +36,10 @@ dependencies = [
     "pyarrow>=8.0",
     "pyyaml>=6.0",
     "duckdb>=0.9",
+    "PyQt6>=6.4.0",
+    "PyQt6-WebEngine>=6.4.0",
+    "matplotlib>=3.5",
+    "seaborn>=0.12",
 ]
 
 [project.optional-dependencies]

@@ -2443,6 +2443,39 @@ qc_report:
 """
 
 
+def cmd_viewer(args: argparse.Namespace) -> int:
+    """Launch the interactive PRISM viewer.
+
+    Args:
+        args: Command-line arguments containing output_dir.
+
+    Returns:
+        Exit code (0 = success).
+
+    """
+    output_dir = Path(args.output_dir)
+
+    if not output_dir.exists():
+        logger.error(f"Directory not found: {output_dir}")
+        return 1
+
+    try:
+        from skyline_prism.gui.viewer import main as viewer_main
+
+        # Override sys.argv for the viewer
+        import sys
+
+        original_argv = sys.argv
+        sys.argv = ["prism-viewer", str(output_dir)]
+        try:
+            return viewer_main()
+        finally:
+            sys.argv = original_argv
+    except ImportError as e:
+        logger.error(f"PyQt6 not available: {e}\nInstall with: pip install skyline-prism[gui]")
+        return 1
+
+
 def main() -> int:
     """Provide main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -2562,6 +2595,18 @@ def main() -> int:
         help="Output minimal config with only commonly-changed options",
     )
 
+    # Viewer command - launch interactive PyQt viewer
+    viewer_parser = subparsers.add_parser(
+        "viewer",
+        help="Launch the interactive PRISM results viewer",
+        description="Open the PyQt-based viewer to explore PRISM analysis results. "
+        "Requires PyQt6 (install with: pip install skyline-prism[gui]).",
+    )
+    viewer_parser.add_argument(
+        "output_dir",
+        help="PRISM output directory containing processed parquet files",
+    )
+
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -2574,6 +2619,8 @@ def main() -> int:
         return cmd_qc(args)
     elif args.command == "config-template":
         return cmd_config_template(args)
+    elif args.command == "viewer":
+        return cmd_viewer(args)
     else:
         parser.print_help()
         return 1
