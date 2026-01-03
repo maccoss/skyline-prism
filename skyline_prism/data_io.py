@@ -959,9 +959,10 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
             dup_list = duplicates[["sample", "batch"]].values.tolist()
             raise ValueError(f"Duplicate sample entries within batch: {dup_list}")
     else:
-        duplicates = meta[meta["sample"].duplicated()]["sample"].tolist()
-        if duplicates:
-            raise ValueError(f"Duplicate sample entries: {duplicates}")
+        # Don't fail on duplicates when batch is missing - the caller
+        # (load_sample_metadata_files) will assign batch from filename
+        # and duplicates across files are expected (e.g., Pool samples)
+        pass
 
     # Ensure RunOrder is numeric if present
     if "RunOrder" in meta.columns:
@@ -1003,6 +1004,14 @@ def load_sample_metadata_files(filepaths: list[Path]) -> pd.DataFrame:
         filepath = Path(filepath)
         logger.info(f"  Loading {filepath.name}...")
         df = load_sample_metadata(filepath)
+
+        # If batch column is missing, assign batch from filename
+        # This ensures samples with the same name from different files are distinguishable
+        if "batch" not in df.columns:
+            batch_name = filepath.stem  # Use filename (without extension) as batch
+            df["batch"] = batch_name
+            logger.info(f"  Assigned batch '{batch_name}' from filename")
+
         dfs.append(df)
 
     # Check that all DataFrames have compatible columns
@@ -1024,17 +1033,53 @@ def load_sample_metadata_files(filepaths: list[Path]) -> pd.DataFrame:
     # Concatenate all DataFrames
     merged = pd.concat(dfs, ignore_index=True)
 
+    # Deduplicate identical rows (same content from multiple files is fine)
+    before_dedup = len(merged)
+    merged = merged.drop_duplicates()
+    if len(merged) < before_dedup:
+        logger.info(f"Removed {before_dedup - len(merged)} duplicate metadata rows")
+
     # Check for duplicates across files
     if "batch" in merged.columns:
         duplicates = merged.groupby(["sample", "batch"]).size().reset_index(name="count")
         duplicates = duplicates[duplicates["count"] > 1]
         if not duplicates.empty:
             dup_list = duplicates[["sample", "batch"]].values.tolist()
-            raise ValueError(f"Duplicate sample entries across files within same batch: {dup_list}")
+            # If duplicates persist within a batch, this is a real problem.
+            raise ValueError(f"Duplicate sample entries within batch: {dup_list}")
     else:
-        duplicates = merged[merged["sample"].duplicated()]["sample"].tolist()
-        if duplicates:
-            raise ValueError(f"Duplicate sample entries across files: {duplicates}")
+        # If no batch column, checking simple sample duplication is too strict if
+        # files implicitly represent batches.
+        # However, without a batch column, we can't distinguish "Pool" in file A vs file B
+        # unless we assign batches derived from filenames here, OR just warn.
+        # But `load_sample_metadata` is generic.
+
+        # Let's check if duplicates exist
+        dup_mask = merged["sample"].duplicated(keep=False)
+        if dup_mask.any():
+            duplicates = merged.loc[dup_mask, "sample"].unique().tolist()
+            # Instead of failing, we should warn and rely on downstream batch estimation
+            # to handle it, BUT downstream merge_skyline_reports uses replicate_name as key.
+            # If metadata has 2 rows for "Pool_001", merge will duplicate rows in data.
+            # We MUST resolve duplicates here.
+
+            logger.warning(
+                f"Duplicate sample entries found: {duplicates[:5]}... "
+                "Attempting to resolve by deduplication."
+            )
+            # If we really have duplicates after drop_duplicates(), it means they have conflicting info
+            # (e.g. different RunOrder or SampleType for same Sample name).
+            # This is a data error.
+
+            # BUT, the user might have listed the same file twice, or overlapping content.
+            # If content is different, it's ambiguous.
+
+            # Show what differs for the first duplicate
+            ex_sample = duplicates[0]
+            ex_rows = merged[merged["sample"] == ex_sample]
+            logger.warning(f"Conflicting entries for {ex_sample}:\n{ex_rows}")
+
+            raise ValueError(f"Conflicting metadata for samples: {duplicates}")
 
     logger.info(f"  Merged {len(merged)} samples from {len(filepaths)} files")
 

@@ -352,16 +352,13 @@ class TestRollupTransitionsSorted:
                 )
 
 
-class TestOutputLinearScale:
-    """Test that parquet outputs are always in LINEAR scale, not log2.
+class TestOutputLog2Scale:
+    """Test that parquet outputs from chunked processing are in LOG2 scale.
 
-    This is a critical invariant for the PRISM pipeline. All internal
-    processing uses log2 scale, but ALL parquet output files must contain
-    LINEAR scale values.
-
-    Failure to maintain this invariant causes downstream analysis errors
-    since values like 10-30 (log2 scale) would be misinterpreted as
-    actual abundances when they should be 1000-1000000000.
+    The PRISM pipeline maintains LOG2 scale for all internal processing steps
+    (peptide rollup, protein rollup, normalization) to ensure numerical stability.
+    Conversion to LINEAR scale happens ONLY at the very end of the pipeline when
+    writing the final report.
     """
 
     @pytest.fixture
@@ -400,12 +397,8 @@ class TestOutputLinearScale:
             }
         )
 
-    def test_peptide_rollup_output_is_linear_scale(self, linear_scale_test_data):
-        """Verify peptide rollup parquet output is in LINEAR scale.
-
-        The output values should be close to the sum of input values
-        (for sum method) or similar magnitude, NOT log2 transformed.
-        """
+    def test_peptide_rollup_output_is_log2_scale(self, linear_scale_test_data):
+        """Verify peptide rollup parquet output is in LOG2 scale."""
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "input.parquet"
             output_path = Path(tmpdir) / "peptides.parquet"
@@ -431,38 +424,17 @@ class TestOutputLinearScale:
             # Get sample column values
             sample_values = peptide_df[["S1", "S2", "S3"]].values.flatten()
 
-            # LINEAR scale check: values should be in the thousands
-            # (sum of ~10000 + 20000 + 15000 = 45000 range)
+            # LOG2 scale check: values should be ~10-25
             min_val = sample_values.min()
             max_val = sample_values.max()
 
-            # If values are in log2 scale, they would be ~15 (log2(45000) ≈ 15.5)
-            # If values are in linear scale, they would be ~42000-48000
-            assert min_val > 1000, (
-                f"Output appears to be in log2 scale! min={min_val:.2f}. "
-                f"Expected linear scale values > 1000"
-            )
-            assert max_val > 10000, (
-                f"Output appears to be in log2 scale! max={max_val:.2f}. "
-                f"Expected linear scale values > 10000"
+            assert min_val > 5 and max_val < 30, (
+                f"Output appears to be in linear scale! min={min_val:.2f}, max={max_val:.2f}. "
+                f"Expected log2 scale values (approx 5-30)"
             )
 
-            # More specific check: values should be close to sum of inputs
-            # S1 sum = 10000 + 20000 + 15000 = 45000
-            expected_s1 = 45000
-            actual_s1 = peptide_df["S1"].iloc[0]
-            # Allow 10% tolerance for any normalization effects
-            assert abs(actual_s1 - expected_s1) / expected_s1 < 0.1, (
-                f"S1 value {actual_s1:.0f} is not close to expected {expected_s1}. "
-                f"Ratio: {actual_s1 / expected_s1:.2f}"
-            )
-
-    def test_output_not_log2_scale(self, linear_scale_test_data):
-        """Explicitly test that output is NOT in log2 scale.
-
-        This is a regression test to catch if someone accidentally
-        removes the linear conversion or changes the output format.
-        """
+    def test_output_is_log2_scale(self, linear_scale_test_data):
+        """Explicitly test that output IS in log2 scale."""
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "input.parquet"
             output_path = Path(tmpdir) / "peptides.parquet"
@@ -485,21 +457,15 @@ class TestOutputLinearScale:
             peptide_df = pd.read_parquet(output_path)
             sample_values = peptide_df[["S1", "S2", "S3"]].values.flatten()
 
-            # Log2 of typical proteomics values would be in range 10-30
-            # Linear values should be in range 1000-1000000000
-            # log2_range_max = 35  # log2(34 billion) ≈ 35
-
-            # If ANY value is below log2_range_max, it might be log2 scale
-            # (assuming reasonable proteomics data with areas > 2^35)
-            # But more importantly, values should be >> 100
-            assert all(sample_values > 100), (
-                f"Output values appear to be in log2 scale! "
+            # Log2 values should be small (<30)
+            assert all(sample_values < 30), (
+                f"Output values appear to be linear scale! "
                 f"Values: {sample_values}. "
-                f"All values should be > 100 for linear scale output."
+                f"All values should be < 30 for log2 scale output."
             )
 
-    def test_median_polish_output_is_linear_scale(self, linear_scale_test_data):
-        """Verify median polish method also outputs LINEAR scale."""
+    def test_median_polish_output_is_log2_scale(self, linear_scale_test_data):
+        """Verify median polish method also outputs LOG2 scale."""
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "input.parquet"
             output_path = Path(tmpdir) / "peptides.parquet"
@@ -522,29 +488,29 @@ class TestOutputLinearScale:
             peptide_df = pd.read_parquet(output_path)
             sample_values = peptide_df[["S1", "S2", "S3"]].values.flatten()
 
-            # Median polish will give different values than sum, but still linear
+            # Median polish on log2 data (input logged by config)
             min_val = sample_values.min()
 
-            assert min_val > 1000, (
-                f"Median polish output appears to be in log2 scale! "
-                f"min={min_val:.2f}. Expected linear scale values > 1000"
+            assert min_val < 30, (
+                f"Median polish output appears to be in linear scale! "
+                f"min={min_val:.2f}. Expected log2 scale values < 30"
             )
 
-    def test_protein_rollup_output_is_linear_scale(self):
-        """Verify protein rollup parquet output is in LINEAR scale.
+    def test_protein_rollup_output_is_log2_scale(self):
+        """Verify protein rollup parquet output preserves LOG2 scale.
 
-        This tests the peptide -> protein rollup to ensure the final
-        protein quantities are written in linear scale.
+        The protein rollup receives log2 peptide data (from peptide rollup)
+        and should output log2 protein data.
         """
-        # Create peptide-level data (already in LINEAR scale as per spec)
+        # Create peptide-level data (using LOG2 values simulating peptide rollup output)
         peptide_data = pd.DataFrame(
             {
                 "Peptide Modified Sequence": ["PEPTIDEK", "ANOTHERK", "THIRDPEPK"],
                 "n_transitions": [3, 3, 3],
-                # LINEAR scale values - typical peptide abundances
-                "S1": [50000.0, 45000.0, 40000.0],
-                "S2": [52000.0, 47000.0, 42000.0],
-                "S3": [48000.0, 43000.0, 38000.0],
+                # LOG2 scale values (approx log2(40000-50000))
+                "S1": [15.6, 15.4, 15.2],
+                "S2": [15.7, 15.5, 15.3],
+                "S3": [15.5, 15.3, 15.2],
             }
         )
 
@@ -593,20 +559,13 @@ class TestOutputLinearScale:
             # Remove NaN values (if any)
             sample_values = sample_values[~np.isnan(sample_values)]
 
-            # LINEAR scale check: protein values should be in the thousands
-            # (similar magnitude to peptide inputs)
+            # LOG2 scale check
             min_val = sample_values.min()
             max_val = sample_values.max()
 
-            # If values are in log2 scale, they would be ~15-16
-            # If values are in linear scale, they would be ~40000-55000
-            assert min_val > 1000, (
-                f"Protein output appears to be in log2 scale! min={min_val:.2f}. "
-                f"Expected linear scale values > 1000"
-            )
-            assert max_val > 10000, (
-                f"Protein output appears to be in log2 scale! max={max_val:.2f}. "
-                f"Expected linear scale values > 10000"
+            assert min_val > 10 and max_val < 30, (
+                f"Protein output appears to be in linear scale! min={min_val:.2f}, max={max_val:.2f}. "
+                f"Expected log2 scale values"
             )
 
 

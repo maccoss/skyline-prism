@@ -5,13 +5,9 @@ Provides a widget to display running process output and log messages.
 
 from __future__ import annotations
 
-import collections
-import logging
-from typing import Deque
-
-from PyQt6.QtCore import QProcess, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QTextCursor
-from PyQt6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget, QLabel, QProgressBar
+from PyQt6.QtCore import QProcess, pyqtSignal
+from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtWidgets import QLabel, QPlainTextEdit, QProgressBar, QVBoxLayout, QWidget
 
 
 class PRISMConsoleWidget(QWidget):
@@ -115,7 +111,7 @@ class PRISMConsoleWidget(QWidget):
         self.progress_bar.hide()
         if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
             self.status_label.setText("Analysis Completed Successfully")
-            self.append_text(f"\nProcess finished successfully.\n", color="green")
+            self.append_text("\nProcess finished successfully.\n", color="green")
             self.process_finished.emit(True, self._output_dir)
         else:
             self.status_label.setText("Analysis Failed")

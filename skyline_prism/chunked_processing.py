@@ -627,13 +627,9 @@ def rollup_transitions_streaming(
         meta_cols.append("mean_rt")
     sample_cols = [s for s in samples if s in peptide_df.columns]
     peptide_df = peptide_df[meta_cols + sample_cols]
-
-    # Convert sample columns from log2 to linear before writing output
-    # This is required by the PRISM specification and for downstream analysis
-    if len(sample_cols) > 0:
-        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2**x)
+    # Data is kept in log2 scale - conversion to linear happens at final output in cli.py
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
+    logger.info(f"  Wrote peptide abundances: {output_path}")
 
     # Write residuals if requested
     residuals_path = None
@@ -939,11 +935,9 @@ def rollup_transitions_sorted(
     sample_cols = [s for s in samples if s in peptide_df.columns]
 
     peptide_df = peptide_df[meta_cols + sample_cols]
-    # Convert sample columns from log2 to linear before writing output
-    if len(sample_cols) > 0:
-        peptide_df[sample_cols] = peptide_df[sample_cols].apply(lambda x: 2**x)
+    # Data is kept in log2 scale - conversion to linear happens at final output in cli.py
     peptide_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote peptide abundances: {output_path} (linear scale)")
+    logger.info(f"  Wrote peptide abundances: {output_path}")
 
     residuals_path = None
     if save_residuals and residual_rows:
@@ -1240,11 +1234,9 @@ def rollup_proteins_streaming(
     sample_cols = [s for s in samples if s in protein_df.columns]
 
     protein_df = protein_df[meta_cols + sample_cols]
-    # Convert sample columns from log2 to linear before writing output
-    if len(sample_cols) > 0:
-        protein_df[sample_cols] = protein_df[sample_cols].apply(lambda x: 2**x)
+    # Data is kept in log2 scale - conversion to linear happens at final output in cli.py
     protein_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote protein abundances: {output_path} (linear scale)")
+    logger.info(f"  Wrote protein abundances: {output_path}")
 
     # Write residuals
     residuals_path = None

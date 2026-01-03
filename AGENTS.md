@@ -18,6 +18,12 @@ This document provides context and guidelines for AI agents working on the Skyli
 
 ### Scale Conventions
 
+> [!CAUTION]
+> **PARQUET FILES MUST ALWAYS CONTAIN LINEAR VALUES (NOT LOG2)**
+>
+> This is a critical requirement that has been incorrectly regressed multiple times.
+> Always verify that output parquet files contain linear abundance values, not log2-transformed values.
+
 | Stage | Scale | Notes |
 |-------|-------|-------|
 
@@ -25,10 +31,19 @@ This document provides context and guidelines for AI agents working on the Skyli
 | **Internal** | LOG2 | All rollup/normalization operates on log2 scale |
 | **Output** | LINEAR | Final peptide/protein output matrices (parquet/CSV) are always written in LINEAR scale (values are 2^x, not log2(x)) |
 
-**Implementation Note:**
-All sample columns in the peptide and protein output matrices are explicitly converted from log2 to linear ($2^x$) immediately before writing the output files. This ensures all downstream quantitative analyses use true abundance values, not log2-transformed values. This is enforced in `chunked_processing.py` for both peptide and protein outputs.
+**Implementation Location:**
+The log2→linear conversion is enforced in `skyline_prism/cli.py` at the final output stage:
+- Peptide output: Line ~1610 (`for col in pep_sample_cols: peptide_output_df[col] = np.power(2, ...)`)
+- Protein output: Line ~1835 (`for col in prot_sample_cols: protein_output_df[col] = np.power(2, ...)`)
 
-**Do not write log2 values to output files.**
+**Important:** Intermediate files (`peptides_rollup.parquet`, `proteins_raw.parquet`) remain in LOG2 scale for normalization and batch correction. Only the **final** output files (`corrected_peptides.parquet`, `corrected_proteins.parquet`) are converted to linear.
+
+**Display conventions:**
+- **Box plots**: Display LINEAR values (from parquet)
+- **PCA plots**: Use LOG2 internally (convert from linear parquet for variance stabilization)
+- **CV calculations**: Always on LINEAR values
+
+**Do not write log2 values to final output files.**
 
 The pipeline automatically handles transforms:
 - Input linear values are log2-transformed for processing

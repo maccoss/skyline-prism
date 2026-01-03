@@ -2239,7 +2239,7 @@ def plot_control_correlation_wide(
     # Hierarchical clustering to reorder samples (no dendrogram, just reorder)
     if cluster and len(control_cols) >= 3:
         try:
-            from scipy.cluster.hierarchy import linkage, leaves_list
+            from scipy.cluster.hierarchy import leaves_list, linkage
             from scipy.spatial.distance import squareform
 
             # Convert correlation to distance (1 - corr)

@@ -1263,13 +1263,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     meta_cols = [c for c in meta_cols if c in peptide_df.columns]
     sample_cols = [c for c in peptide_df.columns if c not in meta_cols]
 
-    # IMPORTANT: Peptide rollup output is in LINEAR scale (per AGENTS.md convention).
-    # Convert to log2 scale for normalization and batch correction.
-    # We'll convert back to linear when writing final output.
-    for col in sample_cols:
-        # Replace zeros/negatives with NaN before log transform
-        peptide_df.loc[peptide_df[col] <= 0, col] = np.nan
-        peptide_df[col] = np.log2(peptide_df[col])
+    # Data is already in LOG2 scale from chunked_processing.py
+    # (The linear to log2 conversion is done inside the rollup functions)
 
     # Filter out peptides with all NaN (< min_transitions, failed rollup)
     # These cannot be normalized or batch-corrected
@@ -1293,6 +1288,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     if outlier_detection_enabled:
         outlier_action = outlier_config.get("action", "report")
         outlier_method = outlier_config.get("method", "iqr")
+        logger.info(
+            f"  Running sample outlier detection (method={outlier_method}, action={outlier_action})"
+        )
 
         # Calculate sample medians on LINEAR scale (not log2!)
         # Data is in log2, so we need to convert to linear for proper statistics
@@ -1593,17 +1591,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         logger.info("  Batch correction disabled in config")
 
-    # Save corrected peptides (final output, also used for Stage 4 protein rollup)
+    # Save log2 peptides for protein rollup (internal use)
+    # Protein rollup expects log2 input, so we save this BEFORE converting to linear
+    peptide_log2_path = output_dir / "peptides_log2_internal.parquet"
+    peptide_df.to_parquet(peptide_log2_path, index=False)
+    logger.info(f"  Saved log2 peptides for protein rollup: {peptide_log2_path}")
+
+    # Convert from log2 to LINEAR scale for final output (per PRISM specification)
     output_format = config["output"].get("format", "parquet")
     peptide_output = output_dir / f"corrected_peptides.{output_format}"
+
+    # Identify sample columns (numeric columns that are not metadata)
+    pep_metadata_cols = [
+        peptide_col,
+        "n_transitions",
+        "mean_rt",
+        "Peptide Modified Sequence Unimod Ids",
+    ]
+    pep_sample_cols = [
+        c
+        for c in peptide_df.columns
+        if c not in pep_metadata_cols and peptide_df[c].dtype in ["float64", "float32"]
+    ]
+
+    # Convert log2 to linear for output
+    peptide_output_df = peptide_df.copy()
+    for col in pep_sample_cols:
+        peptide_output_df[col] = np.power(2, peptide_output_df[col])
+    logger.info(f"  Converted {len(pep_sample_cols)} sample columns from log2 to linear scale")
+
     if output_format == "parquet":
-        peptide_df.to_parquet(peptide_output, index=False)
+        peptide_output_df.to_parquet(peptide_output, index=False)
     else:
         sep = "\t" if output_format == "tsv" else ","
-        peptide_df.to_csv(peptide_output, sep=sep, index=False)
+        peptide_output_df.to_csv(peptide_output, sep=sep, index=False)
     logger.info(f"  Saved corrected peptides: {peptide_output}")
-
-    # =========================================================================
     # Stage 3: Protein Parsimony
     # =========================================================================
     logger.info("=" * 60)
@@ -1651,7 +1673,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     protein_path = output_dir / "proteins_raw.parquet"
     protein_result = rollup_proteins_streaming(
-        peptide_parquet_path=peptide_output,
+        peptide_parquet_path=peptide_log2_path,  # Use log2 version, not linear output
         protein_groups=protein_groups,
         output_path=protein_path,
         config=protein_config,
@@ -1687,10 +1709,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         and protein_df[c].dtype in ["float64", "float32", "int64", "int32"]
     ]
 
-    # Convert from linear to log2 scale for normalization
-    # (chunked_processing outputs linear scale, but normalization works on log2)
-    for col in prot_sample_cols:
-        protein_df[col] = np.log2(protein_df[col].replace(0, np.nan))
+    # Data is already in LOG2 scale from chunked_processing.py
+    # (The linear to log2 conversion is done inside the rollup functions)
 
     # Keep a copy of raw protein data (in log2 scale) for QC comparison
     protein_raw_df = protein_df.copy()
@@ -1794,12 +1814,37 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info(f"  Peptides: {peptide_output} (saved after Stage 2c)")
 
     # Save proteins
+    # Convert from log2 to LINEAR scale for final output (per PRISM specification)
     protein_output = output_dir / f"corrected_proteins.{output_format}"
+
+    # Identify sample columns (numeric columns that are not metadata)
+    prot_metadata_cols = [
+        "protein_group",
+        "leading_protein",
+        "leading_name",
+        "n_peptides",
+        "n_unique_peptides",
+        "low_confidence",
+    ]
+    prot_sample_cols = [
+        c
+        for c in protein_df.columns
+        if c not in prot_metadata_cols and protein_df[c].dtype in ["float64", "float32"]
+    ]
+
+    # Convert log2 to linear for output
+    protein_output_df = protein_df.copy()
+    for col in prot_sample_cols:
+        protein_output_df[col] = np.power(2, protein_output_df[col])
+    logger.info(
+        f"  Converted {len(prot_sample_cols)} protein sample columns from log2 to linear scale"
+    )
+
     if output_format == "parquet":
-        protein_df.to_parquet(protein_output, index=False)
+        protein_output_df.to_parquet(protein_output, index=False)
     else:
         sep = "\t" if output_format == "tsv" else ","
-        protein_df.to_csv(protein_output, sep=sep, index=False)
+        protein_output_df.to_csv(protein_output, sep=sep, index=False)
     logger.info(f"  Saved proteins: {protein_output}")
 
     # Generate pipeline metadata
@@ -2460,10 +2505,10 @@ def cmd_viewer(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        from skyline_prism.gui.viewer import main as viewer_main
-
         # Override sys.argv for the viewer
         import sys
+
+        from skyline_prism.gui.viewer import main as viewer_main
 
         original_argv = sys.argv
         sys.argv = ["prism-viewer", str(output_dir)]

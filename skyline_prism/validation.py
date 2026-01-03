@@ -15,6 +15,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .normalization import RTLowessResult
 
 logger = logging.getLogger(__name__)
 

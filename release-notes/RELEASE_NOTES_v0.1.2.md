@@ -23,6 +23,11 @@ The `-m/--metadata` argument now accepts multiple files which are automatically 
 - **Improved Visualization**: Simplified plot labels, better correlation color scaling, and clearer layout.
 - **Correct Scaling**: QC plots now automatically handle linear-scale raw data vs log-scale normalized data comparisons.
 
+### Unified Viewer Improvements
+- **Enhanced Plots**: Boxplots updated for cleaner look (dots only), increased font sizes for better readability.
+- **QC Alignment**: Viewer QC plots (PCA, CV) now strictly match the algorithms used in the HTML/PDF QC reports.
+- **UI UX**: Simplified dropdown menus by removing redundant fields.
+
 ## Performance Improvements
 
 - **Adaptive Rollup Speedup**:
@@ -37,7 +42,8 @@ The `-m/--metadata` argument now accepts multiple files which are automatically 
 
 - **Sample ID Matching**: Robust handling of `Sample ID` (with batch suffix) vs `Replicate Name` mismatches throughout the pipeline.
 - **Adaptive Fallback**: Fixed logic where meaningless parameters were logged; proper fallback to sum method when adaptive learning yields no improvement.
-- **Scale Handling**: Fixed overflow/infinite value issues during log2/linear transformations.
+- **Scale Handling**: Fixed "Double Log" issues where data was redundant logged; ensured strict Log2 (internal) vs Linear (output) handling.
+- **CV Calculations**: Fixed Coefficient of Variation (CV) calculations to correctly use linear scale, ensuring accurate QC metrics.
 - **QC Plot Labels**: Fixed Reference and QC samples not being correctly identified in plots due to ID format issues.
 - **Duplicate Logging**: Fixed redundant progress messages in streaming rollup.
 - **Config Validation**: Added warnings for unknown/misspelled config keys.

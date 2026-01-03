@@ -570,8 +570,13 @@ class TestLoadSampleMetadataFiles:
         }
         assert set(result["sample_type"].unique()) == {"experimental", "qc", "reference"}
 
-    def test_merge_detects_duplicates(self, tmp_path):
-        """Test that duplicate samples across files are detected."""
+    def test_merge_resolves_duplicates_via_batch_inference(self, tmp_path):
+        """Test that duplicate samples across files are resolved by inferring batch names.
+
+        When metadata files don't have a 'Batch' column, the loader infers the batch
+        from the filename (e.g., 'batch1_metadata'). This allows 'Sample_A1' in file1
+        and 'Sample_A1' in file2 to coexist as separate samples.
+        """
         from skyline_prism.data_io import load_sample_metadata_files
 
         # Create first file
@@ -594,8 +599,17 @@ class TestLoadSampleMetadataFiles:
         )
         df2.to_csv(meta2, index=False)
 
-        with pytest.raises(ValueError, match="[Dd]uplicate"):
-            load_sample_metadata_files([meta1, meta2])
+        # Should NOT raise ValueError anymore
+        result = load_sample_metadata_files([meta1, meta2])
+
+        # We expect 4 rows total (A1, A2 from batch1; A1, B2 from batch2)
+        assert len(result) == 4
+        # Batches should be inferred
+        assert "batch" in result.columns
+        assert set(result["batch"].unique()) == {"batch1_metadata", "batch2_metadata"}
+        # Sample IDs should be unique
+        # (Though implicit sample_id creation happens later in generate_sample_metadata,
+        # load_sample_metadata just loads the DF. The merge correctness is validated here by row count.)
 
     def test_merge_three_files(self, tmp_path):
         """Test merging three metadata files."""

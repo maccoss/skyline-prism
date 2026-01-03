@@ -79,6 +79,9 @@ class PRISMResultWidget(QWidget):
         # Mapping from protein ID to peptide list
         self.protein_peptide_map: dict[str, list[str]] = {}
 
+        # Mapping from protein_group ID to display info (accession, description)
+        self.protein_info: dict[str, dict] = {}
+
         # Metadata
         self.metadata: dict | None = None
         self.sample_metadata: pd.DataFrame | None = None
@@ -378,6 +381,7 @@ class PRISMResultWidget(QWidget):
 
         Returns:
             DataFrame with abundance data for the peptide.
+
         """
         peptide_col = self._get_peptide_column(self.peptide_columns)
 
@@ -421,24 +425,83 @@ class PRISMResultWidget(QWidget):
 
         return long_df
 
-    def _get_unique_proteins(self) -> list[str]:
-        """Get list of unique protein IDs using DuckDB (fast).
+    def _get_unique_proteins(self) -> list[dict]:
+        """Get list of unique protein info using DuckDB (fast).
 
         Returns:
-            Sorted list of unique protein IDs.
+            List of dicts with protein_group, leading_protein, leading_name,
+            sorted by median abundance (descending).
+
         """
         if not self.protein_path.exists():
             return []
 
         protein_col = self._get_protein_column(self.protein_columns)
 
-        query = f"""
-            SELECT DISTINCT "{protein_col}" as protein_id
-            FROM read_parquet('{self.protein_path}')
-            ORDER BY protein_id
+        # Get all non-metadata columns (sample columns) for median calculation
+        all_cols_query = f"""
+            SELECT column_name FROM (
+                DESCRIBE SELECT * FROM read_parquet('{self.protein_path}')
+            )
         """
-        result = self.db.execute(query).df()
-        return result["protein_id"].tolist()
+        all_cols = self.db.execute(all_cols_query).fetchdf()["column_name"].tolist()
+
+        metadata_cols = [
+            "protein_group",
+            "leading_protein",
+            "leading_name",
+            "n_peptides",
+            "n_unique_peptides",
+            "low_confidence",
+        ]
+        sample_cols = [c for c in all_cols if c not in metadata_cols]
+
+        if sample_cols:
+            # Build median calculation across all sample columns
+            # Use GREATEST to handle potential nulls
+            sample_expr = ", ".join([f'"{c}"' for c in sample_cols[:50]])  # Limit for performance
+            query = f"""
+                SELECT 
+                    "{protein_col}" as protein_group,
+                    COALESCE(leading_protein, "{protein_col}") as leading_protein,
+                    COALESCE(leading_name, '') as leading_name,
+                    MEDIAN(median_val) as median_abundance
+                FROM (
+                    SELECT 
+                        "{protein_col}",
+                        leading_protein,
+                        leading_name,
+                        (SELECT MEDIAN(v) FROM (VALUES ({sample_expr})) t(v)) as median_val
+                    FROM read_parquet('{self.protein_path}')
+                )
+                GROUP BY "{protein_col}", leading_protein, leading_name
+                ORDER BY median_abundance DESC NULLS LAST
+            """
+        else:
+            query = f"""
+                SELECT DISTINCT
+                    "{protein_col}" as protein_group,
+                    COALESCE(leading_protein, "{protein_col}") as leading_protein,
+                    COALESCE(leading_name, '') as leading_name
+                FROM read_parquet('{self.protein_path}')
+                ORDER BY protein_group
+            """
+
+        try:
+            result = self.db.execute(query).df()
+        except Exception:
+            # Fallback to simple query if median calc fails
+            query = f"""
+                SELECT DISTINCT
+                    "{protein_col}" as protein_group,
+                    COALESCE(leading_protein, "{protein_col}") as leading_protein,
+                    COALESCE(leading_name, '') as leading_name
+                FROM read_parquet('{self.protein_path}')
+                ORDER BY protein_group
+            """
+            result = self.db.execute(query).df()
+
+        return result.to_dict("records")
 
     def _get_peptides_for_protein(self, protein_id: str) -> list[str]:
         """Get list of peptides for a protein using cached map.
@@ -448,6 +511,7 @@ class PRISMResultWidget(QWidget):
 
         Returns:
             Sorted list of peptide IDs for this protein.
+
         """
         return self.protein_peptide_map.get(str(protein_id), [])
 
@@ -457,7 +521,7 @@ class PRISMResultWidget(QWidget):
             return
 
         # Get grouping columns from metadata
-        exclude_cols = {"replicate", "filename", "file_name"}
+        exclude_cols = {"replicate", "filename", "file_name", "sample_id", "sample", "sample_type"}
 
         available_cols = [
             col
@@ -488,9 +552,29 @@ class PRISMResultWidget(QWidget):
             return
 
         # Add proteins to tree (no peptides yet - load on expand)
-        for protein in proteins:
-            protein_item = QTreeWidgetItem([str(protein)])
-            protein_item.setData(0, Qt.ItemDataRole.UserRole, ("protein", protein))
+        for pinfo in proteins:
+            protein_id = pinfo.get("protein_group", "")
+            accession = pinfo.get("leading_protein", protein_id)
+            description = pinfo.get("leading_name", "")
+
+            # Display format: "ACCESSION | Description" or just "ACCESSION" if no desc
+            if description:
+                # Truncate long descriptions
+                if len(description) > 60:
+                    description = description[:57] + "..."
+                display_text = f"{accession} | {description}"
+            else:
+                display_text = accession
+
+            protein_item = QTreeWidgetItem([display_text])
+            # Store protein_group as the internal ID for queries
+            protein_item.setData(0, Qt.ItemDataRole.UserRole, ("protein", protein_id))
+            # Cache the protein info for use in plot titles
+            self.protein_info[protein_id] = {
+                "accession": accession,
+                "description": description,
+                "display": display_text,
+            }
             # Add a dummy child so the expand arrow shows
             protein_item.addChild(QTreeWidgetItem(["Loading..."]))
             self.tree.addTopLevelItem(protein_item)
@@ -613,7 +697,15 @@ class PRISMResultWidget(QWidget):
             self.status_bar.showMessage(f"No data found for {protein_id}", 3000)
             return
 
-        self._create_abundance_plot(plot_data, f"Protein: {protein_id}")
+        # Get display name from cached protein info
+        pinfo = self.protein_info.get(protein_id, {})
+        display_name = pinfo.get("accession", protein_id)
+        description = pinfo.get("description", "")
+        if description:
+            title = f"{display_name} | {description[:40]}..."
+        else:
+            title = f"Protein: {display_name}"
+        self._create_abundance_plot(plot_data, title)
         self.status_bar.showMessage(f"Showing {len(plot_data)} samples for {protein_id}", 3000)
 
     def _plot_peptide_abundance(self, peptide_id: str) -> None:
@@ -682,8 +774,12 @@ class PRISMResultWidget(QWidget):
         # Determine replicate/sample column for bar plots
         sample_col = "replicate_name" if "replicate_name" in data.columns else "Replicate Name"
 
+        # Data is now stored in linear scale in parquet files
+        data = data.copy()
+
         # Create plot
-        ax.set_ylabel("Abundance")
+        ax.set_ylabel("Abundance", fontsize=12)
+        ax.tick_params(axis="both", labelsize=11)
 
         if sample_type_col and sample_type_col in data.columns:
             # Color by sample type
@@ -708,6 +804,7 @@ class PRISMResultWidget(QWidget):
                     y=abundance_col,
                     ax=ax,
                     palette=palette if hue_col == sample_type_col else None,
+                    showfliers=False,  # Hide outliers (shown as dots/circles) - users prefer swarmplot dots
                 )
                 sns.stripplot(
                     data=data,
@@ -742,7 +839,7 @@ class PRISMResultWidget(QWidget):
             except Exception as e:
                 ax.text(0.5, 0.5, f"Plot error: {e}", ha="center", va="center")
 
-        ax.set_title(title)
+        ax.set_title(title, fontsize=14)
         # ax.set_xlabel("") # Handled above
 
         self.abundance_figure.tight_layout()
@@ -773,9 +870,9 @@ class PRISMResultWidget(QWidget):
         cv_tab = self._create_cv_subtab()
         self.qc_subtabs.addTab(cv_tab, "CV Distribution")
 
-        # Correlation Heatmap subtab
-        corr_tab = self._create_correlation_subtab()
-        self.qc_subtabs.addTab(corr_tab, "Correlation")
+        # Correlation Heatmap subtab - temporarily disabled, will be added back later
+        # corr_tab = self._create_correlation_subtab()
+        # self.qc_subtabs.addTab(corr_tab, "Correlation")
 
         # Intensity Distribution subtab
         intensity_tab = self._create_intensity_subtab()
@@ -996,7 +1093,11 @@ class PRISMResultWidget(QWidget):
             sample_type_col = "sample_type" if "sample_type" in self.protein_data.columns else None
 
             # Standardize and run PCA
-            scaled_data = StandardScaler().fit_transform(pivot.values)
+            # Convert from linear to log2 for variance stabilization (PCA works better on log scale)
+            # Output parquet files are LINEAR, but PCA should use LOG2
+            log2_data = np.log2(pivot.values + 1)  # +1 to avoid log(0)
+            log2_data = np.nan_to_num(log2_data, nan=0, posinf=0, neginf=0)
+            scaled_data = StandardScaler().fit_transform(log2_data)
             pca = PCA(n_components=2)
             coords = pca.fit_transform(scaled_data)
 
@@ -1104,6 +1205,7 @@ class PRISMResultWidget(QWidget):
             ax.set_xlabel("Coefficient of Variation (%)")
             ax.set_ylabel("Count")
             ax.set_title("CV Distribution by Sample Type")
+            ax.set_xlim(0, 100)  # Limit to 0-100% like qc-report.html
             ax.axvline(x=20, color="red", linestyle="--", alpha=0.5, label="20% threshold")
 
         except Exception as e:
@@ -1235,7 +1337,7 @@ class PRISMResultWidget(QWidget):
         """Refresh all QC plots after data is loaded."""
         self._plot_pca()
         self._plot_cv_distribution()
-        self._plot_correlation()
+        # self._plot_correlation()  # Temporarily disabled
         self._plot_intensity_distribution()
 
 

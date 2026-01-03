@@ -7,7 +7,6 @@ via Skyline's External Tools dialog.
 
 from __future__ import annotations
 
-import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path

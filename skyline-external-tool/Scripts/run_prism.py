@@ -145,6 +145,7 @@ def main() -> int:
 
     try:
         from PyQt6.QtWidgets import QApplication
+
         from skyline_prism.gui.main_window import PRISMMainWindow
 
         app = QApplication(sys.argv)

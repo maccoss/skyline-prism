@@ -6,7 +6,6 @@ Combines Configuration, Console, and Results into a single window.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from typing import Any
 
 from PyQt6.QtWidgets import (
@@ -110,6 +109,7 @@ class PRISMMainWindow(QMainWindow):
 
         # Add config file (we need to dump the config dict to a temp yaml file first)
         import tempfile
+
         import yaml
 
         # Create a temporary config file
