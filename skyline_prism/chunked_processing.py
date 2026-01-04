@@ -446,6 +446,8 @@ def rollup_transitions_streaming(
     # Get samples if not provided
     if samples is None:
         samples = get_unique_values_from_parquet(parquet_path, config.sample_col)
+        # Filter out None values before sorting (can happen with missing Sample IDs)
+        samples = [s for s in samples if s is not None]
         samples = sorted(samples)
     logger.info(f"  Samples: {len(samples)}")
 
@@ -691,6 +693,8 @@ def rollup_transitions_sorted(
     # Get samples
     if samples is None:
         samples = get_unique_values_from_parquet(parquet_path, config.sample_col)
+        # Filter out None values before sorting (can happen with missing Sample IDs)
+        samples = [s for s in samples if s is not None]
         samples = sorted(samples)
     logger.info(f"  Samples: {len(samples)}")
 
@@ -1166,7 +1170,8 @@ def rollup_proteins_streaming(
         peptide_df = table.to_pandas()
 
         if samples is None:
-            samples = sorted(peptide_df[config.sample_col].unique())
+            unique_samples = peptide_df[config.sample_col].unique()
+            samples = sorted([s for s in unique_samples if s is not None])
 
         peptide_matrix = peptide_df.pivot_table(
             index=config.peptide_col,

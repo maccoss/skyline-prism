@@ -122,7 +122,7 @@ def _get_sample_colors(
     type_colors = {
         "experimental": "#1f77b4",  # Blue
         "qc": "#ff7f0e",  # Orange
-        "reference": "#2ca02c",  # Green
+        "reference": "#d62728",  # Red (for visibility over blue)
         "unknown": "#7f7f7f",  # Gray
     }
 
@@ -172,8 +172,18 @@ def plot_intensity_distribution(
     """
     _check_matplotlib()
 
-    # Get unique samples in order
-    sample_order = data[sample_col].unique()
+    # Get unique samples and sort by sample type (so same types are grouped)
+    unique_samples = list(data[sample_col].unique())
+
+    if sample_types:
+        # Sort by sample_type, then by sample name within type
+        # Order: reference first, then qc, then experimental (alphabetically)
+        type_order = {"reference": 0, "qc": 1, "experimental": 2, "unknown": 3}
+        sample_order = sorted(
+            unique_samples, key=lambda s: (type_order.get(sample_types.get(s, "unknown"), 3), s)
+        )
+    else:
+        sample_order = unique_samples
 
     # Prepare data for boxplot
     box_data = []
@@ -444,20 +454,37 @@ def plot_pca(
     # Create figure
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Get unique groups and colors
+    # Get unique groups and consistent colors
     unique_groups = pca_df["Group"].unique()
-    cmap = plt.colormaps.get_cmap("Set1")
-    group_colors = {
-        g: cmap(i / max(1, len(unique_groups) - 1)) for i, g in enumerate(unique_groups)
+
+    # Standard sample type colors (match _get_sample_colors)
+    type_colors = {
+        "experimental": "#1f77b4",  # Blue
+        "qc": "#ff7f0e",  # Orange
+        "reference": "#d62728",  # Red (for visibility)
+        "unknown": "#7f7f7f",  # Gray
     }
 
-    # Plot each group
-    for group in unique_groups:
+    # Determine plot order: experimental first, then reference, then qc (so qc is visible on top)
+    plot_order = []
+    for g in ["experimental", "Unknown", "unknown"]:
+        if g in unique_groups:
+            plot_order.append(g)
+    for g in unique_groups:
+        if g not in plot_order and g not in ["reference", "qc"]:
+            plot_order.append(g)
+    for g in ["reference", "qc"]:
+        if g in unique_groups:
+            plot_order.append(g)
+
+    # Plot each group in order
+    for group in plot_order:
         group_data = pca_df[pca_df["Group"] == group]
+        color = type_colors.get(group.lower(), type_colors.get(group, "#1f77b4"))
         ax.scatter(
             group_data["PC1"],
             group_data["PC2"],
-            c=[group_colors[group]],
+            c=[color],
             label=group,
             alpha=0.7,
             s=100,
@@ -572,17 +599,34 @@ def plot_comparative_pca(
             pca_df["Group"] = "All"
 
         unique_groups = pca_df["Group"].unique()
-        cmap = plt.colormaps.get_cmap("Set1")
-        group_colors = {
-            g: cmap(i / max(1, len(unique_groups) - 1)) for i, g in enumerate(unique_groups)
+
+        # Standard sample type colors (match _get_sample_colors)
+        type_colors = {
+            "experimental": "#1f77b4",  # Blue
+            "qc": "#ff7f0e",  # Orange
+            "reference": "#d62728",  # Red (for visibility)
+            "unknown": "#7f7f7f",  # Gray
         }
 
-        for group in unique_groups:
+        # Determine plot order: experimental first, then reference, then qc (on top)
+        plot_order = []
+        for g in ["experimental", "Unknown", "unknown"]:
+            if g in unique_groups:
+                plot_order.append(g)
+        for g in unique_groups:
+            if g not in plot_order and g not in ["reference", "qc"]:
+                plot_order.append(g)
+        for g in ["reference", "qc"]:
+            if g in unique_groups:
+                plot_order.append(g)
+
+        for group in plot_order:
             group_data = pca_df[pca_df["Group"] == group]
+            color = type_colors.get(group.lower(), type_colors.get(group, "#1f77b4"))
             ax.scatter(
                 group_data["PC1"],
                 group_data["PC2"],
-                c=[group_colors[group]],
+                c=[color],
                 label=group,
                 alpha=0.7,
                 s=80,
@@ -1665,14 +1709,23 @@ def plot_intensity_distribution_wide(
     """
     _check_matplotlib()
 
+    # Sort samples by sample_type if available (so same types are grouped)
+    if sample_types:
+        type_order = {"reference": 0, "qc": 1, "experimental": 2, "unknown": 3}
+        sorted_samples = sorted(
+            sample_cols, key=lambda s: (type_order.get(sample_types.get(s, "unknown"), 3), s)
+        )
+    else:
+        sorted_samples = sample_cols
+
     # Prepare data for boxplot
     box_data = []
-    for sample in sample_cols:
+    for sample in sorted_samples:
         sample_data = data[sample].dropna()
         box_data.append(sample_data.values)
 
     # Get colors
-    colors, legend = _get_sample_colors(sample_cols, sample_types)
+    colors, legend = _get_sample_colors(sorted_samples, sample_types)
 
     # Create figure
     fig, ax = plt.subplots(figsize=figsize)
@@ -1680,7 +1733,7 @@ def plot_intensity_distribution_wide(
     # Create box plot
     bp = ax.boxplot(
         box_data,
-        positions=range(len(sample_cols)),
+        positions=range(len(sorted_samples)),
         widths=0.6,
         patch_artist=True,
         showfliers=False,
@@ -1697,14 +1750,14 @@ def plot_intensity_distribution_wide(
     ax.set_title(title, fontsize=14, fontweight="bold")
 
     # X-axis labels
-    if len(sample_cols) <= 20:
-        ax.set_xticks(range(len(sample_cols)))
-        ax.set_xticklabels(sample_cols, rotation=45, ha="right", fontsize=8)
+    if len(sorted_samples) <= 20:
+        ax.set_xticks(range(len(sorted_samples)))
+        ax.set_xticklabels(sorted_samples, rotation=45, ha="right", fontsize=8)
     else:
-        n = max(1, len(sample_cols) // 20)
-        ax.set_xticks(range(0, len(sample_cols), n))
+        n = max(1, len(sorted_samples) // 20)
+        ax.set_xticks(range(0, len(sorted_samples), n))
         ax.set_xticklabels(
-            [sample_cols[i] for i in range(0, len(sample_cols), n)],
+            [sorted_samples[i] for i in range(0, len(sorted_samples), n)],
             rotation=45,
             ha="right",
             fontsize=8,
@@ -1881,17 +1934,34 @@ def plot_pca_wide(
     fig, ax = plt.subplots(figsize=figsize)
 
     unique_groups = pca_df["Group"].unique()
-    cmap = plt.colormaps.get_cmap("Set1")
-    group_colors = {
-        g: cmap(i / max(1, len(unique_groups) - 1)) for i, g in enumerate(unique_groups)
+
+    # Standard sample type colors (match _get_sample_colors)
+    type_colors = {
+        "experimental": "#1f77b4",  # Blue
+        "qc": "#ff7f0e",  # Orange
+        "reference": "#d62728",  # Red (for visibility)
+        "unknown": "#7f7f7f",  # Gray
     }
 
-    for group in unique_groups:
+    # Determine plot order: experimental first, then reference, then qc (on top)
+    plot_order = []
+    for g in ["experimental", "Unknown", "unknown", "All"]:
+        if g in unique_groups:
+            plot_order.append(g)
+    for g in unique_groups:
+        if g not in plot_order and g not in ["reference", "qc"]:
+            plot_order.append(g)
+    for g in ["reference", "qc"]:
+        if g in unique_groups:
+            plot_order.append(g)
+
+    for group in plot_order:
         group_data = pca_df[pca_df["Group"] == group]
+        color = type_colors.get(group.lower(), type_colors.get(group, "#1f77b4"))
         ax.scatter(
             group_data["PC1"],
             group_data["PC2"],
-            c=[group_colors[group]],
+            c=[color],
             label=group,
             alpha=0.7,
             s=80,
@@ -1982,17 +2052,34 @@ def plot_comparative_pca_wide(
             pca_df["Group"] = "All"
 
         unique_groups = pca_df["Group"].unique()
-        cmap = plt.colormaps.get_cmap("Set1")
-        group_colors = {
-            g: cmap(i / max(1, len(unique_groups) - 1)) for i, g in enumerate(unique_groups)
+
+        # Standard sample type colors (match _get_sample_colors)
+        type_colors = {
+            "experimental": "#1f77b4",  # Blue
+            "qc": "#ff7f0e",  # Orange
+            "reference": "#d62728",  # Red (for visibility)
+            "unknown": "#7f7f7f",  # Gray
         }
 
-        for group in unique_groups:
+        # Determine plot order: experimental first, then reference, then qc (on top)
+        plot_order = []
+        for g in ["experimental", "Unknown", "unknown", "All"]:
+            if g in unique_groups:
+                plot_order.append(g)
+        for g in unique_groups:
+            if g not in plot_order and g not in ["reference", "qc"]:
+                plot_order.append(g)
+        for g in ["reference", "qc"]:
+            if g in unique_groups:
+                plot_order.append(g)
+
+        for group in plot_order:
             group_data = pca_df[pca_df["Group"] == group]
+            color = type_colors.get(group.lower(), type_colors.get(group, "#1f77b4"))
             ax.scatter(
                 group_data["PC1"],
                 group_data["PC2"],
-                c=[group_colors[group]],
+                c=[color],
                 label=group,
                 alpha=0.7,
                 s=80,
@@ -2567,6 +2654,15 @@ def plot_boxplot_two_stage(
     """
     _check_matplotlib()
 
+    # Sort samples by sample_type if available (so same types are grouped)
+    if sample_types:
+        type_order = {"reference": 0, "qc": 1, "experimental": 2, "unknown": 3}
+        sorted_samples = sorted(
+            sample_cols, key=lambda s: (type_order.get(sample_types.get(s, "unknown"), 3), s)
+        )
+    else:
+        sorted_samples = sample_cols
+
     datasets = [
         (data_before, before_label),
         (data_after, after_label),
@@ -2574,13 +2670,13 @@ def plot_boxplot_two_stage(
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
 
-    # Get colors for samples
-    colors, legend = _get_sample_colors(sample_cols, sample_types)
+    # Get colors for samples (using sorted order)
+    colors, legend = _get_sample_colors(sorted_samples, sample_types)
 
     for ax, (df, stage_label) in zip(axes, datasets):
         # Prepare data for boxplot
         box_data = []
-        for sample in sample_cols:
+        for sample in sorted_samples:
             if sample in df.columns:
                 sample_data = df[sample].dropna()
                 box_data.append(sample_data.values)
@@ -2590,7 +2686,7 @@ def plot_boxplot_two_stage(
         # Create box plot
         bp = ax.boxplot(
             box_data,
-            positions=range(len(sample_cols)),
+            positions=range(len(sorted_samples)),
             widths=0.6,
             patch_artist=True,
             showfliers=False,
@@ -2613,18 +2709,18 @@ def plot_boxplot_two_stage(
         ax.grid(True, alpha=0.3, axis="y")
 
         # Reduce x-tick labels for readability
-        if len(sample_cols) > 20:
-            n = max(1, len(sample_cols) // 10)
-            ax.set_xticks(range(0, len(sample_cols), n))
+        if len(sorted_samples) > 20:
+            n = max(1, len(sorted_samples) // 10)
+            ax.set_xticks(range(0, len(sorted_samples), n))
             ax.set_xticklabels(
-                [sample_cols[i][:15] for i in range(0, len(sample_cols), n)],
+                [sorted_samples[i][:15] for i in range(0, len(sorted_samples), n)],
                 rotation=45,
                 ha="right",
                 fontsize=7,
             )
         else:
-            ax.set_xticks(range(len(sample_cols)))
-            ax.set_xticklabels(sample_cols, rotation=45, ha="right", fontsize=7)
+            ax.set_xticks(range(len(sorted_samples)))
+            ax.set_xticklabels(sorted_samples, rotation=45, ha="right", fontsize=7)
 
     # Add legend outside plots
     if legend:
@@ -2679,6 +2775,15 @@ def plot_boxplot_three_stage(
     """
     _check_matplotlib()
 
+    # Sort samples by sample_type if available (so same types are grouped)
+    if sample_types:
+        type_order = {"reference": 0, "qc": 1, "experimental": 2, "unknown": 3}
+        sorted_samples = sorted(
+            sample_cols, key=lambda s: (type_order.get(sample_types.get(s, "unknown"), 3), s)
+        )
+    else:
+        sorted_samples = sample_cols
+
     datasets = [
         (data_rawsum, "Raw Sum"),
         (data_medianpolish, "Median Polish"),
@@ -2687,13 +2792,13 @@ def plot_boxplot_three_stage(
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-    # Get colors for samples
-    colors, legend = _get_sample_colors(sample_cols, sample_types)
+    # Get colors for samples (using sorted order)
+    colors, legend = _get_sample_colors(sorted_samples, sample_types)
 
     for ax, (df, stage_label) in zip(axes, datasets):
         # Prepare data for boxplot
         box_data = []
-        for sample in sample_cols:
+        for sample in sorted_samples:
             if sample in df.columns:
                 sample_data = df[sample].dropna()
                 box_data.append(sample_data.values)
@@ -2703,7 +2808,7 @@ def plot_boxplot_three_stage(
         # Create box plot
         bp = ax.boxplot(
             box_data,
-            positions=range(len(sample_cols)),
+            positions=range(len(sorted_samples)),
             widths=0.6,
             patch_artist=True,
             showfliers=False,
@@ -2726,18 +2831,18 @@ def plot_boxplot_three_stage(
         ax.grid(True, alpha=0.3, axis="y")
 
         # Reduce x-tick labels for readability
-        if len(sample_cols) > 20:
-            n = max(1, len(sample_cols) // 10)
-            ax.set_xticks(range(0, len(sample_cols), n))
+        if len(sorted_samples) > 20:
+            n = max(1, len(sorted_samples) // 10)
+            ax.set_xticks(range(0, len(sorted_samples), n))
             ax.set_xticklabels(
-                [sample_cols[i][:15] for i in range(0, len(sample_cols), n)],
+                [sorted_samples[i][:15] for i in range(0, len(sorted_samples), n)],
                 rotation=45,
                 ha="right",
                 fontsize=7,
             )
         else:
-            ax.set_xticks(range(len(sample_cols)))
-            ax.set_xticklabels(sample_cols, rotation=45, ha="right", fontsize=7)
+            ax.set_xticks(range(len(sorted_samples)))
+            ax.set_xticklabels(sorted_samples, rotation=45, ha="right", fontsize=7)
 
     # Add legend outside plots
     if legend:
@@ -3066,7 +3171,7 @@ def plot_rt_bin_cv_comparison(
         sample_types = {s: "reference" for s in sample_cols}
 
     control_types = ["reference", "qc"]
-    type_colors = {"reference": "#2ca02c", "qc": "#ff7f0e"}
+    type_colors = {"reference": "#d62728", "qc": "#ff7f0e"}
     type_labels = {"reference": "Reference Samples", "qc": "QC Samples"}
 
     for ax_idx, control_type in enumerate(control_types):

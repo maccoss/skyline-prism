@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skyline-prism"
-version = "0.1.2"
+version = "0.1.3"
 description = "PRISM (Proteomics Reference-Integrated Signal Modeling) - RT-aware normalization for Skyline proteomics data"
 readme = "README.md"
 license = "MIT"

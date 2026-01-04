@@ -3,10 +3,10 @@
 A normalization pipeline for LC-MS proteomics data exported from Skyline,
 with ComBat batch correction and robust protein quantification.
 
-See: https://skyline.ms for more information about Skyline.
+See: https://skyline.ms for more inflsormation about Skyline.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     # batch_correction

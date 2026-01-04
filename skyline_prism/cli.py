@@ -552,17 +552,20 @@ def _find_unknown_config_keys(user_config: dict) -> list[str]:
     return unknown_keys
 
 
-def load_config_from_provenance(provenance_path: Path) -> dict:
-    """Load configuration from a previous pipeline run's provenance JSON.
+def load_config_from_provenance(provenance_path: Path) -> tuple[dict, dict]:
+    """Load configuration and file paths from a previous pipeline run's provenance JSON.
 
     This enables reproducibility by allowing users to re-run the pipeline
-    with the exact same parameters as a previous run.
+    with the exact same parameters as a previous run, and optionally
+    reuse the same input and metadata files.
 
     Args:
         provenance_path: Path to metadata.json from a previous PRISM run
 
     Returns:
-        Configuration dictionary compatible with load_config() output
+        Tuple of (config, provenance_data):
+        - config: Configuration dictionary compatible with load_config() output
+        - provenance_data: Full provenance dict containing source_files, metadata_files, etc.
 
     Raises:
         ValueError: If the provenance file is missing required fields
@@ -601,7 +604,7 @@ def load_config_from_provenance(provenance_path: Path) -> dict:
     logger.info(f"  Original pipeline version: {provenance.get('pipeline_version', 'unknown')}")
     logger.info(f"  Original processing date: {provenance.get('processing_date', 'unknown')}")
 
-    return config
+    return config, provenance
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -792,9 +795,43 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
 
     # Load configuration
+    provenance_data = None
     if hasattr(args, "from_provenance") and args.from_provenance:
-        config = load_config_from_provenance(Path(args.from_provenance))
+        provenance_path = Path(args.from_provenance)
+        config, provenance_data = load_config_from_provenance(provenance_path)
+        provenance_dir = provenance_path.parent
         method_log = [f"Configuration loaded from provenance: {args.from_provenance}"]
+
+        # Auto-load input files if not explicitly provided
+        if not args.input and "source_files" in provenance_data:
+            source_files = provenance_data["source_files"]
+            missing = [f for f in source_files if not Path(f).exists()]
+            if missing:
+                logger.error("Some source files from provenance not found:")
+                for f in missing:
+                    logger.error(f"  - {f}")
+                logger.error("Please provide input files with -i flag")
+                return 1
+            args.input = source_files
+            logger.info(f"  Using {len(source_files)} input files from provenance")
+
+        # Auto-load metadata files if not explicitly provided
+        if not args.metadata and provenance_data.get("metadata_source") == "user_provided":
+            meta_files = provenance_data.get("metadata_files", [])
+            if meta_files:
+                missing = [f for f in meta_files if not Path(f).exists()]
+                if missing:
+                    # Fall back to saved sample_metadata.tsv
+                    saved_meta = provenance_dir / "sample_metadata.tsv"
+                    if saved_meta.exists():
+                        logger.info(f"  Original metadata files moved; using saved {saved_meta}")
+                        args.metadata = [str(saved_meta)]
+                    else:
+                        logger.warning(f"  Metadata files not found and no saved TSV: {missing}")
+                else:
+                    args.metadata = meta_files
+                    logger.info(f"  Using {len(meta_files)} metadata files from provenance")
+
         if args.config:
             yaml_config = load_config(Path(args.config))
             config = _deep_merge(config, yaml_config)
@@ -932,9 +969,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     # Load explicit metadata if provided
+    # Track metadata source and files for provenance
+    metadata_source = "auto_generated"
+    metadata_input_files: list[str] = []
+
     if args.metadata:
         metadata_paths = [Path(p) for p in args.metadata]
         metadata_df = load_sample_metadata_files(metadata_paths)
+
+        # Always save merged metadata to output directory
+        merged_metadata_path = output_dir / "sample_metadata.tsv"
+        metadata_df.to_csv(merged_metadata_path, sep="\t", index=False)
+        logger.info(f"  Saved merged metadata: {merged_metadata_path}")
+
+        # Track for provenance
+        metadata_source = "user_provided"
+        metadata_input_files = [str(p.resolve()) for p in metadata_paths]
+
         if len(metadata_paths) == 1:
             method_log.append(f"Loaded metadata: {args.metadata[0]}")
         else:
@@ -1652,7 +1703,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     groups_output = output_dir / "protein_groups.tsv"
     export_protein_groups(protein_groups, str(groups_output))
-    method_log.append(f"Protein groups: {len(protein_groups)}")
 
     # =========================================================================
     # Stage 4: Peptide -> Protein Rollup
@@ -1677,10 +1727,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         protein_groups=protein_groups,
         output_path=protein_path,
         config=protein_config,
-        samples=samples,
+        samples=pep_sample_cols,  # Use filtered sample list (excludes outliers)
         save_residuals=config["output"].get("include_residuals", True),
     )
-    method_log.append(f"Protein rollup: {protein_result.n_proteins:,} proteins")
+    rollup_method = config["protein_rollup"].get("method", "median_polish")
+    method_log.append(
+        f"Protein rollup ({rollup_method}): {protein_result.n_proteins:,} proteins "
+        f"from {len(protein_groups):,} groups"
+    )
 
     # -------------------------------------------------------------------------
     # Stage 4b: Protein Global Normalization
@@ -1851,7 +1905,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     metadata = {
         "pipeline_version": __version__,
         "processing_date": datetime.now(timezone.utc).isoformat(),
-        "source_files": [str(p) for p in input_paths],
+        "source_files": [str(p.resolve()) for p in input_paths],
+        "metadata_files": metadata_input_files,
+        "metadata_source": metadata_source,
         "processing_parameters": {
             "transition_rollup": {
                 "method": transition_config.method,

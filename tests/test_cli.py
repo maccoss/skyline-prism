@@ -114,7 +114,7 @@ class TestLoadConfigFromProvenance:
             provenance_path = Path(f.name)
 
         try:
-            config = load_config_from_provenance(provenance_path)
+            config, provenance_data = load_config_from_provenance(provenance_path)
 
             # Check that provenance values are loaded
             assert config["data"]["abundance_column"] == "TotalAreaMs1"
@@ -168,7 +168,7 @@ class TestLoadConfigFromProvenance:
             provenance_path = Path(f.name)
 
         try:
-            config = load_config_from_provenance(provenance_path)
+            config, provenance_data = load_config_from_provenance(provenance_path)
             assert config["output"]["format"] == "csv"
             assert config["output"]["include_residuals"] is False
         finally:

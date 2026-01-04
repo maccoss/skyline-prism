@@ -1,6 +1,6 @@
 # Skyline-PRISM
 
-[![PyPI version](https://badge.fury.io/py/skyline-prism.svg)](https://badge.fury.io/py/skyline-prism)
+[![PyPI version](https://img.shields.io/pypi/v/skyline-prism.svg)](https://pypi.org/project/skyline-prism/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

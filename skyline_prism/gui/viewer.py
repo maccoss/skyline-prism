@@ -142,6 +142,7 @@ class PRISMResultWidget(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Proteins / Peptides"])
         self.tree.itemClicked.connect(self._on_tree_item_clicked)
+        self.tree.currentItemChanged.connect(self._on_tree_item_changed)
         self.tree.setAlternatingRowColors(True)
         layout.addWidget(self.tree)
 
@@ -174,12 +175,12 @@ class PRISMResultWidget(QWidget):
         # Controls bar
         controls = QHBoxLayout()
 
-        # Group by selector
-        controls.addWidget(QLabel("Group by:"))
-        self.group_by_combo = QComboBox()
-        self.group_by_combo.addItems(["sample_type"])
-        self.group_by_combo.currentTextChanged.connect(self._on_group_by_changed)
-        controls.addWidget(self.group_by_combo)
+        # Group by selector - Removed as per user request (redundant)
+        # controls.addWidget(QLabel("Group by:"))
+        # self.group_by_combo = QComboBox()
+        # self.group_by_combo.addItems(["sample_type"])
+        # self.group_by_combo.currentTextChanged.connect(self._on_group_by_changed)
+        # controls.addWidget(self.group_by_combo)
 
         # Experimental subgroup selector
         controls.addWidget(QLabel("Subgroup experimental by:"))
@@ -515,24 +516,146 @@ class PRISMResultWidget(QWidget):
         """
         return self.protein_peptide_map.get(str(protein_id), [])
 
+    def _merge_metadata(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Robustly merge data with sample metadata.
+
+        Args:
+            data: DataFrame with replicate_name/filename/etc.
+
+        Returns:
+            Merged DataFrame containing metadata columns.
+
+        """
+        if self.sample_metadata is None:
+            return data
+
+        meta_cols = list(self.sample_metadata.columns)
+        data_cols = list(data.columns)
+
+        # Find potential join columns with flexible matching
+        # Order of preference for data (left side)
+        left_candidates = ["replicate_name", "Replicate Name", "filename", "sample_id"]
+        # Order of preference for metadata (right side)
+        right_candidates = [
+            "Replicate",
+            "replicate",
+            "sample",
+            "Sample",
+            "filename",
+            "Filename",
+            "sample_id",
+            "replicate_name",
+        ]
+
+        left_col = None
+        right_col = None
+
+        # Find left column (in data)
+        for cand in left_candidates:
+            if cand in data_cols:
+                left_col = cand
+                break
+        # Fallback: case-insensitive search
+        if not left_col:
+            for dc in data_cols:
+                if dc.lower() in ["replicate_name", "replicate name", "filename", "sample_id"]:
+                    left_col = dc
+                    break
+
+        # Find right column (in metadata)
+        for cand in right_candidates:
+            if cand in meta_cols:
+                right_col = cand
+                break
+        # Fallback: case-insensitive search
+        if not right_col:
+            for mc in meta_cols:
+                if mc.lower() in ["replicate", "sample", "filename", "sample_id", "replicate_name"]:
+                    right_col = mc
+                    break
+
+        if not (left_col and right_col):
+            return data
+
+        # 1. Try exact merge
+        merged_data = data.merge(
+            self.sample_metadata, left_on=left_col, right_on=right_col, how="left"
+        )
+
+        # Check if merge "worked" (i.e. did we get sample_type?)
+        if "sample_type" not in merged_data.columns or merged_data["sample_type"].isna().all():
+            # 2. Try normalized merge (strip extensions, _@_batch suffix, etc.)
+            def normalize_key(val: str) -> str:
+                s = str(val)
+                # Strip file extension
+                s = Path(s).stem
+                # Strip _@_batch suffix (PRISM format: sample_@_batch)
+                if "_@_" in s:
+                    s = s.split("_@_")[0]
+                # Strip trailing underscores (sometimes present from separator)
+                s = s.rstrip("_")
+                return s
+
+            # Create temporary normalized columns for merging
+            data = data.copy()
+            data["_merge_key"] = data[left_col].apply(normalize_key)
+            meta_copy = self.sample_metadata.copy()
+            meta_copy["_merge_key"] = meta_copy[right_col].apply(normalize_key)
+
+            merged_data = data.merge(meta_copy, on="_merge_key", how="left", suffixes=("", "_meta"))
+
+        # Clean up any _merge_key in result if it leaked
+        if "_merge_key" in merged_data.columns:
+            merged_data = merged_data.drop(columns=["_merge_key"])
+
+        return merged_data
+
     def _update_groupby_options(self) -> None:
         """Update the groupby combo boxes based on available metadata columns."""
         if self.sample_metadata is None:
             return
 
         # Get grouping columns from metadata
-        exclude_cols = {"replicate", "filename", "file_name", "sample_id", "sample", "sample_type"}
+        # Exclude standard identifier columns
+        exclude_cols = {
+            "replicate",
+            "filename",
+            "file_name",
+            "sample_id",
+            "sample",
+            "sample_type",
+            "replicate_name",
+            "batch",
+            "acquired_time",
+            "run_order",
+        }
 
-        available_cols = [
-            col
-            for col in self.sample_metadata.columns
-            if col.lower() not in exclude_cols and self.sample_metadata[col].dtype == "object"
-        ]
+        available_cols = []
+        for col in self.sample_metadata.columns:
+            col_lower = col.lower()
+            if col_lower in exclude_cols:
+                continue
+            # Include string columns and numeric columns with reasonable cardinality
+            dtype = self.sample_metadata[col].dtype
+            if dtype == "object":
+                # String column - include it
+                available_cols.append(col)
+            elif dtype in ["int64", "float64", "int32", "float32"]:
+                # Numeric column - only include if it has few unique values (categorical-like)
+                n_unique = self.sample_metadata[col].nunique()
+                if 2 <= n_unique <= 20:
+                    available_cols.append(col)
 
         # Update subgroup combo
         self.subgroup_combo.clear()
         self.subgroup_combo.addItem("(none)")
         self.subgroup_combo.addItems(available_cols)
+
+        # Update PCA colorby combo
+        if hasattr(self, "pca_colorby"):
+            self.pca_colorby.clear()
+            self.pca_colorby.addItem("sample_type")
+            self.pca_colorby.addItems(available_cols)
 
     def _populate_tree(self) -> None:
         """Populate the tree with proteins (peptides loaded on-demand)."""
@@ -667,9 +790,16 @@ class PRISMResultWidget(QWidget):
             self.selected_peptide = item_id
             self._plot_peptide_abundance(item_id)
 
-    def _on_group_by_changed(self, value: str) -> None:
-        """Handle group by selection change."""
-        self._refresh_plot()
+    def _on_tree_item_changed(self, current: QTreeWidgetItem, previous: QTreeWidgetItem) -> None:
+        """Handle tree item change via keyboard navigation."""
+        if current is None:
+            return
+        # Reuse the same logic as click handler
+        self._on_tree_item_clicked(current, 0)
+
+    # def _on_group_by_changed(self, value: str) -> None:
+    #     """Handle group by selection change."""
+    #     self._refresh_plot()
 
     def _on_subgroup_changed(self, value: str) -> None:
         """Handle subgroup selection change."""
@@ -738,33 +868,10 @@ class PRISMResultWidget(QWidget):
             return
 
         # Merge with sample metadata if available
-        if self.sample_metadata is not None:
-            # Try to find common column for merge
-            meta_cols = self.sample_metadata.columns
-            data_cols = data.columns
+        data = self._merge_metadata(data)
 
-            left_col = None
-            right_col = None
-
-            if "replicate_name" in data_cols:
-                left_col = "replicate_name"
-                if "Replicate" in meta_cols:
-                    right_col = "Replicate"
-                elif "filename" in meta_cols:
-                    right_col = "filename"
-                elif "sample_id" in meta_cols:
-                    right_col = "sample_id"
-                elif "replicate_name" in meta_cols:
-                    right_col = "replicate_name"
-
-            if left_col and right_col:
-                # Check if values match pattern
-                data = data.merge(
-                    self.sample_metadata, left_on=left_col, right_on=right_col, how="left"
-                )
-
-        # Determine grouping column from the group_by combo box
-        group_col = self.group_by_combo.currentText()
+        # Determine grouping column (default to sample_type)
+        group_col = "sample_type"
         if group_col not in data.columns and "sample_type" in data.columns:
             group_col = "sample_type"
 
@@ -781,30 +888,91 @@ class PRISMResultWidget(QWidget):
         ax.set_ylabel("Abundance", fontsize=12)
         ax.tick_params(axis="both", labelsize=11)
 
-        if sample_type_col and sample_type_col in data.columns:
-            # Color by sample type
-            palette = {"experimental": "#1f77b4", "reference": "#2ca02c", "qc": "#ff7f0e"}
+        if (
+            sample_type_col
+            and sample_type_col in data.columns
+            and not data[sample_type_col].isna().all()
+        ):
+            # Color by sample type default palette
+            base_palette = {"experimental": "#1f77b4", "reference": "#d62728", "qc": "#ff7f0e"}
 
             # Get subgroup if selected
             subgroup = self.subgroup_combo.currentText()
             hue_col = sample_type_col
+            palette = base_palette
 
             if subgroup != "(none)" and subgroup in data.columns:
                 # Create combined grouping for experimental samples
                 data = data.copy()
                 data["plot_group"] = data[sample_type_col]
+
                 exp_mask = data[sample_type_col] == "experimental"
-                data.loc[exp_mask, "plot_group"] = data.loc[exp_mask, subgroup].astype(str)
+
+                # Update plot group for experimental samples to use subgroup value
+                # Using .loc explicitly to avoid SettingWithCopy
+                subgroup_values = data.loc[exp_mask, subgroup].astype(str)
+                data.loc[exp_mask, "plot_group"] = subgroup_values
+
                 hue_col = "plot_group"
 
+                # Create dynamic palette
+                unique_groups = data["plot_group"].unique()
+                palette = {}
+
+                # Find experimental subgroups (exclude qc, reference)
+                exp_subgroups = [g for g in unique_groups if g not in ["qc", "reference"]]
+
+                # Get colors for experimental subgroups using a palette that avoids
+                # QC orange (#ff7f0e) and Reference green (#2ca02c)
+                # Use tab10 colors but skip orange (index 1) and green (index 2)
+                # tab10: blue, orange, green, red, purple, brown, pink, gray, olive, cyan
+                exp_safe_colors = [
+                    "#1f77b4",  # blue
+                    "#d62728",  # red
+                    "#9467bd",  # purple
+                    "#8c564b",  # brown
+                    "#e377c2",  # pink
+                    "#7f7f7f",  # gray
+                    "#bcbd22",  # olive
+                    "#17becf",  # cyan
+                ]
+
+                for i, grp in enumerate(exp_subgroups):
+                    palette[grp] = exp_safe_colors[i % len(exp_safe_colors)]
+
+                # Keep standard colors for QC/Ref
+                palette["qc"] = base_palette["qc"]
+                palette["reference"] = base_palette["reference"]
+
+                # Check for any others (e.g. if 'experimental' remains as a label for some rows)
+                if "experimental" in unique_groups:
+                    palette["experimental"] = base_palette["experimental"]
+
             try:
+                # Calculate proper order for x-axis
+                # sort order: experimental subgroups (sorted), then qc, then reference
+                unique_hues = data[hue_col].unique()
+                sorted_hues = sorted(
+                    [h for h in unique_hues if h not in ["qc", "reference", "experimental"]]
+                )
+
+                order = []
+                order.extend(sorted_hues)
+                if "experimental" in unique_hues and "experimental" not in sorted_hues:
+                    order.append("experimental")
+                if "qc" in unique_hues:
+                    order.append("qc")
+                if "reference" in unique_hues:
+                    order.append("reference")
+
                 sns.boxplot(
                     data=data,
                     x=hue_col,
                     y=abundance_col,
                     ax=ax,
-                    palette=palette if hue_col == sample_type_col else None,
-                    showfliers=False,  # Hide outliers (shown as dots/circles) - users prefer swarmplot dots
+                    palette=palette,
+                    order=order,
+                    showfliers=False,  # Hide outliers (shown as dots)
                 )
                 sns.stripplot(
                     data=data,
@@ -814,6 +982,7 @@ class PRISMResultWidget(QWidget):
                     color="black",
                     alpha=0.5,
                     size=3,
+                    order=order,
                 )
             except Exception as e:
                 ax.text(0.5, 0.5, f"Plot error: {e}", ha="center", va="center")
@@ -927,29 +1096,7 @@ class PRISMResultWidget(QWidget):
                 self.protein_data = df
 
             # Merge with metadata if available
-            if self.sample_metadata is not None:
-                # Try to find common column for merge
-                meta_cols_df = self.sample_metadata.columns
-                data_cols = self.protein_data.columns
-
-                left_col = None
-                right_col = None
-
-                if "replicate_name" in data_cols:
-                    left_col = "replicate_name"
-                    if "Replicate" in meta_cols_df:
-                        right_col = "Replicate"
-                    elif "filename" in meta_cols_df:
-                        right_col = "filename"
-                    elif "sample_id" in meta_cols_df:
-                        right_col = "sample_id"
-                    elif "replicate_name" in meta_cols_df:
-                        right_col = "replicate_name"
-
-                if left_col and right_col:
-                    self.protein_data = self.protein_data.merge(
-                        self.sample_metadata, left_on=left_col, right_on=right_col, how="left"
-                    )
+            self.protein_data = self._merge_metadata(self.protein_data)
 
             self.status_bar.showMessage(f"Loaded {len(self.protein_data):,} protein measurements")
             self.load_qc_btn.setText("Data Loaded ✓")
@@ -1102,35 +1249,95 @@ class PRISMResultWidget(QWidget):
             coords = pca.fit_transform(scaled_data)
 
             # Create color mapping
+            # Default palette
+            base_palette = {
+                "experimental": "#1f77b4",
+                "reference": "#d62728",
+                "qc": "#ff7f0e",
+                "unknown": "#7f7f7f",
+            }
+
+            # Map samples to their coloring value
+            if colorby and colorby in self.protein_data.columns:
+                sample_to_val = (
+                    self.protein_data.drop_duplicates(sample_col)
+                    .set_index(sample_col)[colorby]
+                    .to_dict()
+                )
+            else:
+                sample_to_val = {}
+
+            # Map samples to sample_type for fixed coloring fallback
+            sample_to_type = {}
             if sample_type_col and sample_type_col in self.protein_data.columns:
                 sample_to_type = (
                     self.protein_data.drop_duplicates(sample_col)
                     .set_index(sample_col)[sample_type_col]
                     .to_dict()
                 )
-                colors = [sample_to_type.get(s, "unknown") for s in pivot.index]
-                palette = {
-                    "experimental": "#1f77b4",
-                    "reference": "#2ca02c",
-                    "qc": "#ff7f0e",
-                    "unknown": "#7f7f7f",
-                }
 
-                for sample_type, color in palette.items():
-                    mask = np.array([c == sample_type for c in colors])
-                    if mask.any():
-                        ax.scatter(
-                            coords[mask, 0],
-                            coords[mask, 1],
-                            c=color,
-                            label=sample_type,
-                            alpha=0.7,
-                            s=50,
-                        )
+            # Determine unique values for palette generation
+            unique_vals = sorted(list({str(v) for v in sample_to_val.values() if pd.notna(v)}))
 
-                ax.legend()
+            # Generate palette
+            palette = {}
+
+            if colorby == "sample_type":
+                palette = base_palette
             else:
-                ax.scatter(coords[:, 0], coords[:, 1], alpha=0.7, s=50)
+                # Use colors that avoid QC orange and Reference green
+                exp_safe_colors = [
+                    "#1f77b4",  # blue
+                    "#d62728",  # red
+                    "#9467bd",  # purple
+                    "#8c564b",  # brown
+                    "#e377c2",  # pink
+                    "#7f7f7f",  # gray
+                    "#bcbd22",  # olive
+                    "#17becf",  # cyan
+                ]
+                for i, val in enumerate(unique_vals):
+                    palette[str(val)] = exp_safe_colors[i % len(exp_safe_colors)]
+
+            labels_done = set()
+
+            # Plot points
+            # Plot points
+            for idx, sample in enumerate(pivot.index):
+                val = str(sample_to_val.get(sample, ""))
+                stype = sample_to_type.get(sample, "unknown")
+
+                # Smart coloring logic:
+                # 1. If we are explicitly coloring by "sample_type", use standard palette
+                # 2. If coloring by other metadata (e.g. "Batch"):
+                #    - If value exists: Color by that value
+                #    - If value missing (e.g. Treatment not defined for QC): Fallback to sample_type color
+
+                label = val
+                color = "#7f7f7f"  # default gray
+
+                if colorby == "sample_type":
+                    color = palette.get(val, "#7f7f7f")
+                else:
+                    # Check if value is "missing" (empty string, nan, None)
+                    is_missing = val in ["", "nan", "None", "unknown"]
+
+                    if not is_missing and val in palette:
+                        color = palette[val]
+                    elif stype in ["qc", "reference"]:
+                        # Fallback to standard QC/Ref colors
+                        color = base_palette.get(stype, "#7f7f7f")
+                        label = stype
+                    else:
+                        color = palette.get(val, "#7f7f7f")
+
+                # Plot
+                lbl = label if label not in labels_done else None
+                ax.scatter(coords[idx, 0], coords[idx, 1], c=color, label=lbl, alpha=0.7, s=50)
+                if lbl:
+                    labels_done.add(lbl)
+
+            ax.legend(title=colorby, bbox_to_anchor=(1.05, 1), loc="upper left")
 
             ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0] * 100:.1f}%)")
             ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1] * 100:.1f}%)")
@@ -1182,7 +1389,7 @@ class PRISMResultWidget(QWidget):
                     if not cv_by_protein.empty:
                         cv_data.append((stype, cv_by_protein["cv"].values))
 
-                colors = {"experimental": "#1f77b4", "reference": "#2ca02c", "qc": "#ff7f0e"}
+                colors = {"experimental": "#1f77b4", "reference": "#d62728", "qc": "#ff7f0e"}
                 for stype, cvs in cv_data:
                     color = colors.get(stype, "#7f7f7f")
                     ax.hist(
@@ -1310,7 +1517,7 @@ class PRISMResultWidget(QWidget):
             log_values = np.log2(values[values > 0])
 
             if sample_type_col and sample_type_col in self.protein_data.columns:
-                colors = {"experimental": "#1f77b4", "reference": "#2ca02c", "qc": "#ff7f0e"}
+                colors = {"experimental": "#1f77b4", "reference": "#d62728", "qc": "#ff7f0e"}
                 for stype in self.protein_data[sample_type_col].unique():
                     subset = self.protein_data[self.protein_data[sample_type_col] == stype][
                         abundance_col
