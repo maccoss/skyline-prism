@@ -2,9 +2,22 @@
 
 ## Overview
 
-This release addresses critical bugs in data scaling and outlier handling, enhances metadata recording for reproducibility, and provides significant improvements to the interactive Viewer.
+This release introduces library-assisted transition rollup for spectral library-based interference detection, significant performance optimizations for large datasets, and enhanced metadata recording for reproducibility.
 
 ## New Features
+
+### Library-Assisted Transition Rollup
+- **New `library_assist` method**: Uses a spectral library to detect and exclude interfered transitions via iterative least squares fitting.
+- **Algorithm**: For each peptide, fits `observed = scale * library + residuals`. Transitions with large positive residuals (interference) are iteratively removed and the model refitted.
+- **Supported formats**: BLIB (Skyline BiblioSpec) and Carafe TSV (DIA-NN) spectral library formats.
+- **Key insight**: Only HIGH positive residuals indicate interference. Low/zero signal indicates low abundance, not interference.
+- **Dramatic improvement**: Up to 111% CV reduction for ~29% of peptides with real interference.
+
+### Performance Optimizations
+- **Vectorized least squares**: Library-assisted rollup processes all samples in parallel using BLAS matrix operations (~10x speedup on large datasets).
+- **Merge-and-sort streaming**: CSV merge and sort in a single DuckDB operation, eliminating redundant sorting passes.
+- **Pre-sorted optimization**: Rollup skips sorting when data is already sorted (detected automatically).
+- **Implementation**: `spectral_library.py` -> `least_squares_rollup_vectorized()`, `data_io.py` -> `merge_and_sort_streaming()`
 
 ### Enhanced Metadata Recording & Provenance
 - **Merged metadata always saved**: When using `-m` with multiple metadata files, the merged result is now saved to `sample_metadata.tsv` (previously only auto-generated metadata was saved).
@@ -26,10 +39,24 @@ This release addresses critical bugs in data scaling and outlier handling, enhan
 - **PCA Draw Order**: Reference and QC samples are now plotted last so they appear on top of experimental samples.
 - **Intensity Plot Grouping**: Peptide intensity boxplots now sort samples by sample_type first, grouping reference, qc, and experimental samples together.
 
+### New Consensus Transition Rollup Method
+- **Consensus rollup**: New transition->peptide rollup method (`method: "consensus"`) that weights transitions by their cross-sample consistency. Transitions that deviate from the consensus fold-change pattern are down-weighted.
+- **Algorithm**: Models `log2(T_ij) = alpha_i + beta_j + epsilon_ij` where alpha_i is the transition-specific fragmentation efficiency and beta_j is the sample abundance. Weights are computed as `w_i = 1 / (Var(epsilon_i) + lambda)`.
+- **Diagnostics output**: When using `consensus` method, PRISM automatically outputs `consensus_diagnostics.csv` containing peptide, transition, sample, residual, weight, and variance information for identifying problematic transitions.
+
+### Methods Documentation
+- **New `docs/methods.md`**: Comprehensive technical documentation of all PRISM algorithms, written in manuscript methods style. Covers data formats, transition->peptide rollup, global normalization, batch correction, protein parsimony, and peptide->protein rollup.
+
 ## Bug Fixes
 
 - **Scale Handling**: Fixed "Double Log" issues where data was redundantly logged; ensured strict Log2 (internal) vs Linear (output) handling.
 - **CV Calculations**: Fixed Coefficient of Variation (CV) calculations to correctly use linear scale, ensuring accurate QC metrics.
 - **Outlier Handling**: Fixed a crash in protein rollup when outlier samples were excluded (updated sample list propagation).
 - **None Sample ID Handling**: Fixed crash when Sample ID column contains `None` values by filtering nulls before sorting.
+
+## Testing
+
+- **291 tests passing** (up from 196 in v0.1.2)
+- **60% overall coverage** (up from 47%)
+- **New test module**: `tests/test_spectral_library.py` with 11 tests for vectorized least squares
 

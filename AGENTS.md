@@ -109,11 +109,13 @@ skyline-prism/
 ├── skyline_prism/           # Main Python package
 │   ├── __init__.py          # Package exports
 │   ├── cli.py               # Command-line interface (entry point: `prism`)
-│   ├── data_io.py           # Skyline report loading and merging
+│   ├── chunked_processing.py # Memory-efficient chunked/streaming processing
+│   ├── data_io.py           # Skyline report loading and merging (includes merge_and_sort_streaming)
 │   ├── normalization.py     # RT-aware correction pipeline
 │   ├── batch_correction.py  # ComBat implementation (empirical Bayes)
 │   ├── parsimony.py         # Protein grouping and shared peptide handling
 │   ├── rollup.py            # Peptide → Protein rollup (median polish, etc.)
+│   ├── spectral_library.py  # Library-assisted rollup with least squares fitting
 │   ├── transition_rollup.py # Transition → Peptide rollup (median polish, quality-weighted, variance learning)
 │   ├── validation.py        # QC metrics and reporting (generates HTML QC reports with embedded plots)
 │   └── visualization.py     # Plotting functions for QC assessment and normalization evaluation
@@ -121,6 +123,7 @@ skyline-prism/
 │   ├── test_data_io.py
 │   ├── test_parsimony.py
 │   ├── test_rollup.py
+│   ├── test_spectral_library.py  # Library-assisted rollup tests
 │   └── test_transition_rollup.py
 ├── SPECIFICATION.md         # Detailed technical specification
 ├── README.md                # User-facing documentation
@@ -306,7 +309,7 @@ Comprehensive configuration file with all options documented. Can be generated v
 - `prism config-template --minimal -o config.yaml` (common options only)
 
 Key sections:
-- `transition_rollup`: Transition→peptide rollup (method: sum, median_polish, adaptive)
+- `transition_rollup`: Transition→peptide rollup (method: sum, median_polish, adaptive, library_assist)
 - `sample_outlier_detection`: Detect low-signal samples (method: iqr or fold_median, action: report or exclude)
 - `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
 - `batch_correction`: ComBat settings (method: combat)
@@ -571,7 +574,7 @@ Based on current usage and known issues:
 - `data_io.py`: 28% - File I/O (tested via integration)
 - `validation.py`: 10% - QC reporting (needs more unit tests)
 
-**Overall**: 47% coverage, 196 tests passing
+**Overall**: 60% coverage, 291 tests passing
 
 ### [CHANGELOG] Recent Changes Log
 
@@ -605,6 +608,23 @@ Based on current usage and known issues:
 - Fixed Sample ID vs Replicate Name mismatch throughout pipeline (helper functions)
 - Fixed QC report sample type detection (Reference/QC now appear correctly in plots)
 - Fixed duplicate progress logging in streaming peptide rollup
+
+**January 2025:**
+
+- **Library-assisted rollup (v10)**: Spectral library-based interference detection
+  - Uses iterative least squares to fit observed intensities to library pattern
+  - Automatically detects and excludes interfered transitions (high positive residuals)
+  - Supports BLIB (Skyline) and Carafe TSV (DIA-NN) library formats
+  - Dramatically improves CV for ~29% of peptides with real interference
+- **Vectorized least squares**: All samples processed in parallel using BLAS matrix operations
+  - ~10x speedup for library-assisted rollup on large datasets
+  - Implementation: `spectral_library.py` -> `least_squares_rollup_vectorized()`
+- **Merge-and-sort streaming**: CSV merge and sort in single DuckDB operation
+  - Eliminates redundant sorting pass, faster for large multi-file datasets
+  - Implementation: `data_io.py` -> `merge_and_sort_streaming()`
+- **Pre-sorted optimization**: Rollup skips sorting when data is already sorted
+  - Implementation: `chunked_processing.py` -> `rollup_transitions_sorted(pre_sorted=True)`
+- Test count increased from 196 to 291 (comprehensive spectral library tests)
 
 ## Not Yet Implemented
 

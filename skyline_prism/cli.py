@@ -29,8 +29,8 @@ from .data_io import (
     get_parquet_source_fingerprints,
     load_sample_metadata,
     load_sample_metadata_files,
+    merge_and_sort_streaming,
     merge_skyline_reports,
-    merge_skyline_reports_streaming,
     verify_source_fingerprints,
 )
 from .parsimony import (
@@ -383,6 +383,9 @@ KNOWN_CONFIG_KEYS = {
         "learn_adaptive_weights",
         "learn_weights",  # Both supported for compatibility
         "adaptive_rollup",  # Nested section
+        "spectral_library_path",  # Path to spectral library for library-assisted method
+        "spectral_library_min_fragments",  # Min fragments for library matching
+        "spectral_library_mz_tolerance",  # m/z tolerance for library matching
     },
     "transition_rollup.adaptive_rollup": {
         "beta_relative_intensity",
@@ -901,6 +904,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     metadata_df = None
     n_transitions = 0  # Track total transition rows for metadata
+    is_pre_sorted = False  # Track if merge+sort was done (skip sorting in rollup)
 
     if len(csv_inputs) >= 1:
         batch_names = [p.stem for p in csv_inputs]
@@ -935,14 +939,16 @@ def cmd_run(args: argparse.Namespace) -> int:
                 logger.info("  No fingerprints in parquet metadata - reprocessing required")
 
         if not use_cached:
-            logger.info(f"Merging {len(csv_inputs)} Skyline reports (streaming)...")
-            merged_path, samples_by_batch, total_rows = merge_skyline_reports_streaming(
+            logger.info(f"Merging and sorting {len(csv_inputs)} Skyline reports (streaming)...")
+            merged_path, samples_by_batch, total_rows = merge_and_sort_streaming(
                 csv_inputs,
                 merged_parquet_path,
+                sort_column=None,  # Auto-detect peptide column from CSV
                 batch_names=batch_names,
             )
             n_transitions = total_rows
-            method_log.append(f"Merged {len(csv_inputs)} reports ({total_rows:,} rows)")
+            is_pre_sorted = True  # Flag for rollup to skip sorting
+            method_log.append(f"Merged and sorted {len(csv_inputs)} reports ({total_rows:,} rows)")
             transition_parquet = merged_path
 
             # Generate metadata if not provided
@@ -1255,6 +1261,38 @@ def cmd_run(args: argparse.Namespace) -> int:
     topn_selection = config["transition_rollup"].get("topn_selection", "correlation")
     topn_weighting = config["transition_rollup"].get("topn_weighting", "sqrt")
 
+    # Library-assisted method: load spectral library
+    spectral_library = None
+    if rollup_method == "library-assisted":
+        from .spectral_library import SpectralLibraryRollup
+
+        spectral_library_path = config["transition_rollup"].get("spectral_library_path")
+        if not spectral_library_path:
+            logger.error("library-assisted method requires spectral_library_path in config")
+            return 1
+
+        lib_path = Path(spectral_library_path)
+        if not lib_path.is_absolute():
+            # Relative paths are relative to config file or current directory
+            lib_path = Path.cwd() / lib_path
+
+        if not lib_path.exists():
+            logger.error(f"Spectral library not found: {lib_path}")
+            return 1
+
+        lib_min_fragments = config["transition_rollup"].get("spectral_library_min_fragments", 3)
+        lib_mz_tolerance = config["transition_rollup"].get("spectral_library_mz_tolerance", 0.02)
+
+        logger.info(f"  Spectral library: {lib_path}")
+        spectral_library = SpectralLibraryRollup(
+            library_path=lib_path,
+            min_fragments=lib_min_fragments,
+            mz_tolerance=lib_mz_tolerance,
+            use_robust=True,
+        )
+        spectral_library.load_library()
+        logger.info(f"  Library spectra loaded: {len(spectral_library.library):,}")
+
     # Get parallel processing parameters
     n_workers = config.get("processing", {}).get("n_workers", 1)
     peptide_batch_size = config.get("processing", {}).get("peptide_batch_size", 1000)
@@ -1283,6 +1321,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         topn_weighting=topn_weighting,
         n_workers=n_workers,
         peptide_batch_size=peptide_batch_size,
+        spectral_library=spectral_library,  # For library-assisted method
+        # Save consensus diagnostics when using consensus method
+        consensus_diagnostics_path=(
+            str(output_dir / "consensus_diagnostics.csv") if rollup_method == "consensus" else None
+        ),
     )
 
     peptide_rollup_path = output_dir / "peptides_rollup.parquet"
@@ -1292,12 +1335,26 @@ def cmd_run(args: argparse.Namespace) -> int:
         config=transition_config,
         save_residuals=config["output"].get("include_residuals", True)
         and rollup_method == "median_polish",
+        pre_sorted=is_pre_sorted,  # Skip sorting if merge+sort already done
     )
     samples = peptide_result.samples
     method_log.append(
         f"Transition rollup ({rollup_method}): {peptide_result.n_peptides:,} peptides, "
         f"{len(samples)} samples"
     )
+
+    # Log library-assisted statistics
+    if rollup_method == "library-assisted" and spectral_library is not None:
+        lib_stats = spectral_library.get_statistics()
+        logger.info(f"  Library match rate: {lib_stats['match_rate'] * 100:.1f}%")
+        logger.info(
+            f"    Matched: {lib_stats['n_matched']:,}, "
+            f"Unmatched: {lib_stats['n_unmatched']:,}"
+        )
+        method_log.append(
+            f"  Library: {lib_stats['n_matched']:,} matched, "
+            f"{lib_stats['n_unmatched']:,} unmatched ({lib_stats['match_rate'] * 100:.1f}%)"
+        )
 
     # -------------------------------------------------------------------------
     # Stage 2b: Peptide Normalization
@@ -2203,11 +2260,15 @@ processing:
   n_workers: 1
 
 transition_rollup:
-  # Method: sum (default), median_polish, adaptive, topn
+  # Method: sum (default), consensus, median_polish, adaptive, topn, library_assist
   method: "sum"
 
   # Minimum transitions required per peptide
   min_transitions: 3
+
+  # For library_assist method: path to spectral library (.blib or .tsv)
+  # library_assist:
+  #   library_path: "/path/to/library.blib"
 
 global_normalization:
   method: "rt_lowess"
@@ -2385,11 +2446,14 @@ transition_rollup:
   enabled: true
 
   # Rollup method:
-  #   sum          - Simple sum of fragment intensities (default, robust)
-  #   median_polish - Tukey median polish (robust to interference)
-  #   adaptive     - Learned weights based on intensity, m/z, shape correlation
-  #   topn         - Select top N transitions by correlation
-  method: "adaptive"
+  #   sum            - Simple sum of fragment intensities (default, robust)
+  #   consensus      - Inverse-variance weighted sum (down-weights outlier transitions)
+  #   median_polish  - Tukey median polish (robust to interference)
+  #   adaptive       - Learned weights based on intensity, m/z, shape correlation
+  #   topn           - Select top N transitions by correlation
+  #   library_assist - Uses spectral library to detect/exclude interfered transitions
+  #                    via iterative least squares fitting (recommended with library)
+  method: "sum"
 
   # Include MS1 precursor signal? (false = MS2 only, recommended)
   use_ms1: false
@@ -2415,7 +2479,20 @@ transition_rollup:
     # Threshold for "low" shape correlation (transitions often below this have interference)
     shape_corr_low_threshold: 0.7
     # Minimum improvement required to use learned weights vs simple sum
+    # This is specific to adaptive method - library_assist always uses library fitting
     min_improvement_pct: 0.1
+
+  # Library-assist parameters (if method: library_assist)
+  # Uses spectral library to detect interfered transitions via least squares fitting.
+  # Compares observed fragment ratios to library and removes outliers iteratively.
+  # Only HIGH residuals are outliers (signal > expected = interference).
+  # Low or negative residuals are valid - they indicate low abundance, not interference.
+  library_assist:
+    library_path: null          # Path to .blib or .tsv spectral library (REQUIRED)
+    mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
+    r_squared_threshold: 0.8    # Minimum R-squared for reliable fit
+    mad_threshold: 3.0          # MAD multiplier for outlier detection (high residuals only)
+    min_matched_fragments: 3    # Minimum fragments for valid fit (else NaN)
 
 # =============================================================================
 # Global Normalization

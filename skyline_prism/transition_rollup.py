@@ -1259,6 +1259,241 @@ def rollup_peptide_topn(
     return abundances, uncertainties, full_weights, n_select
 
 
+def rollup_peptide_consensus(
+    intensity_matrix: pd.DataFrame,
+    min_transitions: int = 3,
+    regularization: float = 0.1,
+) -> tuple[pd.Series, pd.Series, pd.Series, int]:
+    """Roll up transitions using consensus-based inverse-variance weighting.
+
+    Core assumption: All transitions from a peptide should show the SAME
+    fold-change pattern across samples. Transitions that deviate from the
+    consensus pattern are down-weighted.
+
+    Algorithm:
+    1. Model: log2(T_ij) = α_i (transition offset) + β_j (sample abundance) + ε_ij
+    2. Estimate initial β using row-centered medians (robust to outliers)
+    3. Calculate residuals: ε_ij = T_ij - α_i - β_j
+    4. Weight transitions: w_i = 1 / (variance(ε_i) + regularization)
+    5. Return weighted sum in linear space (scaled to match sum method)
+
+    Args:
+        intensity_matrix: Transition x sample matrix (LOG2 scale)
+        min_transitions: Minimum transitions required per peptide
+        regularization: Regularization constant to prevent division by zero
+            and avoid over-weighting low-variance transitions (default: 0.1)
+
+    Returns:
+        Tuple of (abundances, uncertainties, weights, n_transitions_used)
+        - abundances: LOG2 scale peptide abundance per sample
+        - uncertainties: Residual-based uncertainty per sample
+        - weights: Inverse-variance weight per transition
+        - n_transitions_used: Number of transitions used
+
+    """
+    n_transitions = len(intensity_matrix)
+
+    if n_transitions < min_transitions:
+        return (
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(dtype=float),
+            0,
+        )
+
+    # Work in log2 space for additive model
+    matrix = intensity_matrix.values  # (transitions x samples)
+
+    # Step 1: Estimate transition offsets (α_i) as row medians
+    # These capture the fragmentation efficiency of each transition
+    # (different fragments are produced in different relative abundances)
+    row_medians = np.nanmedian(matrix, axis=1, keepdims=True)
+
+    # Step 2: Estimate sample abundances (β_j) as column medians of centered data
+    centered = matrix - row_medians
+    col_medians = np.nanmedian(centered, axis=0, keepdims=True)
+
+    # Step 3: Calculate residuals
+    # ε_ij = log2(T_ij) - α_i - β_j
+    residuals = matrix - row_medians - col_medians
+
+    # Step 4: Calculate per-transition residual variance
+    # Transitions with high variance deviate from the consensus pattern
+    with np.errstate(invalid="ignore"):
+        transition_variances = np.nanvar(residuals, axis=1)
+
+    # Handle NaN variances (e.g., all NaN row)
+    transition_variances = np.nan_to_num(transition_variances, nan=np.inf)
+
+    # Step 5: Compute inverse-variance weights
+    # Higher variance = lower weight (less reliable transition)
+    weights = 1.0 / (transition_variances + regularization)
+
+    # Normalize weights to sum to n_transitions (preserve sum magnitude)
+    weight_sum = np.nansum(weights)
+    if not np.isfinite(weight_sum) or weight_sum <= 0:
+        weights = np.ones(n_transitions)
+    else:
+        weights = weights * (n_transitions / weight_sum)
+
+    # Step 6: Weighted sum in linear space (to match sum method scale)
+    linear_matrix = 2**intensity_matrix
+
+    abundances = pd.Series(index=intensity_matrix.columns, dtype=float)
+    uncertainties = pd.Series(index=intensity_matrix.columns, dtype=float)
+
+    for i, sample in enumerate(intensity_matrix.columns):
+        linear_values = linear_matrix[sample].values
+        valid_mask = np.isfinite(linear_values) & (linear_values > 0)
+
+        if valid_mask.sum() < min_transitions:
+            abundances[sample] = np.nan
+            uncertainties[sample] = np.nan
+            continue
+
+        valid_weights = weights[valid_mask]
+        valid_linear = linear_values[valid_mask]
+
+        # Weighted sum in linear space
+        weighted_sum = np.sum(valid_weights * valid_linear)
+
+        # Convert back to log2
+        abundances[sample] = np.log2(max(weighted_sum, 1.0))
+
+        # Uncertainty: residual std for this sample
+        sample_residuals = residuals[:, i][valid_mask]
+        uncertainties[sample] = np.nanstd(sample_residuals)
+
+    # Return weights as a Series
+    weights_series = pd.Series(weights, index=intensity_matrix.index)
+
+    return abundances, uncertainties, weights_series, n_transitions
+
+
+@dataclass
+class ConsensusRollupDiagnostics:
+    """Diagnostic information from consensus rollup for a single peptide.
+
+    Contains residuals and weights to identify problematic transitions.
+    """
+
+    peptide: str
+    residuals: pd.DataFrame  # transition × sample matrix of residuals
+    weights: pd.Series  # per-transition weights
+    variances: pd.Series  # per-transition variance
+    max_abs_residual: float  # largest absolute residual
+    worst_transition: str  # transition with highest variance
+    worst_sample: str  # sample with largest residual for worst transition
+
+
+def rollup_peptide_consensus_with_diagnostics(
+    intensity_matrix: pd.DataFrame,
+    peptide_name: str = "",
+    min_transitions: int = 3,
+    regularization: float = 0.1,
+) -> tuple[pd.Series, pd.Series, pd.Series, int, ConsensusRollupDiagnostics | None]:
+    """Roll up transitions using consensus with diagnostic output.
+
+    Same as rollup_peptide_consensus but also returns diagnostic information
+    about residuals and weights for identifying problematic transitions.
+
+    Returns:
+        Tuple of (abundances, uncertainties, weights, n_used, diagnostics)
+    """
+    n_transitions = len(intensity_matrix)
+
+    if n_transitions < min_transitions:
+        return (
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(np.nan, index=intensity_matrix.columns),
+            pd.Series(dtype=float),
+            0,
+            None,
+        )
+
+    # Work in log2 space for additive model
+    matrix = intensity_matrix.values
+
+    # Step 1: Estimate transition offsets (α_i) as row medians
+    row_medians = np.nanmedian(matrix, axis=1, keepdims=True)
+
+    # Step 2: Estimate sample effects (β_j) as column medians of centered data
+    centered = matrix - row_medians
+    col_medians = np.nanmedian(centered, axis=0, keepdims=True)
+
+    # Step 3: Calculate residuals
+    residuals = matrix - row_medians - col_medians
+
+    # Step 4: Calculate per-transition residual variance
+    with np.errstate(invalid="ignore"):
+        transition_variances = np.nanvar(residuals, axis=1)
+    transition_variances = np.nan_to_num(transition_variances, nan=np.inf)
+
+    # Step 5: Compute inverse-variance weights
+    weights = 1.0 / (transition_variances + regularization)
+
+    # Normalize weights
+    weight_sum = np.nansum(weights)
+    if not np.isfinite(weight_sum) or weight_sum <= 0:
+        weights = np.ones(n_transitions)
+    else:
+        weights = weights * (n_transitions / weight_sum)
+
+    # Step 6: Weighted sum in linear space
+    linear_matrix = 2**intensity_matrix
+
+    abundances = pd.Series(index=intensity_matrix.columns, dtype=float)
+    uncertainties = pd.Series(index=intensity_matrix.columns, dtype=float)
+
+    for i, sample in enumerate(intensity_matrix.columns):
+        linear_values = linear_matrix[sample].values
+        valid_mask = np.isfinite(linear_values) & (linear_values > 0)
+
+        if valid_mask.sum() < min_transitions:
+            abundances[sample] = np.nan
+            uncertainties[sample] = np.nan
+            continue
+
+        valid_weights = weights[valid_mask]
+        valid_linear = linear_values[valid_mask]
+
+        weighted_sum = np.sum(valid_weights * valid_linear)
+        abundances[sample] = np.log2(max(weighted_sum, 1.0))
+
+        sample_residuals = residuals[:, i][valid_mask]
+        uncertainties[sample] = np.nanstd(sample_residuals)
+
+    weights_series = pd.Series(weights, index=intensity_matrix.index)
+    variance_series = pd.Series(transition_variances, index=intensity_matrix.index)
+
+    # Build residual DataFrame
+    residual_df = pd.DataFrame(
+        residuals,
+        index=intensity_matrix.index,
+        columns=intensity_matrix.columns,
+    )
+
+    # Find worst transition (highest variance) and worst sample
+    worst_trans_idx = np.argmax(transition_variances)
+    worst_transition = intensity_matrix.index[worst_trans_idx]
+    worst_trans_residuals = residuals[worst_trans_idx, :]
+    worst_sample_idx = np.nanargmax(np.abs(worst_trans_residuals))
+    worst_sample = intensity_matrix.columns[worst_sample_idx]
+    max_abs_residual = float(np.nanmax(np.abs(residuals)))
+
+    diagnostics = ConsensusRollupDiagnostics(
+        peptide=peptide_name,
+        residuals=residual_df,
+        weights=weights_series,
+        variances=variance_series,
+        max_abs_residual=max_abs_residual,
+        worst_transition=str(worst_transition),
+        worst_sample=str(worst_sample),
+    )
+
+    return abundances, uncertainties, weights_series, n_transitions, diagnostics
+
+
 def rollup_transitions_to_peptides(
     data: pd.DataFrame,
     peptide_col: str = "peptide_modified",
@@ -1289,7 +1524,7 @@ def rollup_transitions_to_peptides(
         abundance_col: Column with transition intensities (LINEAR scale)
         shape_corr_col: Column with shape correlation values
         mz_col: Column with product m/z values (for adaptive method)
-        method: Rollup method ('sum', 'median_polish', 'adaptive', 'topn')
+        method: Rollup method ('sum', 'consensus', 'median_polish', 'adaptive', 'topn')
         adaptive_params: AdaptiveRollupParams for adaptive method
         min_transitions: Minimum transitions required per peptide
         log_transform: Whether to log2 transform intensities (default: True)
@@ -1398,6 +1633,14 @@ def rollup_transitions_to_peptides(
             # Roll up using adaptive weights
             abundances, uncertainties, weights, n_used = rollup_peptide_adaptive(
                 intensity_matrix, mz_values, shape_corr_matrix, adaptive_params, min_transitions
+            )
+            all_weights[peptide] = weights
+
+        elif method == "consensus":
+            # Consensus-based inverse-variance weighting
+            # Down-weights transitions that deviate from the cross-sample pattern
+            abundances, uncertainties, weights, n_used = rollup_peptide_consensus(
+                intensity_matrix, min_transitions=min_transitions
             )
             all_weights[peptide] = weights
 

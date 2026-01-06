@@ -749,6 +749,174 @@ def _add_fingerprints_to_parquet(parquet_path: Path, fingerprints: list[dict]) -
     logger.info(f"  Wrote fingerprints to {sidecar_path.name}")
 
 
+def merge_and_sort_streaming(
+    report_paths: list[Path],
+    output_path: Path,
+    sort_column: str | None = None,
+    batch_names: list[str] | None = None,
+    sort_buffer_mb: int = 8192,
+    compute_fingerprint_md5: bool = False,
+) -> tuple[Path, dict[str, set[str]], int]:
+    """Merge multiple CSVs and sort in one DuckDB operation.
+
+    This is more efficient than merge_skyline_reports_streaming + separate sort
+    because it avoids writing an unsorted intermediate file. DuckDB reads all
+    CSVs, adds batch columns, sorts, and writes the final parquet in one pass.
+
+    Performance improvement: Eliminates one full read + write of the dataset
+    (~2x faster than separate merge + sort for large files).
+
+    Args:
+        report_paths: List of paths to Skyline CSV reports
+        output_path: Path for output Parquet file (will be sorted)
+        sort_column: Column to sort by (auto-detected if None, looks for peptide column)
+        batch_names: Optional list of batch names (one per report)
+        sort_buffer_mb: Memory limit for DuckDB sorting (enables disk spilling)
+        compute_fingerprint_md5: If True, compute MD5 checksums for fingerprints
+
+    Returns:
+        Tuple of (output_path, dict of batch_name -> sample_names, total_row_count)
+
+    """
+    import duckdb
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if batch_names is None:
+        batch_names = [p.stem for p in report_paths]
+
+    if len(batch_names) != len(report_paths):
+        raise ValueError("batch_names must have same length as report_paths")
+
+    # Compute source file fingerprints for cache validation
+    logger.info("Computing source file fingerprints...")
+    fingerprints = compute_source_fingerprints(report_paths, compute_md5=compute_fingerprint_md5)
+
+    total_size_gb = sum(p.stat().st_size for p in report_paths) / 1e9
+    logger.info(
+        f"Merging and sorting {len(report_paths)} reports ({total_size_gb:.1f} GB total)..."
+    )
+
+    # Auto-detect peptide column from first CSV if sort_column not specified
+    # Skyline exports can have different column names for the peptide column
+    if sort_column is None:
+        # Read first few lines of first CSV to detect column name
+        first_csv = Path(report_paths[0])
+        suffix = first_csv.suffix.lower()
+        delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
+        
+        with open(first_csv, "r") as f:
+            header = f.readline().strip().split(delimiter)
+        
+        # Look for peptide column - order matters (prefer modified sequence)
+        peptide_column_names = [
+            "Peptide Modified Sequence",
+            "Peptide Modified Sequence Unimod Ids",
+            "Modified Sequence",
+            "Peptide Sequence",
+            "Peptide",
+        ]
+        sort_column = None
+        for col_name in peptide_column_names:
+            if col_name in header:
+                sort_column = col_name
+                break
+        
+        if sort_column is None:
+            raise ValueError(
+                f"Could not find peptide column for sorting. "
+                f"Looked for: {peptide_column_names}. "
+                f"Found columns: {header[:10]}..."
+            )
+        logger.info(f"  Auto-detected sort column: {sort_column}")
+
+    # Build UNION ALL query with batch columns added per file
+    # DuckDB will read all CSVs, add the columns, union, sort, and write in one pass
+    union_parts = []
+    for csv_path, batch_name in zip(report_paths, batch_names):
+        csv_path = Path(csv_path)
+        # Escape single quotes in batch name and path
+        batch_escaped = batch_name.replace("'", "''")
+        stem_escaped = csv_path.stem.replace("'", "''")
+        path_str = str(csv_path).replace("'", "''")
+
+        # Detect delimiter from file extension
+        suffix = csv_path.suffix.lower()
+        delimiter = "\\t" if suffix in [".tsv", ".txt"] else ","
+
+        union_parts.append(f"""
+            SELECT *,
+                   '{batch_escaped}' AS "Batch",
+                   '{stem_escaped}' AS "Source Document",
+                   "Replicate Name" || '__@__' || '{batch_escaped}' AS "Sample ID"
+            FROM read_csv('{path_str}',
+                          header=true,
+                          delim='{delimiter}',
+                          ignore_errors=true,
+                          all_varchar=false)
+        """)
+
+    union_query = " UNION ALL ".join(union_parts)
+
+    # Configure DuckDB for large file handling
+    temp_dir = output_path.parent / ".duckdb_temp"
+    temp_dir.mkdir(exist_ok=True)
+
+    conn = duckdb.connect()
+    conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
+    conn.execute(f"SET temp_directory='{temp_dir}'")
+    conn.execute("SET enable_progress_bar=true")
+
+    logger.info(f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}")
+    logger.info(f"  Sorting by: {sort_column}")
+
+    # Merge + sort + write in one operation
+    conn.execute(f"""
+        COPY (
+            SELECT * FROM ({union_query})
+            ORDER BY "{sort_column}"
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+    """)
+
+    # Get row count and sample info
+    result = conn.execute(f"""
+        SELECT COUNT(*) as total_rows,
+               COUNT(DISTINCT "Replicate Name") as n_samples
+        FROM read_parquet('{output_path}')
+    """).fetchone()
+    total_rows = result[0] if result else 0
+
+    # Get samples per batch
+    all_samples: dict[str, set[str]] = {}
+    samples_result = conn.execute(f"""
+        SELECT "Batch", "Replicate Name"
+        FROM read_parquet('{output_path}')
+        GROUP BY "Batch", "Replicate Name"
+    """).fetchall()
+
+    for batch, sample in samples_result:
+        if batch not in all_samples:
+            all_samples[batch] = set()
+        if sample is not None:
+            all_samples[batch].add(sample)
+
+    conn.close()
+
+    # Clean up temp directory
+    import shutil
+
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Write fingerprints
+    _add_fingerprints_to_parquet(output_path, fingerprints)
+
+    logger.info(f"Merge and sort complete: {total_rows:,} total rows -> {output_path.name}")
+
+    return output_path, all_samples, total_rows
+
+
 def validate_skyline_report(filepath: Path) -> ValidationResult:
     """Validate that a Skyline report has required columns.
 

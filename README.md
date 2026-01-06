@@ -164,6 +164,9 @@ Stage 5b: QC Report Generation (HTML + plots)
 **Key Implementation Notes:**
 
 - **Streaming CSV merge** handles large datasets (~47GB tested) without loading into memory
+- **Merge-and-sort in single pass** using DuckDB for efficient multi-file processing
+- **Vectorized least squares** for library-assisted rollup (~10x speedup on large datasets)
+- **Pre-sorted optimization** skips redundant sorting when data is already sorted
 - **Both peptide and protein outputs** receive independent batch correction
 - **Automatic log files** saved to output directory with timestamp for reproducibility
 - **RT correction disabled by default** - search engine calibration may not generalize between samples
@@ -331,6 +334,7 @@ While median polish is recommended, these alternative methods are available:
 | Method             | Description                     | Use Case                                                           |
 | ------------------ | ------------------------------- | ------------------------------------------------------------------ |
 | `median_polish`    | Tukey median polish (default)   | General use, robust to outliers                                    |
+| `library_assist`   | Spectral library-based rollup   | When you have a high-quality spectral library and want to detect/exclude interfered transitions |
 | `adaptive`         | Learned weighted average        | When quality metrics (intensity, m/z, ShapeCorrelation) are available |
 | `sum`              | Simple sum of intensities       | Fast but sensitive to outliers                                     |
 
@@ -411,6 +415,36 @@ The transition intensities are the VALUES being summed. The learned weights adju
 1. Parameters are optimized on reference samples by minimizing median CV
 2. Results are validated on QC samples (held-out) to prevent overfitting
 3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
+
+### Library-Assisted Rollup with Spectral Library
+
+For transition->peptide rollup, the `library_assist` method uses a spectral library to detect and exclude interfered transitions. This is particularly effective when co-eluting peptides contribute signal to specific fragments.
+
+```yaml
+transition_rollup:
+  method: "library_assist"
+  library_assist:
+    library_path: "/path/to/library.blib"  # or .tsv (Carafe format)
+    mz_tolerance: 0.02         # m/z tolerance for matching (Da)
+    r_squared_threshold: 0.8   # Minimum R-squared for "good" fit
+    mad_threshold: 3.0         # MAD multiplier for outlier detection
+    min_matched_fragments: 3   # Minimum fragments for valid fit
+```
+
+**Algorithm:** Iterative least squares with outlier removal:
+1. Match observed transitions to library fragments by m/z
+2. Fit: `observed = scale * library + residuals`
+3. Flag transitions with HIGH positive residuals as interfered (signal > expected)
+4. Remove outliers and refit until convergence
+5. Final abundance = scale * sum(library intensities)
+
+**Key insight:** Only high residuals indicate interference. Low or negative residuals are valid - they indicate low abundance or noise, not interference.
+
+**Supported library formats:**
+- **BLIB (Skyline):** SQLite-based format with zlib-compressed peak arrays
+- **Carafe TSV (DIA-NN):** Tab-separated format with fragment annotations
+
+**Performance:** The implementation uses vectorized least squares (BLAS matrix operations) to process all samples in parallel, providing ~10x speedup on large datasets.
 
 **Note:** For very large cohorts (hundreds to thousands of samples), consider [directLFQ](https://github.com/MannLabs/directlfq) which uses a different "intensity trace" algorithm with linear runtime scaling. Our `maxlfq` implementation uses the original pairwise ratio approach which scales quadratically with sample count.
 

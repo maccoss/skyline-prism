@@ -150,14 +150,18 @@ processing:
 transition_rollup:
   enabled: true  # Set true if input has individual transitions
   
-  # Rollup method: sum, median_polish, adaptive, topn
+  # Rollup method: sum, median_polish, adaptive, topn, library_assist
   # - sum: Simple sum of all fragment intensities (default, robust)
   # - median_polish: Tukey median polish (robust to interference)
   # - adaptive: Learned weight function based on intensity, m/z, and shape correlation
   # - topn: Select top N transitions by correlation consistency, weight by sqrt(intensity)
+  # - library_assist: Uses spectral library to detect and exclude interfered transitions
+  #                   via iterative least squares fitting. Compares observed fragment ratios
+  #                   to library and removes outliers (likely interference). Falls back to
+  #                   simple sum when library doesn't improve the fit.
   #
-  # Note: Sum is recommended for most datasets. Adaptive and topn
-  # may improve CV for high-quality data with good shape correlation.
+  # Note: Sum is recommended for most datasets. library_assist is recommended when you
+  # have a high-quality spectral library and want to detect/exclude interfered transitions.
   method: "sum"
   
   # Whether to include MS1 precursor signal in quantification
@@ -230,7 +234,42 @@ transition_rollup:
     beta_shape_corr_outlier: 0.0  # Weight by low-fraction (any value)
     shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation (0-1)
     mz_normalize: true            # Normalize m/z to [0,1] range
-    min_improvement_pct: 5.0      # Min improvement over sum to use adaptive weights
+    
+    # Minimum CV improvement (%) required to use learned adaptive weights vs simple sum
+    # If adaptive doesn't improve CV by at least this amount, falls back to simple sum
+    # This is specific to the adaptive method - library_assist always uses library fitting
+    min_improvement_pct: 5.0
+
+  # -------------------------------------------------------------------------
+  # Library-Assist Method Parameters (only used if method: library_assist)
+  # -------------------------------------------------------------------------
+  # Uses a spectral library to detect interfered transitions via least squares.
+  # For each peptide, fits: observed_i = scale * library_i + residual_i
+  # Transitions with large positive residuals (interference) are iteratively removed.
+  # Low or negative residuals are fine - they indicate low abundance or noise, not interference.
+  #
+  # Supports .blib (BiblioSpec) or .tsv (Carafe/EncyclopeDIA) libraries.
+  library_assist:
+    # Path to spectral library file (REQUIRED for library_assist method)
+    library_path: null  # e.g., "/path/to/library.blib" or "/path/to/library.tsv"
+    
+    # m/z tolerance for matching transitions to library fragments (in Da)
+    mz_tolerance: 0.02
+    
+    # Minimum R-squared for a "good" library fit
+    # Below this threshold, the result is flagged as potentially unreliable
+    r_squared_threshold: 0.8
+    
+    # MAD (Median Absolute Deviation) multiplier for outlier detection
+    # Only HIGH residuals are considered outliers (signal > expected = interference)
+    # Low or negative residuals are never flagged - they're valid low-abundance data
+    # A transition is an outlier if: residual > median + (mad_threshold * MAD)
+    # Higher values = more conservative (only removes extreme interference)
+    mad_threshold: 3.0
+    
+    # Minimum matched fragments required for a valid fit
+    # Peptides with fewer matches return NaN (insufficient data)
+    min_matched_fragments: 3
 
 # =============================================================================
 # Stage 1: Global Normalization

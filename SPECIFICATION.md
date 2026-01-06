@@ -967,6 +967,24 @@ Simple sum of transition intensities (converted to linear scale, then back to lo
 - Fast but not robust to outliers
 - May be appropriate when transitions are well-curated
 
+#### 4. Library-Assisted Rollup
+
+Uses a spectral library to detect and exclude interfered transitions via iterative least squares fitting. This method is particularly effective when co-eluting peptides contribute signal to specific fragments.
+
+**Algorithm:**
+1. Match observed transitions to library fragments by m/z (tolerance: 0.02 Da)
+2. Fit: `observed = scale * library + residuals`
+3. Flag transitions with HIGH positive residuals as interfered (signal > expected)
+4. Remove outliers and refit until convergence (max 5 iterations)
+5. Final abundance = scale * sum(library intensities)
+
+**Key design principles:**
+- Only HIGH residuals are outliers - low/zero signal indicates low abundance, not interference
+- Uses vectorized least squares (BLAS matrix operations) for all samples in parallel
+- Supports BLIB (Skyline) and Carafe TSV (DIA-NN) library formats
+
+**Implementation:** `spectral_library.py` -> `least_squares_rollup_vectorized()`, `library_assisted_rollup_peptide()`
+
 **Note on MS1 data:** By default, MS1 signal is **not** used for quantification even if present in the output. Fragment-based quantification is typically more specific. This can be enabled via configuration.
 
 **Handling multiple charge states:** When a peptide has multiple precursor charge states (e.g., +2 and +3), the transitions from all charge states are treated as additional transitions for that peptide. They are combined together in the same transition→peptide rollup step using median polish or quality-weighted aggregation. This approach:
@@ -1745,7 +1763,7 @@ sample_annotations:
 # Stage 0: Transition to peptide rollup (if needed)
 transition_rollup:
   enabled: false  # Set true if input has transition-level data
-  method: "adaptive"  # options: median_polish, sum, adaptive
+  method: "adaptive"  # options: median_polish, sum, adaptive, library_assist
   use_ms1: false  # Whether to include MS1 in quantification (default: no)
   min_transitions: 3  # Minimum transitions required
   learn_adaptive_weights: true  # Learn weights from reference samples (default when method=adaptive)
@@ -2107,13 +2125,14 @@ This section documents important design decisions made during PRISM development.
 
 ## Implementation Status
 
-This section documents the current implementation status of PRISM features as of December 2024.
+This section documents the current implementation status of PRISM features as of January 2025.
 
 ### [WORKING] Fully Implemented and Tested
 
 **Data Processing:**
 
 - **Streaming CSV merge**: Memory-efficient merging of multiple Skyline reports (~47GB datasets tested)
+- **Merge-and-sort streaming**: Single-pass DuckDB operation for CSV merge + sort (`data_io.py` -> `merge_and_sort_streaming()`)
 - **Automatic column detection**: Handles different Skyline export formats with column name normalization
 - **Metadata handling**: Support for both PRISM format (`sample`, `sample_type`, `batch`) and Skyline format (`Replicate Name`, `Sample Type`, `Batch Name`)
 - **Sample type detection**: Pattern-based automatic assignment of reference/qc/experimental samples
@@ -2121,7 +2140,9 @@ This section documents the current implementation status of PRISM features as of
 
 **Peptide Quantification:**
 
-- **Transition → Peptide rollup**: Tukey median polish implementation with residual preservation
+- **Transition -> Peptide rollup**: Tukey median polish implementation with residual preservation
+- **Library-assisted rollup**: Spectral library-based interference detection with iterative least squares fitting
+- **Vectorized least squares**: All samples processed in parallel using BLAS matrix operations (~10x speedup)
 - **Quality-weighted aggregation**: Alternative rollup method with learned variance models
 - **Global normalization**: Median-based normalization (default) applied at peptide level
 - **Peptide batch correction**: Full ComBat implementation with empirical Bayes shrinkage
@@ -2129,7 +2150,7 @@ This section documents the current implementation status of PRISM features as of
 **Protein Quantification:**
 
 - **Protein parsimony**: FASTA-based protein grouping with shared peptide handling
-- **Peptide → Protein rollup**: Tukey median polish with multiple peptide handling strategies
+- **Peptide -> Protein rollup**: Tukey median polish with multiple peptide handling strategies
 - **Protein global normalization**: Median-based normalization applied at protein level
 - **Protein batch correction**: Full ComBat implementation applied after protein rollup
 
@@ -2177,12 +2198,13 @@ This section documents the current implementation status of PRISM features as of
 
 ### [COVERAGE] Test Coverage
 
-- **Overall coverage**: 43% (164 tests passing)
+- **Overall coverage**: 60% (291 tests passing)
 - **High coverage modules**:
   - `fasta.py`: 95% (protein parsimony)
   - `transition_rollup.py`: 93% (peptide aggregation)
   - `batch_correction.py`: 89% (ComBat implementation)
   - `parsimony.py`: 78% (protein grouping)
+  - `spectral_library.py`: 60% (library-assisted rollup)
 - **Low coverage modules**:
   - `cli.py`: 13% (command-line interface - mainly integration code)
   - `normalization.py`: 12% (RT correction - disabled by default)

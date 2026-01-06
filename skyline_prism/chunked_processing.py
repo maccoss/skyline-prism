@@ -32,8 +32,14 @@ from .rollup import tukey_median_polish
 from .transition_rollup import (
     AdaptiveRollupParams,
     rollup_peptide_adaptive,
+    rollup_peptide_consensus,
+    rollup_peptide_consensus_with_diagnostics,
     rollup_peptide_topn,
 )
+
+# Import SpectralLibraryRollup lazily to avoid circular imports
+# and allow use without spectral library dependencies
+SpectralLibraryRollup = None  # Will be imported when needed
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +76,18 @@ class ChunkedRollupConfig:
     topn_selection: str = "correlation"  # "correlation" or "intensity"
     topn_weighting: str = "sqrt"  # "sum" or "sqrt"
 
-    # Processing parameters
     n_workers: int = 1  # Number of parallel workers (0 = all CPUs)
     peptide_batch_size: int = 1000  # Process this many peptides at once
     progress_interval: int = 10000  # Log progress every N peptides
     max_memory_gb: float = 8.0  # Maximum memory to use for parallel processing (per worker)
+
+    # Library-assisted method parameters
+    spectral_library: SpectralLibraryRollup | None = None  # Loaded spectral library
+    spectral_library_min_fragments: int = 3  # Minimum matched fragments for library fitting
+    spectral_library_mz_tolerance: float = 0.02  # m/z tolerance for library matching (Da)
+
+    # Diagnostics
+    consensus_diagnostics_path: str | None = None  # If set, save consensus residual diagnostics
 
 
 @dataclass
@@ -87,6 +100,7 @@ class PeptideRollupResult:
     n_transitions: int
     residuals: dict[str, dict[str, float]] | None = None  # transition -> sample -> residual
     mean_rt: float | None = None  # Mean retention time for this peptide
+    consensus_diagnostics: list[dict] | None = None  # Rows for diagnostic output
 
 
 @dataclass
@@ -111,8 +125,14 @@ def _get_required_columns(config: ChunkedRollupConfig) -> tuple[list[str], list[
         config.sample_col,
         config.abundance_col,
     ]
-    # Optional columns
-    optional = [config.shape_corr_col, config.coeluting_col, config.rt_col, config.batch_col]
+    # Optional columns (mz_col needed for library-assisted and adaptive methods)
+    optional = [
+        config.shape_corr_col,
+        config.coeluting_col,
+        config.rt_col,
+        config.batch_col,
+        config.mz_col,
+    ]
     return cols, optional
 
 
@@ -283,6 +303,152 @@ def _process_single_peptide(
         uncertainties = uncert_series.to_dict()
         residuals = None
 
+    elif config.method == "consensus":
+        # Consensus-based inverse-variance weighting
+        # Down-weights transitions that deviate from cross-sample pattern
+        if config.consensus_diagnostics_path:
+            # Use diagnostic version to collect residual info
+            abund_series, uncert_series, weights, n_used, diag = (
+                rollup_peptide_consensus_with_diagnostics(
+                    intensity_matrix,
+                    peptide_name=peptide,
+                    min_transitions=config.min_transitions,
+                )
+            )
+            # Build diagnostic rows from residual matrix
+            diag_rows = []
+            if diag is not None:
+                for trans in diag.residuals.index:
+                    trans_var = diag.variances[trans]
+                    trans_weight = diag.weights[trans]
+                    for sample in diag.residuals.columns:
+                        resid = diag.residuals.loc[trans, sample]
+                        if np.isfinite(resid):
+                            diag_rows.append(
+                                {
+                                    "peptide": peptide,
+                                    "transition": trans,
+                                    "sample": sample,
+                                    "residual": resid,
+                                    "abs_residual": abs(resid),
+                                    "transition_weight": trans_weight,
+                                    "transition_variance": trans_var,
+                                }
+                            )
+        else:
+            abund_series, uncert_series, _, n_used = rollup_peptide_consensus(
+                intensity_matrix, min_transitions=config.min_transitions
+            )
+            diag_rows = None
+        abundances = abund_series.to_dict()
+        uncertainties = uncert_series.to_dict()
+        residuals = None
+
+    elif config.method == "library-assisted":
+        # Library-assisted least squares rollup using spectral library
+        if config.spectral_library is None:
+            raise ValueError(
+                "library-assisted method requires spectral_library to be set in config"
+            )
+
+        # IMPORTANT: intensity_matrix is log2-transformed at this point, but
+        # library-assisted rollup needs LINEAR values for least squares fitting
+        if config.log_transform:
+            linear_intensity_matrix = 2 ** intensity_matrix
+        else:
+            linear_intensity_matrix = intensity_matrix
+
+        # Get all unique charge states for this peptide
+        # Each charge state has a different fragmentation pattern in the library
+        charge_states = [2]  # Default
+        if config.precursor_charge_col in pep_data.columns:
+            charge_values = pep_data[config.precursor_charge_col].dropna().unique()
+            if len(charge_values) > 0:
+                charge_states = sorted([int(c) for c in charge_values])
+
+        # Get transition metadata with charge state info
+        meta_cols = [
+            col
+            for col in [config.transition_col, config.mz_col, config.precursor_charge_col]
+            if col in pep_data.columns
+        ]
+        transition_meta = pep_data.groupby("_transition_id").first()[meta_cols].reset_index()
+
+        # Build wide-format DataFrame with LINEAR intensity values
+        wide_df = transition_meta.merge(
+            linear_intensity_matrix.reset_index(),
+            on="_transition_id",
+            how="left",
+        )
+
+        # For single charge state, just use it directly
+        if len(charge_states) == 1:
+            charge = charge_states[0]
+            if config.precursor_charge_col in wide_df.columns:
+                charge_mask = wide_df[config.precursor_charge_col] == charge
+                charge_df = wide_df[charge_mask].copy()
+            else:
+                charge_df = wide_df
+
+            lib_abundances = config.spectral_library.rollup_peptide(
+                transitions_df=charge_df,
+                modified_sequence=peptide,
+                charge=charge,
+                sample_cols=samples,
+                fragment_col=config.transition_col,
+                product_mz_col=config.mz_col,
+            )
+            final_abundances = lib_abundances
+            n_used = len(charge_df)
+        else:
+            # Multiple charge states: process each separately and sum abundances
+            # Each charge state has its own library spectrum with different fragment patterns
+            # The total peptide abundance is the sum of abundances from all charge states
+            # (on linear scale - each precursor contributes independently)
+            final_abundances = {s: 0.0 for s in samples}
+            n_used = 0
+
+            for charge in charge_states:
+                if config.precursor_charge_col in wide_df.columns:
+                    charge_mask = wide_df[config.precursor_charge_col] == charge
+                    charge_df = wide_df[charge_mask].copy()
+                else:
+                    charge_df = wide_df
+
+                if len(charge_df) == 0:
+                    continue
+
+                # Get abundances for this charge state using its specific library spectrum
+                lib_abundances = config.spectral_library.rollup_peptide(
+                    transitions_df=charge_df,
+                    modified_sequence=peptide,
+                    charge=charge,
+                    sample_cols=samples,
+                    fragment_col=config.transition_col,
+                    product_mz_col=config.mz_col,
+                )
+
+                # Sum abundances across charge states (linear scale)
+                for s, v in lib_abundances.items():
+                    if np.isfinite(v) and v > 0:
+                        final_abundances[s] += v
+
+                n_used += len(charge_df)
+
+        # Convert to log2 scale if needed (library rollup returns linear)
+        if config.log_transform:
+            abundances = {}
+            for s, v in final_abundances.items():
+                if np.isfinite(v) and v > 0:
+                    abundances[s] = np.log2(v)
+                else:
+                    abundances[s] = np.nan
+        else:
+            abundances = final_abundances
+
+        uncertainties = {s: np.nan for s in samples}
+        residuals = None
+
     else:
         raise ValueError(f"Unknown rollup method: {config.method}")
 
@@ -293,6 +459,7 @@ def _process_single_peptide(
         n_transitions=n_used,
         residuals=residuals,
         mean_rt=mean_rt,
+        consensus_diagnostics=diag_rows if config.method == "consensus" else None,
     )
 
 
@@ -323,6 +490,7 @@ def _worker_process_batch(
                 "n_transitions": result.n_transitions,
                 "residuals": result.residuals,
                 "mean_rt": result.mean_rt,
+                "consensus_diagnostics": result.consensus_diagnostics,
             }
         )
     return results
@@ -659,6 +827,7 @@ def rollup_transitions_sorted(
     samples: list[str] | None = None,
     save_residuals: bool = True,
     sort_buffer_mb: int = 8192,
+    pre_sorted: bool = False,
 ) -> StreamingRollupResult:
     """Roll up transitions to peptides using sorted streaming.
 
@@ -671,7 +840,7 @@ def rollup_transitions_sorted(
     - Temp directory for disk spilling (external sort)
 
     Steps:
-    1. Sort parquet by peptide (uses disk spilling if needed)
+    1. Sort parquet by peptide (uses disk spilling if needed) - skipped if pre_sorted=True
     2. Stream through sorted file, processing each peptide as it completes
     3. Write output incrementally
 
@@ -683,6 +852,8 @@ def rollup_transitions_sorted(
         save_residuals: Whether to save residuals to separate file
         sort_buffer_mb: Memory budget for DuckDB sorting (default 8GB).
             For very large files, DuckDB will spill to disk if needed.
+        pre_sorted: If True, input is already sorted by peptide column,
+            skip the sort step. Use with merge_and_sort_streaming().
 
     Returns:
         StreamingRollupResult with output paths and statistics
@@ -698,60 +869,73 @@ def rollup_transitions_sorted(
         samples = sorted(samples)
     logger.info(f"  Samples: {len(samples)}")
 
-    # Step 1: Create sorted version
-    sorted_path = output_path.parent / f".{output_path.stem}_sorted_temp.parquet"
-    logger.info(f"  Sorting by {config.peptide_col}...")
+    # Step 1: Create sorted version (or use input if pre_sorted)
+    if pre_sorted:
+        # Input is already sorted by peptide column (from merge_and_sort_streaming)
+        sorted_path = parquet_path
+        logger.info(f"  Using pre-sorted input: {parquet_path}")
+    else:
+        sorted_path = output_path.parent / f".{output_path.stem}_sorted_temp.parquet"
+        logger.info(f"  Sorting by {config.peptide_col}...")
 
-    # Read, sort, write
-    # For very large files, use DuckDB with external sorting (disk spilling)
-    try:
-        import duckdb
+        # Read, sort, write
+        # For very large files, use DuckDB with external sorting (disk spilling)
+        try:
+            import duckdb
 
-        logger.info("  Using DuckDB for efficient sorting...")
+            logger.info("  Using DuckDB for efficient sorting...")
 
-        # Configure DuckDB for large file handling:
-        # - Use temp directory for spilling (external sort)
-        # - Limit memory usage to sort_buffer_mb
-        temp_dir = output_path.parent / ".duckdb_temp"
-        temp_dir.mkdir(exist_ok=True)
+            # Configure DuckDB for large file handling:
+            # - Use temp directory for spilling (external sort)
+            # - Limit memory usage to sort_buffer_mb
+            temp_dir = output_path.parent / ".duckdb_temp"
+            temp_dir.mkdir(exist_ok=True)
 
-        conn = duckdb.connect()
-        # Set memory limit for sorting (enables disk spilling for large datasets)
-        conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
-        # Set temp directory for external sorting
-        conn.execute(f"SET temp_directory='{temp_dir}'")
-        # Enable progress bar for long operations
-        conn.execute("SET enable_progress_bar=true")
+            conn = duckdb.connect()
+            # Set memory limit for sorting (enables disk spilling for large datasets)
+            conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
+            # Set temp directory for external sorting
+            conn.execute(f"SET temp_directory='{temp_dir}'")
+            # Enable progress bar for long operations
+            conn.execute("SET enable_progress_bar=true")
 
-        logger.info(f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}")
+            logger.info(f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}")
 
-        conn.execute(f"""
-            COPY (
-                SELECT * FROM read_parquet('{parquet_path}')
-                ORDER BY "{config.peptide_col}"
-            ) TO '{sorted_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
-        """)
-        conn.close()
+            conn.execute(f"""
+                COPY (
+                    SELECT * FROM read_parquet('{parquet_path}')
+                    ORDER BY "{config.peptide_col}"
+                ) TO '{sorted_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+            """)
+            conn.close()
 
-        # Clean up temp directory
-        import shutil
+            # Clean up temp directory
+            import shutil
 
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-    except ImportError:
-        logger.warning("  DuckDB not available, using PyArrow (may be slower)...")
-        table = pq.read_table(parquet_path)
-        # Sort using PyArrow
-        sorted_table = table.sort_by([(config.peptide_col, "ascending")])
-        pq.write_table(sorted_table, sorted_path, compression="zstd")
-        del table, sorted_table
+        except ImportError:
+            logger.warning("  DuckDB not available, using PyArrow (may be slower)...")
+            table = pq.read_table(parquet_path)
+            # Sort using PyArrow
+            sorted_table = table.sort_by([(config.peptide_col, "ascending")])
+            pq.write_table(sorted_table, sorted_path, compression="zstd")
+            del table, sorted_table
 
-    logger.info("  Sorting complete, streaming rollup...")
+        logger.info("  Sorting complete, streaming rollup...")
 
     # Determine number of workers
     n_workers = config.n_workers if config.n_workers > 0 else mp.cpu_count()
     use_parallel = n_workers > 1
+
+    # Library-assisted method requires single-threaded processing because
+    # SpectralLibraryRollup objects can't be pickled for multiprocessing.
+    # This is fine because the per-peptide work is just O(1) dict lookup + least squares.
+    if config.method == "library-assisted" and use_parallel:
+        logger.info("  Library-assisted rollup uses single-threaded processing (fast lookups)")
+        use_parallel = False
+        n_workers = 1
 
     if use_parallel:
         logger.info(f"  Using {n_workers} parallel workers")
@@ -767,6 +951,7 @@ def rollup_transitions_sorted(
 
     peptide_rows = []
     residual_rows = []
+    consensus_diag_rows = []  # Collect consensus diagnostic rows
     n_peptides = 0
     n_filtered = 0
     last_logged_count = 0  # Track last logged value to avoid duplicate logs
@@ -804,6 +989,7 @@ def rollup_transitions_sorted(
             "peptide_batch_size": config.peptide_batch_size,
             "progress_interval": config.progress_interval,
             "max_memory_gb": config.max_memory_gb,
+            "consensus_diagnostics_path": config.consensus_diagnostics_path,
         }
 
     def process_batch_parallel(batch_dict: dict[str, pd.DataFrame]) -> None:
@@ -844,6 +1030,11 @@ def rollup_transitions_sorted(
                                 }
                                 res_row.update(sample_residuals)
                                 residual_rows.append(res_row)
+
+                        # Collect consensus diagnostics from parallel results
+                        if result.get("consensus_diagnostics"):
+                            consensus_diag_rows.extend(result["consensus_diagnostics"])
+
                         n_peptides += 1
                 except Exception as e:
                     logger.error(f"Worker error: {e}")
@@ -885,6 +1076,10 @@ def rollup_transitions_sorted(
                         }
                         res_row.update(sample_residuals)
                         residual_rows.append(res_row)
+
+                # Collect consensus diagnostics
+                if result.consensus_diagnostics:
+                    consensus_diag_rows.extend(result.consensus_diagnostics)
 
                 n_peptides += 1
 
@@ -928,8 +1123,9 @@ def rollup_transitions_sorted(
             f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions"
         )
 
-    # Clean up temp file (use missing_ok=True in case it was already removed)
-    sorted_path.unlink(missing_ok=True)
+    # Clean up temp sorted file (only if we created it, not if input was pre-sorted)
+    if not pre_sorted:
+        sorted_path.unlink(missing_ok=True)
 
     # Write outputs
     peptide_df = pd.DataFrame(peptide_rows)
@@ -950,6 +1146,14 @@ def rollup_transitions_sorted(
         residuals_df = pd.DataFrame(residual_rows)
         residuals_df.to_parquet(residuals_path, compression="zstd", index=False)
         logger.info(f"  Wrote residuals: {residuals_path}")
+
+    # Save consensus diagnostics if collected
+    if consensus_diag_rows and config.consensus_diagnostics_path:
+        diag_df = pd.DataFrame(consensus_diag_rows)
+        # Sort by abs_residual descending (most problematic first)
+        diag_df = diag_df.sort_values("abs_residual", ascending=False)
+        diag_df.to_csv(config.consensus_diagnostics_path, index=False)
+        logger.info(f"  Wrote consensus diagnostics: {config.consensus_diagnostics_path}")
 
     return StreamingRollupResult(
         output_path=output_path,
