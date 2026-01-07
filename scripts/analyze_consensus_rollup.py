@@ -51,7 +51,6 @@ def analyze_peptide_consensus(
     regularization: float = 0.1,
 ) -> list[dict]:
     """Compute consensus residuals for one peptide, return top N problematic entries."""
-
     # Pivot to transition × sample matrix
     try:
         intensity_matrix = pep_data.pivot_table(

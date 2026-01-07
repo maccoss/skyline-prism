@@ -805,10 +805,10 @@ def merge_and_sort_streaming(
         first_csv = Path(report_paths[0])
         suffix = first_csv.suffix.lower()
         delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
-        
-        with open(first_csv, "r") as f:
+
+        with open(first_csv) as f:
             header = f.readline().strip().split(delimiter)
-        
+
         # Look for peptide column - order matters (prefer modified sequence)
         peptide_column_names = [
             "Peptide Modified Sequence",
@@ -822,7 +822,7 @@ def merge_and_sort_streaming(
             if col_name in header:
                 sort_column = col_name
                 break
-        
+
         if sort_column is None:
             raise ValueError(
                 f"Could not find peptide column for sorting. "

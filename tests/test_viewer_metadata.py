@@ -4,9 +4,9 @@ These tests verify the robust metadata merging logic in the PRISM viewer,
 including key normalization for various naming conventions.
 """
 
-import pandas as pd
-import pytest
 from pathlib import Path
+
+import pandas as pd
 
 
 class TestKeyNormalization:

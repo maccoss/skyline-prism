@@ -1399,6 +1399,7 @@ def rollup_peptide_consensus_with_diagnostics(
 
     Returns:
         Tuple of (abundances, uncertainties, weights, n_used, diagnostics)
+
     """
     n_transitions = len(intensity_matrix)
 

@@ -75,6 +75,7 @@ class SpectralLibraryLoader(ABC):
         Returns:
             Dict mapping peptide key (modified_sequence + charge) to FragmentSpectrum.
             Key format: "PEPTIDEK_2" for charge 2.
+
         """
         pass
 
@@ -88,6 +89,7 @@ class SpectralLibraryLoader(ABC):
 
         Returns:
             Key string in format "SEQUENCE_CHARGE"
+
         """
         return f"{modified_sequence}_{charge}"
 
@@ -102,6 +104,7 @@ class SpectralLibraryLoader(ABC):
 
         Returns:
             Normalized sequence with L replaced by I
+
         """
         return sequence.replace("L", "I")
 
@@ -119,6 +122,7 @@ class SpectralLibraryLoader(ABC):
 
         Returns:
             Unmodified (stripped) sequence
+
         """
         import re
 
@@ -146,6 +150,7 @@ class SpectralLibraryLoader(ABC):
 
         Returns:
             Key string in format "STRIPPEDSEQUENCE_CHARGE"
+
         """
         stripped = SpectralLibraryLoader.strip_modifications(modified_sequence)
         return f"{stripped}_{charge}"
@@ -176,6 +181,7 @@ class CarafeTSVLoader(SpectralLibraryLoader):
 
         Args:
             path: Path to Carafe TSV spectral library
+
         """
         self.path = Path(path)
 
@@ -184,6 +190,7 @@ class CarafeTSVLoader(SpectralLibraryLoader):
 
         Returns:
             Dict mapping peptide keys to FragmentSpectrum objects
+
         """
         import duckdb
 
@@ -247,22 +254,22 @@ class CarafeTSVLoader(SpectralLibraryLoader):
             SELECT
                 ModifiedPeptide,
                 PrecursorCharge,
-                {'StrippedPeptide,' if has_stripped else ''}
-                {'PrecursorMz,' if has_precursor_mz else ''}
-                {'Tr_recalibrated,' if has_rt else ''}
-                {'FIRST(ProteinID) as ProteinID,' if has_protein else ''}
+                {"StrippedPeptide," if has_stripped else ""}
+                {"PrecursorMz," if has_precursor_mz else ""}
+                {"Tr_recalibrated," if has_rt else ""}
+                {"FIRST(ProteinID) as ProteinID," if has_protein else ""}
                 LIST(FragmentMz) as frag_mz_list,
                 LIST(RelativeIntensity) as frag_intensity_list,
                 LIST(FragmentType) as frag_type_list,
                 LIST(FragmentNumber) as frag_num_list,
                 LIST(FragmentCharge) as frag_charge_list
-                {',' + 'LIST(FragmentLossType) as frag_loss_list' if has_loss else ''}
+                {"," + "LIST(FragmentLossType) as frag_loss_list" if has_loss else ""}
             FROM read_csv_auto('{self.path}', delim='\\t', header=true)
             WHERE Decoy = 0 OR Decoy IS NULL
             GROUP BY ModifiedPeptide, PrecursorCharge
-                {',' + 'StrippedPeptide' if has_stripped else ''}
-                {',' + 'PrecursorMz' if has_precursor_mz else ''}
-                {',' + 'Tr_recalibrated' if has_rt else ''}
+                {"," + "StrippedPeptide" if has_stripped else ""}
+                {"," + "PrecursorMz" if has_precursor_mz else ""}
+                {"," + "Tr_recalibrated" if has_rt else ""}
         """
 
         logger.info("  Aggregating fragments by peptide (this may take a minute)...")
@@ -343,6 +350,7 @@ class BLIBLoader(SpectralLibraryLoader):
 
         Args:
             path: Path to BLIB spectral library
+
         """
         self.path = Path(path)
 
@@ -354,6 +362,7 @@ class BLIBLoader(SpectralLibraryLoader):
 
         Returns:
             Array of m/z values
+
         """
         try:
             # Check for zlib magic bytes (78 9c)
@@ -384,6 +393,7 @@ class BLIBLoader(SpectralLibraryLoader):
 
         Returns:
             Array of intensity values (normalized to max=1.0)
+
         """
         try:
             # Check if zlib compressed
@@ -412,6 +422,7 @@ class BLIBLoader(SpectralLibraryLoader):
 
         Returns:
             Dict mapping peptide keys to FragmentSpectrum objects
+
         """
         logger.info(f"Loading BLIB library from {self.path}")
 
@@ -506,6 +517,7 @@ def load_spectral_library(path: Path | str) -> dict[str, FragmentSpectrum]:
 
     Raises:
         ValueError: If file format is not recognized
+
     """
     path = Path(path)
 
@@ -547,6 +559,7 @@ def match_transition_to_library(
 
     Returns:
         Expected relative intensity (0-1), or None if no match found
+
     """
     # Try annotation-based matching first (more reliable)
     parsed = _parse_fragment_ion(fragment_ion)
@@ -586,6 +599,7 @@ def _parse_fragment_ion(fragment_ion: str) -> tuple[str, int, int, str] | None:
 
     Returns:
         Tuple of (type, number, charge, loss) or None if unparseable
+
     """
     import re
 
@@ -723,9 +737,7 @@ def least_squares_rollup_vectorized(
 
         # Vectorized MAD computation per sample for outlier detection
         # Set excluded positions to NaN for nanmedian
-        pos_res_masked = np.where(
-            included & (positive_residuals > 0), positive_residuals, np.nan
-        )
+        pos_res_masked = np.where(included & (positive_residuals > 0), positive_residuals, np.nan)
 
         # Count positive residuals per sample
         n_positive = np.sum(included & (positive_residuals > 0), axis=0)  # (S,)
@@ -773,7 +785,8 @@ def least_squares_rollup_vectorized(
     obs_mean = np.sum(obs_final, axis=0) / np.maximum(n_included, 1)
     ss_tot = np.sum(np.where(included, (obs_v - obs_mean[None, :]) ** 2, 0.0), axis=0)
 
-    r_squared = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r_squared = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, 0.0)
 
     # Count fragments used per sample
     n_used = n_included.astype(np.int32)
@@ -875,6 +888,7 @@ def least_squares_rollup(
     References:
         - Becker & Bern, 2002: Least squares isotope mass spectra
         - CHIMERYS (Frejno et al., 2025): Linear deconvolution of chimeric spectra
+
     """
     # Filter to valid fragments
     # - Observed can be >= 0 (zeros are valid - low abundance or no interference)
@@ -1111,6 +1125,7 @@ def predict_isotope_distribution(
         - Senko et al., 1995: Averagine model
         - Matthews, D.E.: Biological isotope abundances (personal communication)
         - MacCoss MJ, IDCalc: https://github.com/maccoss/IDCalc
+
     """
     # Estimate elemental composition from mass using averagine
     n_residues = mass / AVERAGINE_MASS
@@ -1130,9 +1145,7 @@ def predict_isotope_distribution(
     #   18O, 34S
 
     # Expected count of +1 Da heavy isotopes
-    lambda_1 = (
-        n_c * P_C13 + n_n * P_N15 + n_o * P_O17 + n_s * P_S33 + n_h * P_H2
-    )
+    lambda_1 = n_c * P_C13 + n_n * P_N15 + n_o * P_O17 + n_s * P_S33 + n_h * P_H2
 
     # For a more accurate calculation, we would convolve the +1 and +2 distributions
     # Here we use Poisson approximation which is accurate for typical peptide sizes
@@ -1686,19 +1699,13 @@ class SpectralLibraryRollup:
             obs_matched[~matched_mask] = np.nan
             lib_matched[~matched_mask] = np.nan
 
-            # Fit least squares
-            if self.use_robust:
-                fit_result = robust_least_squares_rollup(
-                    observed_intensities=obs_matched,
-                    library_intensities=lib_matched,
-                    min_fragments=self.min_fragments,
-                )
-            else:
-                fit_result = least_squares_rollup(
-                    observed_intensities=obs_matched,
-                    library_intensities=lib_matched,
-                    min_fragments=self.min_fragments,
-                )
+            # Fit least squares (with or without outlier removal based on use_robust)
+            fit_result = least_squares_rollup(
+                observed_intensities=obs_matched,
+                library_intensities=lib_matched,
+                min_fragments=self.min_fragments,
+                remove_outliers=self.use_robust,
+            )
 
             if fit_result is not None:
                 abundances[sample_col] = fit_result.abundance

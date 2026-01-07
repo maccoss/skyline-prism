@@ -1097,6 +1097,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Get rollup configuration
     rollup_method = config["transition_rollup"].get("method", "sum")
+    # Normalize method name (accept library_assist as alias for library-assisted)
+    if rollup_method == "library_assist":
+        rollup_method = "library-assisted"
     use_ms1 = config["transition_rollup"].get("use_ms1", False)
     min_transitions = config["transition_rollup"].get("min_transitions", 3)
     # Support both 'learn_adaptive_weights' (preferred) and 'learn_weights' (deprecated)
@@ -1266,9 +1269,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     if rollup_method == "library-assisted":
         from .spectral_library import SpectralLibraryRollup
 
-        spectral_library_path = config["transition_rollup"].get("spectral_library_path")
+        # Support both config formats:
+        # 1. Nested: transition_rollup.library_assist.library_path
+        # 2. Flat: transition_rollup.spectral_library_path
+        lib_assist_config = config["transition_rollup"].get("library_assist", {})
+        spectral_library_path = lib_assist_config.get("library_path") or config[
+            "transition_rollup"
+        ].get("spectral_library_path")
         if not spectral_library_path:
-            logger.error("library-assisted method requires spectral_library_path in config")
+            logger.error(
+                "library-assisted method requires library_path in config. "
+                "Use transition_rollup.library_assist.library_path"
+            )
             return 1
 
         lib_path = Path(spectral_library_path)
@@ -1280,8 +1292,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             logger.error(f"Spectral library not found: {lib_path}")
             return 1
 
-        lib_min_fragments = config["transition_rollup"].get("spectral_library_min_fragments", 3)
-        lib_mz_tolerance = config["transition_rollup"].get("spectral_library_mz_tolerance", 0.02)
+        # Get additional parameters from nested or flat format
+        lib_min_fragments = lib_assist_config.get("min_matched_fragments") or config[
+            "transition_rollup"
+        ].get("spectral_library_min_fragments", 3)
+        lib_mz_tolerance = lib_assist_config.get("mz_tolerance") or config["transition_rollup"].get(
+            "spectral_library_mz_tolerance", 0.02
+        )
 
         logger.info(f"  Spectral library: {lib_path}")
         spectral_library = SpectralLibraryRollup(
@@ -1348,8 +1365,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         lib_stats = spectral_library.get_statistics()
         logger.info(f"  Library match rate: {lib_stats['match_rate'] * 100:.1f}%")
         logger.info(
-            f"    Matched: {lib_stats['n_matched']:,}, "
-            f"Unmatched: {lib_stats['n_unmatched']:,}"
+            f"    Matched: {lib_stats['n_matched']:,}, Unmatched: {lib_stats['n_unmatched']:,}"
         )
         method_log.append(
             f"  Library: {lib_stats['n_matched']:,} matched, "
@@ -2490,8 +2506,6 @@ transition_rollup:
   library_assist:
     library_path: null          # Path to .blib or .tsv spectral library (REQUIRED)
     mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
-    r_squared_threshold: 0.8    # Minimum R-squared for reliable fit
-    mad_threshold: 3.0          # MAD multiplier for outlier detection (high residuals only)
     min_matched_fragments: 3    # Minimum fragments for valid fit (else NaN)
 
 # =============================================================================

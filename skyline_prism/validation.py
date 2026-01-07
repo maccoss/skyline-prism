@@ -11,11 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .normalization import RTLowessResult

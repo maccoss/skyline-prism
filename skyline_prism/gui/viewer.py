@@ -462,13 +462,13 @@ class PRISMResultWidget(QWidget):
             # Use GREATEST to handle potential nulls
             sample_expr = ", ".join([f'"{c}"' for c in sample_cols[:50]])  # Limit for performance
             query = f"""
-                SELECT 
+                SELECT
                     "{protein_col}" as protein_group,
                     COALESCE(leading_protein, "{protein_col}") as leading_protein,
                     COALESCE(leading_name, '') as leading_name,
                     MEDIAN(median_val) as median_abundance
                 FROM (
-                    SELECT 
+                    SELECT
                         "{protein_col}",
                         leading_protein,
                         leading_name,

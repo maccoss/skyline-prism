@@ -35,7 +35,7 @@ peptide_query = " UNION ALL ".join(
 )
 
 peptides_df = con.execute(f"""
-    SELECT DISTINCT peptide 
+    SELECT DISTINCT peptide
     FROM ({peptide_query})
 """).fetchdf()
 
@@ -48,8 +48,8 @@ print("Selecting 10% subset...")
 con.register("peptides_table", peptides_df)
 
 selected = con.execute("""
-    SELECT peptide 
-    FROM peptides_table 
+    SELECT peptide
+    FROM peptides_table
     WHERE hash(peptide) % 10 = 0
 """).fetchdf()
 

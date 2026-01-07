@@ -299,7 +299,6 @@ def plot_rt_bin_boxplots_comparison(
         positions = []
         data_to_plot = []
         box_colors = []
-        labels = []
 
         width = 0.8 / len(batches)
 
@@ -319,7 +318,7 @@ def plot_rt_bin_boxplots_comparison(
                     box_colors.append(batch_to_color[batch])
 
             if i == 0:
-                labels = [f"{rt_start:.1f}" for _ in batches]
+                [f"{rt_start:.1f}" for _ in batches]
 
         # Create boxplots
         bp = ax.boxplot(
