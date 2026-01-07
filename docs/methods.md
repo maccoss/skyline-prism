@@ -32,7 +32,7 @@ PRISM accepts Skyline transition-level exports in CSV format. Required columns i
 Optional quality columns:
 | Column | Description |
 |--------|-------------|
-| `Shape Correlation` | Library spectrum correlation (0-1) |
+| `Shape Correlation` | R^2^ of the transition XIC trace to the median trace (0-1) |
 | `Product Mz` | Fragment ion m/z |
 | `Precursor Charge` | Precursor ion charge state |
 | `Product Charge` | Fragment ion charge state |
