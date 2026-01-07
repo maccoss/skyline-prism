@@ -20,6 +20,7 @@ This release introduces the `consensus` transition rollup method and comprehensi
 
 ## Bug Fixes
 
+- **Missing dependency**: Added `statsmodels>=0.13` to required dependencies. RT-lowess normalization requires statsmodels but it was not listed in `pyproject.toml`, causing install failures on fresh environments.
 - **Divide-by-zero warning**: Fixed RuntimeWarning in `spectral_library.py` when computing R-squared with zero total sum of squares. Added `np.errstate` context manager to suppress the already-handled edge case.
 - **Undefined function**: Fixed `robust_least_squares_rollup` reference error by using `least_squares_rollup` with `remove_outliers` parameter.
 - **Config parsing**: Fixed library-assist config parsing to properly read nested `library_assist.library_path` format.

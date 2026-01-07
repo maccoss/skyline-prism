@@ -91,12 +91,37 @@ def build_peptide_protein_map(
     protein_to_peptides: dict[str, set[str]] = defaultdict(set)
     protein_to_name: dict[str, str] = {}
 
-    for _, row in df[[peptide_col, protein_col, protein_name_col]].drop_duplicates().iterrows():
+    # Build unique column list to avoid duplicate column issues
+    cols_to_select = [peptide_col, protein_col]
+    if protein_name_col != protein_col:
+        cols_to_select.append(protein_name_col)
+
+    for _, row in df[cols_to_select].drop_duplicates().iterrows():
         peptide = row[peptide_col]
 
         # Handle semicolon-separated protein lists
-        proteins_str = str(row[protein_col]) if pd.notna(row[protein_col]) else ""
-        names_str = str(row[protein_name_col]) if pd.notna(row[protein_name_col]) else ""
+        # Use .iloc[0] if we somehow get a Series (shouldn't happen now, but defensive)
+        protein_val = row[protein_col]
+        if hasattr(protein_val, "iloc"):
+            protein_val = protein_val.iloc[0]
+        proteins_str = (
+            str(protein_val)
+            if protein_val is not None and str(protein_val) not in ("nan", "None", "")
+            else ""
+        )
+
+        # Use protein_col as name fallback if protein_name_col is the same
+        if protein_name_col == protein_col:
+            names_str = proteins_str
+        else:
+            name_val = row[protein_name_col]
+            if hasattr(name_val, "iloc"):
+                name_val = name_val.iloc[0]
+            names_str = (
+                str(name_val)
+                if name_val is not None and str(name_val) not in ("nan", "None", "")
+                else ""
+            )
 
         proteins = [p.strip() for p in proteins_str.split(";") if p.strip()]
         names = [n.strip() for n in names_str.split(";") if n.strip()]

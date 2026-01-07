@@ -386,6 +386,7 @@ KNOWN_CONFIG_KEYS = {
         "spectral_library_path",  # Path to spectral library for library-assisted method
         "spectral_library_min_fragments",  # Min fragments for library matching
         "spectral_library_mz_tolerance",  # m/z tolerance for library matching
+        "library_assist",  # Nested section for library-assisted rollup config
     },
     "transition_rollup.adaptive_rollup": {
         "beta_relative_intensity",
@@ -400,6 +401,11 @@ KNOWN_CONFIG_KEYS = {
         "mz_min",
         "mz_max",
         "log_intensity_center",
+    },
+    "transition_rollup.library_assist": {
+        "library_path",
+        "mz_tolerance",
+        "min_matched_fragments",
     },
     "global_normalization": {
         "method",
