@@ -938,7 +938,6 @@ class TestLeastSquaresVectorized:
 
     def test_vectorized_with_missing_data(self):
         """Test handling of NaN values in observations."""
-
         library = np.array([1.0, 0.6, 0.4, 0.3, 0.2, 0.1])
         scales = np.array([1000, 1500, 2000, 1200])
         observed = library[:, None] * scales[None, :]
