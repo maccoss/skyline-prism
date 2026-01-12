@@ -1056,6 +1056,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     if protein_name_col not in available_columns and "Protein" in available_columns:
         protein_name_col = "Protein"
 
+    # Optional gene and description columns from Skyline CSV
+    protein_gene_col = config["data"].get("protein_gene_column", "Protein Gene")
+    if protein_gene_col not in available_columns and "Protein Gene" in available_columns:
+        protein_gene_col = "Protein Gene"
+    elif protein_gene_col not in available_columns:
+        protein_gene_col = None
+
+    protein_description_col = config["data"].get("protein_description_column", "Protein")
+    # For description, we use the "Protein" column which contains the full protein name/description
+    if protein_description_col not in available_columns and "Protein" in available_columns:
+        protein_description_col = "Protein"
+    elif protein_description_col not in available_columns:
+        protein_description_col = None
+
     logger.info(
         f"Using columns: peptide={peptide_col}, sample={sample_col}, abundance={abundance_col}"
     )
@@ -1763,6 +1777,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("=" * 60)
 
     columns_for_parsimony = [peptide_col, protein_col, protein_name_col]
+    if protein_gene_col:
+        columns_for_parsimony.append(protein_gene_col)
+    if protein_description_col:
+        columns_for_parsimony.append(protein_description_col)
     columns_for_parsimony = [c for c in columns_for_parsimony if c in available_columns]
 
     logger.info("  Reading peptide-protein mappings...")
@@ -1770,14 +1788,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     mapping_df = mapping_table.to_pandas().drop_duplicates()
     logger.info(f"  Found {len(mapping_df):,} unique peptide-protein records")
 
-    pep_to_prot, prot_to_pep, prot_to_name = build_peptide_protein_map(
+    (
+        pep_to_prot,
+        prot_to_pep,
+        prot_to_name,
+        prot_to_gene,
+        prot_to_description,
+    ) = build_peptide_protein_map(
         mapping_df,
         peptide_col=peptide_col,
         protein_col=protein_col,
         protein_name_col=protein_name_col,
+        protein_gene_col=protein_gene_col,
+        protein_description_col=protein_description_col,
     )
 
-    protein_groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+    protein_groups = compute_protein_groups(
+        prot_to_pep,
+        pep_to_prot,
+        prot_to_name,
+        prot_to_gene,
+        prot_to_description,
+    )
     logger.info(f"  Computed {len(protein_groups)} protein groups")
 
     groups_output = output_dir / "protein_groups.tsv"
@@ -1830,6 +1862,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "protein_group",
         "leading_protein",
         "leading_name",
+        "leading_uniprot_id",
+        "leading_gene_name",
+        "leading_description",
         "n_peptides",
         "n_unique_peptides",
         "low_confidence",
@@ -1955,6 +1990,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "protein_group",
         "leading_protein",
         "leading_name",
+        "leading_uniprot_id",
+        "leading_gene_name",
+        "leading_description",
         "n_peptides",
         "n_unique_peptides",
         "low_confidence",

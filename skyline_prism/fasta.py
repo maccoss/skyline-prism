@@ -55,11 +55,20 @@ class ProteinEntry:
     gene_name: str | None  # Gene name if available
     description: str  # Full description line
     sequence: str  # Amino acid sequence
+    db_type: str | None = None  # Database type (e.g., 'sp', 'tr' for UniProt)
 
     @property
     def length(self) -> int:
         """Return the length of the protein sequence."""
         return len(self.sequence)
+
+    @property
+    def uniprot_id(self) -> str:
+        """Return full UniProt identifier (e.g., sp|P04406|G3P_HUMAN) if available."""
+        if self.db_type and self.db_type in ["sp", "tr"]:
+            return f"{self.db_type}|{self.accession}|{self.name}"
+        # Fallback to accession for non-UniProt entries
+        return self.accession
 
 
 # =============================================================================
@@ -145,7 +154,7 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
     # Try UniProt format: >sp|P04406|G3P_HUMAN Description
     uniprot_match = re.match(r"^([sptr]{2})\|([^|]+)\|([^\s]+)\s*(.*)", header)
     if uniprot_match:
-        # db_type = uniprot_match.group(1)  # sp or tr
+        db_type = uniprot_match.group(1)  # sp or tr
         accession = uniprot_match.group(2)
         name = uniprot_match.group(3)
         description = uniprot_match.group(4) or name
@@ -161,6 +170,7 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
             gene_name=gene_name,
             description=description,
             sequence=sequence,
+            db_type=db_type,
         )
 
     # Try NCBI format: >NP_001256799.1 description [species]

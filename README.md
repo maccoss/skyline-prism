@@ -66,6 +66,19 @@ This produces:
 - `n_peptides` - Number of peptides used in rollup
 - `qc_flag` - QC warnings (e.g., `low_peptide_count(n)`, `single_peptide_in_sample`)
 
+### Protein Metadata (parsimony “leading_” semantics)
+
+Protein groups are formed by parsimony. Each group has a canonical representative (“leading protein”) used to label group-level metadata. The following metadata columns appear in `corrected_proteins.parquet`:
+
+- `protein_group`: Protein group ID (PG####)
+- `leading_protein`: Representative accession for the leading protein
+- `leading_name`: Representative protein name (from Skyline `Protein`)
+- `leading_uniprot_id`: UniProt accession for the leading protein (from Skyline `Protein Accession`)
+- `leading_gene_name`: Gene symbol for the leading protein (from Skyline `Protein Gene`)
+- `leading_description`: Full protein description for the leading protein (from Skyline `Protein`)
+
+The `leading_` prefix clarifies that these fields describe the group’s canonical representative, avoiding ambiguity with member/subsumed proteins. Member/subsumed lists are available in `protein_groups.tsv`.
+
 See [SPECIFICATION.md](SPECIFICATION.md) for complete column definitions.
 
 ### Reproducibility: Re-run from provenance
@@ -179,7 +192,7 @@ For optimal results, include these controls in each batch:
 | Control Type               | Description                               | Replicates/Batch |
 | -------------------------- | ----------------------------------------- | ---------------- |
 | Inter-experiment reference | Commercial pool (e.g., Golden West CSF)   | 1-8              |
-| Intra-experiment QC      | Pooled experimental samples               | 1-8              |
+| Intra-experiment QC        | Pooled experimental samples               | 1-8              |
 
 **Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
 
@@ -301,7 +314,8 @@ sample_outlier_detection:
 ```
 
 Example log output:
-```
+
+```text
 Sample outlier detection (IQR method, linear scale):
   Q1=1234567, Q3=2345678, IQR=1111111
   Lower bound: 567890 (Q1 - 1.5*IQR)
@@ -389,29 +403,32 @@ transition_rollup:
 
 **The weight formula:**
 
-```
+```text
 w_t = exp(beta_mz * normalized_mz + beta_shape_outlier * outlier_frac)
 ```
 
 Where:
+
 - `normalized_mz`: m/z normalized to [0,1] range
 - `outlier_frac`: Fraction of samples where shape correlation < threshold (indicates interference)
 
 **Key insight:** When all betas are 0, all weights equal 1 (simple sum baseline). The optimizer only uses learned weights if they improve CV.
 
 **What gets optimized:**
+
 - `beta_mz`: Higher m/z fragments may have better signal (positive = favor high m/z)
 - `beta_shape_corr_outlier`: Transitions with frequent interference (low shape correlation) should be down-weighted (negative = penalize)
 
 **The peptide abundance calculation:**
 
-```
+```text
 Peptide_abundance = log2(Σ weight_t × intensity_t)
 ```
 
 The transition intensities are the VALUES being summed. The learned weights adjust how much each transition contributes based on its quality metrics (m/z and interference level).
 
 **Learning process:**
+
 1. Parameters are optimized on reference samples by minimizing median CV
 2. Results are validated on QC samples (held-out) to prevent overfitting
 3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
@@ -432,6 +449,7 @@ transition_rollup:
 ```
 
 **Algorithm:** Iterative least squares with outlier removal:
+
 1. Match observed transitions to library fragments by m/z
 2. Fit: `observed = scale * library + residuals`
 3. Flag transitions with HIGH positive residuals as interfered (signal > expected)
@@ -441,6 +459,7 @@ transition_rollup:
 **Key insight:** Only high residuals indicate interference. Low or negative residuals are valid - they indicate low abundance or noise, not interference.
 
 **Supported library formats:**
+
 - **BLIB (Skyline):** SQLite-based format with zlib-compressed peak arrays
 - **Carafe TSV (DIA-NN):** Tab-separated format with fragment annotations
 

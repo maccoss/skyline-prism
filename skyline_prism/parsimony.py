@@ -9,8 +9,12 @@ Implements greedy set cover algorithm to create protein groups where:
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from skyline_prism.fasta import ProteinEntry
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,9 @@ class ProteinGroup:
     group_id: str
     leading_protein: str  # Representative accession
     leading_protein_name: str  # Gene name or description
+    leading_uniprot_id: str  # Full UniProt identifier (e.g., sp|P62754|RS6_MOUSE)
+    leading_gene_name: str  # Gene name from FASTA
+    leading_description: str  # Full protein description
     member_proteins: list[str]  # All indistinguishable proteins
     subsumed_proteins: list[str]  # Proteins whose peptides are subset
 
@@ -51,7 +58,10 @@ class ProteinGroup:
         return {
             "GroupID": self.group_id,
             "LeadingProtein": self.leading_protein,
+            "LeadingUniProtID": self.leading_uniprot_id,
+            "LeadingGeneName": self.leading_gene_name,
             "LeadingName": self.leading_protein_name,
+            "LeadingDescription": self.leading_description,
             "MemberProteins": ";".join(self.member_proteins),
             "SubsumedProteins": ";".join(self.subsumed_proteins),
             "NPeptides": self.n_peptides,
@@ -69,7 +79,15 @@ def build_peptide_protein_map(
     peptide_col: str = "peptide_sequence",
     protein_col: str = "protein_ids",
     protein_name_col: str = "protein_names",
-) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
+    protein_gene_col: str | None = None,
+    protein_description_col: str | None = None,
+) -> tuple[
+    dict[str, set[str]],
+    dict[str, set[str]],
+    dict[str, str],
+    dict[str, str],
+    dict[str, str],
+]:
     """Build bidirectional mapping between peptides and proteins.
 
     Handles semicolon-separated protein lists in the protein column.
@@ -79,22 +97,32 @@ def build_peptide_protein_map(
         peptide_col: Column containing peptide sequences
         protein_col: Column containing protein IDs (may be semicolon-separated)
         protein_name_col: Column containing protein names
+        protein_gene_col: Column containing protein gene names (optional)
+        protein_description_col: Column containing protein descriptions (optional)
 
     Returns:
         Tuple of:
         - peptide_to_proteins: dict[peptide] -> set of protein IDs
         - protein_to_peptides: dict[protein] -> set of peptides
         - protein_to_name: dict[protein] -> protein name
+        - protein_to_gene: dict[protein] -> gene name
+        - protein_to_description: dict[protein] -> description
 
     """
     peptide_to_proteins: dict[str, set[str]] = defaultdict(set)
     protein_to_peptides: dict[str, set[str]] = defaultdict(set)
     protein_to_name: dict[str, str] = {}
+    protein_to_gene: dict[str, str] = {}
+    protein_to_description: dict[str, str] = {}
 
     # Build unique column list to avoid duplicate column issues
     cols_to_select = [peptide_col, protein_col]
     if protein_name_col != protein_col:
         cols_to_select.append(protein_name_col)
+    if protein_gene_col and protein_gene_col in df.columns:
+        cols_to_select.append(protein_gene_col)
+    if protein_description_col and protein_description_col in df.columns:
+        cols_to_select.append(protein_description_col)
 
     for _, row in df[cols_to_select].drop_duplicates().iterrows():
         peptide = row[peptide_col]
@@ -123,20 +151,66 @@ def build_peptide_protein_map(
                 else ""
             )
 
+        # Get gene names if available
+        genes_str = ""
+        if protein_gene_col and protein_gene_col in row.index:
+            gene_val = row[protein_gene_col]
+            if hasattr(gene_val, "iloc"):
+                gene_val = gene_val.iloc[0]
+            genes_str = (
+                str(gene_val)
+                if gene_val is not None and str(gene_val) not in ("nan", "None", "")
+                else ""
+            )
+
+        # Get descriptions if available
+        descriptions_str = ""
+        if protein_description_col and protein_description_col in row.index:
+            desc_val = row[protein_description_col]
+            if hasattr(desc_val, "iloc"):
+                desc_val = desc_val.iloc[0]
+            descriptions_str = (
+                str(desc_val)
+                if desc_val is not None and str(desc_val) not in ("nan", "None", "")
+                else ""
+            )
+
         proteins = [p.strip() for p in proteins_str.split(";") if p.strip()]
         names = [n.strip() for n in names_str.split(";") if n.strip()]
+        genes = [g.strip() for g in genes_str.split(";") if g.strip()]
+        descriptions = [d.strip() for d in descriptions_str.split(";") if d.strip()]
 
         # Pad names if fewer than proteins
         while len(names) < len(proteins):
             names.append(proteins[len(names)] if len(names) < len(proteins) else "")
+        # Pad genes if fewer than proteins
+        while len(genes) < len(proteins):
+            genes.append("")
+        # Pad descriptions if fewer than proteins
+        while len(descriptions) < len(proteins):
+            descriptions.append("")
 
-        for protein, name in zip(proteins, names):
+        for i, protein in enumerate(proteins):
+            name = names[i] if i < len(names) else protein
+            gene = genes[i] if i < len(genes) else ""
+            description = descriptions[i] if i < len(descriptions) else ""
+
             peptide_to_proteins[peptide].add(protein)
             protein_to_peptides[protein].add(peptide)
             if protein not in protein_to_name:
                 protein_to_name[protein] = name
+            if protein not in protein_to_gene:
+                protein_to_gene[protein] = gene
+            if protein not in protein_to_description:
+                protein_to_description[protein] = description
 
-    return dict(peptide_to_proteins), dict(protein_to_peptides), protein_to_name
+    return (
+        dict(peptide_to_proteins),
+        dict(protein_to_peptides),
+        protein_to_name,
+        protein_to_gene,
+        protein_to_description,
+    )
 
 
 def build_peptide_protein_map_from_fasta(
@@ -253,6 +327,9 @@ def compute_protein_groups(
     protein_to_peptides: dict[str, set[str]],
     peptide_to_proteins: dict[str, set[str]],
     protein_to_name: dict[str, str],
+    protein_to_gene: dict[str, str] | None = None,
+    protein_to_description: dict[str, str] | None = None,
+    protein_entries: dict[str, "ProteinEntry"] | None = None,
 ) -> list[ProteinGroup]:
     """Apply parsimony algorithm to create protein groups.
 
@@ -265,6 +342,9 @@ def compute_protein_groups(
         protein_to_peptides: Mapping from protein to peptides
         peptide_to_proteins: Mapping from peptide to proteins
         protein_to_name: Mapping from protein ID to name
+        protein_to_gene: Mapping from protein ID to gene name (optional)
+        protein_to_description: Mapping from protein ID to description (optional)
+        protein_entries: FASTA-based protein entries (optional)
 
     Returns:
         List of ProteinGroup objects
@@ -418,10 +498,25 @@ def compute_protein_groups(
         # Leading protein is the canonical (or first member if indistinguishable)
         leading = members[0]
 
+        # Extract metadata from protein_entries if available (FASTA-based)
+        if protein_entries and leading in protein_entries:
+            entry = protein_entries[leading]
+            uniprot_id = entry.uniprot_id
+            gene_name = entry.gene_name or ""
+            description = entry.description
+        else:
+            # Use Skyline CSV-based mappings if available
+            uniprot_id = leading  # Default: use accession as UniProt ID
+            gene_name = protein_to_gene.get(leading, "") if protein_to_gene else ""
+            description = protein_to_description.get(leading, "") if protein_to_description else ""
+
         group = ProteinGroup(
             group_id=f"PG{i + 1:04d}",
             leading_protein=leading,
             leading_protein_name=protein_to_name.get(leading, leading),
+            leading_uniprot_id=uniprot_id,
+            leading_gene_name=gene_name,
+            leading_description=description,
             member_proteins=members,
             subsumed_proteins=subsumed_list,
             peptides=all_peps,

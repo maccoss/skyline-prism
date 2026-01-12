@@ -22,7 +22,7 @@ class TestBuildPeptideProteinMap:
             }
         )
 
-        pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)
+        pep_to_prot, prot_to_pep, _, _, _ = build_peptide_protein_map(df)
 
         assert len(pep_to_prot) == 3
         assert pep_to_prot["PEPTIDE1"] == {"P001"}
@@ -38,7 +38,7 @@ class TestBuildPeptideProteinMap:
             }
         )
 
-        pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)
+        pep_to_prot, prot_to_pep, _, _, _ = build_peptide_protein_map(df)
 
         # SHARED peptide maps to both proteins
         assert pep_to_prot["SHARED"] == {"P001", "P002"}
@@ -56,7 +56,7 @@ class TestBuildPeptideProteinMap:
             }
         )
 
-        pep_to_prot, prot_to_pep, _ = build_peptide_protein_map(df)
+        pep_to_prot, prot_to_pep, _, _, _ = build_peptide_protein_map(df)
 
         # Peptide should map to all three proteins
         assert pep_to_prot["PEPTIDE1"] == {"P001", "P002", "P003"}
@@ -157,6 +157,9 @@ class TestProteinGroup:
             group_id="PG001",
             leading_protein="P001",
             leading_protein_name="TestProtein",
+                leading_uniprot_id="sp|P001|TEST_HUMAN",
+                leading_gene_name="TEST",
+                leading_description="Test protein",
             member_proteins=["P001"],
             subsumed_proteins=[],
             peptides={"PEP1", "PEP2", "PEP3"},
@@ -175,6 +178,9 @@ class TestProteinGroup:
             group_id="PG001",
             leading_protein="P001",
             leading_protein_name="TestProtein",
+                leading_uniprot_id="sp|P001|TEST_HUMAN",
+                leading_gene_name="TEST",
+                leading_description="Test protein",
             member_proteins=["P001"],
             subsumed_proteins=["P002"],
             peptides={"PEP1", "PEP2"},

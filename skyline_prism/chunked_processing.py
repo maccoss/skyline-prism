@@ -1202,6 +1202,9 @@ class ProteinRollupResult:
     abundances: dict[str, float]  # sample -> abundance (log2)
     residuals: dict[str, dict[str, float]] | None = None  # peptide -> sample -> residual
     low_confidence: bool = False
+    leading_uniprot_id: str = ""
+    leading_gene_name: str = ""
+    leading_description: str = ""
 
 
 @dataclass
@@ -1253,6 +1256,9 @@ def _process_single_protein(
             group_id=group_id,
             leading_protein=group.leading_protein,
             leading_name=group.leading_protein_name,
+            leading_uniprot_id=group.leading_uniprot_id,
+            leading_gene_name=group.leading_gene_name,
+            leading_description=group.leading_description,
             n_peptides=0,
             n_unique_peptides=len(group.unique_peptides),
             abundances={s: np.nan for s in samples},
@@ -1306,6 +1312,9 @@ def _process_single_protein(
         group_id=group_id,
         leading_protein=group.leading_protein,
         leading_name=group.leading_protein_name,
+        leading_uniprot_id=group.leading_uniprot_id,
+        leading_gene_name=group.leading_gene_name,
+        leading_description=group.leading_description,
         n_peptides=n_peptides,
         n_unique_peptides=len(group.unique_peptides),
         abundances=abundances,
@@ -1406,6 +1415,9 @@ def rollup_proteins_streaming(
             "protein_group": result.group_id,
             "leading_protein": result.leading_protein,
             "leading_name": result.leading_name,
+            "leading_uniprot_id": result.leading_uniprot_id,
+            "leading_gene_name": result.leading_gene_name,
+            "leading_description": result.leading_description,
             "n_peptides": result.n_peptides,
             "n_unique_peptides": result.n_unique_peptides,
             "low_confidence": result.low_confidence,
@@ -1436,6 +1448,9 @@ def rollup_proteins_streaming(
         "protein_group",
         "leading_protein",
         "leading_name",
+        "leading_uniprot_id",
+        "leading_gene_name",
+        "leading_description",
         "n_peptides",
         "n_unique_peptides",
         "low_confidence",

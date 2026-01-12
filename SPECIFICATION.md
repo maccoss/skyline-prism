@@ -118,6 +118,21 @@ Proteins > Protein Gene
 Peptides > Peptide
 Peptides > Peptide Modified Sequence Unimod Ids
 Precursors > Precursor Charge
+
+### Output Files
+
+The pipeline writes the following outputs (linear scale for abundance matrices):
+
+- `corrected_peptides.parquet`: Peptide-level normalized and batch-corrected abundances per sample.
+- `corrected_proteins.parquet`: Protein group abundances per sample with parsimony metadata:
+    - `protein_group`: Group identifier (PG####)
+    - `leading_protein`: Representative accession for the leading protein
+    - `leading_uniprot_id`: UniProt accession for the leading protein (from Skyline `Protein Accession`)
+    - `leading_gene_name`: Gene symbol for the leading protein (from Skyline `Protein Gene`)
+    - `leading_description`: Full protein description for the leading protein (from Skyline `Protein`)
+- `protein_groups.tsv`: Group membership export including `LeadingUniProtID`, `LeadingGeneName`, `LeadingDescription`.
+
+The `leading_` prefix indicates metadata taken from the canonical representative of each parsimony group.
 Precursors > Precursor Mz
 Precursors > Isotope Dot Product
 Precursors > Detection Q Value

@@ -21,7 +21,7 @@ This document provides detailed descriptions of all computational methods implem
 PRISM accepts Skyline transition-level exports in CSV format. Required columns include:
 
 | Column | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `Peptide Modified Sequence` | Modified peptide sequence (e.g., `C[+57]PEPTIDEK`) |
 | `Protein Accession` | UniProt or other protein identifier |
 | `Replicate Name` | Sample/replicate identifier |
@@ -30,8 +30,9 @@ PRISM accepts Skyline transition-level exports in CSV format. Required columns i
 | `Retention Time` | Chromatographic retention time (minutes) |
 
 Optional quality columns:
+
 | Column | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `Shape Correlation` | R^2^ of the transition XIC trace to the median trace (0-1) |
 | `Product Mz` | Fragment ion m/z |
 | `Precursor Charge` | Precursor ion charge state |
@@ -43,7 +44,7 @@ Optional quality columns:
 #### Peptide Abundances (`corrected_peptides.parquet`)
 
 | Column | Type | Description |
-|--------|------|-------------|
+| ------ | ---- | ----------- |
 | `peptide` | string | Modified peptide sequence |
 | `protein_accession` | string | Associated protein(s) |
 | `mean_rt` | float64 | Mean retention time across samples |
@@ -52,12 +53,16 @@ Optional quality columns:
 #### Protein Abundances (`corrected_proteins.parquet`)
 
 | Column | Type | Description |
-|--------|------|-------------|
+| ------ | ---- | ----------- |
 | `protein_group` | string | Protein group identifier |
 | `leading_protein` | string | Representative protein accession |
-| `gene_name` | string | Gene symbol (if available) |
+| `leading_uniprot_id` | string | UniProt accession for the leading protein |
+| `leading_gene_name` | string | Gene symbol for the leading protein |
+| `leading_description` | string | Full protein description/name for the leading protein |
 | `n_peptides` | int64 | Number of peptides in group |
 | `<sample_1>` ... `<sample_n>` | float64 | Linear-scale abundance per sample |
+
+**Leading metadata semantics:** The `leading_` prefix indicates that these fields describe the canonical representative (leading protein) of the parsimony group, not all member proteins. Values are populated from Skyline export columns (`Protein Accession`, `Protein Gene`, `Protein`).
 
 ---
 
@@ -371,6 +376,7 @@ Assigns peptides to protein groups using a minimal set cover approach.
 
 Each protein group contains:
 - **Leading protein:** Representative protein (sorted alphabetically or by evidence)
+- **Leading metadata:** Group-level identifiers and names are taken from the leading protein and exposed as `leading_uniprot_id`, `leading_gene_name`, and `leading_description` in outputs.
 - **Member proteins:** Indistinguishable proteins with identical peptides
 - **Subsumed proteins:** Proteins whose peptides are a subset
 - **Unique peptides:** Map exclusively to this group

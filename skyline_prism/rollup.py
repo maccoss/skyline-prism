@@ -1342,6 +1342,9 @@ def rollup_to_proteins(
         g.group_id: {
             "leading_protein": g.leading_protein,
             "leading_name": g.leading_protein_name,
+            "leading_uniprot_id": g.leading_uniprot_id,
+            "leading_gene_name": g.leading_gene_name,
+            "leading_description": g.leading_description,
             "n_peptides": g.n_peptides,
             "n_unique_peptides": g.n_unique_peptides,
             "qc_flag": protein_qc_flags.get(g.group_id),
@@ -1349,7 +1352,16 @@ def rollup_to_proteins(
         for g in protein_groups
     }
 
-    for col in ["leading_protein", "leading_name", "n_peptides", "n_unique_peptides", "qc_flag"]:
+    for col in [
+        "leading_protein",
+        "leading_name",
+        "leading_uniprot_id",
+        "leading_gene_name",
+        "leading_description",
+        "n_peptides",
+        "n_unique_peptides",
+        "qc_flag",
+    ]:
         protein_df[col] = protein_df.index.map(
             lambda x, c=col: group_metadata.get(x, {}).get(c, np.nan)
         )
