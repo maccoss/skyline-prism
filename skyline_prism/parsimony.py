@@ -7,6 +7,7 @@ Implements greedy set cover algorithm to create protein groups where:
 """
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -17,6 +18,28 @@ if TYPE_CHECKING:
     from skyline_prism.fasta import ProteinEntry
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_protein_entry_name(identifier: str) -> str:
+    """Extract clean entry name from a protein identifier.
+
+    For UniProt-style identifiers like:
+        sp|P55012|S12A2_MOUSE -> S12A2_MOUSE
+        tr|A0A075B5J9|A0A075B5J9_MOUSE -> A0A075B5J9_MOUSE
+
+    For other formats, returns the identifier as-is.
+
+    Args:
+        identifier: Protein identifier string
+
+    Returns:
+        Clean entry name or original identifier
+    """
+    # Match UniProt format: sp|accession|entry_name or tr|accession|entry_name
+    match = re.match(r"^[sptr]{2}\|[^|]+\|([^\s]+)", identifier)
+    if match:
+        return match.group(1)
+    return identifier
 
 
 @dataclass
@@ -195,6 +218,19 @@ def build_peptide_protein_map(
             gene = genes[i] if i < len(genes) else ""
             description = descriptions[i] if i < len(descriptions) else ""
 
+            # Clean up name if it looks like a UniProt identifier
+            # e.g., "sp|P55012|S12A2_MOUSE" -> "S12A2_MOUSE"
+            name = _extract_protein_entry_name(name)
+
+            # For gene: if empty, set to "NA"
+            if not gene:
+                gene = "NA"
+
+            # For description: if it looks like a UniProt identifier or is empty,
+            # set to "NA" (proper descriptions come from FASTA or Skyline report)
+            if not description or description == protein or "|" in description:
+                description = "NA"
+
             peptide_to_proteins[peptide].add(protein)
             protein_to_peptides[protein].add(peptide)
             if protein not in protein_to_name:
@@ -218,7 +254,13 @@ def build_peptide_protein_map_from_fasta(
     fasta_path: str,
     peptide_col: str = "peptide_sequence",
     handle_il_ambiguity: bool = True,
-) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
+) -> tuple[
+    dict[str, set[str]],
+    dict[str, set[str]],
+    dict[str, str],
+    dict[str, str],
+    dict[str, str],
+]:
     """Build peptide-protein mapping from FASTA database.
 
     This is the RECOMMENDED method for proper parsimony analysis.
@@ -236,6 +278,8 @@ def build_peptide_protein_map_from_fasta(
         - peptide_to_proteins: dict[peptide] -> set of protein IDs
         - protein_to_peptides: dict[protein] -> set of peptides
         - protein_to_name: dict[protein] -> protein name
+        - protein_to_gene: dict[protein] -> gene name
+        - protein_to_description: dict[protein] -> protein description
 
     """
     from .fasta import (
@@ -264,6 +308,13 @@ def build_peptide_protein_map_from_fasta(
     # Build protein name map
     protein_to_name = build_protein_name_map(protein_entries)
 
+    # Build gene name and description maps from FASTA entries
+    protein_to_gene: dict[str, str] = {}
+    protein_to_description: dict[str, str] = {}
+    for accession, entry in protein_entries.items():
+        protein_to_gene[accession] = entry.gene_name or "NA"
+        protein_to_description[accession] = entry.description or "NA"
+
     # Log statistics
     n_mapped = len(peptide_to_proteins)
     n_total = len(detected_peptides)
@@ -277,7 +328,13 @@ def build_peptide_protein_map_from_fasta(
         f"  Unique peptides: {n_unique}, Shared peptides: {n_shared}"
     )
 
-    return peptide_to_proteins, protein_to_peptides, protein_to_name
+    return (
+        peptide_to_proteins,
+        protein_to_peptides,
+        protein_to_name,
+        protein_to_gene,
+        protein_to_description,
+    )
 
 
 def _find_subsumable_proteins(protein_to_peptides: dict[str, set[str]]) -> dict[str, str]:

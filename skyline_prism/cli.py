@@ -1776,32 +1776,64 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info("Stage 3: Protein Parsimony")
     logger.info("=" * 60)
 
-    columns_for_parsimony = [peptide_col, protein_col, protein_name_col]
-    if protein_gene_col:
-        columns_for_parsimony.append(protein_gene_col)
-    if protein_description_col:
-        columns_for_parsimony.append(protein_description_col)
-    columns_for_parsimony = [c for c in columns_for_parsimony if c in available_columns]
+    # Check if FASTA path is configured for FASTA-based parsimony
+    fasta_path = config.get("parsimony", {}).get("fasta_path")
+    use_fasta_parsimony = fasta_path and Path(fasta_path).exists()
 
-    logger.info("  Reading peptide-protein mappings...")
-    mapping_table = pf.read(columns=columns_for_parsimony)
-    mapping_df = mapping_table.to_pandas().drop_duplicates()
-    logger.info(f"  Found {len(mapping_df):,} unique peptide-protein records")
+    if use_fasta_parsimony:
+        logger.info(f"  Using FASTA-based parsimony: {fasta_path}")
 
-    (
-        pep_to_prot,
-        prot_to_pep,
-        prot_to_name,
-        prot_to_gene,
-        prot_to_description,
-    ) = build_peptide_protein_map(
-        mapping_df,
-        peptide_col=peptide_col,
-        protein_col=protein_col,
-        protein_name_col=protein_name_col,
-        protein_gene_col=protein_gene_col,
-        protein_description_col=protein_description_col,
-    )
+        # Read peptide sequences for FASTA matching
+        mapping_table = pf.read(columns=[peptide_col])
+        mapping_df = mapping_table.to_pandas().drop_duplicates()
+
+        from .parsimony import build_peptide_protein_map_from_fasta
+
+        (
+            pep_to_prot,
+            prot_to_pep,
+            prot_to_name,
+            prot_to_gene,
+            prot_to_description,
+        ) = build_peptide_protein_map_from_fasta(
+            mapping_df,
+            fasta_path=fasta_path,
+            peptide_col=peptide_col,
+            handle_il_ambiguity=True,
+        )
+    else:
+        if fasta_path:
+            logger.warning(f"  FASTA file not found: {fasta_path}")
+            logger.warning("  Falling back to Skyline CSV-based parsimony")
+        else:
+            logger.info("  Using Skyline CSV-based parsimony (no FASTA configured)")
+
+        columns_for_parsimony = [peptide_col, protein_col, protein_name_col]
+        if protein_gene_col:
+            columns_for_parsimony.append(protein_gene_col)
+        if protein_description_col:
+            columns_for_parsimony.append(protein_description_col)
+        columns_for_parsimony = [c for c in columns_for_parsimony if c in available_columns]
+
+        logger.info("  Reading peptide-protein mappings...")
+        mapping_table = pf.read(columns=columns_for_parsimony)
+        mapping_df = mapping_table.to_pandas().drop_duplicates()
+        logger.info(f"  Found {len(mapping_df):,} unique peptide-protein records")
+
+        (
+            pep_to_prot,
+            prot_to_pep,
+            prot_to_name,
+            prot_to_gene,
+            prot_to_description,
+        ) = build_peptide_protein_map(
+            mapping_df,
+            peptide_col=peptide_col,
+            protein_col=protein_col,
+            protein_name_col=protein_name_col,
+            protein_gene_col=protein_gene_col,
+            protein_description_col=protein_description_col,
+        )
 
     protein_groups = compute_protein_groups(
         prot_to_pep,

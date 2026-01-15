@@ -145,21 +145,39 @@ def _parse_header(header: str, sequence: str) -> ProteinEntry:
     """Parse a FASTA header line to extract accession and metadata.
 
     Handles UniProt and NCBI formats.
+
+    For UniProt entries like::
+
+        >sp|Q86YV5|PRAG1_HUMAN Inactive tyrosine-protein kinase PRAG1 OS=...
+
+    Extracts:
+        - accession: Q86YV5
+        - name: PRAG1_HUMAN
+        - gene_name: PRAG1
+        - description: Inactive tyrosine-protein kinase PRAG1 (clean)
     """
     accession = ""
     name = ""
     gene_name = None
     description = header
 
-    # Try UniProt format: >sp|P04406|G3P_HUMAN Description
+    # Try UniProt format: >sp|P04406|G3P_HUMAN Description OS=... GN=...
     uniprot_match = re.match(r"^([sptr]{2})\|([^|]+)\|([^\s]+)\s*(.*)", header)
     if uniprot_match:
         db_type = uniprot_match.group(1)  # sp or tr
         accession = uniprot_match.group(2)
         name = uniprot_match.group(3)
-        description = uniprot_match.group(4) or name
+        full_description = uniprot_match.group(4) or name
 
-        # Extract gene name from OS= or GN= fields
+        # Extract clean description (text before OS=, OX=, GN=, PE=, SV= tags)
+        # These tags mark the start of UniProt metadata fields
+        desc_match = re.match(r"^(.*?)\s*(?:OS=|OX=|GN=|PE=|SV=|$)", full_description)
+        if desc_match and desc_match.group(1).strip():
+            description = desc_match.group(1).strip()
+        else:
+            description = name  # Fallback to entry name if no description text
+
+        # Extract gene name from GN= field
         gn_match = re.search(r"GN=(\S+)", header)
         if gn_match:
             gene_name = gn_match.group(1)

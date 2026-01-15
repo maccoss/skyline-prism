@@ -157,9 +157,9 @@ class TestProteinGroup:
             group_id="PG001",
             leading_protein="P001",
             leading_protein_name="TestProtein",
-                leading_uniprot_id="sp|P001|TEST_HUMAN",
-                leading_gene_name="TEST",
-                leading_description="Test protein",
+            leading_uniprot_id="sp|P001|TEST_HUMAN",
+            leading_gene_name="TEST",
+            leading_description="Test protein",
             member_proteins=["P001"],
             subsumed_proteins=[],
             peptides={"PEP1", "PEP2", "PEP3"},
@@ -178,9 +178,9 @@ class TestProteinGroup:
             group_id="PG001",
             leading_protein="P001",
             leading_protein_name="TestProtein",
-                leading_uniprot_id="sp|P001|TEST_HUMAN",
-                leading_gene_name="TEST",
-                leading_description="Test protein",
+            leading_uniprot_id="sp|P001|TEST_HUMAN",
+            leading_gene_name="TEST",
+            leading_description="Test protein",
             member_proteins=["P001"],
             subsumed_proteins=["P002"],
             peptides={"PEP1", "PEP2"},
@@ -227,7 +227,13 @@ PEPTIDEKFGRIGRLVTR
             }
         )
 
-        pep_to_prot, prot_to_pep, prot_to_name = build_peptide_protein_map_from_fasta(
+        (
+            pep_to_prot,
+            prot_to_pep,
+            prot_to_name,
+            prot_to_gene,
+            prot_to_description,
+        ) = build_peptide_protein_map_from_fasta(
             df,
             fasta_path=str(fasta_path),
             peptide_col="peptide_sequence",
@@ -240,6 +246,13 @@ PEPTIDEKFGRIGRLVTR
         # Check protein name map
         if "P001" in prot_to_name:
             assert prot_to_name["P001"] == "TEST1"  # Gene name preferred
+
+        # Check gene name and description are extracted from FASTA
+        if "P001" in prot_to_gene:
+            assert prot_to_gene["P001"] == "TEST1"
+        if "P001" in prot_to_description:
+            # Description should be clean (without OS=, GN= tags)
+            assert prot_to_description["P001"] == "Test protein 1"
 
     def test_modified_peptide_matching(self, tmp_path):
         """Test that modified peptides are matched after stripping mods."""
@@ -261,7 +274,7 @@ MVCPEPTIDEKFGR
             }
         )
 
-        pep_to_prot, _, _ = build_peptide_protein_map_from_fasta(
+        pep_to_prot, _, _, _, _ = build_peptide_protein_map_from_fasta(
             df,
             fasta_path=str(fasta_path),
             peptide_col="peptide_sequence",
