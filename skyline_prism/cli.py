@@ -185,6 +185,81 @@ def build_sample_batch_map(
     return result
 
 
+def get_batches_from_source_document(
+    parquet_path: Path,
+    sample_cols: list[str],
+) -> dict[str, str]:
+    """Get batch assignments from Source Document column in parquet.
+
+    Each input CSV file is treated as a separate batch.
+
+    Args:
+        parquet_path: Path to transition/peptide parquet file
+        sample_cols: Sample column names (may be Sample IDs)
+
+    Returns:
+        Dict mapping sample_col -> batch label (source document name)
+
+    """
+    import duckdb
+
+    con = duckdb.connect()
+
+    # Check if Source Document column exists and get sample-to-source mapping
+    try:
+        result = con.execute(f"""
+            SELECT DISTINCT
+                COALESCE("Sample ID", "Replicate Name") as sample_id,
+                "Replicate Name" as replicate_name,
+                "Source Document" as source_doc
+            FROM read_parquet('{parquet_path}')
+            WHERE "Source Document" IS NOT NULL
+        """).fetchdf()
+    except Exception:
+        con.close()
+        return {}
+
+    con.close()
+
+    if len(result) == 0:
+        return {}
+
+    # Check if we have multiple source documents
+    source_docs = result["source_doc"].unique()
+    if len(source_docs) < 2:
+        return {}
+
+    logger.info(f"  Assigning batches from source documents: {len(source_docs)} batches")
+    for doc in sorted(source_docs):
+        n_samples = (result["source_doc"] == doc).sum()
+        logger.info(f"    {doc}: {n_samples} samples")
+
+    # Build mapping from sample_col to source document
+    sample_to_batch = {}
+
+    for _, row in result.iterrows():
+        sample_id = row["sample_id"]
+        rep_name = row["replicate_name"]
+        source = row["source_doc"]
+
+        sample_to_batch[sample_id] = source
+        if rep_name != sample_id:
+            sample_to_batch[rep_name] = source
+
+    # Map sample_cols to their batch assignments
+    result_map = {}
+    for col in sample_cols:
+        if col in sample_to_batch:
+            result_map[col] = sample_to_batch[col]
+        else:
+            # Try extracting replicate name from Sample ID
+            rep_name = sample_id_to_replicate_name(col)
+            if rep_name in sample_to_batch:
+                result_map[col] = sample_to_batch[rep_name]
+
+    return result_map
+
+
 def estimate_batches_from_parquet(
     parquet_path: Path,
     sample_cols: list[str],
@@ -192,15 +267,21 @@ def estimate_batches_from_parquet(
     n_batches: int | None = None,
     gap_iqr_multiplier: float = 1.5,
 ) -> dict[str, str]:
-    """Estimate batch assignments from acquisition times in parquet file.
+    """Estimate batch assignments from source documents or acquisition times.
+
+    Priority order:
+    1. Source Document column (each input CSV = separate batch)
+    2. Acquisition time gaps (if method="auto" or "gap")
+    3. Fixed division into n_batches (if method="fixed")
 
     Args:
         parquet_path: Path to transition parquet file
         sample_cols: Sample column names (may be Sample IDs)
         method: Estimation method:
-            - "auto": Try gap detection, fall back to fixed if no gaps
+            - "auto": Try source document, then gap detection, then fixed
             - "fixed": Divide into n_batches equal batches by acquisition time
             - "gap": Only use gap detection (return empty if no gaps found)
+            - "source": Only use Source Document column
         n_batches: Number of batches for fixed method (required if method="fixed")
         gap_iqr_multiplier: IQR multiplier for gap detection
 
@@ -209,6 +290,15 @@ def estimate_batches_from_parquet(
 
     """
     import duckdb
+
+    # Priority 1: Try Source Document column first (unless method is "fixed" or "gap")
+    if method in ["auto", "source"]:
+        source_batches = get_batches_from_source_document(parquet_path, sample_cols)
+        if source_batches:
+            return source_batches
+        if method == "source":
+            logger.warning("Source Document column not found or has only one value")
+            return {}
 
     con = duckdb.connect()
 
@@ -1634,6 +1724,132 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.info("  Skipping global normalization (method='none')")
         method_log.append("Peptide global normalization: skipped")
 
+    elif norm_method == "quantile":
+        # Quantile normalization: force identical distributions across samples
+        # Works on log2 scale data
+        logger.info("  Applying quantile normalization...")
+
+        sample_data = peptide_df[sample_cols].values  # (n_peptides, n_samples)
+
+        # For each sample, get ranks (handling NaN)
+        n_peptides, n_samples = sample_data.shape
+        ranks = np.zeros_like(sample_data)
+        for j in range(n_samples):
+            col_data = sample_data[:, j]
+            # Rank with average for ties, NaN stays NaN
+            valid_mask = ~np.isnan(col_data)
+            if valid_mask.sum() > 0:
+                from scipy.stats import rankdata
+                ranks[valid_mask, j] = rankdata(col_data[valid_mask], method="average")
+
+        # Sort each column and compute row means (the quantile reference)
+        sorted_data = np.sort(sample_data, axis=0)  # Sort each column
+        # Row means = reference quantile values
+        quantile_reference = np.nanmean(sorted_data, axis=1)
+
+        # Map ranks back to quantile reference values using interpolation
+        normalized = np.zeros_like(sample_data)
+        for j in range(n_samples):
+            col_ranks = ranks[:, j]
+            valid_mask = ~np.isnan(sample_data[:, j])
+            if valid_mask.sum() > 0:
+                # Interpolate: rank -> quantile reference value
+                max_rank = valid_mask.sum()
+                normalized[valid_mask, j] = np.interp(
+                    col_ranks[valid_mask],
+                    np.arange(1, max_rank + 1),
+                    quantile_reference[:max_rank],
+                )
+            normalized[~valid_mask, j] = np.nan
+
+        # Update peptide_df with normalized values
+        for j, col in enumerate(sample_cols):
+            peptide_df[col] = normalized[:, j]
+
+        logger.info(f"  Quantile normalization complete: {n_samples} samples normalized")
+        method_log.append("Peptide quantile normalization")
+
+    elif norm_method == "vsn":
+        # Variance Stabilizing Normalization using arcsinh transformation
+        # Input is log2 scale, convert to linear, apply arcsinh, output is VSN scale
+        logger.info("  Applying VSN (Variance Stabilizing Normalization)...")
+
+        vsn_config = norm_config.get("vsn_params", {})
+        optimize_params = vsn_config.get("optimize_params", False)
+
+        sample_data = peptide_df[sample_cols].values  # log2 scale
+        n_peptides, n_samples = sample_data.shape
+        normalized = np.zeros_like(sample_data)
+
+        for j in range(n_samples):
+            col_data = sample_data[:, j]
+            valid_mask = ~np.isnan(col_data)
+
+            if valid_mask.sum() == 0:
+                normalized[:, j] = np.nan
+                continue
+
+            # Convert from log2 to linear scale
+            linear_values = np.power(2.0, col_data[valid_mask])
+
+            # Estimate VSN parameter: a = 1/median for scaling
+            median_val = np.median(linear_values[linear_values > 0])
+            a_param = 1.0 / median_val if median_val > 0 else 1.0
+
+            if optimize_params:
+                # Optional: optimize a to minimize variance heterogeneity
+                from scipy import optimize as scipy_optimize
+
+                def variance_heterogeneity(params):
+                    a = params[0]
+                    if a <= 0:
+                        return 1e6
+                    transformed = np.arcsinh(a * linear_values)
+                    sorted_idx = np.argsort(linear_values)
+                    sorted_transformed = transformed[sorted_idx]
+                    window_size = max(100, len(linear_values) // 20)
+                    variances = []
+                    for i in range(0, len(sorted_transformed) - window_size, window_size // 4):
+                        window_data = sorted_transformed[i : i + window_size]
+                        if len(window_data) > 10:
+                            variances.append(np.var(window_data))
+                    if len(variances) > 1:
+                        mean_var = np.mean(variances)
+                        if mean_var > 0:
+                            return np.std(variances) / mean_var
+                    return 1e6
+
+                try:
+                    result = scipy_optimize.minimize(
+                        variance_heterogeneity,
+                        [a_param],
+                        method="Nelder-Mead",
+                        options={"maxiter": 500},
+                    )
+                    if result.success:
+                        a_param = result.x[0]
+                except Exception:
+                    pass  # Keep default a_param
+
+            # Apply arcsinh transformation
+            transformed = np.arcsinh(a_param * linear_values)
+            normalized[valid_mask, j] = transformed
+            normalized[~valid_mask, j] = np.nan
+
+        # Update peptide_df with VSN-transformed values
+        for j, col in enumerate(sample_cols):
+            peptide_df[col] = normalized[:, j]
+
+        logger.info(
+            f"  VSN normalization complete: {n_samples} samples "
+            f"(optimize_params={optimize_params})"
+        )
+        logger.info(
+            "  NOTE: VSN output is on arcsinh scale, not log2. "
+            "Negative values are valid and expected for low-abundance peptides."
+        )
+        method_log.append(f"Peptide VSN normalization (optimize={optimize_params})")
+
     else:
         logger.warning(f"  Unknown normalization method: {norm_method}, using median")
         # Fall back to median
@@ -1649,27 +1865,70 @@ def cmd_run(args: argparse.Namespace) -> int:
     # -------------------------------------------------------------------------
     batch_correction_enabled = config.get("batch_correction", {}).get("enabled", True)
 
-    if batch_correction_enabled and metadata_df is not None:
+    if batch_correction_enabled:
         logger.info("-" * 60)
         logger.info("Stage 2c: Peptide ComBat Batch Correction")
         logger.info("-" * 60)
 
-        # Get batch info from metadata using helper function
-        # This handles Sample ID vs Replicate Name mismatch
-        sample_to_batch = build_sample_batch_map(sample_cols, metadata_df)
+        # Priority 1: Get batches from Source Document column (each input file = batch)
+        # This is the most reliable method when multiple input files are provided
+        sample_to_batch = get_batches_from_source_document(transition_parquet, sample_cols)
+
+        if sample_to_batch:
+            batch_source = "source documents"
+        elif metadata_df is not None:
+            # Priority 2: Get batch info from metadata
+            sample_to_batch = build_sample_batch_map(sample_cols, metadata_df)
+            batch_source = "metadata"
+
+        if not sample_to_batch:
+            # Priority 3: Estimate batches from acquisition times
+            batch_est_config = config.get("batch_estimation", {})
+            est_method = batch_est_config.get("method", "auto")
+            est_n_batches = batch_est_config.get("n_batches")
+            gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
+
+            logger.info("  Estimating batches from acquisition times...")
+
+            sample_to_batch = estimate_batches_from_parquet(
+                transition_parquet,
+                sample_cols,
+                method=est_method,
+                n_batches=est_n_batches,
+                gap_iqr_multiplier=gap_iqr,
+            )
+            batch_source = "acquisition time estimation"
 
         if sample_to_batch:
             # Check if all sample columns have batch info
             batches = [sample_to_batch.get(s) for s in sample_cols]
-            n_batches = len(set(b for b in batches if b is not None))
+            unique_batches = set(b for b in batches if b is not None)
+            n_batches = len(unique_batches)
+
+            # Log batch assignments for debugging
+            n_unmatched = sum(1 for b in batches if b is None)
+            if n_unmatched > 0:
+                logger.warning(f"  {n_unmatched} samples without batch assignment")
+            batch_counts = {}
+            for b in batches:
+                if b is not None:
+                    batch_counts[b] = batch_counts.get(b, 0) + 1
+            logger.info(f"  Batch source: {batch_source}")
+            logger.info(f"  Batches found: {sorted(unique_batches)}")
+            for b_name, b_count in sorted(batch_counts.items()):
+                logger.info(f"    {b_name}: {b_count} samples")
 
             if n_batches < 2:
                 logger.warning(f"Only {n_batches} batch - skipping batch correction")
             else:
                 from .batch_correction import combat
 
-                # Get sample types for reference-anchored ComBat
-                sample_to_type = build_sample_type_map(sample_cols, metadata_df)
+                # Get sample types for reference-anchored ComBat (if metadata available)
+                sample_to_type = (
+                    build_sample_type_map(sample_cols, metadata_df)
+                    if metadata_df is not None
+                    else {}
+                )
 
                 # Prepare data for ComBat (features x samples matrix)
                 data_matrix = peptide_df[sample_cols].values
@@ -1702,61 +1961,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                             f"QC median CV: {qc_cv.median():.1f}%"
                         )
         else:
-            # No batch column in metadata - try to estimate batches
-            batch_est_config = config.get("batch_estimation", {})
-            est_method = batch_est_config.get("method", "auto")
-            est_n_batches = batch_est_config.get("n_batches")
-            gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
-
-            logger.info("  No batch column in metadata - estimating from acquisition times...")
-
-            sample_to_batch = estimate_batches_from_parquet(
-                transition_parquet,
-                sample_cols,
-                method=est_method,
-                n_batches=est_n_batches,
-                gap_iqr_multiplier=gap_iqr,
-            )
-
-            if sample_to_batch:
-                batches = [sample_to_batch.get(s) for s in sample_cols]
-                n_batches = len(set(b for b in batches if b is not None))
-
-                if n_batches >= 2:
-                    from .batch_correction import combat
-
-                    sample_to_type = build_sample_type_map(sample_cols, metadata_df)
-                    data_matrix = peptide_df[sample_cols].values
-                    batch_labels = [sample_to_batch.get(s, "unknown") for s in sample_cols]
-
-                    logger.info(f"  Applying ComBat across {n_batches} estimated batches...")
-
-                    corrected_matrix = combat(data_matrix, batch_labels)
-
-                    for i, col in enumerate(sample_cols):
-                        peptide_df[col] = corrected_matrix[:, i]
-
-                    method_log.append(f"Peptide ComBat: {n_batches} estimated batches")
-
-                    if sample_to_type:
-                        ref_cols = [c for c in sample_cols if sample_to_type.get(c) == "reference"]
-                        qc_cols = [c for c in sample_cols if sample_to_type.get(c) == "qc"]
-
-                        if ref_cols and qc_cols:
-                            ref_linear = 2 ** peptide_df[ref_cols]
-                            qc_linear = 2 ** peptide_df[qc_cols]
-                            ref_cv = (ref_linear.std(axis=1) / ref_linear.mean(axis=1)) * 100
-                            qc_cv = (qc_linear.std(axis=1) / qc_linear.mean(axis=1)) * 100
-                            logger.info(
-                                f"  Reference median CV: {ref_cv.median():.1f}%, "
-                                f"QC median CV: {qc_cv.median():.1f}%"
-                            )
-                else:
-                    logger.warning(f"Only {n_batches} batch estimated - skipping correction")
-            else:
-                logger.warning("Could not estimate batches - skipping batch correction")
-    elif batch_correction_enabled:
-        logger.warning("No metadata available - skipping batch correction")
+            logger.warning("  Could not determine batches - skipping batch correction")
     else:
         logger.info("  Batch correction disabled in config")
 
@@ -1961,32 +2166,70 @@ def cmd_run(args: argparse.Namespace) -> int:
     # -------------------------------------------------------------------------
     # Stage 4c: Protein ComBat Batch Correction
     # -------------------------------------------------------------------------
-    if batch_correction_enabled and metadata_df is not None:
+    if batch_correction_enabled:
         logger.info("-" * 60)
         logger.info("Stage 4c: Protein ComBat Batch Correction")
         logger.info("-" * 60)
 
-        batch_col = "batch"
-        sample_type_col = "sample_type"
-        # Use sample_id (unique across batches) if available
-        if "sample_id" in metadata_df.columns:
-            meta_sample_col = "sample_id"
-        elif "sample" in metadata_df.columns:
-            meta_sample_col = "sample"
-        else:
-            meta_sample_col = "replicate_name"
+        # Priority 1: Get batches from Source Document column (each input file = batch)
+        # Use transition parquet since peptide parquet doesn't have Source Document
+        sample_to_batch = get_batches_from_source_document(transition_parquet, prot_sample_cols)
 
-        if batch_col in metadata_df.columns:
-            sample_to_batch = dict(zip(metadata_df[meta_sample_col], metadata_df[batch_col]))
+        if sample_to_batch:
+            batch_source = "source documents"
+        elif metadata_df is not None:
+            # Priority 2: Get batch info from metadata
+            sample_to_batch = build_sample_batch_map(prot_sample_cols, metadata_df)
+            batch_source = "metadata"
 
+        if not sample_to_batch:
+            # Priority 3: Estimate batches from acquisition times
+            batch_est_config = config.get("batch_estimation", {})
+            est_method = batch_est_config.get("method", "auto")
+            est_n_batches = batch_est_config.get("n_batches")
+            gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
+
+            logger.info("  Estimating batches from acquisition times...")
+
+            sample_to_batch = estimate_batches_from_parquet(
+                transition_parquet,
+                prot_sample_cols,
+                method=est_method,
+                n_batches=est_n_batches,
+                gap_iqr_multiplier=gap_iqr,
+            )
+            batch_source = "acquisition time estimation"
+
+        if sample_to_batch:
             # Check if all sample columns have batch info
             prot_batches = [sample_to_batch.get(s) for s in prot_sample_cols]
-            n_batches = len(set(b for b in prot_batches if b is not None))
+            unique_batches = set(b for b in prot_batches if b is not None)
+            n_batches = len(unique_batches)
+
+            # Log batch assignments for debugging
+            n_unmatched = sum(1 for b in prot_batches if b is None)
+            if n_unmatched > 0:
+                logger.warning(f"  {n_unmatched} samples without batch assignment")
+            batch_counts = {}
+            for b in prot_batches:
+                if b is not None:
+                    batch_counts[b] = batch_counts.get(b, 0) + 1
+            logger.info(f"  Batch source: {batch_source}")
+            logger.info(f"  Batches found: {sorted(unique_batches)}")
+            for b_name, b_count in sorted(batch_counts.items()):
+                logger.info(f"    {b_name}: {b_count} samples")
 
             if n_batches < 2:
                 logger.warning(f"Only {n_batches} batch - skipping batch correction")
             else:
                 from .batch_correction import combat
+
+                # Get sample types for CV reporting (if metadata available)
+                sample_to_type = (
+                    build_sample_type_map(prot_sample_cols, metadata_df)
+                    if metadata_df is not None
+                    else {}
+                )
 
                 # Prepare data for ComBat (features x samples matrix)
                 prot_data_matrix = protein_df[prot_sample_cols].values
@@ -2004,10 +2247,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 method_log.append(f"Protein ComBat: {n_batches} batches corrected")
 
                 # Evaluate using reference and QC samples if available
-                if sample_type_col in metadata_df.columns:
-                    sample_to_type = dict(
-                        zip(metadata_df[meta_sample_col], metadata_df[sample_type_col])
-                    )
+                if sample_to_type:
                     ref_cols = [c for c in prot_sample_cols if sample_to_type.get(c) == "reference"]
                     qc_cols = [c for c in prot_sample_cols if sample_to_type.get(c) == "qc"]
 
@@ -2022,9 +2262,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                             f"QC median CV: {qc_cv.median():.1f}%"
                         )
         else:
-            logger.warning("No batch column in metadata - skipping batch correction")
-    elif batch_correction_enabled:
-        logger.warning("No metadata available - skipping batch correction")
+            logger.warning("  Could not determine batches - skipping batch correction")
     else:
         logger.info("  Batch correction disabled in config")
 
@@ -2635,8 +2873,11 @@ global_normalization:
   #   median    - Subtract sample median (recommended for simple cases)
   #   rt_lowess - RT-dependent Lowess normalization (RECOMMENDED default)
   #               Corrects for RT-dependent systematic effects (ion suppression, gradient issues)
-  #   vsn       - Variance Stabilizing Normalization
-  #   quantile  - Force identical distributions (aggressive)
+  #   quantile  - Force identical distributions across all samples (aggressive)
+  #               Ranks values, maps to mean quantile. Good when you expect similar distributions.
+  #   vsn       - Variance Stabilizing Normalization (arcsinh transformation)
+  #               Stabilizes variance across intensity range, good for heteroscedastic data.
+  #               NOTE: Output is on arcsinh scale, NOT log2. Negative values are expected.
   #   none      - Skip normalization
   method: "rt_lowess"
 
@@ -2650,8 +2891,11 @@ global_normalization:
     n_grid_points: 100
 
   # VSN parameters (only used if method: vsn)
+  # WARNING: VSN output is NOT on log2 scale - it's arcsinh transformed.
+  # Negative values are valid and represent low-abundance peptides/proteins.
+  # Do not use log2 back-transform (2^x) on VSN data - values are already interpretable.
   vsn_params:
-    optimize_params: false
+    optimize_params: false  # Set true for better variance stabilization (slower)
 
 # =============================================================================
 # Batch Correction
