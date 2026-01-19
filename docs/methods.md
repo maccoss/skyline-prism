@@ -178,13 +178,52 @@ Transitions from Skyline are matched to library fragments by:
 - **BLIB (Skyline):** SQLite-based format with zlib-compressed peak arrays
 - **Carafe TSV (DIA-NN):** Tab-separated format with fragment annotations
 
-**Algorithm: Iterative Least Squares with Outlier Removal**
+#### Fitting Methods
 
-The core equation solved is:
+Two fitting methods are available, controlled by the `fitting_method` configuration option:
 
-$$\text{observed} = s \times \text{library} + \text{residuals}$$
+##### Library Median Polish (Default, Recommended)
 
-Where $s$ is the scale factor that best fits the observed intensities to the expected library pattern.
+Uses the spectral library as a **prior** for transition row effects (ionization efficiency) and estimates sample scale factors using the **median**, which is inherently robust to interference outliers.
+
+**Model:**
+$$\log(O_{t,s}) = \log(L_t) + \beta_s + \epsilon_{t,s}$$
+
+Where:
+- $O_{t,s}$ = observed intensity for transition $t$ in sample $s$
+- $L_t$ = library intensity for transition $t$ (provides the row effect)
+- $\beta_s$ = sample-specific scale factor (log-scale)
+- $\epsilon_{t,s}$ = residual (noise + interference)
+
+**Algorithm:**
+
+1. **Estimate scale via median:** For each sample $s$:
+   $$\hat{\beta}_s = \text{median}_t\left(\log(O_{t,s}) - \log(L_t)\right)$$
+   
+   The median automatically ignores up to 50% outliers, making this robust to 1-2 interfered transitions out of 4-6 total.
+
+2. **Compute predicted values:** $\hat{O}_{t,s} = L_t \times e^{\hat{\beta}_s}$
+
+3. **Identify outliers:** Compute normalized residuals:
+   $$r_{t,s} = \frac{O_{t,s} - \hat{O}_{t,s}}{\hat{O}_{t,s}}$$
+   
+   Only HIGH positive residuals indicate interference (signal > expected). Interference can only **add** signal, never remove it.
+
+4. **Iterative removal:** Remove the worst outlier (highest $r_{t,s}$) if it exceeds threshold (default 1.0 = observed > 2x predicted). Repeat until convergence.
+
+5. **Calculate final abundance:**
+   $$I_{peptide,s} = e^{\hat{\beta}_s} \times \sum_{t} L_t$$
+   
+   Uses the **full library sum** so all samples quantify the same total signal.
+
+**Key advantages of median polish:**
+- **Inherent robustness:** Median ignores outliers without needing to detect them first
+- **Cross-sample consistency:** Same transitions tend to be interfered across samples
+- **Faster convergence:** Often converges in 1-2 iterations vs. 3-5 for least squares
+
+##### Least Squares Fitting
+
+Classic least squares fitting, more sensitive to outliers but may perform better on very clean data.
 
 **Closed-form solution:**
 $$s^* = \frac{\vec{L} \cdot \vec{O}}{\vec{L} \cdot \vec{L}}$$

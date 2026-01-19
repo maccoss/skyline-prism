@@ -1125,7 +1125,139 @@ def rollup_transitions_to_peptides(
 
 
 # ============================================================================
-# Peptide to Protein Rollup
+# Peptide to Protein Rollup - Core Logic
+# ============================================================================
+
+
+@dataclass
+class ProteinMatrixRollupResult:
+    """Result of rolling up a single protein's peptide matrix.
+
+    This is the core result type used internally. Higher-level functions
+    add additional metadata (gene name, description, etc.)
+    """
+
+    abundances: pd.Series | dict  # Sample -> abundance (log2 scale)
+    residuals: dict[str, dict[str, float]] | None = None  # Peptide -> sample -> residual
+    polish_result: "MedianPolishResult | None" = None
+    topn_result: "TopNResult | None" = None
+
+
+def _sum_linear(matrix: pd.DataFrame) -> pd.Series:
+    """Sum peptides in linear space, return log2 result.
+
+    For log2 data, we need to convert to linear, sum, and convert back.
+    This is the proper way to aggregate intensities.
+
+    Args:
+        matrix: Peptide x Sample matrix in log2 scale
+
+    Returns:
+        Series of summed abundances (log2 scale)
+
+    """
+    linear = 2**matrix
+    summed = linear.sum(axis=0)
+    return np.log2(summed.clip(lower=1))
+
+
+def rollup_protein_matrix(
+    matrix: pd.DataFrame,
+    method: str = "median_polish",
+    min_peptides: int = 3,
+    topn_n: int = 3,
+    topn_selection: str = "median_abundance",
+    n_theoretical_peptides: int | None = None,
+) -> ProteinMatrixRollupResult:
+    """Core function to roll up a peptide matrix to protein-level abundance.
+
+    This is the SINGLE SOURCE OF TRUTH for protein rollup logic.
+    All protein rollup implementations should call this function.
+
+    The logic follows these rules:
+    - 1 peptide: Use peptide abundance directly
+    - < min_peptides: Use sum in linear space (flagged as low_confidence)
+    - >= min_peptides: Use the requested method
+
+    Args:
+        matrix: Peptide x Sample DataFrame in log2 scale.
+            Rows are peptides, columns are samples.
+        method: Rollup method - "median_polish", "topn", "sum", "ibaq", "maxlfq"
+        min_peptides: Minimum peptides for full-confidence quantification.
+            Proteins below this use sum fallback.
+        topn_n: Number of top peptides for "topn" method
+        topn_selection: Selection criterion for "topn" - "median_abundance" or "frequency"
+        n_theoretical_peptides: For "ibaq" method only - theoretical peptide count
+
+    Returns:
+        ProteinMatrixRollupResult with abundances and optional method-specific results
+
+    """
+    n_peptides = len(matrix)
+
+    if n_peptides == 0:
+        # Empty matrix - return NaN for all samples
+        return ProteinMatrixRollupResult(
+            abundances=pd.Series({col: np.nan for col in matrix.columns}),
+        )
+
+    if n_peptides == 1:
+        # Single peptide - use directly
+        return ProteinMatrixRollupResult(
+            abundances=matrix.iloc[0],
+        )
+
+    if n_peptides < min_peptides:
+        # Below threshold - use sum in linear space
+        return ProteinMatrixRollupResult(
+            abundances=_sum_linear(matrix),
+        )
+
+    # >= min_peptides: Apply the requested method
+    if method == "median_polish":
+        result = tukey_median_polish(matrix)
+        residuals = {str(p): result.residuals.loc[p].to_dict() for p in result.residuals.index}
+        return ProteinMatrixRollupResult(
+            abundances=result.col_effects,
+            residuals=residuals,
+            polish_result=result,
+        )
+
+    elif method == "topn":
+        result = rollup_top_n(matrix, n=topn_n, selection=topn_selection)
+        return ProteinMatrixRollupResult(
+            abundances=result.abundances,
+            topn_result=result,
+        )
+
+    elif method == "sum":
+        return ProteinMatrixRollupResult(
+            abundances=_sum_linear(matrix),
+        )
+
+    elif method == "ibaq":
+        if n_theoretical_peptides is None:
+            n_theoretical_peptides = n_peptides  # Fallback
+        return ProteinMatrixRollupResult(
+            abundances=rollup_ibaq(matrix, n_theoretical_peptides),
+        )
+
+    elif method == "maxlfq":
+        return ProteinMatrixRollupResult(
+            abundances=rollup_maxlfq(matrix),
+        )
+
+    elif method == "directlfq":
+        return ProteinMatrixRollupResult(
+            abundances=rollup_directlfq(matrix),
+        )
+
+    else:
+        raise ValueError(f"Unknown rollup method: {method}")
+
+
+# ============================================================================
+# Peptide to Protein Rollup - Public API
 # ============================================================================
 
 
@@ -1145,14 +1277,15 @@ def rollup_to_proteins(
     """Aggregate peptide abundances to protein group level.
 
     All proteins are quantified regardless of peptide count, using appropriate
-    methods based on peptide count:
+    methods based on peptide count and min_peptides threshold:
     - 1 peptide: Use peptide abundance directly
-    - 2 peptides: Use mean of peptides
-    - ≥3 peptides: Use requested method (median_polish, topn, etc.)
+    - < min_peptides: Use sum of peptides (consistent with median_polish scale)
+    - >= min_peptides: Use requested method (median_polish, topn, etc.)
 
     Proteins with fewer than min_peptides are flagged as low_confidence=True
     in the output but are still quantified. The n_peptides column in output
     allows users to filter by peptide count if desired.
+
 
     Args:
         peptide_data: DataFrame with peptide abundances in long format
@@ -1279,44 +1412,25 @@ def rollup_to_proteins(
             qc_flags.append("single_peptide_in_sample")
         protein_qc_flags[group_id] = "; ".join(qc_flags) if qc_flags else None
 
-        # Handle proteins with few peptides using fallback methods
-        # (Per SPECIFICATION.md: always quantify, use appropriate method)
-        if n_peptides == 1:
-            # 1 peptide: Use peptide abundance directly
-            protein_abundances[group_id] = matrix.iloc[0]
-            # No polish result for single peptide
+        # Use the core rollup function
+        n_theor = (
+            n_theoretical_peptides.get(group_id, n_peptides) if n_theoretical_peptides else None
+        )
+        rollup_result = rollup_protein_matrix(
+            matrix,
+            method=method,
+            min_peptides=min_peptides,
+            topn_n=topn_n,
+            topn_selection=topn_selection,
+            n_theoretical_peptides=n_theor,
+        )
 
-        elif n_peptides == 2:
-            # 2 peptides: Use mean (no robust advantage with only 2)
-            protein_abundances[group_id] = matrix.mean(axis=0)
-            # No polish result for 2 peptides
-
-        else:
-            # >= 3 peptides: Apply requested rollup method
-            if method == "median_polish":
-                result = tukey_median_polish(matrix)
-                protein_abundances[group_id] = result.col_effects
-                polish_results[group_id] = result
-
-            elif method == "topn":
-                result = rollup_top_n(matrix, n=topn_n, selection=topn_selection)
-                protein_abundances[group_id] = result.abundances
-                topn_results[group_id] = result
-
-            elif method == "ibaq":
-                if n_theoretical_peptides is None:
-                    raise ValueError("n_theoretical_peptides required for iBAQ method")
-                n_theor = n_theoretical_peptides.get(group_id, n_peptides)
-                protein_abundances[group_id] = rollup_ibaq(matrix, n_theor)
-
-            elif method == "maxlfq":
-                protein_abundances[group_id] = rollup_maxlfq(matrix)
-
-            elif method == "directlfq":
-                protein_abundances[group_id] = rollup_directlfq(matrix)
-
-            else:
-                raise ValueError(f"Unknown rollup method: {method}")
+        # Extract results
+        protein_abundances[group_id] = rollup_result.abundances
+        if rollup_result.polish_result is not None:
+            polish_results[group_id] = rollup_result.polish_result
+        if rollup_result.topn_result is not None:
+            topn_results[group_id] = rollup_result.topn_result
 
     if skipped_groups:
         logger.info(f"Skipped {len(skipped_groups)} groups with 0 peptides")

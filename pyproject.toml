@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skyline-prism"
-version = "26.1.3"
+version = "26.2.1"
 description = "PRISM (Proteomics Reference-Integrated Signal Modeling) - RT-aware normalization for Skyline proteomics data"
 readme = "README.md"
 license = "MIT"
@@ -31,6 +31,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.21",
     "pandas>=1.4",
+    "pytz>=2024.1",  # Avoid SyntaxWarning in older versions
     "scipy>=1.7",
     "scikit-learn>=1.0",
     "statsmodels>=0.13",
@@ -58,7 +59,7 @@ viz = [
 ]
 
 [project.scripts]
-prism = "skyline_prism.cli:main"
+prism = "skyline_prism.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/maccoss/skyline-prism"

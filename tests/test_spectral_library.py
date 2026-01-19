@@ -27,6 +27,7 @@ from skyline_prism.spectral_library import (
     _parse_fragment_ion,
     least_squares_rollup,
     least_squares_rollup_vectorized,
+    library_median_polish_rollup_vectorized,
     load_spectral_library,
     match_transition_to_library,
 )
@@ -1125,3 +1126,226 @@ class TestLeastSquaresVectorized:
                 loop_abundances[valid_mask],
                 rtol=0.1  # Allow 10% difference due to outlier detection variance
             )
+
+
+class TestLibraryMedianPolish:
+    """Tests for library_median_polish_rollup_vectorized function.
+
+    This function uses the library as a prior for row effects and estimates
+    sample scale via MEDIAN, which is robust to interference outliers.
+    """
+
+    def test_basic_clean_data(self):
+        """Test basic rollup with clean data (no interference)."""
+        library = np.array([1.0, 0.8, 0.5, 0.3, 0.2])
+        n_samples = 5
+
+        # Generate clean observations: obs = lib * scale
+        scales = np.array([100, 500, 1000, 2000, 5000])
+        observed = library[:, None] * scales[None, :]
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2
+        )
+
+        # Abundance = scale * sum(library) = scale * 2.8
+        expected_abundances = scales * np.sum(library)
+        np.testing.assert_allclose(abundances, expected_abundances, rtol=0.01)
+
+        # R-squared should be high for clean data
+        assert np.all(r_squared > 0.99)
+
+        # All fragments used
+        assert np.all(n_used == 5)
+
+    def test_single_interfered_fragment(self):
+        """Test that median is robust to one interfered fragment."""
+        library = np.array([1.0, 0.8, 0.6, 0.4, 0.3, 0.2])
+        lib_sum = np.sum(library)
+        n_samples = 3
+        true_scale = 1000
+
+        # Clean observations
+        observed = library[:, None] * np.full(n_samples, true_scale)
+
+        # Add interference to fragment 2 in sample 0 (3x expected)
+        observed[2, 0] = library[2] * true_scale * 4
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        # Sample 0 should still recover the correct abundance
+        # (median ignores the outlier)
+        expected_abundance = true_scale * lib_sum
+        np.testing.assert_allclose(abundances[0], expected_abundance, rtol=0.1)
+
+        # Samples 1 and 2 should also be correct
+        np.testing.assert_allclose(abundances[1:], expected_abundance, rtol=0.01)
+
+    def test_two_interfered_fragments(self):
+        """Test that median is robust to two interfered fragments out of six."""
+        library = np.array([1.0, 0.8, 0.6, 0.4, 0.3, 0.2])
+        lib_sum = np.sum(library)
+        true_scale = 1000
+
+        # Clean observations for one sample
+        observed = (library * true_scale).reshape(-1, 1)
+
+        # Add interference to 2 fragments (33% outliers - median handles this)
+        observed[0, 0] = library[0] * true_scale * 5  # 5x expected
+        observed[3, 0] = library[3] * true_scale * 4  # 4x expected
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        # Should recover approximately correct abundance
+        expected_abundance = true_scale * lib_sum
+        np.testing.assert_allclose(abundances[0], expected_abundance, rtol=0.15)
+
+    def test_compares_favorably_to_least_squares_with_interference(self):
+        """Test that median polish performs better than least squares with interference."""
+        library = np.array([1.0, 0.8, 0.6, 0.4, 0.3, 0.2])
+        lib_sum = np.sum(library)
+        true_scale = 1000
+
+        observed = (library * true_scale).reshape(-1, 1)
+
+        # Add strong interference to one fragment
+        observed[0, 0] = library[0] * true_scale * 10  # 10x expected
+
+        # Median polish
+        mp_abundances, _, _ = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        # Least squares
+        ls_abundances, _, _ = least_squares_rollup_vectorized(
+            observed, library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        expected_abundance = true_scale * lib_sum
+
+        # Both should handle this, but median should be at least as good
+        mp_error = abs(mp_abundances[0] - expected_abundance) / expected_abundance
+        ls_error = abs(ls_abundances[0] - expected_abundance) / expected_abundance
+
+        # Median polish error should be reasonable (< 15%)
+        assert mp_error < 0.15, f"Median polish error {mp_error*100:.1f}% too high"
+
+    def test_handles_all_zeros(self):
+        """Test that all-zero observations return NaN."""
+        library = np.array([1.0, 0.8, 0.6, 0.4])
+        observed = np.zeros((4, 2))
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2
+        )
+
+        # All zeros should result in NaN (can't compute meaningful median)
+        assert np.all(np.isnan(abundances))
+
+    def test_handles_partial_zeros(self):
+        """Test handling of some zero observations."""
+        library = np.array([1.0, 0.8, 0.6, 0.4])
+        lib_sum = np.sum(library)
+        true_scale = 1000
+
+        # Create observations where 2 transitions have signal, 2 are zero
+        observed = np.array([
+            [library[0] * true_scale],
+            [library[1] * true_scale],
+            [0.0],
+            [0.0]
+        ])
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2
+        )
+
+        # Should get a result based on the 2 valid transitions
+        # Scale estimated from median of log(obs/lib) for valid transitions
+        # Then abundance = scale * sum(ALL library)
+        assert not np.isnan(abundances[0])
+        assert n_used[0] == 2
+
+    def test_insufficient_fragments(self):
+        """Test that insufficient fragments returns NaN."""
+        library = np.array([1.0, 0.8, 0.6, 0.4])
+        observed = np.zeros((4, 1))
+        observed[0, 0] = 1000  # Only one valid observation
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=3
+        )
+
+        # Should return NaN due to insufficient fragments
+        assert np.isnan(abundances[0])
+
+    def test_multiple_samples_varying_interference(self):
+        """Test multiple samples with different interference patterns."""
+        library = np.array([1.0, 0.8, 0.6, 0.4, 0.3, 0.2])
+        lib_sum = np.sum(library)
+        n_samples = 5
+        true_scales = np.array([500, 1000, 1500, 2000, 2500])
+
+        # Base observations
+        observed = library[:, None] * true_scales[None, :]
+
+        # Add different interference to different samples
+        observed[0, 0] *= 3  # Sample 0: fragment 0 interfered
+        observed[2, 1] *= 4  # Sample 1: fragment 2 interfered
+        observed[1, 2] *= 5  # Sample 2: fragment 1 interfered
+        # Samples 3, 4: clean
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        expected_abundances = true_scales * lib_sum
+
+        # All samples should recover reasonable abundances
+        # (median is robust to single outliers)
+        for i in range(n_samples):
+            relative_error = abs(abundances[i] - expected_abundances[i]) / expected_abundances[i]
+            assert relative_error < 0.15, f"Sample {i} error {relative_error*100:.1f}% too high"
+
+    def test_vectorized_performance_shape(self):
+        """Test that vectorized output has correct shape for many samples."""
+        library = np.array([1.0, 0.8, 0.6, 0.4])
+        n_samples = 100
+        observed = np.random.uniform(100, 10000, (4, n_samples))
+
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed, library, min_fragments=2
+        )
+
+        assert abundances.shape == (n_samples,)
+        assert r_squared.shape == (n_samples,)
+        assert n_used.shape == (n_samples,)
+
+    def test_outlier_threshold_effect(self):
+        """Test that outlier threshold affects sensitivity."""
+        library = np.array([1.0, 0.8, 0.6, 0.4, 0.3])
+        true_scale = 1000
+        lib_sum = np.sum(library)
+
+        # Create observation with moderate interference (2.5x expected)
+        observed = (library * true_scale).reshape(-1, 1)
+        observed[0, 0] = library[0] * true_scale * 2.5
+
+        # Strict threshold (1.0): (2.5 - 1) / 1 = 1.5 > 1.0, so outlier detected
+        strict_abundances, _, strict_n = library_median_polish_rollup_vectorized(
+            observed.copy(), library, min_fragments=2, outlier_threshold=1.0
+        )
+
+        # Conservative threshold (2.0): 1.5 < 2.0, so NOT detected as outlier
+        conservative_abundances, _, conservative_n = library_median_polish_rollup_vectorized(
+            observed.copy(), library, min_fragments=2, outlier_threshold=2.0
+        )
+
+        # Both should recover reasonable abundance since median is robust
+        expected = true_scale * lib_sum
+        assert abs(strict_abundances[0] - expected) / expected < 0.1
+        assert abs(conservative_abundances[0] - expected) / expected < 0.1

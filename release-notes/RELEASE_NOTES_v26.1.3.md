@@ -70,7 +70,6 @@ If the FASTA file is not found, PRISM falls back to Skyline CSV-based parsimony 
 | No FASTA, UniProt identifier | Entry name (e.g., `S12A2_MOUSE`) | `"NA"` | `"NA"` |
 | No FASTA, other identifier | Original value | `"NA"` | `"NA"` |
 
-
 ## Testing
 
 - All 43 parsimony and FASTA tests passing

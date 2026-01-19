@@ -63,6 +63,54 @@ cv = (linear_data.std() / linear_data.mean()) * 100  # CV as percentage
 
 Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2 data would be meaningless - true biological CVs for proteomics control samples typically range from 10-30%.
 
+### Peptide Modification Format (CRITICAL)
+
+> [!CAUTION]
+> **Skyline exports and BLIB spectral libraries use DIFFERENT modification formats.**
+>
+> This has caused repeated issues. Always convert between formats when matching peptides to library spectra.
+
+| Source | Format | Example |
+|--------|--------|---------|
+| **Skyline export** | Unimod IDs in parentheses | `C(unimod:4)`, `M(unimod:35)` |
+| **BLIB library** | Mass deltas in brackets | `C[+57.02146]`, `M[+15.99491]` |
+
+**Common modifications:**
+
+| Modification | Unimod Format | BLIB Format |
+|--------------|---------------|-------------|
+| Carbamidomethyl (Cys) | `C(unimod:4)` | `C[+57.02146]` |
+| Oxidation (Met) | `M(unimod:35)` | `M[+15.99491]` |
+| Phosphorylation (Ser) | `S(unimod:21)` | `S[+79.96633]` |
+| Phosphorylation (Thr) | `T(unimod:21)` | `T[+79.96633]` |
+| Phosphorylation (Tyr) | `Y(unimod:21)` | `Y[+79.96633]` |
+
+**Conversion function:**
+```python
+import re
+
+def convert_unimod_to_blib_format(seq):
+    """Convert Unimod format C(unimod:4) to BLIB format C[+57.02146]."""
+    conversions = {
+        r'C\(unimod:4\)': 'C[+57.02146]',     # Carbamidomethyl
+        r'M\(unimod:35\)': 'M[+15.99491]',    # Oxidation
+        r'S\(unimod:21\)': 'S[+79.96633]',    # Phospho
+        r'T\(unimod:21\)': 'T[+79.96633]',    # Phospho
+        r'Y\(unimod:21\)': 'Y[+79.96633]',    # Phospho
+    }
+    result = seq
+    for pattern, replacement in conversions.items():
+        result = re.sub(pattern, replacement, result)
+    return result
+```
+
+**When matching peptides to library:**
+1. First try the original key format from the data
+2. If not found, convert to BLIB format and retry
+3. Also try I/L normalization (mass spec cannot distinguish isoleucine/leucine)
+
+**PRISM implementation:** The `SpectralLibraryLoader.normalize_sequence_for_matching()` handles I/L normalization, but modification format conversion must be done separately when working with raw Skyline exports.
+
 ### Processing Pipeline
 
 The current implementation follows this stage structure:
@@ -127,7 +175,7 @@ skyline-prism/
 │   └── test_transition_rollup.py
 ├── SPECIFICATION.md         # Detailed technical specification
 ├── README.md                # User-facing documentation
-├── config_template.yaml     # Configuration file template
+├── config_template.yaml     # Static reference (NOT the source - see cli.py)
 ├── pyproject.toml           # Package configuration and dependencies
 └── .venv/                   # Virtual environment (not in git)
 ```
@@ -290,7 +338,19 @@ mypy skyline_prism/
 **Keep README.md updated:**
 - When adding new features, update the README.md to document them
 - When changing CLI commands, update the usage examples
-- When adding new configuration options, document them in both README.md and config_template.yaml
+- When adding new configuration options, update the template functions in `cli.py` (see below)
+
+**CRITICAL: Configuration Template Updates**
+
+When adding or modifying configuration options, you MUST update the template functions in `skyline_prism/cli.py`:
+- `get_full_config_template()` - Full annotated template (all options)
+- `get_minimal_config_template()` - Minimal template (common options only)
+
+These functions generate the output of `prism config-template`. The static `config_template.yaml` file in the repo root is NOT used by the software - it's just a reference copy. Users generate their configs via:
+```bash
+prism config-template -o config.yaml           # Full template
+prism config-template --minimal -o config.yaml  # Minimal template
+```
 
 **SPECIFICATION.md** contains the detailed technical specification. Reference it for algorithm details but avoid modifying it unless the fundamental approach changes.
 
@@ -303,8 +363,16 @@ The authoritative technical specification. Contains:
 - Processing pipeline stages (two-arm design)
 - Configuration parameters
 
-### config_template.yaml
-Comprehensive configuration file with all options documented. Can be generated via:
+### Configuration Templates (IMPORTANT)
+
+**The configuration templates are generated from functions in `skyline_prism/cli.py`, NOT from `config_template.yaml`.**
+
+To update configuration options:
+1. Edit `get_full_config_template()` in `cli.py` for full template
+2. Edit `get_minimal_config_template()` in `cli.py` for minimal template
+3. The static `config_template.yaml` is just a reference and is NOT read by the software
+
+Users generate templates via:
 - `prism config-template -o config.yaml` (full template)
 - `prism config-template --minimal -o config.yaml` (common options only)
 
@@ -398,7 +466,7 @@ prism config-template --minimal -o config.yaml
 3. Add tests in `tests/`
 4. Run `pytest tests/ -v` to verify
 5. Update README.md if user-facing
-6. Update config_template.yaml if configurable
+6. If configurable: update `get_full_config_template()` and `get_minimal_config_template()` in `cli.py`
 7. Commit with descriptive message
 
 ### Fixing a Bug
@@ -612,13 +680,22 @@ Based on current usage and known issues:
 **January 2025:**
 
 - **Library-assisted rollup (v10)**: Spectral library-based interference detection
-  - Uses iterative least squares to fit observed intensities to library pattern
-  - Automatically detects and excludes interfered transitions (high positive residuals)
+  - Uses library as PRIOR for row effects (transition ionization efficiency)
+  - Two fitting methods available via `fitting_method` config:
+    - `median_polish` (DEFAULT, RECOMMENDED): Estimates sample scale via MEDIAN
+      - Robust to 1-2 outliers automatically (median ignores up to 50% outliers)
+      - Model: `log(obs) = log(lib) + beta_s + epsilon`
+      - Final abundance = `exp(beta_s) * sum(ALL library intensities)`
+    - `least_squares`: Classic OLS: `scale = (lib . obs) / (lib . lib)`
+      - More sensitive to outliers
+      - May be better for very clean data
+  - Both methods: only HIGH positive residuals indicate interference (obs > 2x predicted)
   - Supports BLIB (Skyline) and Carafe TSV (DIA-NN) library formats
-  - Dramatically improves CV for ~29% of peptides with real interference
-- **Vectorized least squares**: All samples processed in parallel using BLAS matrix operations
+  - Dramatically improves CV for peptides with real interference
+- **Vectorized implementation**: All samples processed in parallel using numpy
   - ~10x speedup for library-assisted rollup on large datasets
-  - Implementation: `spectral_library.py` -> `least_squares_rollup_vectorized()`
+  - Implementation: `spectral_library.py` -> `library_median_polish_rollup_vectorized()`
+  - Legacy: `spectral_library.py` -> `least_squares_rollup_vectorized()`
 - **Merge-and-sort streaming**: CSV merge and sort in single DuckDB operation
   - Eliminates redundant sorting pass, faster for large multi-file datasets
   - Implementation: `data_io.py` -> `merge_and_sort_streaming()`

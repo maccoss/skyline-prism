@@ -256,16 +256,23 @@ transition_rollup:
     # m/z tolerance for matching transitions to library fragments (in Da)
     mz_tolerance: 0.02
     
+    # Outlier detection threshold (normalized residual)
+    # Uses normalized residual = (observed - predicted) / predicted
+    # A transition is flagged as outlier if: norm_res > outlier_threshold
+    #
+    # Default (1.0):  Detected as outlier if observed > 2× predicted (standard sensitivity)
+    # Conservative (2.0): Detected as outlier if observed > 3× predicted (strict filtering)
+    #
+    # Higher threshold = more conservative (removes only severe interference)
+    # Lower threshold = more aggressive (removes more potential interference)
+    #
+    # Removes one outlier at a time, stops if removing more would go below min_transitions.
+    # This respects your min_transitions constraint to avoid over-removal.
+    outlier_threshold: 1.0
+    
     # Minimum R-squared for a "good" library fit
     # Below this threshold, the result is flagged as potentially unreliable
     r_squared_threshold: 0.8
-    
-    # MAD (Median Absolute Deviation) multiplier for outlier detection
-    # Only HIGH residuals are considered outliers (signal > expected = interference)
-    # Low or negative residuals are never flagged - they're valid low-abundance data
-    # A transition is an outlier if: residual > median + (mad_threshold * MAD)
-    # Higher values = more conservative (only removes extreme interference)
-    mad_threshold: 3.0
     
     # Minimum matched fragments required for a valid fit
     # Peptides with fewer matches return NaN (insufficient data)

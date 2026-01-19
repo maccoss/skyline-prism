@@ -178,7 +178,7 @@ Stage 5b: QC Report Generation (HTML + plots)
 
 - **Streaming CSV merge** handles large datasets (~47GB tested) without loading into memory
 - **Merge-and-sort in single pass** using DuckDB for efficient multi-file processing
-- **Vectorized least squares** for library-assisted rollup (~10x speedup on large datasets)
+- **Vectorized library-assisted rollup** using median polish (~10x speedup on large datasets)
 - **Pre-sorted optimization** skips redundant sorting when data is already sorted
 - **Both peptide and protein outputs** receive independent batch correction
 - **Automatic log files** saved to output directory with timestamp for reproducibility
@@ -203,7 +203,14 @@ Plus internal QCs in all samples:
 
 ## Configuration
 
-See `config_template.yaml` for all options. Key settings:
+Generate a configuration template with all options documented:
+
+```bash
+prism config-template -o config.yaml           # Full template with all options
+prism config-template --minimal -o config.yaml  # Minimal template
+```
+
+Key settings:
 
 ```yaml
 # Sample type detection patterns (for automatic sample type assignment)
@@ -255,6 +262,7 @@ parsimony:
 # Protein rollup (peptide → protein aggregation)
 protein_rollup:
   method: "sum"  # default; alternatives: median_polish, topn, ibaq, maxlfq
+  min_peptides: 3  # Minimum peptides for method application (below uses sum)
 
 # QC report generation
 qc_report:
@@ -347,10 +355,12 @@ While median polish is recommended, these alternative methods are available:
 
 | Method             | Description                     | Use Case                                                           |
 | ------------------ | ------------------------------- | ------------------------------------------------------------------ |
-| `median_polish`    | Tukey median polish (default)   | General use, robust to outliers                                    |
-| `library_assist`   | Spectral library-based rollup   | When you have a high-quality spectral library and want to detect/exclude interfered transitions |
+| `sum`              | Simple sum of intensities       | Default, fast, straightforward                                     |
+| `consensus`        | Inverse-variance weighted sum   | Down-weights transitions that deviate from the cross-sample pattern |
+| `median_polish`    | Tukey median polish             | Robust to outliers, produces residuals for QC                      |
 | `adaptive`         | Learned weighted average        | When quality metrics (intensity, m/z, ShapeCorrelation) are available |
-| `sum`              | Simple sum of intensities       | Fast but sensitive to outliers                                     |
+| `topn`             | Top N by correlation/intensity  | When a subset of transitions are known to be reliable              |
+| `library_assist`   | Spectral library-based rollup   | When you have a high-quality spectral library and want to detect/exclude interfered transitions |
 
 **Peptide → Protein Rollup**:
 
@@ -361,6 +371,24 @@ While median polish is recommended, these alternative methods are available:
 | `ibaq`          | iBAQ (intensity / theoretical peptide count) | Absolute quantification across proteins                    |
 | `maxlfq`        | Maximum LFQ (MaxQuant-style)                 | When peptide ratios are more reliable than absolute values |
 | `sum`           | Simple sum of intensities                    | Fast but sensitive to outliers                             |
+
+**`min_peptides` Threshold:**
+
+The `min_peptides` setting controls the minimum number of peptides required for full-confidence method application:
+
+```yaml
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 3  # Default: 3
+```
+
+| Peptide Count | Method Used | `low_confidence` flag |
+|---------------|-------------|----------------------|
+| 1 | Direct peptide value | `True` |
+| < min_peptides | Sum (linear space) | `True` |
+| >= min_peptides | Configured method | `False` |
+
+Proteins below the threshold are still quantified using sum in linear space (consistent with median_polish output scale) and flagged with `low_confidence=True`.
 
 ### iBAQ (Intensity-Based Absolute Quantification)
 
@@ -433,6 +461,28 @@ The transition intensities are the VALUES being summed. The learned weights adju
 2. Results are validated on QC samples (held-out) to prevent overfitting
 3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
 
+### Consensus Rollup with Cross-Sample Weighting
+
+The `consensus` method uses cross-sample consistency to weight transitions. It assumes that all transitions from a peptide should show the same fold-change pattern across samples - transitions that deviate from this consensus are down-weighted.
+
+```yaml
+transition_rollup:
+  method: "consensus"
+  min_transitions: 3
+```
+
+**Algorithm:**
+
+1. Model: `log2(T_ij) = α_i (transition offset) + β_j (sample abundance) + ε_ij`
+2. Estimate initial β using row-centered medians (robust to outliers)
+3. Calculate residuals: `ε_ij = T_ij - α_i - β_j`
+4. Weight transitions: `w_i = 1 / (variance(ε_i) + regularization)`
+5. Return weighted sum in linear space
+
+**Key insight:** Transitions with high cross-sample residual variance are likely interfered. This method requires no external data (no spectral library or shape correlation) - it learns weights purely from the data itself.
+
+**When to use:** Best for DDA data or when quality metrics like shape correlation are not available.
+
 ### Library-Assisted Rollup with Spectral Library
 
 For transition->peptide rollup, the `library_assist` method uses a spectral library to detect and exclude interfered transitions. This is particularly effective when co-eluting peptides contribute signal to specific fragments.
@@ -442,21 +492,29 @@ transition_rollup:
   method: "library_assist"
   library_assist:
     library_path: "/path/to/library.blib"  # or .tsv (Carafe format)
-    mz_tolerance: 0.02         # m/z tolerance for matching (Da)
-    r_squared_threshold: 0.8   # Minimum R-squared for "good" fit
-    mad_threshold: 3.0         # MAD multiplier for outlier detection
-    min_matched_fragments: 3   # Minimum fragments for valid fit
+    fitting_method: "median_polish"  # RECOMMENDED (or "least_squares")
+    mz_tolerance: 0.02               # m/z tolerance for matching (Da)
+    min_matched_fragments: 3         # Minimum fragments for valid fit
+    outlier_threshold: 1.0           # 1.0 = obs > 2x predicted is outlier
 ```
 
-**Algorithm:** Iterative least squares with outlier removal:
+**Two fitting methods available:**
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| `median_polish` | Uses MEDIAN to estimate scale; robust to 1-2 outliers automatically | **Recommended for most data** |
+| `least_squares` | Classic OLS fitting; more sensitive to outliers | Very clean data |
+
+**Algorithm (median_polish, default):**
 
 1. Match observed transitions to library fragments by m/z
-2. Fit: `observed = scale * library + residuals`
-3. Flag transitions with HIGH positive residuals as interfered (signal > expected)
-4. Remove outliers and refit until convergence
-5. Final abundance = scale * sum(library intensities)
+2. Model: `log(observed) = log(library) + scale_factor + noise`
+3. Estimate scale via MEDIAN of log-ratios (robust to up to 50% outliers)
+4. Flag transitions with HIGH positive residuals as interfered (signal > expected)
+5. Remove worst outlier and refit until convergence
+6. Final abundance = exp(scale_factor) * sum(ALL library intensities)
 
-**Key insight:** Only high residuals indicate interference. Low or negative residuals are valid - they indicate low abundance or noise, not interference.
+**Key insight:** Only high residuals indicate interference - because interference can only **add** signal, never remove it. Low or negative residuals are valid (low abundance or noise).
 
 **Supported library formats:**
 
@@ -534,7 +592,36 @@ outliers = peptide_residuals.groupby(['protein_group_id', 'peptide']).agg({
 outliers = outliers[outliers['residual_mad'] > 0.5]  # Threshold of your choice
 ```
 
+**Core Rollup API:**
+
+For advanced use cases, the `rollup_protein_matrix` function provides direct access to the core protein rollup logic:
+
+```python
+from skyline_prism import rollup_protein_matrix
+import pandas as pd
+
+# Create a peptide x sample matrix (log2 scale)
+matrix = pd.DataFrame({
+    'Sample1': [12.5, 14.2, 13.1],
+    'Sample2': [12.8, 14.5, 13.4],
+}, index=['PeptideA', 'PeptideB', 'PeptideC'])
+
+# Roll up to protein-level abundance
+result = rollup_protein_matrix(
+    matrix,
+    method='median_polish',
+    min_peptides=3,
+)
+
+# Result contains:
+# - result.abundances: pd.Series of sample abundances (log2)
+# - result.residuals: dict of peptide -> sample -> residual
+# - result.polish_result: MedianPolishResult (for median_polish method)
+# - result.topn_result: TopNResult (for topn method)
+```
+
 For transition-level residuals:
+
 
 ```python
 from skyline_prism import rollup_transitions_to_peptides, extract_transition_residuals
@@ -571,6 +658,7 @@ from skyline_prism import (
     
     # Rollup
     tukey_median_polish,
+    rollup_protein_matrix,  # Core protein rollup function
     rollup_to_proteins,
     rollup_transitions_to_peptides,
     

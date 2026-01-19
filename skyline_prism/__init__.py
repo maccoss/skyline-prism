@@ -6,7 +6,7 @@ with ComBat batch correction and robust protein quantification.
 See: https://skyline.ms for more inflsormation about Skyline.
 """
 
-__version__ = "26.1.3"
+__version__ = "26.2.1"
 
 __all__ = [
     # batch_correction
@@ -71,6 +71,8 @@ __all__ = [
     "extract_transition_residuals",
     "flag_outlier_peptides",
     "protein_output_pipeline",
+    "ProteinMatrixRollupResult",
+    "rollup_protein_matrix",
     "rollup_to_proteins",
     "rollup_top_n",
     "tukey_median_polish",
@@ -168,6 +170,7 @@ from .rollup import (
     AggregationResult,
     MedianPolishResult,
     ProteinBatchCorrectionResult,
+    ProteinMatrixRollupResult,
     TopNResult,
     batch_correct_proteins,
     extract_peptide_residuals,
@@ -176,6 +179,7 @@ from .rollup import (
     extract_transition_residuals,
     flag_outlier_peptides,
     protein_output_pipeline,
+    rollup_protein_matrix,
     rollup_to_proteins,
     rollup_top_n,
     tukey_median_polish,

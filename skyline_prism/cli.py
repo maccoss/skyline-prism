@@ -406,6 +406,9 @@ KNOWN_CONFIG_KEYS = {
         "library_path",
         "mz_tolerance",
         "min_matched_fragments",
+        "outlier_threshold",
+        "fitting_method",
+        "remove_outliers",
     },
     "global_normalization": {
         "method",
@@ -1117,8 +1120,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Get rollup configuration
     rollup_method = config["transition_rollup"].get("method", "sum")
-    # Normalize method name (accept library_assist as alias for library-assisted)
-    if rollup_method == "library_assist":
+    # Normalize method name (accept various spellings for library-assisted)
+    if rollup_method in ("library_assist", "library-assist"):
         rollup_method = "library-assisted"
     use_ms1 = config["transition_rollup"].get("use_ms1", False)
     min_transitions = config["transition_rollup"].get("min_transitions", 3)
@@ -1319,16 +1322,37 @@ def cmd_run(args: argparse.Namespace) -> int:
         lib_mz_tolerance = lib_assist_config.get("mz_tolerance") or config["transition_rollup"].get(
             "spectral_library_mz_tolerance", 0.02
         )
+        lib_outlier_threshold = lib_assist_config.get("outlier_threshold") or config[
+            "transition_rollup"
+        ].get("spectral_library_outlier_threshold", 1.0)
+        # Whether to remove outliers (default True, set False for debugging)
+        lib_remove_outliers = lib_assist_config.get("remove_outliers", True)
+        # Fitting method: "median_polish" (default, recommended) or "least_squares"
+        lib_fitting_method = lib_assist_config.get("fitting_method", "median_polish")
+        if lib_fitting_method not in ("median_polish", "least_squares"):
+            logger.warning(
+                f"Unknown fitting_method '{lib_fitting_method}', using 'median_polish'"
+            )
+            lib_fitting_method = "median_polish"
 
         logger.info(f"  Spectral library: {lib_path}")
+        logger.info(f"  Fitting method: {lib_fitting_method}")
+        logger.info(f"  Min matched fragments: {lib_min_fragments}")
+        logger.info(f"  Outlier threshold: {lib_outlier_threshold}")
+        logger.info(f"  Remove outliers: {lib_remove_outliers}")
         spectral_library = SpectralLibraryRollup(
             library_path=lib_path,
             min_fragments=lib_min_fragments,
             mz_tolerance=lib_mz_tolerance,
-            use_robust=True,
+            use_robust=lib_remove_outliers,
+            outlier_threshold=lib_outlier_threshold,
+            fitting_method=lib_fitting_method,
         )
         spectral_library.load_library()
         logger.info(f"  Library spectra loaded: {len(spectral_library.library):,}")
+    else:
+        spectral_library = None
+        lib_outlier_threshold = 1.0  # Default value when not using library-assisted
 
     # Get parallel processing parameters
     n_workers = config.get("processing", {}).get("n_workers", 1)
@@ -1359,6 +1383,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         n_workers=n_workers,
         peptide_batch_size=peptide_batch_size,
         spectral_library=spectral_library,  # For library-assisted method
+        spectral_library_outlier_threshold=lib_outlier_threshold,
         # Save consensus diagnostics when using consensus method
         consensus_diagnostics_path=(
             str(output_dir / "consensus_diagnostics.csv") if rollup_method == "consensus" else None
@@ -2361,6 +2386,9 @@ transition_rollup:
   # For library_assist method: path to spectral library (.blib or .tsv)
   # library_assist:
   #   library_path: "/path/to/library.blib"
+  #   fitting_method: "median_polish"  # or "least_squares"
+  #   outlier_threshold: 1.0  # 1.0=obs>2x pred, 2.0=obs>3x pred (conservative)
+  #   remove_outliers: true   # Set false to disable outlier removal (debugging)
 
 global_normalization:
   method: "rt_lowess"
@@ -2575,7 +2603,7 @@ transition_rollup:
     min_improvement_pct: 0.1
 
   # Library-assist parameters (if method: library_assist)
-  # Uses spectral library to detect interfered transitions via least squares fitting.
+  # Uses spectral library as a prior for transition ionization efficiency (row effects).
   # Compares observed fragment ratios to library and removes outliers iteratively.
   # Only HIGH residuals are outliers (signal > expected = interference).
   # Low or negative residuals are valid - they indicate low abundance, not interference.
@@ -2583,6 +2611,19 @@ transition_rollup:
     library_path: null          # Path to .blib or .tsv spectral library (REQUIRED)
     mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
     min_matched_fragments: 3    # Minimum fragments for valid fit (else NaN)
+    fitting_method: "median_polish"  # "median_polish" (RECOMMENDED) or "least_squares"
+                                # median_polish: Uses MEDIAN to estimate sample scale factor
+                                #   - Robust to 1-2 interfered transitions automatically
+                                #   - Based on: log(obs) = log(lib) + beta_s + epsilon
+                                # least_squares: Classic OLS: scale = (lib . obs) / (lib . lib)
+                                #   - More sensitive to outliers
+                                #   - May be better for very clean data
+    outlier_threshold: 1.0      # Normalized residual threshold: (obs-pred)/pred > threshold
+                                # 1.0 = observed > 2x predicted (standard sensitivity)
+                                # 2.0 = observed > 3x predicted (conservative)
+                                # Removes one outlier at a time, respects min_matched_fragments
+    remove_outliers: true       # Set to false to disable outlier removal entirely
+                                # Useful for debugging or when median robustness is sufficient
 
 # =============================================================================
 # Global Normalization

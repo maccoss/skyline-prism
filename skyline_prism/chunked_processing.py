@@ -28,7 +28,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .parsimony import ProteinGroup
-from .rollup import tukey_median_polish
+from .rollup import rollup_protein_matrix, tukey_median_polish
 from .transition_rollup import (
     AdaptiveRollupParams,
     rollup_peptide_adaptive,
@@ -85,6 +85,7 @@ class ChunkedRollupConfig:
     spectral_library: SpectralLibraryRollup | None = None  # Loaded spectral library
     spectral_library_min_fragments: int = 3  # Minimum matched fragments for library fitting
     spectral_library_mz_tolerance: float = 0.02  # m/z tolerance for library matching (Da)
+    spectral_library_outlier_threshold: float = 1.0  # Normalized residual threshold for outliers
 
     # Diagnostics
     consensus_diagnostics_path: str | None = None  # If set, save consensus residual diagnostics
@@ -354,7 +355,7 @@ def _process_single_peptide(
         # IMPORTANT: intensity_matrix is log2-transformed at this point, but
         # library-assisted rollup needs LINEAR values for least squares fitting
         if config.log_transform:
-            linear_intensity_matrix = 2 ** intensity_matrix
+            linear_intensity_matrix = 2**intensity_matrix
         else:
             linear_intensity_matrix = intensity_matrix
 
@@ -1270,43 +1271,20 @@ def _process_single_protein(
     # Determine confidence
     low_confidence = n_peptides < config.min_peptides
 
-    residuals = None
+    # Use the core rollup function from rollup.py (SINGLE SOURCE OF TRUTH)
+    rollup_result = rollup_protein_matrix(
+        matrix,
+        method=config.method,
+        min_peptides=config.min_peptides,
+        topn_n=config.topn_n,
+        topn_selection=config.topn_selection,
+    )
 
-    # Helper function to compute sum in linear space
-    def sum_linear(mat: pd.DataFrame) -> dict:
-        """Sum peptides in linear space, return log2 result."""
-        linear = 2**mat
-        summed = linear.sum(axis=0)
-        return np.log2(summed.clip(lower=1)).to_dict()
-
-    if n_peptides == 1:
-        # Single peptide - use directly (same for all methods)
-        abundances = matrix.iloc[0].to_dict()
-    elif n_peptides == 2:
-        # Two peptides - method-dependent handling
-        if config.method in ("sum", "topn"):
-            # Sum methods: sum in linear space
-            abundances = sum_linear(matrix)
-        else:
-            # median_polish with <3 peptides: fall back to mean (geometric mean in log space)
-            abundances = matrix.mean(axis=0).to_dict()
-    elif config.method == "median_polish":
-        # Median polish for robust rollup (requires 3+ peptides)
-        result = tukey_median_polish(matrix)
-        abundances = result.col_effects.to_dict()
-        # Store residuals
-        residuals = {str(p): result.residuals.loc[p].to_dict() for p in result.residuals.index}
-    elif config.method == "topn":
-        # Top N by median abundance, then sum in linear space
-        median_per_peptide = matrix.median(axis=1)
-        top_peptides = median_per_peptide.nlargest(config.topn_n).index.tolist()
-        abundances = sum_linear(matrix.loc[top_peptides])
-    elif config.method == "sum":
-        # Sum all peptides in linear space
-        abundances = sum_linear(matrix)
+    # Convert abundances to dict if needed (core function may return Series)
+    if hasattr(rollup_result.abundances, "to_dict"):
+        abundances = rollup_result.abundances.to_dict()
     else:
-        # Fallback to mean
-        abundances = matrix.mean(axis=0).to_dict()
+        abundances = rollup_result.abundances
 
     return ProteinRollupResult(
         group_id=group_id,
@@ -1318,7 +1296,7 @@ def _process_single_protein(
         n_peptides=n_peptides,
         n_unique_peptides=len(group.unique_peptides),
         abundances=abundances,
-        residuals=residuals,
+        residuals=rollup_result.residuals,
         low_confidence=low_confidence,
     )
 

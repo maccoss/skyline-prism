@@ -5,12 +5,22 @@ This module supports loading spectral libraries from:
 - BLIB format (Skyline's SQLite-based spectral library)
 
 The primary use case is providing reference fragment intensities for
-least-squares rollup quantification, which can handle interference
+library-assisted rollup quantification, which uses the library as a PRIOR
+for transition ionization efficiency (row effects) and can handle interference
 by fitting observed intensities to expected library patterns.
+
+Two fitting methods are available:
+- median_polish (DEFAULT, RECOMMENDED): Uses MEDIAN to estimate sample scale
+  - Robust to 1-2 outliers automatically (median ignores up to 50% outliers)
+  - Model: log(obs) = log(lib) + beta_s + epsilon
+  - Final abundance = exp(beta_s) * sum(ALL library intensities)
+- least_squares: Classic OLS: scale = (lib . obs) / (lib . lib)
+  - More sensitive to outliers, may be better for very clean data
 
 Key concepts:
 - Spectral libraries contain "expected" relative fragment intensities
-- Least squares fitting: observed = scale * library + interference
+- Only HIGH positive residuals indicate interference (obs > 2x predicted)
+- Interference can only ADD signal, never remove it
 - Robust to 1-2 interfered fragments when 4+ fragments are available
 """
 
@@ -646,7 +656,7 @@ def least_squares_rollup_vectorized(
     observed_matrix: np.ndarray,
     library_intensities: np.ndarray,
     min_fragments: int = 2,
-    outlier_threshold: float = 3.0,
+    outlier_threshold: float = 1.0,
     max_iterations: int = 5,
     remove_outliers: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -658,8 +668,8 @@ def least_squares_rollup_vectorized(
     Algorithm:
     1. First pass: Solve scale_s = (L . O_s) / (L . L) for all samples at once
     2. Compute residuals for all samples in parallel
-    3. For each iteration, identify and mask outliers per sample
-    4. Refit with masked observations
+    3. For each sample, find worst outlier if it exceeds threshold
+    4. Remove that outlier and refit
     5. Return abundances = scales * sum(library)
 
     Key optimization: The library vector is shared across all samples, so
@@ -672,7 +682,9 @@ def least_squares_rollup_vectorized(
         observed_matrix: (T, S) matrix of observed intensities, T=transitions, S=samples
         library_intensities: (T,) vector of library intensities
         min_fragments: Minimum valid fragments required
-        outlier_threshold: MAD multiplier for outlier detection (high residuals only)
+        outlier_threshold: Normalized residual threshold = (obs - pred) / pred
+                          (default 1.0 = observed > 2× predicted).
+                          Use 2.0 for more conservative outlier detection.
         max_iterations: Maximum outlier removal iterations
         remove_outliers: Whether to detect and exclude outliers
 
@@ -701,12 +713,16 @@ def least_squares_rollup_vectorized(
     lib_v = lib[lib_valid]  # (n_valid,)
     obs_v = observed_matrix[lib_valid, :]  # (n_valid, S)
 
-    # Replace NaN with 0 in observations (treat as missing signal, zeros are valid)
+    # Replace NaN with 0 in observations - zeros ARE valid measurements
+    # A zero where library expects signal means the peptide has less abundance
+    # (could be below LOD, ion suppression, etc.)
     obs_v = np.nan_to_num(obs_v, nan=0.0)
 
-    # Initialize inclusion mask (all True) - tracks which fragments are included per sample
+    # Initialize inclusion mask - start with ALL fragments included
+    # Zeros should participate in fitting: they pull down the scale appropriately
+    # when expected signal is missing. Only outliers (interference) get excluded.
     included = np.ones((n_valid, n_samples), dtype=bool)
-    lib_sum = np.sum(lib_v)
+    lib_sum = np.sum(lib_v)  # Full library sum for final abundance
 
     # Column vector of library intensities for broadcasting
     lib_col = lib_v[:, None]  # (T, 1)
@@ -721,7 +737,8 @@ def least_squares_rollup_vectorized(
         lib_dot_lib = np.sum(np.where(included, lib_col**2, 0.0), axis=0)  # (S,)
 
         # Solve for scale, avoid division by zero
-        scales = np.where(lib_dot_lib > 0, lib_dot_obs / lib_dot_lib, 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            scales = np.where(lib_dot_lib > 0, lib_dot_obs / lib_dot_lib, 0.0)
         scales = np.maximum(scales, 0.0)  # Ensure non-negative
 
         if not remove_outliers:
@@ -733,47 +750,59 @@ def least_squares_rollup_vectorized(
 
         # Only HIGH residuals are outliers (interference = signal > expected)
         # Low or negative residuals are valid - just low abundance
-        positive_residuals = np.maximum(residuals, 0.0)
-
-        # Vectorized MAD computation per sample for outlier detection
-        # Set excluded positions to NaN for nanmedian
-        pos_res_masked = np.where(included & (positive_residuals > 0), positive_residuals, np.nan)
-
-        # Count positive residuals per sample
-        n_positive = np.sum(included & (positive_residuals > 0), axis=0)  # (S,)
-        enough_residuals = n_positive > 2
-
-        new_outliers = np.zeros_like(included, dtype=bool)
-
-        if np.any(enough_residuals):
-            # Compute MAD (Median Absolute Deviation) per sample
-            # Only for samples with enough positive residuals
-            mad = np.nanmedian(pos_res_masked[:, enough_residuals], axis=0)  # (n_enough,)
-            mad_std = np.where(mad > 0, mad * 1.4826, 1.0)
-
-            # Compute z-scores for samples with enough residuals
-            z_scores = positive_residuals[:, enough_residuals] / mad_std[None, :]
-
-            # Identify outliers: high z-score AND currently included
-            outliers_subset = (z_scores > outlier_threshold) & included[:, enough_residuals]
-            new_outliers[:, enough_residuals] = outliers_subset
-
-        if not np.any(new_outliers):
-            # Converged - no new outliers found
+        
+        # Compute normalized residuals: (obs - pred) / pred for included fragments
+        norm_residuals = np.zeros_like(residuals)
+        valid_pred = predicted > 0
+        norm_residuals[valid_pred] = residuals[valid_pred] / predicted[valid_pred]
+        
+        # Find worst outlier per sample
+        # Only among included fragments that exceed threshold
+        worst_outliers_found = False
+        new_excluded = np.zeros_like(included, dtype=bool)
+        
+        for s in range(n_samples):
+            included_idx = np.where(included[:, s])[0]
+            n_included_s = len(included_idx)
+            
+            if n_included_s <= min_fragments:
+                continue
+            
+            # Get normalized residuals for included fragments
+            norm_res_s = norm_residuals[included_idx, s]
+            
+            # Find worst (highest positive) residual
+            worst_local_idx = np.argmax(norm_res_s)
+            worst_norm_res = norm_res_s[worst_local_idx]
+            
+            # Check if it exceeds threshold
+            if worst_norm_res > outlier_threshold:
+                # Mark as excluded in the full array
+                worst_global_idx = included_idx[worst_local_idx]
+                new_excluded[worst_global_idx, s] = True
+                worst_outliers_found = True
+        
+        if not worst_outliers_found:
+            # Converged - no outliers exceed threshold
             break
 
-        # Exclude new outliers from future iterations
-        included = included & ~new_outliers
+        # Exclude identified outliers
+        included = included & ~new_excluded
 
     # Final fit with clean data
     obs_final = np.where(included, obs_v, 0.0)
     lib_dot_obs_final = np.sum(lib_col * obs_final, axis=0)
     lib_dot_lib_final = np.sum(np.where(included, lib_col**2, 0.0), axis=0)
 
-    scales_final = np.where(lib_dot_lib_final > 0, lib_dot_obs_final / lib_dot_lib_final, 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scales_final = np.where(
+            lib_dot_lib_final > 0, lib_dot_obs_final / lib_dot_lib_final, 0.0
+        )
     scales_final = np.maximum(scales_final, 0.0)
 
-    # Compute abundances: scale * sum(library)
+    # Compute abundances: scale * sum(ALL library intensities)
+    # CRITICAL: Always use full lib_sum so all samples sum the same fragments
+    # The scale already accounts for missing signal (zeros pull it down appropriately)
     abundances = scales_final * lib_sum
 
     # Compute R-squared per sample
@@ -791,10 +820,202 @@ def least_squares_rollup_vectorized(
     # Count fragments used per sample
     n_used = n_included.astype(np.int32)
 
-    # Mark samples with too few fragments as NaN
+    # Track samples with all zeros - these should return 0.0, not NaN
+    # (no signal is a valid measurement, distinct from "couldn't compute")
+    all_zeros = np.sum(obs_v, axis=0) == 0  # (S,) - samples where every obs is 0
+
+    # Mark samples with too few fragments as NaN, BUT not all-zero samples
+    # All-zero samples correctly get abundance=0 from scale=0 * lib_sum
+    too_few = (n_used < min_fragments) & ~all_zeros
+    abundances[too_few] = np.nan
+    r_squared[too_few] = np.nan
+
+    return abundances, r_squared, n_used
+
+
+def library_median_polish_rollup_vectorized(
+    observed_matrix: np.ndarray,
+    library_intensities: np.ndarray,
+    min_fragments: int = 2,
+    outlier_threshold: float = 1.0,
+    max_iterations: int = 5,
+    remove_outliers: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Library-constrained median polish rollup across all samples.
+
+    Uses the spectral library as a PRIOR for transition row effects (ionization
+    efficiency). Estimates sample scale factors using MEDIAN for robustness to
+    interference outliers.
+
+    Algorithm:
+    1. Model: log(Observed[t,s]) = log(Library[t]) + beta_s + epsilon[t,s]
+       Where Library[t] provides the row effects (no estimation needed)
+    2. Estimate beta_s = MEDIAN across transitions t of [log(obs) - log(lib)]
+       MEDIAN is robust to 1-2 interfered transitions per peptide
+    3. Compute normalized residuals: (obs - pred) / pred on LINEAR scale
+    4. Detect outliers: only HIGH positive residuals indicate interference
+       (interference can only ADD signal, never remove it)
+    5. Iterate: exclude worst outlier per sample, refit, until convergence
+    6. Final abundance = exp(beta_s) × sum(ALL library intensities)
+       Using ALL library ensures consistent scale across peptides
+
+    Why median instead of least-squares:
+    - Least squares minimizes squared error, so outliers have outsized influence
+    - Median ignores up to 50% outliers automatically
+    - With 6 transitions, median is robust to 2 interfered fragments
+    - Cross-sample information: same transitions tend to be interfered
+
+    Performance: Similar to least_squares_rollup_vectorized - processes all
+    samples in parallel using numpy operations.
+
+    Args:
+        observed_matrix: (T, S) matrix of observed intensities, T=transitions, S=samples
+                        Should be LINEAR intensities (not log2)
+        library_intensities: (T,) vector of library intensities (relative, linear)
+        min_fragments: Minimum valid fragments required
+        outlier_threshold: Normalized residual threshold = (obs - pred) / pred
+                          (default 1.0 = observed > 2x predicted).
+                          Use 2.0 for more conservative outlier detection.
+        max_iterations: Maximum outlier removal iterations
+        remove_outliers: Whether to detect and exclude outliers
+
+    Returns:
+        Tuple of:
+        - abundances: (S,) array of peptide abundances (LINEAR scale)
+        - r_squared: (S,) array of R-squared values (fit quality)
+        - n_used: (S,) array of number of fragments used per sample
+
+    """
+    n_transitions, n_samples = observed_matrix.shape
+    lib = library_intensities.astype(np.float64)
+
+    # Build valid mask: library > 0 for all
+    lib_valid = (lib > 0) & ~np.isnan(lib)
+    n_valid = np.sum(lib_valid)
+
+    if n_valid < min_fragments:
+        return (
+            np.full(n_samples, np.nan),
+            np.full(n_samples, np.nan),
+            np.zeros(n_samples, dtype=np.int32),
+        )
+
+    # Extract valid fragments
+    lib_v = lib[lib_valid]  # (n_valid,)
+    obs_v = observed_matrix[lib_valid, :].astype(np.float64)  # (n_valid, S)
+
+    # Full library sum for final abundance (always use ALL library)
+    lib_sum = np.sum(lib_v)
+
+    # Replace zeros and negatives with NaN for log transform
+    # (zeros will be handled in median calculation)
+    obs_v_safe = np.where(obs_v > 0, obs_v, np.nan)
+
+    # Work in log space for additive model
+    # log(obs) = log(lib) + beta_s + epsilon
+    log_obs = np.log(obs_v_safe)  # (T, S)
+    log_lib = np.log(lib_v)[:, None]  # (T, 1) for broadcasting
+
+    # Initialize inclusion mask - start with ALL valid observations
+    included = ~np.isnan(log_obs)  # (T, S)
+
+    for iteration in range(max_iterations):
+        # Compute beta_s = median(log_obs - log_lib) for each sample
+        # Use masked arrays for median computation
+        diff = log_obs - log_lib  # (T, S)
+        diff_masked = np.where(included, diff, np.nan)
+
+        # Compute median for each sample (column)
+        beta_s = np.nanmedian(diff_masked, axis=0)  # (S,)
+
+        if not remove_outliers:
+            break
+
+        # Compute predicted values (LINEAR scale for residual calculation)
+        # pred = lib * exp(beta_s) = lib * scale
+        scales = np.exp(beta_s)  # (S,)
+        predicted = lib_v[:, None] * scales[None, :]  # (T, S) via broadcasting
+
+        # Replace NaN observations with 0 for residual calculation
+        # (missing observations don't contribute to residuals)
+        obs_for_resid = np.nan_to_num(obs_v, nan=0.0)
+
+        # Compute normalized residuals: (obs - pred) / pred
+        # Only HIGH residuals are outliers (interference = signal > expected)
+        norm_residuals = np.zeros_like(obs_for_resid)
+        valid_pred = predicted > 0
+        norm_residuals[valid_pred] = (
+            obs_for_resid[valid_pred] - predicted[valid_pred]
+        ) / predicted[valid_pred]
+
+        # Find worst outlier per sample (only among included fragments)
+        worst_outliers_found = False
+        new_excluded = np.zeros_like(included, dtype=bool)
+
+        for s in range(n_samples):
+            included_idx = np.where(included[:, s])[0]
+            n_included_s = len(included_idx)
+
+            if n_included_s <= min_fragments:
+                continue
+
+            # Get normalized residuals for included fragments
+            norm_res_s = norm_residuals[included_idx, s]
+
+            # Find worst (highest positive) residual
+            worst_local_idx = np.argmax(norm_res_s)
+            worst_norm_res = norm_res_s[worst_local_idx]
+
+            # Check if it exceeds threshold
+            if worst_norm_res > outlier_threshold:
+                # Mark as excluded in the full array
+                worst_global_idx = included_idx[worst_local_idx]
+                new_excluded[worst_global_idx, s] = True
+                worst_outliers_found = True
+
+        if not worst_outliers_found:
+            # Converged - no outliers exceed threshold
+            break
+
+        # Exclude identified outliers
+        included = included & ~new_excluded
+
+    # Final fit with clean data
+    diff_final = np.where(included, log_obs - log_lib, np.nan)
+    beta_s_final = np.nanmedian(diff_final, axis=0)  # (S,)
+
+    # Compute final abundances: exp(beta_s) * sum(ALL library intensities)
+    # CRITICAL: Always use full lib_sum so all samples sum the same fragments
+    scales_final = np.exp(beta_s_final)  # (S,)
+    abundances = scales_final * lib_sum
+
+    # Compute R-squared per sample (on LINEAR scale)
+    predicted_final = lib_v[:, None] * scales_final[None, :]  # (T, S)
+    obs_for_r2 = np.nan_to_num(obs_v, nan=0.0)
+    residuals_final = np.where(included, obs_for_r2 - predicted_final, 0.0)
+
+    ss_res = np.sum(residuals_final**2, axis=0)
+    n_included = np.sum(included, axis=0)
+    obs_mean = np.sum(np.where(included, obs_for_r2, 0.0), axis=0) / np.maximum(n_included, 1)
+    ss_tot = np.sum(np.where(included, (obs_for_r2 - obs_mean[None, :]) ** 2, 0.0), axis=0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r_squared = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, 0.0)
+
+    # Count fragments used per sample
+    n_used = n_included.astype(np.int32)
+
+    # Track samples with all zeros/NaN - these should return NaN (no valid data)
+    # Unlike least-squares where 0s are valid, for median polish we need at least
+    # min_fragments valid observations for a meaningful median
     too_few = n_used < min_fragments
     abundances[too_few] = np.nan
     r_squared[too_few] = np.nan
+
+    # Handle case where all observations were zero/NaN
+    all_nan_obs = np.all(np.isnan(log_obs), axis=0)
+    abundances[all_nan_obs] = np.nan
+    r_squared[all_nan_obs] = np.nan
 
     return abundances, r_squared, n_used
 
@@ -851,7 +1072,7 @@ def least_squares_rollup(
     observed_intensities: np.ndarray,
     library_intensities: np.ndarray,
     min_fragments: int = 2,
-    outlier_threshold: float = 3.0,
+    outlier_threshold: float = 1.0,
     max_iterations: int = 5,
     remove_outliers: bool = True,
 ) -> LeastSquaresResult | None:
@@ -859,9 +1080,9 @@ def least_squares_rollup(
 
     Algorithm:
     1. Fit: observed = scale * library (closed-form least squares)
-    2. Identify outliers (residuals > threshold × MAD, high only = interference)
-    3. Exclude outliers and refit
-    4. Repeat until stable or max iterations
+    2. Identify outliers: (residual / predicted) > threshold (interference detection)
+    3. Exclude worst outlier and refit
+    4. Repeat until stable, no outliers, or min_fragments reached
     5. Return abundance = scale × sum(library)
 
     Key design decisions:
@@ -869,6 +1090,10 @@ def least_squares_rollup(
       fragments. If those match the most intense library peaks, that's good data.
     - Only HIGH residuals are outliers: signal > expected = interference.
       Low/zero signal is not interference, it's just low abundance.
+    - Normalized residuals: threshold compares (observed - predicted) / predicted
+      to make the criterion scale-independent. threshold=1.0 means observed > 2× predicted.
+    - One outlier per iteration: Removes worst outlier at a time to avoid over-removal.
+    - Respects min_fragments: Stops if removing more would go below minimum.
     - Abundance from scaled library: We use scale × sum(library) so the
       quantification is derived from the library pattern, not raw sums.
 
@@ -878,7 +1103,9 @@ def least_squares_rollup(
         observed_intensities: Observed fragment intensities (linear scale)
         library_intensities: Expected relative intensities from library (0-1)
         min_fragments: Minimum fragments required (default 2 since zeros are OK)
-        outlier_threshold: MAD-scaled threshold for outlier detection (default 3.0)
+        outlier_threshold: Normalized residual threshold = (obs - pred) / pred
+                          (default 1.0 = observed > 2× predicted).
+                          Use 2.0 for more conservative outlier detection.
         max_iterations: Maximum outlier removal iterations (default 5)
         remove_outliers: If True, iteratively remove outliers and refit
 
@@ -890,18 +1117,25 @@ def least_squares_rollup(
         - CHIMERYS (Frejno et al., 2025): Linear deconvolution of chimeric spectra
 
     """
-    # Filter to valid fragments
-    # - Observed can be >= 0 (zeros are valid - low abundance or no interference)
-    # - Library must be > 0 (we need positive reference values)
+    # Compute full library sum (used for final abundance)
+    lib_mask = ~np.isnan(library_intensities) & (library_intensities > 0)
+    full_lib_sum = np.sum(library_intensities[lib_mask])
+
+    # Filter to valid fragments for fitting
+    # Include ALL fragments where library > 0 (zeros in observed are valid!)
+    # A zero where library expects signal means lower abundance - this should
+    # pull down the scale. Only outliers (interference = obs >> expected) are excluded.
     valid_mask = ~np.isnan(observed_intensities) & ~np.isnan(library_intensities)
-    valid_mask &= observed_intensities >= 0  # Allow zeros
-    valid_mask &= library_intensities > 0
+    valid_mask &= library_intensities > 0  # Library must be > 0
+    # Note: observed can be 0 - that's valid data (below LOD, suppression, etc.)
+    # Convert NaN observed to 0 for fitting
+    observed_intensities = np.nan_to_num(observed_intensities, nan=0.0)
 
     n_valid = np.sum(valid_mask)
     if n_valid < min_fragments:
         return None
 
-    # Get valid data
+    # Get valid data (includes zeros in observed)
     valid_indices = np.where(valid_mask)[0]
     obs = observed_intensities[valid_mask].copy()
     lib = library_intensities[valid_mask].copy()
@@ -910,7 +1144,7 @@ def least_squares_rollup(
     included_mask = np.ones(len(obs), dtype=bool)
     all_outlier_indices = []
 
-    # Iterative outlier removal
+    # Iterative outlier removal (at most 1 per iteration to avoid over-removal)
     for iteration in range(max_iterations):
         # Get currently included data
         obs_iter = obs[included_mask]
@@ -918,7 +1152,7 @@ def least_squares_rollup(
 
         n_included = np.sum(included_mask)
         if n_included < min_fragments:
-            # Not enough fragments left - use previous iteration or fail
+            # Not enough fragments left - stop here, don't refit
             if iteration == 0:
                 return None
             break
@@ -938,41 +1172,37 @@ def least_squares_rollup(
         if not remove_outliers:
             break
 
-        # Compute residuals for ALL fragments (to detect outliers)
-        predicted = scale * lib
-        residuals = obs - predicted
+        # Compute residuals for ALL included fragments
+        predicted = scale * lib[included_mask]
+        residuals = obs_iter - predicted
 
         # Only HIGH residuals are outliers (interference = signal > expected)
         # Low or negative residuals are fine - just low abundance or noise
-        positive_residuals = np.maximum(residuals, 0)
-
-        # Use MAD of positive residuals for robust threshold
-        if np.sum(positive_residuals > 0) > 2:
-            # MAD of positive residuals only
-            pos_res = positive_residuals[positive_residuals > 0]
-            mad = np.median(pos_res)
-            mad_std = mad * 1.4826 if mad > 0 else np.std(pos_res)
-
-            if mad_std > 0:
-                # Outliers are fragments with HIGH positive residuals
-                z_scores = positive_residuals / mad_std
-                new_outliers = (z_scores > outlier_threshold) & included_mask
-
-                if not np.any(new_outliers):
-                    # No new outliers - converged
-                    break
-
-                # Record outlier indices (in original array)
-                for i in np.where(new_outliers)[0]:
-                    orig_idx = valid_indices[i]
-                    if orig_idx not in all_outlier_indices:
-                        all_outlier_indices.append(int(orig_idx))
-
-                # Exclude new outliers
-                included_mask &= ~new_outliers
-            else:
-                break
+        
+        # Find worst outlier using normalized residuals
+        # normalized_residual = (observed - predicted) / predicted
+        # threshold=1.0 means observed > 2× predicted (detected as outlier)
+        worst_idx = -1
+        worst_norm_res = 0.0
+        
+        for i in range(len(obs_iter)):
+            if predicted[i] > 0:
+                norm_res = residuals[i] / predicted[i]
+                if norm_res > worst_norm_res:
+                    worst_norm_res = norm_res
+                    worst_idx = i
+        
+        # Check if worst outlier exceeds threshold
+        if worst_norm_res > outlier_threshold and n_included > min_fragments:
+            # Mark this fragment as outlier in included_mask
+            included_positions = np.where(included_mask)[0]
+            included_mask[included_positions[worst_idx]] = False
+            
+            # Record in original indices
+            orig_idx = valid_indices[included_positions[worst_idx]]
+            all_outlier_indices.append(int(orig_idx))
         else:
+            # No outlier exceeds threshold - converged
             break
 
     # Final fit with clean data
@@ -1007,8 +1237,9 @@ def least_squares_rollup(
     residual_std = np.sqrt(ss_res / (n_final - 1)) if n_final > 1 else 0.0
 
     # Peptide abundance: scale × sum of ALL library intensities
-    # This recovers the full signal based on the library pattern
-    abundance = scale * np.sum(lib)
+    # CRITICAL: Always use full_lib_sum so all samples sum the same fragments
+    # The scale already accounts for missing signal (zeros pull it down appropriately)
+    abundance = scale * full_lib_sum
 
     # Assess fit quality
     # Poor R² suggests either: 1) severe interference, or 2) suspect ID
@@ -1327,28 +1558,36 @@ def library_assisted_rollup_peptide(
     min_fragments: int = 2,
     mz_tolerance: float = 0.02,
     use_robust: bool = True,
+    outlier_threshold: float = 1.0,
+    fitting_method: str = "median_polish",
     use_ms1: bool = False,
     ms1_isotopes_df: pd.DataFrame | None = None,
     precursor_mz: float | None = None,
     precursor_charge: int | None = None,
 ) -> dict[str, float]:
-    """Compute peptide abundances across samples using library-assisted least squares.
+    """Compute peptide abundances across samples using library-assisted rollup.
 
     For each sample, this function:
     1. Matches observed transitions to library fragments
     2. Builds intensity vectors (observed and expected)
-    3. Fits: observed = scale * expected via least squares
+    3. Fits using the specified method (median_polish or least_squares)
     4. Iteratively removes outliers (high residuals = interference)
     5. Returns peptide abundance = scale * sum(expected)
     6. If use_ms1=True, also fits MS1 isotopes and adds to abundance
 
     Key design principles:
-    - Zeros are valid: Low-abundance peptides may only have 2-3 fragments with signal.
-      If those match the top library peaks, that's good data.
     - Only HIGH residuals are outliers: signal > expected = interference.
+      Interference can only ADD signal, never remove it.
     - Different fragments can be outliers in different samples.
-    - Abundance = scale × sum(library) gives consistent quantification.
+    - Abundance = scale * sum(library) gives consistent quantification.
     - Poor R² across all samples flags potential suspect IDs.
+
+    Fitting methods:
+    - "median_polish": Uses library as prior for row effects, estimates sample
+      scale via MEDIAN. Robust to 1-2 outliers per peptide automatically.
+      RECOMMENDED for most use cases.
+    - "least_squares": Classic least squares: scale = (lib . obs) / (lib . lib).
+      More sensitive to outliers but may be better for very clean data.
 
     Args:
         transitions_df: DataFrame with one row per transition for a single peptide
@@ -1356,9 +1595,12 @@ def library_assisted_rollup_peptide(
         sample_cols: List of sample column names to process
         fragment_col: Column with fragment ion annotation (default: "Fragment Ion")
         product_mz_col: Column with product m/z (default: "Product Mz")
-        min_fragments: Minimum matched fragments required (default 2 since zeros are OK)
+        min_fragments: Minimum matched fragments required (default 2)
         mz_tolerance: m/z tolerance for library matching (Da)
         use_robust: Use iterative outlier removal for robustness (default True)
+        outlier_threshold: Normalized residual threshold for outlier detection (default 1.0).
+                          Higher threshold = more conservative. Use 2.0 for strict filtering.
+        fitting_method: "median_polish" (default, recommended) or "least_squares"
         use_ms1: If True, also include MS1 isotope contribution
         ms1_isotopes_df: DataFrame with MS1 isotope intensities (M, M+1, M+2, ...)
         precursor_mz: Precursor m/z (required if use_ms1=True)
@@ -1405,14 +1647,28 @@ def library_assisted_rollup_peptide(
     lib_matched[~matched_mask] = np.nan
     observed_matrix[~matched_mask, :] = np.nan
 
-    # Vectorized least squares fit for ALL samples at once
-    abundances, r_squared, n_used = least_squares_rollup_vectorized(
-        observed_matrix=observed_matrix,
-        library_intensities=lib_matched,
-        min_fragments=min_fragments,
-        outlier_threshold=3.0,
-        remove_outliers=use_robust,
-    )
+    # Vectorized fit for ALL samples at once using the specified method
+    if fitting_method == "median_polish":
+        abundances, r_squared, n_used = library_median_polish_rollup_vectorized(
+            observed_matrix=observed_matrix,
+            library_intensities=lib_matched,
+            min_fragments=min_fragments,
+            outlier_threshold=outlier_threshold,
+            remove_outliers=use_robust,
+        )
+    elif fitting_method == "least_squares":
+        abundances, r_squared, n_used = least_squares_rollup_vectorized(
+            observed_matrix=observed_matrix,
+            library_intensities=lib_matched,
+            min_fragments=min_fragments,
+            outlier_threshold=outlier_threshold,
+            remove_outliers=use_robust,
+        )
+    else:
+        raise ValueError(
+            f"Unknown fitting_method: {fitting_method}. "
+            "Use 'median_polish' or 'least_squares'."
+        )
 
     # Handle MS1 isotope contribution if enabled
     if use_ms1 and ms1_isotopes_df is not None and precursor_mz and precursor_charge:
@@ -1433,13 +1689,20 @@ def library_assisted_rollup_peptide(
 
 
 class SpectralLibraryRollup:
-    """Library-assisted transition-to-peptide rollup using least squares fitting.
+    """Library-assisted transition-to-peptide rollup using spectral library fitting.
 
     This class manages spectral library loading and provides efficient rollup
     for large datasets by caching library spectra.
 
+    Supports two fitting methods:
+    - "median_polish": Uses library as prior for row effects, estimates sample
+      scale via MEDIAN. Robust to 1-2 outliers per peptide automatically.
+      RECOMMENDED for most use cases.
+    - "least_squares": Classic least squares: scale = (lib . obs) / (lib . lib).
+      More sensitive to outliers but may be better for very clean data.
+
     Usage:
-        rollup = SpectralLibraryRollup(library_path)
+        rollup = SpectralLibraryRollup(library_path, fitting_method="median_polish")
         rollup.load_library()
 
         # For each peptide group:
@@ -1458,6 +1721,8 @@ class SpectralLibraryRollup:
         min_fragments: int = 3,
         mz_tolerance: float = 0.02,
         use_robust: bool = True,
+        outlier_threshold: float = 1.0,
+        fitting_method: str = "median_polish",
     ):
         """Initialize library-assisted rollup.
 
@@ -1465,13 +1730,17 @@ class SpectralLibraryRollup:
             library_path: Path to spectral library (.tsv or .blib)
             min_fragments: Minimum matched fragments for fitting
             mz_tolerance: m/z tolerance for library matching (Da)
-            use_robust: Use iteratively reweighted least squares
+            use_robust: Use iterative outlier removal
+            outlier_threshold: Normalized residual threshold for outlier detection (default 1.0)
+            fitting_method: "median_polish" (default, recommended) or "least_squares"
 
         """
         self.library_path = Path(library_path)
         self.min_fragments = min_fragments
         self.mz_tolerance = mz_tolerance
         self.use_robust = use_robust
+        self.fitting_method = fitting_method
+        self.outlier_threshold = outlier_threshold
         self.library: dict[str, FragmentSpectrum] = {}
         self._stripped_lookup: dict[str, str] = {}  # stripped_key -> original_key
         self._loaded = False
@@ -1558,7 +1827,7 @@ class SpectralLibraryRollup:
         fragment_col: str = "Fragment Ion",
         product_mz_col: str = "Product Mz",
     ) -> dict[str, float]:
-        """Compute peptide abundances using library-assisted least squares.
+        """Compute peptide abundances using library-assisted rollup.
 
         Args:
             transitions_df: DataFrame with one row per transition
@@ -1598,6 +1867,8 @@ class SpectralLibraryRollup:
             min_fragments=self.min_fragments,
             mz_tolerance=self.mz_tolerance,
             use_robust=self.use_robust,
+            outlier_threshold=self.outlier_threshold,
+            fitting_method=self.fitting_method,
         )
 
     def get_statistics(self) -> dict[str, int]:
@@ -1627,11 +1898,14 @@ class SpectralLibraryRollup:
         fragment_col: str = "Fragment Ion",
         product_mz_col: str = "Product Mz",
     ) -> tuple[dict[str, float], dict[str, float]]:
-        """Compute peptide abundances AND R² values using library-assisted least squares.
+        """Compute peptide abundances AND R² values using library-assisted rollup.
 
         This version returns both the abundance and the fit quality (R²) for each sample,
         which can be used to evaluate which charge state has the best correlation with
         the library spectrum.
+
+        Note: This method currently only supports least_squares fitting for R² calculation.
+        For median_polish, use rollup_peptide() which uses the vectorized implementation.
 
         Args:
             transitions_df: DataFrame with one row per transition

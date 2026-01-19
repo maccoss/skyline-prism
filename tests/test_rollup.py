@@ -485,8 +485,8 @@ class TestRollupToProteins:
         # Should NOT have a polish result for single peptide
         assert "PG_single" not in polish_results
 
-    def test_two_peptide_uses_mean(self, sample_peptide_data, sample_protein_groups):
-        """Test that 2-peptide proteins use mean of peptides."""
+    def test_two_peptide_uses_sum(self, sample_peptide_data, sample_protein_groups):
+        """Test that 2-peptide proteins use sum of peptides (below min_peptides=3)."""
         from skyline_prism.rollup import rollup_to_proteins
 
         result_df, polish_results, _ = rollup_to_proteins(
@@ -496,17 +496,25 @@ class TestRollupToProteins:
             sample_col="replicate_name",
             peptide_col="peptide_modified",
             method="median_polish",
+            min_peptides=3,  # Default is 3
         )
 
-        # For 2-peptide protein, abundances should be mean of:
-        # pep_two_a: S1=8, S2=9, S3=10
-        # pep_two_b: S1=12, S2=13, S3=14
-        # Mean: S1=10, S2=11, S3=12
-        assert abs(result_df.loc["PG_two", "S1"] - 10.0) < 0.01
-        assert abs(result_df.loc["PG_two", "S2"] - 11.0) < 0.01
-        assert abs(result_df.loc["PG_two", "S3"] - 12.0) < 0.01
+        # For 2-peptide protein (below min_peptides=3), abundances should be sum of:
+        # pep_two_a: S1=8, S2=9, S3=10 (linear: 256, 512, 1024)
+        # pep_two_b: S1=12, S2=13, S3=14 (linear: 4096, 8192, 16384)
+        # Sum in linear: S1=4352, S2=8704, S3=17408
+        # Back to log2: S1≈12.09, S2≈13.09, S3≈14.09
+        import numpy as np
 
-        # Should NOT have a polish result for two peptides
+        expected_s1 = np.log2(2**8 + 2**12)  # log2(4352) ≈ 12.09
+        expected_s2 = np.log2(2**9 + 2**13)  # log2(8704) ≈ 13.09
+        expected_s3 = np.log2(2**10 + 2**14)  # log2(17408) ≈ 14.09
+
+        assert abs(result_df.loc["PG_two", "S1"] - expected_s1) < 0.01
+        assert abs(result_df.loc["PG_two", "S2"] - expected_s2) < 0.01
+        assert abs(result_df.loc["PG_two", "S3"] - expected_s3) < 0.01
+
+        # Should NOT have a polish result for two peptides (below threshold)
         assert "PG_two" not in polish_results
 
     def test_three_or_more_uses_median_polish(self, sample_peptide_data, sample_protein_groups):
