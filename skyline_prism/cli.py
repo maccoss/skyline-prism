@@ -229,11 +229,6 @@ def get_batches_from_source_document(
     if len(source_docs) < 2:
         return {}
 
-    logger.info(f"  Assigning batches from source documents: {len(source_docs)} batches")
-    for doc in sorted(source_docs):
-        n_samples = (result["source_doc"] == doc).sum()
-        logger.info(f"    {doc}: {n_samples} samples")
-
     # Build mapping from sample_col to source document
     sample_to_batch = {}
 
@@ -1702,6 +1697,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     elif norm_method == "median" or norm_method is None:
         # Apply global median normalization (on log2 scale)
         # For each sample column, subtract sample median and add global median
+
+        # Log CVs BEFORE normalization
+        if sample_to_type:
+            ref_cv_before, qc_cv_before = compute_sample_type_cvs(
+                peptide_df, sample_cols, sample_to_type
+            )
+            cv_parts = []
+            if ref_cv_before is not None:
+                cv_parts.append(f"Reference: {ref_cv_before:.1f}%")
+            if qc_cv_before is not None:
+                cv_parts.append(f"QC: {qc_cv_before:.1f}%")
+            if cv_parts:
+                logger.info(f"  Before normalization - median CV: {', '.join(cv_parts)}")
+
         sample_medians = peptide_df[sample_cols].median()
         global_peptide_median = sample_medians.median()
         norm_factors = sample_medians - global_peptide_median
@@ -1718,6 +1727,20 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"  Global median = {linear_global_median:.0f} (linear), "
             f"max shift = {fold_change_shift:.2f}x"
         )
+
+        # Log CVs AFTER normalization
+        if sample_to_type:
+            ref_cv_after, qc_cv_after = compute_sample_type_cvs(
+                peptide_df, sample_cols, sample_to_type
+            )
+            cv_parts = []
+            if ref_cv_after is not None:
+                cv_parts.append(f"Reference: {ref_cv_after:.1f}%")
+            if qc_cv_after is not None:
+                cv_parts.append(f"QC: {qc_cv_after:.1f}%")
+            if cv_parts:
+                logger.info(f"  After normalization - median CV: {', '.join(cv_parts)}")
+
         method_log.append(f"Peptide median normalization: max shift = {fold_change_shift:.2f}x")
 
     elif norm_method == "none":
@@ -1728,6 +1751,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Quantile normalization: force identical distributions across samples
         # Works on log2 scale data
         logger.info("  Applying quantile normalization...")
+
+        # Log CVs BEFORE normalization
+        if sample_to_type:
+            ref_cv_before, qc_cv_before = compute_sample_type_cvs(
+                peptide_df, sample_cols, sample_to_type
+            )
+            cv_parts = []
+            if ref_cv_before is not None:
+                cv_parts.append(f"Reference: {ref_cv_before:.1f}%")
+            if qc_cv_before is not None:
+                cv_parts.append(f"QC: {qc_cv_before:.1f}%")
+            if cv_parts:
+                logger.info(f"  Before normalization - median CV: {', '.join(cv_parts)}")
 
         sample_data = peptide_df[sample_cols].values  # (n_peptides, n_samples)
 
@@ -1767,12 +1803,39 @@ def cmd_run(args: argparse.Namespace) -> int:
             peptide_df[col] = normalized[:, j]
 
         logger.info(f"  Quantile normalization complete: {n_samples} samples normalized")
+
+        # Log CVs AFTER normalization
+        if sample_to_type:
+            ref_cv_after, qc_cv_after = compute_sample_type_cvs(
+                peptide_df, sample_cols, sample_to_type
+            )
+            cv_parts = []
+            if ref_cv_after is not None:
+                cv_parts.append(f"Reference: {ref_cv_after:.1f}%")
+            if qc_cv_after is not None:
+                cv_parts.append(f"QC: {qc_cv_after:.1f}%")
+            if cv_parts:
+                logger.info(f"  After normalization - median CV: {', '.join(cv_parts)}")
+
         method_log.append("Peptide quantile normalization")
 
     elif norm_method == "vsn":
         # Variance Stabilizing Normalization using arcsinh transformation
         # Input is log2 scale, convert to linear, apply arcsinh, output is VSN scale
         logger.info("  Applying VSN (Variance Stabilizing Normalization)...")
+
+        # Log CVs BEFORE normalization
+        if sample_to_type:
+            ref_cv_before, qc_cv_before = compute_sample_type_cvs(
+                peptide_df, sample_cols, sample_to_type
+            )
+            cv_parts = []
+            if ref_cv_before is not None:
+                cv_parts.append(f"Reference: {ref_cv_before:.1f}%")
+            if qc_cv_before is not None:
+                cv_parts.append(f"QC: {qc_cv_before:.1f}%")
+            if cv_parts:
+                logger.info(f"  Before normalization - median CV: {', '.join(cv_parts)}")
 
         vsn_config = norm_config.get("vsn_params", {})
         optimize_params = vsn_config.get("optimize_params", False)
@@ -1848,6 +1911,24 @@ def cmd_run(args: argparse.Namespace) -> int:
             "  NOTE: VSN output is on arcsinh scale, not log2. "
             "Negative values are valid and expected for low-abundance peptides."
         )
+
+        # Log CVs AFTER normalization (note: VSN uses arcsinh scale, CV calculation still valid)
+        if sample_to_type:
+            # For VSN, we compute CV on the arcsinh-transformed values directly
+            ref_cols = [c for c in sample_cols if sample_to_type.get(c) == "reference"]
+            qc_cols = [c for c in sample_cols if sample_to_type.get(c) == "qc"]
+            cv_parts = []
+            if ref_cols:
+                ref_data = peptide_df[ref_cols]
+                ref_cv = ((ref_data.std(axis=1) / ref_data.mean(axis=1).abs()) * 100).median()
+                cv_parts.append(f"Reference: {ref_cv:.1f}%")
+            if qc_cols:
+                qc_data = peptide_df[qc_cols]
+                qc_cv = ((qc_data.std(axis=1) / qc_data.mean(axis=1).abs()) * 100).median()
+                cv_parts.append(f"QC: {qc_cv:.1f}%")
+            if cv_parts:
+                logger.info(f"  After normalization - median CV: {', '.join(cv_parts)}")
+
         method_log.append(f"Peptide VSN normalization (optimize={optimize_params})")
 
     else:

@@ -100,3 +100,4 @@ results/
 .venv/
 example-files/
 *.log
+bug-fix/

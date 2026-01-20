@@ -184,7 +184,7 @@ Two fitting methods are available, controlled by the `fitting_method` configurat
 
 ##### Library Median Polish (Default, Recommended)
 
-Uses the spectral library as a **prior** for transition row effects (ionization efficiency) and estimates sample scale factors using the **median**, which is inherently robust to interference outliers.
+Uses the spectral library as a **prior** for transition row effects (fragmentation differences) and estimates sample scale factors using the **median**, which is inherently robust to interference outliers.
 
 **Model:**
 $$\log(O_{t,s}) = \log(L_t) + \beta_s + \epsilon_{t,s}$$
