@@ -26,6 +26,21 @@ Stage 2b: Peptide Normalization
   After normalization - median CV: Reference: 11.8%, QC: 13.5%
 ```
 
+### Configurable Protein-Level Normalization
+
+Added new `protein_normalization` config section to control protein-level normalization:
+
+```yaml
+protein_normalization:
+  # Method: median (default), none
+  method: "median"
+```
+
+- **median** (default): Centers all samples to the same median protein abundance
+- **none**: Skip protein-level normalization (useful if peptide-level normalization is sufficient or you prefer to handle normalization downstream)
+
+Previously, protein-level normalization was always median with no option to skip.
+
 ### Reduced Redundant Logging
 
 Removed duplicate batch assignment logging that was appearing twice in logs:

@@ -521,6 +521,9 @@ KNOWN_CONFIG_KEYS = {
         "median_polish",
         "shared_peptide_handling",
     },
+    "protein_normalization": {
+        "method",
+    },
     "protein_rollup.topn": {
         "n",
         "selection",
@@ -593,6 +596,9 @@ def load_config(config_path: Path | None) -> dict:
             "method": "median_polish",
             "topn": {"n": 3, "selection": "median_abundance"},
             "median_polish": {"max_iterations": 20, "convergence_tolerance": 0.0001},
+        },
+        "protein_normalization": {
+            "method": "median",
         },
         "output": {
             "format": "parquet",
@@ -2226,23 +2232,43 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Keep a copy of raw protein data (in log2 scale) for QC comparison
     protein_raw_df = protein_df.copy()
 
-    # Apply global median normalization (on log2 scale)
-    prot_sample_medians = protein_df[prot_sample_cols].median()
-    global_protein_median = prot_sample_medians.median()
-    prot_norm_factors = prot_sample_medians - global_protein_median
+    # Get protein normalization method from config
+    prot_norm_config = config.get("protein_normalization", {})
+    prot_norm_method = prot_norm_config.get("method", "median")
 
-    # Apply normalization to each sample column
-    for col in prot_sample_cols:
-        protein_df[col] = protein_df[col] - prot_norm_factors[col]
+    if prot_norm_method == "none":
+        logger.info("  Skipping protein normalization (method='none')")
+        method_log.append("Protein normalization: skipped")
+    elif prot_norm_method == "median" or prot_norm_method is None:
+        # Apply global median normalization (on log2 scale)
+        prot_sample_medians = protein_df[prot_sample_cols].median()
+        global_protein_median = prot_sample_medians.median()
+        prot_norm_factors = prot_sample_medians - global_protein_median
 
-    max_prot_shift = prot_norm_factors.abs().max()
-    # Report in linear scale for interpretability
-    linear_prot_median = 2**global_protein_median
-    fold_prot_shift = 2**max_prot_shift
-    logger.info(
-        f"  Global median = {linear_prot_median:.0f} (linear), max shift = {fold_prot_shift:.2f}x"
-    )
-    method_log.append(f"Protein median normalization: max shift = {fold_prot_shift:.2f}x")
+        # Apply normalization to each sample column
+        for col in prot_sample_cols:
+            protein_df[col] = protein_df[col] - prot_norm_factors[col]
+
+        max_prot_shift = prot_norm_factors.abs().max()
+        # Report in linear scale for interpretability
+        linear_prot_median = 2**global_protein_median
+        fold_prot_shift = 2**max_prot_shift
+        logger.info(
+            f"  Global median = {linear_prot_median:.0f} (linear), "
+            f"max shift = {fold_prot_shift:.2f}x"
+        )
+        method_log.append(
+            f"Protein median normalization: max shift = {fold_prot_shift:.2f}x"
+        )
+    else:
+        logger.warning(f"  Unknown protein normalization method: {prot_norm_method}, using median")
+        # Fall back to median
+        prot_sample_medians = protein_df[prot_sample_cols].median()
+        global_protein_median = prot_sample_medians.median()
+        prot_norm_factors = prot_sample_medians - global_protein_median
+        for col in prot_sample_cols:
+            protein_df[col] = protein_df[col] - prot_norm_factors[col]
+        method_log.append("Protein median normalization (fallback)")
 
     # -------------------------------------------------------------------------
     # Stage 4c: Protein ComBat Batch Correction
@@ -2719,6 +2745,12 @@ protein_rollup:
   # Method: sum (default), median_polish, topn, ibaq, maxlfq
   method: "sum"
 
+protein_normalization:
+  # Method: median (default), none
+  # Median normalization centers all samples to the same median protein abundance
+  # Use 'none' to skip protein-level normalization
+  method: "median"
+
 # =============================================================================
 # Output Options
 # =============================================================================
@@ -3038,6 +3070,21 @@ protein_rollup:
   median_polish:
     max_iterations: 20
     convergence_tolerance: 0.0001
+
+# =============================================================================
+# Protein Normalization
+# =============================================================================
+# Global normalization applied at the protein level after peptide-to-protein rollup.
+# This is separate from peptide-level normalization (global_normalization section).
+
+protein_normalization:
+  # Method:
+  #   median - Subtract sample median, add global median (default)
+  #            Centers all samples to the same median protein abundance
+  #   none   - Skip protein-level normalization
+  #            Use this if you prefer to handle normalization downstream
+  #            or if peptide-level normalization is sufficient
+  method: "median"
 
 # =============================================================================
 # Output Options
