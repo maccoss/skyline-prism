@@ -90,7 +90,9 @@ Added comprehensive documentation for all PRISM output files in `docs/output_fil
 
 ## Bug Fixes
 
-None in this release.
+### Fixed Test Compatibility with Newer Pandas Versions
+
+Fixed `test_merge_with_mixed_timestamp_types` failing on CI with newer pandas versions. The test was checking for exact `object` dtype, but newer pandas can return `StringDtype` for string columns read from parquet. Changed to use `pd.api.types.is_string_dtype()` which handles both cases.
 
 ## Testing
 

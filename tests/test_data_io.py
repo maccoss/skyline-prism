@@ -372,7 +372,8 @@ class TestMergeStreamingSchemaNormalization:
         assert "Acquired Time" in merged_df.columns
 
         # Acquired Time should be string type (normalized)
-        assert merged_df["Acquired Time"].dtype == object  # pandas string dtype
+        # Note: pandas may return 'object' or 'string' dtype depending on version
+        assert pd.api.types.is_string_dtype(merged_df["Acquired Time"])
 
     def test_merge_with_consistent_types(self, tmp_path):
         """Test that merge works normally when types are already consistent."""
