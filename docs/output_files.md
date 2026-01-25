@@ -15,8 +15,8 @@ output_dir/
 ├── proteins_raw.parquet            # Protein quantities before normalization (LOG2 scale)
 ├── merged_data.parquet             # Merged transition-level data from all input files
 ├── merged_data.fingerprints.json   # Fingerprints for detecting when re-merge is needed
-├── protein_groups.tsv              # Protein group definitions and peptide assignments
-├── sample_metadata.tsv             # Sample metadata (auto-generated or merged from input)
+├── protein_groups.csv              # Protein group definitions and peptide assignments
+├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── metadata.json                   # Complete provenance and processing parameters
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
@@ -83,11 +83,11 @@ These are the main files you will use for downstream analysis.
 
 ---
 
-### protein_groups.tsv
+### protein_groups.csv
 
 **Purpose**: Detailed protein group definitions showing peptide-to-protein assignments.
 
-**Format**: Tab-separated values
+**Format**: Comma-separated values
 
 **Columns**:
 
@@ -230,7 +230,7 @@ These files are useful for debugging, custom analysis, or re-running specific st
   "output_files": {
     "peptides": "output_dir/corrected_peptides.parquet",
     "proteins": "output_dir/corrected_proteins.parquet",
-    "protein_groups": "output_dir/protein_groups.tsv"
+    "protein_groups": "output_dir/protein_groups.csv"
   },
   "statistics": {
     "n_samples": 238,
@@ -250,7 +250,7 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/metadata.j
 
 ---
 
-### sample_metadata.tsv
+### sample_metadata.csv
 
 **Purpose**: Sample metadata used for normalization and batch correction.
 

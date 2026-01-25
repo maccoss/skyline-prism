@@ -130,7 +130,7 @@ The pipeline writes the following outputs (linear scale for abundance matrices):
     - `leading_uniprot_id`: UniProt accession for the leading protein (from Skyline `Protein Accession`)
     - `leading_gene_name`: Gene symbol for the leading protein (from Skyline `Protein Gene`)
     - `leading_description`: Full protein description for the leading protein (from Skyline `Protein`)
-- `protein_groups.tsv`: Group membership export including `LeadingUniProtID`, `LeadingGeneName`, `LeadingDescription`.
+- `protein_groups.csv`: Group membership export including `LeadingUniProtID`, `LeadingGeneName`, `LeadingDescription`.
 
 The `leading_` prefix indicates metadata taken from the canonical representative of each parsimony group.
 Precursors > Precursor Mz
@@ -1861,7 +1861,7 @@ output:
   corrected_peptides: "corrected_peptides.parquet"       # normalized, batch-corrected peptides
   corrected_proteins: "corrected_proteins.parquet"       # normalized, batch-corrected proteins
   peptide_residuals: "peptide_residuals.parquet"         # median polish residuals per peptide
-  protein_groups: "protein_groups.tsv"
+  protein_groups: "protein_groups.csv"
   metadata: "metadata.json"                              # pipeline provenance and parameters
   qc_report: "qc_report.html"                            # HTML report with embedded diagnostic plots
   qc_plots: "qc_plots/"                                  # individual PNG plot files (if save_plots: true)
@@ -1929,7 +1929,7 @@ over-smoothed by batch correction.
 │  corrected_peptides     │         │  corrected_proteins         │
 │  (parquet/csv)          │         │  (parquet/csv)              │
 │                         │         │                             │
-│  peptide_residuals      │         │  protein_groups.tsv         │
+│  peptide_residuals      │         │  protein_groups.csv         │
 │  (from protein rollup)  │         │                             │
 └─────────────────────────┘         └─────────────────────────────┘
           │                                       │
@@ -1953,7 +1953,7 @@ over-smoothed by batch correction.
 │                                 rollup (before normalization)  │
 │  - corrected_peptides.parquet   Batch-corrected peptides       │
 │  - corrected_proteins.parquet   Batch-corrected proteins       │
-│  - protein_groups.tsv           Protein group definitions      │
+│  - protein_groups.csv           Protein group definitions      │
 │  - peptide_residuals.parquet    Median polish residuals        │
 │  - qc_report.html               QC metrics and plots           │
 │  - metadata.json                Pipeline provenance            │

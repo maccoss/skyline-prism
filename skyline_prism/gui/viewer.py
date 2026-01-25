@@ -241,15 +241,15 @@ class PRISMResultWidget(QWidget):
                 with open(metadata_path) as f:
                     self.metadata = json.load(f)
 
-            # Load protein groups mapping manually (tsv file)
+            # Load protein groups mapping manually (csv file)
             # This is needed because peptide parquet doesn't have protein info
-            groups_path = self.output_dir / "protein_groups.tsv"
+            groups_path = self.output_dir / "protein_groups.csv"
             if groups_path.exists():
                 self.status_bar.showMessage("Loading protein-peptide mapping...", 2000)
                 try:
                     # Read minimal columns needed
                     groups_df = pd.read_csv(
-                        groups_path, sep="\t", usecols=["GroupID", "AllPeptides"]
+                        groups_path, usecols=["GroupID", "AllPeptides"]
                     )
                     for _, row in groups_df.iterrows():
                         if pd.isna(row["AllPeptides"]):
@@ -263,11 +263,11 @@ class PRISMResultWidget(QWidget):
                 except Exception as e:
                     print(f"Failed to load protein groups: {e}")
 
-            # Load sample metadata for grouping (sample_metadata.tsv)
-            sample_meta_path = self.output_dir / "sample_metadata.tsv"
+            # Load sample metadata for grouping (sample_metadata.csv)
+            sample_meta_path = self.output_dir / "sample_metadata.csv"
             if sample_meta_path.exists():
                 try:
-                    self.sample_metadata = pd.read_csv(sample_meta_path, sep="\t")
+                    self.sample_metadata = pd.read_csv(sample_meta_path)
                     # Ensure Replicate column exists for joining
                     if (
                         "Replicate" not in self.sample_metadata.columns

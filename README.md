@@ -36,7 +36,7 @@ pip install -e ".[dev,viz]"
 
 ```bash
 # Run complete PRISM pipeline (recommended)
-prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.tsv
+prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.csv
 
 # Multiple metadata files are automatically merged
 prism run -i data.csv -o output/ -c config.yaml -m batch1_meta.csv batch2_meta.csv
@@ -48,7 +48,7 @@ This produces:
 - `corrected_proteins.parquet` - Protein-level quantities (normalized, batch-corrected)
 - `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
 - `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
-- `protein_groups.tsv` - Protein group definitions
+- `protein_groups.csv` - Protein group definitions
 - `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
 - `metadata.json` - Processing metadata and provenance
 - `prism_run_YYYYMMDD_HHMMSS.log` - Detailed log file with all processing steps and timings
@@ -77,7 +77,7 @@ Protein groups are formed by parsimony. Each group has a canonical representativ
 - `leading_gene_name`: Gene symbol for the leading protein (from Skyline `Protein Gene`)
 - `leading_description`: Full protein description for the leading protein (from Skyline `Protein`)
 
-The `leading_` prefix clarifies that these fields describe the group’s canonical representative, avoiding ambiguity with member/subsumed proteins. Member/subsumed lists are available in `protein_groups.tsv`.
+The `leading_` prefix clarifies that these fields describe the group's canonical representative, avoiding ambiguity with member/subsumed proteins. Member/subsumed lists are available in `protein_groups.csv`.
 
 See [SPECIFICATION.md](SPECIFICATION.md) for complete column definitions.
 
@@ -118,7 +118,7 @@ prism config-template --minimal -o config.yaml
 ### Merge multiple Skyline reports
 
 ```bash
-prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.tsv
+prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.csv
 ```
 
 ### QC report contents

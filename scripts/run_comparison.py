@@ -9,7 +9,7 @@ from pathlib import Path
 # Paths - use existing parquet from previous run
 BASE_DIR = Path("/home/maccoss/GitHub-Repo/maccoss/skyline-prism/example-files")
 INPUT_FILE = BASE_DIR / "out_test_sum" / "merged_data.parquet"
-METADATA_FILE = BASE_DIR / "out_test_sum" / "sample_metadata.tsv"
+METADATA_FILE = BASE_DIR / "out_test_sum" / "sample_metadata.csv"
 FASTA_FILE = BASE_DIR / "uniprot_mouse_may2025_contam_yeastENO1.fasta"
 OUTPUT_BASE = BASE_DIR / "out_compare"
 

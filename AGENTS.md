@@ -413,7 +413,7 @@ The package provides a `prism` CLI. The primary command is `prism run`:
 
 ```bash
 # Run the full PRISM pipeline (recommended)
-prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m metadata.tsv
+prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m metadata.csv
 ```
 
 This produces:
@@ -421,7 +421,7 @@ This produces:
 - `corrected_proteins.parquet` - Protein-level normalized/batch-corrected quantities
 - `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
 - `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
-- `protein_groups.tsv` - Protein group definitions
+- `protein_groups.csv` - Protein group definitions
 - `peptide_residuals.parquet` - Residuals for outlier analysis (if enabled)
 - `metadata.json` - Complete processing parameters for reproducibility
 - `qc_report.html` - HTML QC report with embedded diagnostic plots

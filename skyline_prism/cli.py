@@ -961,13 +961,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             if meta_files:
                 missing = [f for f in meta_files if not Path(f).exists()]
                 if missing:
-                    # Fall back to saved sample_metadata.tsv
-                    saved_meta = provenance_dir / "sample_metadata.tsv"
+                    # Fall back to saved sample_metadata.csv
+                    saved_meta = provenance_dir / "sample_metadata.csv"
                     if saved_meta.exists():
                         logger.info(f"  Original metadata files moved; using saved {saved_meta}")
                         args.metadata = [str(saved_meta)]
                     else:
-                        logger.warning(f"  Metadata files not found and no saved TSV: {missing}")
+                        logger.warning(f"  Metadata files not found and no saved CSV: {missing}")
                 else:
                     args.metadata = meta_files
                     logger.info(f"  Using {len(meta_files)} metadata files from provenance")
@@ -1078,7 +1078,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
                 method_log.append("Reused cached merged parquet (source files unchanged)")
                 # Try to load existing metadata if available
-                existing_metadata = output_dir / "sample_metadata.tsv"
+                existing_metadata = output_dir / "sample_metadata.csv"
                 if existing_metadata.exists() and not args.metadata:
                     metadata_df = load_sample_metadata(existing_metadata)
                     logger.info(f"  Loaded existing metadata: {existing_metadata}")
@@ -1120,8 +1120,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 reference_patterns=reference_patterns,
                 qc_patterns=qc_patterns,
             )
-            metadata_path = output_dir / "sample_metadata.tsv"
-            metadata_df.to_csv(metadata_path, sep="\t", index=False)
+            metadata_path = output_dir / "sample_metadata.csv"
+            metadata_df.to_csv(metadata_path, index=False)
             method_log.append(f"Generated sample metadata: {metadata_path}")
     # Load explicit metadata if provided
     # Track metadata source and files for provenance
@@ -1133,8 +1133,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         metadata_df = load_sample_metadata_files(metadata_paths)
 
         # Always save merged metadata to output directory
-        merged_metadata_path = output_dir / "sample_metadata.tsv"
-        metadata_df.to_csv(merged_metadata_path, sep="\t", index=False)
+        merged_metadata_path = output_dir / "sample_metadata.csv"
+        metadata_df.to_csv(merged_metadata_path, index=False)
         logger.info(f"  Saved merged metadata: {merged_metadata_path}")
 
         # Track for provenance
@@ -2258,7 +2258,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     logger.info(f"  Computed {len(protein_groups)} protein groups")
 
-    groups_output = output_dir / "protein_groups.tsv"
+    groups_output = output_dir / "protein_groups.csv"
     export_protein_groups(protein_groups, str(groups_output))
 
     # =========================================================================
@@ -2619,7 +2619,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
     - corrected_peptides.parquet (normalized/batch-corrected peptides)
     - proteins_raw.parquet (raw proteins from peptide rollup)
     - corrected_proteins.parquet (normalized/batch-corrected proteins)
-    - sample_metadata.tsv (sample types)
+    - sample_metadata.csv (sample types)
     """
     import pandas as pd
 
@@ -2663,9 +2663,9 @@ def cmd_qc(args: argparse.Namespace) -> int:
 
     # Load sample metadata for sample types
     sample_types = {}
-    metadata_path = output_dir / "sample_metadata.tsv"
+    metadata_path = output_dir / "sample_metadata.csv"
     if metadata_path.exists():
-        metadata_df = pd.read_csv(metadata_path, sep="\t")
+        metadata_df = pd.read_csv(metadata_path)
         if "sample_type" in metadata_df.columns:
             # Use sample_id (full name) if available, else fallback to sample
             if "sample_id" in metadata_df.columns:
@@ -2674,7 +2674,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
                 sample_types = dict(zip(metadata_df["sample"], metadata_df["sample_type"]))
             logger.info(f"  Sample types loaded: {len(sample_types)}")
     else:
-        logger.warning("sample_metadata.tsv not found, sample types will not be colored")
+        logger.warning("sample_metadata.csv not found, sample types will not be colored")
 
     # Determine sample columns (exclude metadata columns)
     meta_cols = [

@@ -592,16 +592,16 @@ def export_protein_groups(
     groups: list[ProteinGroup],
     output_path: str,
 ) -> None:
-    """Export protein groups to TSV file.
+    """Export protein groups to CSV file.
 
     Args:
         groups: List of ProteinGroup objects
-        output_path: Path to output TSV file
+        output_path: Path to output CSV file
 
     """
     rows = [g.to_dict() for g in groups]
     df = pd.DataFrame(rows)
-    df.to_csv(output_path, sep="\t", index=False)
+    df.to_csv(output_path, index=False)
     logger.info(f"Exported {len(groups)} protein groups to {output_path}")
 
 

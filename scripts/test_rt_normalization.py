@@ -27,11 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def load_peptide_data(output_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load peptides_rollup.parquet and sample_metadata.tsv."""
+    """Load peptides_rollup.parquet and sample_metadata.csv."""
     output_dir = Path(output_dir)
 
     peptide_path = output_dir / "peptides_rollup.parquet"
-    meta_path = output_dir / "sample_metadata.tsv"
+    meta_path = output_dir / "sample_metadata.csv"
 
     if not peptide_path.exists():
         raise FileNotFoundError(f"Peptide file not found: {peptide_path}")
@@ -39,7 +39,7 @@ def load_peptide_data(output_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFram
         raise FileNotFoundError(f"Metadata file not found: {meta_path}")
 
     df = pq.read_table(peptide_path).to_pandas()
-    meta = pd.read_csv(meta_path, sep="\t")
+    meta = pd.read_csv(meta_path)
 
     return df, meta
 

@@ -1563,8 +1563,8 @@ def run_streaming_pipeline(
 
     # Save protein groups
     groups_df = pd.DataFrame([g.to_dict() for g in protein_groups])
-    groups_path = output_dir / "protein_groups.tsv"
-    groups_df.to_csv(groups_path, sep="\t", index=False)
+    groups_path = output_dir / "protein_groups.csv"
+    groups_df.to_csv(groups_path, index=False)
     logger.info(f"  Saved protein groups: {groups_path}")
 
     # Step 3: Peptide → Protein rollup (streaming)
