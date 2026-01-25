@@ -8,9 +8,53 @@ import pytest
 
 from skyline_prism.cli import (
     _deep_merge,
+    find_column,
     load_config,
     load_config_from_provenance,
 )
+
+
+class TestFindColumn:
+    """Tests for find_column helper function."""
+
+    def test_exact_match(self):
+        """Test that exact matches are returned."""
+        available = {"Area", "Fragment_Ion", "Peptide"}
+        assert find_column(available, "Area") == "Area"
+        assert find_column(available, "Fragment_Ion") == "Fragment_Ion"
+
+    def test_space_to_underscore(self):
+        """Test that space variant finds underscore column."""
+        available = {"Fragment_Ion", "Area", "Protein_Accession"}
+        assert find_column(available, "Fragment Ion") == "Fragment_Ion"
+        assert find_column(available, "Protein Accession") == "Protein_Accession"
+
+    def test_underscore_to_space(self):
+        """Test that underscore variant finds space column."""
+        available = {"Fragment Ion", "Area", "Protein Accession"}
+        assert find_column(available, "Fragment_Ion") == "Fragment Ion"
+        assert find_column(available, "Protein_Accession") == "Protein Accession"
+
+    def test_multiple_candidates(self):
+        """Test that first matching candidate is returned."""
+        available = {"Fragment_Ion", "Area"}
+        # First candidate doesn't exist, second does
+        assert find_column(available, "NonExistent", "Fragment Ion") == "Fragment_Ion"
+        # First candidate exists
+        assert find_column(available, "Area", "Fragment Ion") == "Area"
+
+    def test_no_match_returns_none(self):
+        """Test that None is returned when no match found."""
+        available = {"Area", "Peptide"}
+        assert find_column(available, "Fragment Ion") is None
+        assert find_column(available, "NonExistent") is None
+
+    def test_mixed_format_columns(self):
+        """Test with mixed space/underscore columns."""
+        available = {"Fragment_Ion", "Sample ID", "Protein Accession"}
+        assert find_column(available, "Fragment Ion") == "Fragment_Ion"
+        assert find_column(available, "Sample ID") == "Sample ID"
+        assert find_column(available, "Protein_Accession") == "Protein Accession"
 
 
 class TestDeepMerge:

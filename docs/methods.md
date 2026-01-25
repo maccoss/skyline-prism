@@ -230,6 +230,43 @@ $$s^* = \frac{\vec{L} \cdot \vec{O}}{\vec{L} \cdot \vec{L}}$$
 
 Where $\vec{L}$ is the library intensity vector and $\vec{O}$ is the observed intensity vector.
 
+#### Handling Multiple Charge States
+
+Peptides are often detected in multiple precursor charge states (e.g., +2 and +3). Each charge state produces a **different fragmentation pattern**, so the library stores separate spectra for each peptide+charge combination.
+
+**Processing workflow:**
+
+1. **Identify charge states:** For each peptide, identify all unique precursor charge states present in the data.
+
+2. **Process independently:** Each charge state is processed separately using its own library spectrum:
+   - +2 ions are matched to library spectrum `PEPTIDEK_2`
+   - +3 ions are matched to library spectrum `PEPTIDEK_3`
+   - Each gets its own library-assisted rollup to estimate abundance
+
+3. **Sum on linear scale:** The final peptide abundance is the sum of abundances from all charge states:
+   $$I_{peptide,s} = \sum_{z} I_{peptide,z,s}$$
+   
+   Where $z$ indexes the charge states.
+
+**Example:**
+
+For peptide `SAMPLE(unimod:21)PK` detected in +2 and +3 charge states:
+
+| Charge | Library Key | Estimated Abundance |
+|--------|-------------|---------------------|
+| +2 | `SAMPLE(unimod:21)PK_2` | 1000 |
+| +3 | `SAMPLE(unimod:21)PK_3` | 500 |
+| **Total** | — | **1500** |
+
+**Rationale:**
+
+- Each precursor charge state ionizes independently in the electrospray source
+- Fragmentation patterns differ between charge states (different y/b ion intensity ratios)
+- The library provides expected fragment ratios **per charge state**
+- Total peptide signal is the sum of all ionized precursor forms
+
+**Implementation:** See `chunked_processing.py` -> `_process_single_peptide()`, lines 363-436.
+
 **Key Design Principles:**
 
 | Principle | Rationale |

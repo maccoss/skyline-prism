@@ -749,6 +749,238 @@ def _add_fingerprints_to_parquet(parquet_path: Path, fingerprints: list[dict]) -
     logger.info(f"  Wrote fingerprints to {sidecar_path.name}")
 
 
+def _process_single_parquet(
+    input_path: Path,
+    output_path: Path,
+    sort_column: str,
+    replicate_col: str,
+    batch_name: str,
+    fingerprints: dict,
+    sort_buffer_mb: int = 4096,
+) -> tuple[Path, dict[str, set[str]], int]:
+    """Process a single parquet file efficiently with low memory usage.
+
+    For single parquet files, we use a streaming approach:
+    1. Check if the file is already sorted by sampling
+    2. If sorted, add columns row-by-row using PyArrow streaming
+    3. If not sorted, use DuckDB with conservative memory settings
+
+    This avoids loading the entire file into memory, which is critical for
+    large Skyline exports (50GB+ for proteomics datasets).
+
+    Args:
+        input_path: Path to input parquet file
+        output_path: Path for output parquet file
+        sort_column: Column to sort by
+        replicate_col: Name of replicate column in input
+        batch_name: Batch name to add
+        fingerprints: Source fingerprints for metadata
+        sort_buffer_mb: Memory limit for DuckDB if sorting needed
+
+    Returns:
+        Tuple of (output_path, dict of batch_name -> sample_names, total_row_count)
+
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"  Processing single parquet file: {input_path.name}")
+
+    # Check if file is already sorted by sampling first and last rows
+    pf = pq.ParquetFile(input_path)
+
+    # Sample first and last batches to check sort order
+    first_batch = pf.read_row_group(0, columns=[sort_column])
+    last_batch = pf.read_row_group(pf.metadata.num_row_groups - 1, columns=[sort_column])
+
+    first_values = first_batch[sort_column].to_pylist()
+    last_values = last_batch[sort_column].to_pylist()
+
+    # Check if sorted: first batch should be <= last batch's first value
+    is_sorted = (
+        first_values == sorted(first_values)
+        and last_values == sorted(last_values)
+        and (not first_values or not last_values or first_values[-1] <= last_values[0])
+    )
+
+    if is_sorted:
+        logger.info("  File appears to be pre-sorted - using streaming copy")
+        # Use PyArrow streaming to add columns without loading entire file
+        return _stream_parquet_with_columns(
+            input_path, output_path, replicate_col, batch_name, fingerprints
+        )
+    else:
+        logger.info("  File needs sorting - using DuckDB with memory-efficient settings")
+        # Use DuckDB with conservative memory for sorting
+        return _sort_parquet_low_memory(
+            input_path,
+            output_path,
+            sort_column,
+            replicate_col,
+            batch_name,
+            fingerprints,
+            sort_buffer_mb,
+        )
+
+
+def _stream_parquet_with_columns(
+    input_path: Path,
+    output_path: Path,
+    replicate_col: str,
+    batch_name: str,
+    fingerprints: dict,
+) -> tuple[Path, dict[str, set[str]], int]:
+    """Stream parquet file and add batch/source columns without loading into memory.
+
+    Uses PyArrow's record batch iterator for memory-efficient processing.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    pf = pq.ParquetFile(input_path)
+    total_rows = pf.metadata.num_rows
+
+    # Collect unique samples while streaming
+    unique_samples: set[str] = set()
+
+    # Create writer with extended schema
+    original_schema = pf.schema_arrow
+    new_fields = [
+        pa.field("Batch", pa.string()),
+        pa.field("Source Document", pa.string()),
+        pa.field("Sample ID", pa.string()),
+    ]
+    new_schema = pa.schema(list(original_schema) + new_fields)
+
+    # Add fingerprint metadata
+    existing_metadata = original_schema.metadata or {}
+    new_metadata = {
+        **existing_metadata,
+        b"source_fingerprints": json.dumps(fingerprints).encode(),
+    }
+    new_schema = new_schema.with_metadata(new_metadata)
+
+    stem_name = input_path.stem
+    batch_rows_processed = 0
+
+    with pq.ParquetWriter(output_path, new_schema, compression="zstd") as writer:
+        for batch in pf.iter_batches(batch_size=100_000):
+            # Get replicate values for this batch
+            replicate_array = batch.column(replicate_col)
+
+            # Collect unique samples
+            for val in replicate_array.to_pylist():
+                if val:
+                    unique_samples.add(str(val))
+
+            # Create new columns
+            batch_col = pa.array([batch_name] * len(batch), type=pa.string())
+            source_col = pa.array([stem_name] * len(batch), type=pa.string())
+
+            # Create Sample ID: replicate__@__batch
+            sample_ids = [
+                f"{rep}__@__{batch_name}" if rep else f"__@__{batch_name}"
+                for rep in replicate_array.to_pylist()
+            ]
+            sample_id_col = pa.array(sample_ids, type=pa.string())
+
+            # Append columns to batch
+            new_batch = pa.RecordBatch.from_arrays(
+                list(batch.columns) + [batch_col, source_col, sample_id_col],
+                schema=new_schema,
+            )
+            writer.write_batch(new_batch)
+
+            batch_rows_processed += len(batch)
+            if batch_rows_processed % 10_000_000 == 0:
+                pct = 100 * batch_rows_processed / total_rows
+                logger.info(f"    Processed {batch_rows_processed:,} rows ({pct:.1f}%)")
+
+    logger.info(f"  Streaming complete: {total_rows:,} rows, {len(unique_samples)} samples")
+
+    return output_path, {batch_name: unique_samples}, total_rows
+
+
+def _sort_parquet_low_memory(
+    input_path: Path,
+    output_path: Path,
+    sort_column: str,
+    replicate_col: str,
+    batch_name: str,
+    fingerprints: dict,
+    sort_buffer_mb: int,
+) -> tuple[Path, dict[str, set[str]], int]:
+    """Sort parquet file using DuckDB with memory-efficient settings.
+
+    Uses external sorting (disk spilling) to handle files larger than RAM.
+    """
+    import duckdb
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    # Use more conservative memory limit for large single files
+    # DuckDB will spill to disk when this is exceeded
+    effective_memory = min(sort_buffer_mb, 4096)  # Cap at 4GB for single file
+
+    temp_dir = output_path.parent / ".duckdb_temp"
+    temp_dir.mkdir(exist_ok=True)
+
+    conn = duckdb.connect()
+    conn.execute(f"SET memory_limit='{effective_memory}MB'")
+    conn.execute(f"SET temp_directory='{temp_dir}'")
+    conn.execute("SET enable_progress_bar=true")
+    # Enable external sorting for large datasets
+    conn.execute("SET preserve_insertion_order=false")
+
+    logger.info(f"  Memory limit: {effective_memory}MB, temp dir: {temp_dir}")
+
+    batch_escaped = batch_name.replace("'", "''")
+    stem_escaped = input_path.stem.replace("'", "''")
+    path_str = str(input_path).replace("'", "''")
+
+    # Sort and add columns
+    conn.execute(f"""
+        COPY (
+            SELECT *,
+                   '{batch_escaped}' AS "Batch",
+                   '{stem_escaped}' AS "Source Document",
+                   "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+            FROM read_parquet('{path_str}')
+            ORDER BY "{sort_column}"
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+    """)
+
+    # Get row count and samples
+    result = conn.execute(f"""
+        SELECT COUNT(*) as total_rows
+        FROM read_parquet('{output_path}')
+    """).fetchone()
+    total_rows = result[0] if result else 0
+
+    samples_result = conn.execute(f"""
+        SELECT DISTINCT "{replicate_col}"
+        FROM read_parquet('{output_path}')
+    """).fetchall()
+    unique_samples = {str(row[0]) for row in samples_result if row[0]}
+
+    conn.close()
+
+    # Clean up temp directory
+    import shutil
+
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Write fingerprints to sidecar JSON file (not embedded - avoids reading entire file)
+    _add_fingerprints_to_parquet(output_path, fingerprints)
+
+    logger.info(f"  Sorting complete: {total_rows:,} rows, {len(unique_samples)} samples")
+
+    return output_path, {batch_name: unique_samples}, total_rows
+
+
 def merge_and_sort_streaming(
     report_paths: list[Path],
     output_path: Path,
@@ -757,17 +989,23 @@ def merge_and_sort_streaming(
     sort_buffer_mb: int = 8192,
     compute_fingerprint_md5: bool = False,
 ) -> tuple[Path, dict[str, set[str]], int]:
-    """Merge multiple CSVs and sort in one DuckDB operation.
+    """Merge multiple Skyline reports (CSV or parquet) and sort in one DuckDB operation.
 
     This is more efficient than merge_skyline_reports_streaming + separate sort
     because it avoids writing an unsorted intermediate file. DuckDB reads all
-    CSVs, adds batch columns, sorts, and writes the final parquet in one pass.
+    files, adds batch columns, sorts, and writes the final parquet in one pass.
+
+    Supports:
+    - CSV/TSV files (.csv, .tsv, .txt)
+    - Parquet files (.parquet) - direct from Skyline or other sources
+    - Mixed inputs (CSV + parquet)
+    - Single parquet file - efficiently adds batch column and sorts if needed
 
     Performance improvement: Eliminates one full read + write of the dataset
     (~2x faster than separate merge + sort for large files).
 
     Args:
-        report_paths: List of paths to Skyline CSV reports
+        report_paths: List of paths to Skyline reports (CSV/TSV/parquet)
         output_path: Path for output Parquet file (will be sorted)
         sort_column: Column to sort by (auto-detected if None, looks for peptide column)
         batch_names: Optional list of batch names (one per report)
@@ -798,23 +1036,33 @@ def merge_and_sort_streaming(
         f"Merging and sorting {len(report_paths)} reports ({total_size_gb:.1f} GB total)..."
     )
 
-    # Auto-detect peptide column from first CSV if sort_column not specified
+    # Auto-detect peptide column from first file if sort_column not specified
     # Skyline exports can have different column names for the peptide column
-    if sort_column is None:
-        # Read first few lines of first CSV to detect column name
-        first_csv = Path(report_paths[0])
-        suffix = first_csv.suffix.lower()
-        delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
+    first_file = Path(report_paths[0])
+    suffix = first_file.suffix.lower()
 
-        with open(first_csv) as f:
+    if suffix == ".parquet":
+        # Read parquet column names
+        pf = pq.ParquetFile(first_file)
+        header = pf.schema.names
+    else:
+        # Read CSV/TSV header
+        delimiter = "\t" if suffix in [".tsv", ".txt"] else ","
+        with open(first_file) as f:
             header = f.readline().strip().split(delimiter)
 
+    if sort_column is None:
         # Look for peptide column - order matters (prefer modified sequence)
+        # Support both space-separated (CSV) and underscore (parquet) formats
         peptide_column_names = [
             "Peptide Modified Sequence",
+            "Peptide_Modified_Sequence",
             "Peptide Modified Sequence Unimod Ids",
+            "Peptide_Modified_Sequence_Unimod_Ids",
             "Modified Sequence",
+            "Modified_Sequence",
             "Peptide Sequence",
+            "Peptide_Sequence",
             "Peptide",
         ]
         sort_column = None
@@ -831,31 +1079,93 @@ def merge_and_sort_streaming(
             )
         logger.info(f"  Auto-detected sort column: {sort_column}")
 
+    # Detect replicate column name
+    replicate_col = None
+    for col_name in ["Replicate Name", "Replicate_Name", "ReplicateName"]:
+        if col_name in header:
+            replicate_col = col_name
+            break
+    
+    if replicate_col is None:
+        raise ValueError(
+            f"Could not find replicate column in {first_file.name}. "
+            f"Looked for: Replicate Name, Replicate_Name, ReplicateName"
+        )
+
+    # =========================================================================
+    # Optimization: Single parquet file can be processed more efficiently
+    # =========================================================================
+    if len(report_paths) == 1 and suffix == ".parquet":
+        return _process_single_parquet(
+            report_paths[0],
+            output_path,
+            sort_column,
+            replicate_col,
+            batch_names[0],
+            fingerprints,
+            sort_buffer_mb,
+        )
+
+
     # Build UNION ALL query with batch columns added per file
-    # DuckDB will read all CSVs, add the columns, union, sort, and write in one pass
+    # DuckDB will read all files (CSV or parquet), add the columns, union, sort, and write in one pass
     union_parts = []
-    for csv_path, batch_name in zip(report_paths, batch_names):
-        csv_path = Path(csv_path)
+    for file_path, batch_name in zip(report_paths, batch_names):
+        file_path = Path(file_path)
         # Escape single quotes in batch name and path
         batch_escaped = batch_name.replace("'", "''")
-        stem_escaped = csv_path.stem.replace("'", "''")
-        path_str = str(csv_path).replace("'", "''")
+        stem_escaped = file_path.stem.replace("'", "''")
+        path_str = str(file_path).replace("'", "''")
 
-        # Detect delimiter from file extension
-        suffix = csv_path.suffix.lower()
+        # Detect file type from extension
+        suffix = file_path.suffix.lower()
+        is_parquet = suffix == ".parquet"
         delimiter = "\\t" if suffix in [".tsv", ".txt"] else ","
 
-        union_parts.append(f"""
-            SELECT *,
-                   '{batch_escaped}' AS "Batch",
-                   '{stem_escaped}' AS "Source Document",
-                   "Replicate Name" || '__@__' || '{batch_escaped}' AS "Sample ID"
-            FROM read_csv('{path_str}',
-                          header=true,
-                          delim='{delimiter}',
-                          ignore_errors=true,
-                          all_varchar=false)
-        """)
+        # Detect replicate column name (spaces vs underscores)
+        # Skyline CSV uses "Replicate Name", parquet uses "Replicate_Name"
+        if is_parquet:
+            pf = pq.ParquetFile(file_path)
+            header = pf.schema.names
+        else:
+            with open(file_path) as f:
+                header_line = f.readline().strip()
+                header = header_line.split("\\t" if suffix in [".tsv", ".txt"] else ",")
+
+        replicate_col = None
+        for col_name in ["Replicate Name", "Replicate_Name", "ReplicateName"]:
+            if col_name in header:
+                replicate_col = col_name
+                break
+        
+        if replicate_col is None:
+            raise ValueError(
+                f"Could not find replicate column in {file_path.name}. "
+                f"Looked for: Replicate Name, Replicate_Name, ReplicateName"
+            )
+
+        if is_parquet:
+            # Read parquet file directly
+            union_parts.append(f"""
+                SELECT *,
+                       '{batch_escaped}' AS "Batch",
+                       '{stem_escaped}' AS "Source Document",
+                       "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+                FROM read_parquet('{path_str}')
+            """)
+        else:
+            # Read CSV/TSV file
+            union_parts.append(f"""
+                SELECT *,
+                       '{batch_escaped}' AS "Batch",
+                       '{stem_escaped}' AS "Source Document",
+                       "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+                FROM read_csv('{path_str}',
+                              header=true,
+                              delim='{delimiter}',
+                              ignore_errors=true,
+                              all_varchar=false)
+            """)
 
     union_query = " UNION ALL ".join(union_parts)
 
@@ -879,10 +1189,28 @@ def merge_and_sort_streaming(
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
     """)
 
+    # Detect replicate column name in output (may be "Replicate Name" or "Replicate_Name")
+    output_cols = conn.execute(f"""
+        DESCRIBE SELECT * FROM read_parquet('{output_path}') LIMIT 0
+    """).fetchall()
+    output_col_names = [row[0] for row in output_cols]
+    
+    replicate_col_out = None
+    for col_name in ["Replicate Name", "Replicate_Name", "ReplicateName"]:
+        if col_name in output_col_names:
+            replicate_col_out = col_name
+            break
+    
+    if replicate_col_out is None:
+        raise ValueError(
+            f"Could not find replicate column in merged output. "
+            f"Available columns: {output_col_names[:10]}..."
+        )
+
     # Get row count and sample info
     result = conn.execute(f"""
         SELECT COUNT(*) as total_rows,
-               COUNT(DISTINCT "Replicate Name") as n_samples
+               COUNT(DISTINCT "{replicate_col_out}") as n_samples
         FROM read_parquet('{output_path}')
     """).fetchone()
     total_rows = result[0] if result else 0
@@ -890,10 +1218,11 @@ def merge_and_sort_streaming(
     # Get samples per batch
     all_samples: dict[str, set[str]] = {}
     samples_result = conn.execute(f"""
-        SELECT "Batch", "Replicate Name"
+        SELECT "Batch", "{replicate_col_out}"
         FROM read_parquet('{output_path}')
-        GROUP BY "Batch", "Replicate Name"
+        GROUP BY "Batch", "{replicate_col_out}"
     """).fetchall()
+
 
     for batch, sample in samples_result:
         if batch not in all_samples:
@@ -978,13 +1307,66 @@ def validate_skyline_report(filepath: Path) -> ValidationResult:
     return result
 
 
+def _check_not_prism_output(filepath: Path) -> None:
+    """Check if parquet file is a PRISM output file, not a Skyline report.
+
+    PRISM output files have distinct patterns that distinguish them from Skyline reports:
+    - Contain parquet metadata with 'source_fingerprints' (indicates merged_data.parquet)
+    - Have PRISM-specific columns like 'median_polish_residuals'
+    - Have batch-partitioned directory structure
+
+    Raises:
+        ValueError: If the file appears to be a PRISM output file
+
+    """
+    try:
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(filepath)
+
+        # Check for PRISM fingerprint metadata
+        if pf.metadata and pf.metadata.metadata:
+            metadata = pf.metadata.metadata
+            if b"source_fingerprints" in metadata or b"fingerprints" in metadata:
+                raise ValueError(
+                    f"Error: '{filepath.name}' appears to be a PRISM output file "
+                    f"(merged_data.parquet), not a Skyline report. "
+                    f"Please provide the original Skyline parquet report instead. "
+                    f"PRISM output files are generated in the output directory."
+                )
+
+        # Check for PRISM-specific columns
+        schema_names = [name.lower() for name in pf.schema.names]
+        prism_output_markers = [
+            "median_polish_residuals",
+            "log2_abundance",
+            "scaled_abundance",
+            "corrected_abundance",
+        ]
+        for marker in prism_output_markers:
+            if marker in schema_names:
+                raise ValueError(
+                    f"Error: '{filepath.name}' appears to be a PRISM output file, "
+                    f"not a Skyline report (contains column: {marker}). "
+                    f"Please provide the original Skyline parquet export instead."
+                )
+
+    except ValueError:
+        # Re-raise our custom error messages
+        raise
+    except Exception as e:
+        # If we can't read the metadata, let validation proceed
+        # (will fail later if it's not a valid Skyline report)
+        logger.debug(f"Could not check parquet metadata: {e}")
+
+
 def load_skyline_report(
     filepath: Path, source_name: str | None = None, validate: bool = True
 ) -> pd.DataFrame:
     """Load a single Skyline report with standardized column names.
 
     Args:
-        filepath: Path to CSV/TSV report
+        filepath: Path to CSV/TSV/parquet report
         source_name: Identifier for this document (defaults to filename stem)
         validate: Whether to validate before loading
 
@@ -1001,13 +1383,20 @@ def load_skyline_report(
         validation = validate_skyline_report(filepath)
         if not validation.is_valid:
             raise ValueError(f"Invalid Skyline report: {validation}")
+        
+        # For parquet files, do additional check to ensure it's not a PRISM output
+        if filepath.suffix.lower() == ".parquet":
+            _check_not_prism_output(filepath)
 
-    # Detect delimiter
+
+    # Load data based on file type
     suffix = filepath.suffix.lower()
-    sep = "\t" if suffix in [".tsv", ".txt"] else ","
-
-    # Load data
-    df = pd.read_csv(filepath, sep=sep)
+    if suffix == ".parquet":
+        df = pd.read_parquet(filepath)
+    else:
+        # CSV/TSV - detect delimiter
+        sep = "\t" if suffix in [".tsv", ".txt"] else ","
+        df = pd.read_csv(filepath, sep=sep)
     df = _standardize_columns(df)
 
     # Add source tracking
@@ -1045,7 +1434,7 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     - Batch: accepts 'Batch Name'
 
     Args:
-        filepath: Path to metadata TSV/CSV
+        filepath: Path to metadata TSV/CSV/parquet
 
     Returns:
         Validated metadata DataFrame with standardized column names
@@ -1056,11 +1445,14 @@ def load_sample_metadata(filepath: Path) -> pd.DataFrame:
     """
     filepath = Path(filepath)
 
-    # Detect delimiter
+    # Load based on file type
     suffix = filepath.suffix.lower()
-    sep = "\t" if suffix in [".tsv", ".txt"] else ","
-
-    meta = pd.read_csv(filepath, sep=sep)
+    if suffix == ".parquet":
+        meta = pd.read_parquet(filepath)
+    else:
+        # CSV/TSV - detect delimiter
+        sep = "\t" if suffix in [".tsv", ".txt"] else ","
+        meta = pd.read_csv(filepath, sep=sep)
 
     # Normalize sample name column to 'sample'
     replicate_col = None
@@ -1149,8 +1541,11 @@ def load_sample_metadata_files(filepaths: list[Path]) -> pd.DataFrame:
     Loads each metadata file individually, validates them, and concatenates
     them into a single DataFrame. All files must have compatible columns.
 
+    Supports CSV, TSV, and parquet format metadata files, and can mix formats
+    (e.g., metadata1.csv and metadata2.parquet in the same run).
+
     Args:
-        filepaths: List of paths to metadata files (CSV or TSV)
+        filepaths: List of paths to metadata files (CSV, TSV, or parquet)
 
     Returns:
         Merged DataFrame with all samples from all files

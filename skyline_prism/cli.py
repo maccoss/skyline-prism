@@ -89,6 +89,43 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
 SAMPLE_ID_SEPARATOR = "__@__"
 
 
+def find_column(available_columns: set[str], *candidates: str) -> str | None:
+    """Find a column by trying multiple name variants.
+
+    Parquet files may have column names with spaces or underscores depending on
+    how they were created. This function tries each candidate name as-is,
+    then with spaces replaced by underscores, then with underscores replaced
+    by spaces.
+
+    Args:
+        available_columns: Set of column names present in the data
+        *candidates: Column names to try, in order of preference
+
+    Returns:
+        The first matching column name found, or None if no match
+
+    Examples:
+        >>> find_column({"Fragment_Ion", "Area"}, "Fragment Ion")
+        'Fragment_Ion'
+        >>> find_column({"Fragment Ion", "Area"}, "Fragment_Ion")
+        'Fragment Ion'
+
+    """
+    for name in candidates:
+        # Try exact match first
+        if name in available_columns:
+            return name
+        # Try with spaces replaced by underscores
+        underscore_variant = name.replace(" ", "_")
+        if underscore_variant in available_columns:
+            return underscore_variant
+        # Try with underscores replaced by spaces
+        space_variant = name.replace("_", " ")
+        if space_variant in available_columns:
+            return space_variant
+    return None
+
+
 def sample_id_to_replicate_name(sample_id: str) -> str:
     """Extract Replicate Name from Sample ID.
 
@@ -989,6 +1026,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             qc_patterns = [qc_pattern] if isinstance(qc_pattern, str) else qc_pattern
 
     # Categorize input files
+    # Skyline can now export directly to parquet format
     csv_inputs = [p for p in input_paths if p.suffix.lower() in [".csv", ".tsv", ".txt"]]
     parquet_inputs = [p for p in input_paths if p.suffix.lower() == ".parquet"]
 
@@ -1005,75 +1043,86 @@ def cmd_run(args: argparse.Namespace) -> int:
     metadata_df = None
     n_transitions = 0  # Track total transition rows for metadata
     is_pre_sorted = False  # Track if merge+sort was done (skip sorting in rollup)
+    # Will be set in merge stage - initialize to satisfy type checker
+    transition_parquet = output_dir / "merged_data.parquet"
 
-    if len(csv_inputs) >= 1:
-        batch_names = [p.stem for p in csv_inputs]
-        merged_parquet_path = output_dir / "merged_data.parquet"
+    # Combine CSV and parquet inputs (both supported now)
+    all_report_files = csv_inputs + parquet_inputs
 
-        # Check if we can reuse an existing merged parquet
-        use_cached = False
-        if not force_reprocess and merged_parquet_path.exists():
-            logger.info(f"Found existing merged parquet: {merged_parquet_path}")
-            stored_fingerprints = get_parquet_source_fingerprints(merged_parquet_path)
-
-            if stored_fingerprints:
-                is_valid, mismatch_reasons = verify_source_fingerprints(
-                    csv_inputs, stored_fingerprints
-                )
-                if is_valid:
-                    logger.info("  Source files match - using cached parquet")
-                    use_cached = True
-                    transition_parquet = merged_parquet_path
-                    n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
-                    method_log.append("Reused cached merged parquet (source files unchanged)")
-                    # Try to load existing metadata if available
-                    existing_metadata = output_dir / "sample_metadata.tsv"
-                    if existing_metadata.exists() and not args.metadata:
-                        metadata_df = load_sample_metadata(existing_metadata)
-                        logger.info(f"  Loaded existing metadata: {existing_metadata}")
-                else:
-                    logger.info("  Source files changed - reprocessing required:")
-                    for reason in mismatch_reasons:
-                        logger.info(f"    - {reason}")
-            else:
-                logger.info("  No fingerprints in parquet metadata - reprocessing required")
-
-        if not use_cached:
-            logger.info(f"Merging and sorting {len(csv_inputs)} Skyline reports (streaming)...")
-            merged_path, samples_by_batch, total_rows = merge_and_sort_streaming(
-                csv_inputs,
-                merged_parquet_path,
-                sort_column=None,  # Auto-detect peptide column from CSV
-                batch_names=batch_names,
-            )
-            n_transitions = total_rows
-            is_pre_sorted = True  # Flag for rollup to skip sorting
-            method_log.append(f"Merged and sorted {len(csv_inputs)} reports ({total_rows:,} rows)")
-            transition_parquet = merged_path
-
-            # Generate metadata if not provided
-            if not args.metadata:
-                logger.info("Generating sample metadata from sample names...")
-                metadata_df = generate_sample_metadata(
-                    samples_by_batch,
-                    reference_patterns=reference_patterns,
-                    qc_patterns=qc_patterns,
-                )
-                metadata_path = output_dir / "sample_metadata.tsv"
-                metadata_df.to_csv(metadata_path, sep="\t", index=False)
-                method_log.append(f"Generated sample metadata: {metadata_path}")
-
-    elif len(parquet_inputs) >= 1:
-        merged_parquet_path = parquet_inputs[0]  # treat input as "merged"
-        transition_parquet = parquet_inputs[0]
-        n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
-        logger.info(f"Using existing parquet: {transition_parquet}")
-        method_log.append(f"Input parquet: {transition_parquet}")
-
-    else:
-        logger.error("No input files provided")
+    if len(all_report_files) < 1:
+        logger.error("No input files provided (CSV, TSV, or parquet)")
         return 1
 
+    # Now we know we have files - proceed with merge
+    batch_names = [p.stem for p in all_report_files]
+    merged_parquet_path = output_dir / "merged_data.parquet"
+
+    # Special case: single parquet file can be used directly if it's already sorted
+    # and contains batch columns - but for now, always merge to ensure consistent
+    # batch column format. Future optimization: detect and reuse single parquet.
+
+    # Check if we can reuse an existing merged parquet
+    use_cached = False
+    if not force_reprocess and merged_parquet_path.exists():
+        logger.info(f"Found existing merged parquet: {merged_parquet_path}")
+        stored_fingerprints = get_parquet_source_fingerprints(merged_parquet_path)
+
+        if stored_fingerprints:
+            is_valid, mismatch_reasons = verify_source_fingerprints(
+                all_report_files, stored_fingerprints
+            )
+            if is_valid:
+                logger.info("  Source files match - using cached parquet")
+                use_cached = True
+                transition_parquet = merged_parquet_path
+                n_transitions = pq.ParquetFile(transition_parquet).metadata.num_rows
+                method_log.append("Reused cached merged parquet (source files unchanged)")
+                # Try to load existing metadata if available
+                existing_metadata = output_dir / "sample_metadata.tsv"
+                if existing_metadata.exists() and not args.metadata:
+                    metadata_df = load_sample_metadata(existing_metadata)
+                    logger.info(f"  Loaded existing metadata: {existing_metadata}")
+            else:
+                logger.info("  Source files changed - reprocessing required:")
+                for reason in mismatch_reasons:
+                    logger.info(f"    - {reason}")
+        else:
+            logger.info("  No fingerprints in parquet metadata - reprocessing required")
+
+    if not use_cached:
+        file_types = [
+            "parquet" if p.suffix.lower() == ".parquet" else "CSV"
+            for p in all_report_files
+        ]
+        file_type_summary = ", ".join(sorted(set(file_types)))
+        logger.info(
+            f"Merging and sorting {len(all_report_files)} Skyline reports "
+            f"({file_type_summary}) (streaming)..."
+        )
+        merged_path, samples_by_batch, total_rows = merge_and_sort_streaming(
+            all_report_files,
+            merged_parquet_path,
+            sort_column=None,  # Auto-detect peptide column
+            batch_names=batch_names,
+        )
+        n_transitions = total_rows
+        is_pre_sorted = True  # Flag for rollup to skip sorting
+        method_log.append(
+            f"Merged and sorted {len(all_report_files)} reports ({total_rows:,} rows)"
+        )
+        transition_parquet = merged_path
+
+        # Generate metadata if not provided
+        if not args.metadata:
+            logger.info("Generating sample metadata from sample names...")
+            metadata_df = generate_sample_metadata(
+                samples_by_batch,
+                reference_patterns=reference_patterns,
+                qc_patterns=qc_patterns,
+            )
+            metadata_path = output_dir / "sample_metadata.tsv"
+            metadata_df.to_csv(metadata_path, sep="\t", index=False)
+            method_log.append(f"Generated sample metadata: {metadata_path}")
     # Load explicit metadata if provided
     # Track metadata source and files for provenance
     metadata_source = "auto_generated"
@@ -1104,65 +1153,107 @@ def cmd_run(args: argparse.Namespace) -> int:
     available_columns = set(pf.schema_arrow.names)
     logger.info(f"  Available columns: {sorted(available_columns)}")
 
-    # Auto-detect peptide column
-    peptide_col = config["data"]["peptide_column"]
-    peptide_col_alternatives = [
+    # Auto-detect peptide column - try config value first, then alternatives
+    # Use find_column to handle both space and underscore variants
+    peptide_col_candidates = [
+        config["data"]["peptide_column"],
         "Peptide Modified Sequence Unimod Ids",
         "Peptide Modified Sequence",
         "Peptide",
     ]
-    if peptide_col not in available_columns:
-        for alt in peptide_col_alternatives:
-            if alt in available_columns:
-                logger.info(f"  Peptide column '{peptide_col}' not found, using '{alt}'")
-                peptide_col = alt
-                break
-        else:
-            logger.error(f"No peptide column found. Available: {sorted(available_columns)}")
-            return 1
+    peptide_col = find_column(available_columns, *peptide_col_candidates)
+    if peptide_col is None:
+        logger.error(f"No peptide column found. Available: {sorted(available_columns)}")
+        return 1
+    if peptide_col != config["data"]["peptide_column"]:
+        config_pep_col = config['data']['peptide_column']
+        logger.info(f"  Peptide column '{config_pep_col}' not found, using '{peptide_col}'")
 
     # Get other column names (use config or auto-detect)
     # ALWAYS prefer 'Sample ID' (unique across batches) over 'Replicate Name'
     # This ensures duplicate sample names in different batches are kept separate
-    if "Sample ID" in available_columns:
-        sample_col = "Sample ID"
+    sample_col = find_column(available_columns, "Sample ID")
+    if sample_col:
         logger.info("  Using 'Sample ID' for unique sample identification across batches")
-    elif config["data"]["sample_column"] in available_columns:
-        sample_col = config["data"]["sample_column"]
-    elif "Replicate Name" in available_columns:
-        sample_col = "Replicate Name"
     else:
-        sample_col = config["data"]["sample_column"]
+        sample_col = find_column(
+            available_columns,
+            config["data"]["sample_column"],
+            "Replicate Name",
+            "Replicate_Name",
+        )
+        if sample_col is None:
+            sample_col = config["data"]["sample_column"]
 
-    abundance_col = config["data"]["abundance_column"]
-    if abundance_col not in available_columns and "Area" in available_columns:
-        abundance_col = "Area"
+    abundance_col = find_column(available_columns, config["data"]["abundance_column"], "Area")
+    if abundance_col is None:
+        abundance_col = config["data"]["abundance_column"]
 
-    transition_col = config["data"].get("transition_column", "Fragment Ion")
-    if transition_col not in available_columns and "Fragment Ion" in available_columns:
-        transition_col = "Fragment Ion"
+    transition_col = find_column(
+        available_columns,
+        config["data"].get("transition_column", "Fragment Ion"),
+        "Fragment Ion",
+    )
+    if transition_col is None:
+        transition_col = config["data"].get("transition_column", "Fragment Ion")
+        logger.warning(f"  Transition column not found, defaulting to '{transition_col}'")
 
-    protein_col = config["data"]["protein_column"]
-    if protein_col not in available_columns and "Protein Accession" in available_columns:
-        protein_col = "Protein Accession"
+    protein_col = find_column(
+        available_columns,
+        config["data"]["protein_column"],
+        "Protein Accession",
+    )
+    if protein_col is None:
+        protein_col = config["data"]["protein_column"]
 
-    protein_name_col = config["data"].get("protein_name_column", "Protein")
-    if protein_name_col not in available_columns and "Protein" in available_columns:
-        protein_name_col = "Protein"
+    protein_name_col = find_column(
+        available_columns,
+        config["data"].get("protein_name_column", "Protein"),
+        "Protein",
+    )
+    if protein_name_col is None:
+        protein_name_col = config["data"].get("protein_name_column", "Protein")
 
     # Optional gene and description columns from Skyline CSV
-    protein_gene_col = config["data"].get("protein_gene_column", "Protein Gene")
-    if protein_gene_col not in available_columns and "Protein Gene" in available_columns:
-        protein_gene_col = "Protein Gene"
-    elif protein_gene_col not in available_columns:
-        protein_gene_col = None
+    protein_gene_col = find_column(
+        available_columns,
+        config["data"].get("protein_gene_column", "Protein Gene"),
+        "Protein Gene",
+    )
+    # protein_gene_col can be None if not found
 
-    protein_description_col = config["data"].get("protein_description_column", "Protein")
     # For description, we use the "Protein" column which contains the full protein name/description
-    if protein_description_col not in available_columns and "Protein" in available_columns:
-        protein_description_col = "Protein"
-    elif protein_description_col not in available_columns:
-        protein_description_col = None
+    protein_description_col = find_column(
+        available_columns,
+        config["data"].get("protein_description_column", "Protein"),
+        "Protein",
+    )
+    # protein_description_col can be None if not found
+
+    # Additional columns used by ChunkedRollupConfig (for transition rollup)
+    precursor_charge_col = find_column(available_columns, "Precursor Charge")
+    if precursor_charge_col is None:
+        precursor_charge_col = "Precursor Charge"  # Will fail if not found during processing
+
+    product_charge_col = find_column(available_columns, "Product Charge")
+    if product_charge_col is None:
+        product_charge_col = "Product Charge"
+
+    shape_corr_col = find_column(available_columns, "Shape Correlation")
+    if shape_corr_col is None:
+        shape_corr_col = "Shape Correlation"
+
+    rt_col = find_column(available_columns, "Retention Time")
+    if rt_col is None:
+        rt_col = "Retention Time"
+
+    mz_col = find_column(available_columns, "Product Mz")
+    if mz_col is None:
+        mz_col = "Product Mz"
+
+    batch_col = find_column(available_columns, "Batch")
+    if batch_col is None:
+        batch_col = "Batch"
 
     logger.info(
         f"Using columns: peptide={peptide_col}, sample={sample_col}, abundance={abundance_col}"
@@ -1460,8 +1551,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     transition_config = ChunkedRollupConfig(
         peptide_col=peptide_col,
         transition_col=transition_col,
+        precursor_charge_col=precursor_charge_col,
+        product_charge_col=product_charge_col,
         sample_col=sample_col,
         abundance_col=abundance_col,
+        shape_corr_col=shape_corr_col,
+        rt_col=rt_col,
+        batch_col=batch_col,
+        mz_col=mz_col,
         method=rollup_method,
         min_transitions=min_transitions,
         log_transform=True,
