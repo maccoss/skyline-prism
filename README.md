@@ -121,6 +121,72 @@ prism config-template --minimal -o config.yaml
 prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.csv
 ```
 
+### Compare rollup methods
+
+Compare peptide CVs between two PRISM runs using different rollup methods. This is useful for evaluating whether library-assisted rollup is helping to reduce interference for specific peptides.
+
+**Workflow:**
+
+1. Run PRISM twice with different rollup methods:
+
+```bash
+# Run 1: Sum method (baseline)
+prism run -i data.parquet -o output_sum/ -c config_sum.yaml
+
+# Run 2: Library-assist method
+prism run -i data.parquet -o output_lib/ -c config_lib.yaml
+```
+
+1. Compare the results:
+
+```bash
+prism compare -1 output_sum/ -2 output_lib/ -o comparison_report.html
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-1, --run1` | First output directory (baseline, e.g., sum method) | Required |
+| `-2, --run2` | Second output directory (comparison, e.g., library_assist) | Required |
+| `-o, --output` | Output HTML report path | `comparison_report.html` |
+| `-s, --sample-type` | Sample type to analyze (`reference`, `qc`, or `all`) | `reference` |
+| `-n, --top-n` | Number of top peptides to show in detail | `100` |
+| `-r, --ranking` | How to rank peptides: `most_improved`, `most_worsened`, `highest_cv`, `largest_difference` | `most_improved` |
+| `--save-plots` | Save individual PNG plot files | False |
+
+**Example with all options:**
+
+```bash
+prism compare \
+    -1 output_sum/ \
+    -2 output_lib/ \
+    -o comparison.html \
+    --sample-type reference \
+    --top-n 50 \
+    --ranking most_improved \
+    --save-plots
+```
+
+**Required files in each output directory:**
+
+- `corrected_peptides.parquet` - Used for CV calculations
+- `merged_data.parquet` - Required in run2 for library fitting visualization
+- `metadata.json` - Method names and sample metadata
+
+**Comparison report contents:**
+
+- Summary statistics comparing CV distributions between methods
+- Top N peptides ranked by CV improvement
+- For each peptide: detailed library fitting visualization showing:
+  - Raw transition intensities
+  - Library-scaled predictions
+  - Outlier detection and removal steps
+  - R² values for each sample
+  - Final abundance comparison
+
+This helps identify peptides where library-assisted rollup successfully removes interfered transitions and improves quantification precision.
+
 ### QC report contents
 
 The QC report includes:

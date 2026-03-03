@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(python3:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(ls:*)",
+      "Bash(source:*)",
+      "Bash(prism run:*)",
+      "Bash(git checkout:*)",
+      "Bash(python -c:*)",
+      "Bash(prism compare --help:*)",
+      "Bash(pytest:*)"
+    ]
+  }
+}

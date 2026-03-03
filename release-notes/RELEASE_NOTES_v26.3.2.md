@@ -51,6 +51,7 @@ Changed the two TSV output files to CSV format for better compatibility with Exc
 - `sample_metadata.tsv` -> `sample_metadata.csv`
 
 **Rationale:**
+
 - Excel auto-opens CSV files correctly with double-click
 - TSV files often require manual import steps in Excel
 - All PRISM input files are already CSV, so this provides consistency
@@ -128,6 +129,42 @@ Fixed a crash when processing peptides with missing Fragment Ion values:
 - **Problem**: When `Fragment Ion` column contained NaN values, the precursor exclusion filter (`str.startswith("precursor")`) would return NaN, and inverting with `~` caused a `TypeError: bad operand type for unary ~: 'NoneType'`.
 - **Solution**: Added `.fillna(False)` to handle NaN values gracefully. Missing Fragment Ion values are now treated as non-precursor ions (kept in the data).
 
+### Fixed: Duplicate Column Creation When Re-processing Parquet Files
+
+Fixed a bug where re-running PRISM on already-merged parquet files would create duplicate columns:
+
+- **Problem**: When processing a parquet file that already contained `Batch`, `Source Document`, and `Sample ID` columns (from a previous PRISM run), the code would add these columns again, creating `Batch_1`, `Source Document_1`, `Sample ID_1` duplicates.
+- **Solution**: Check for existing columns before adding in three key functions:
+  - `_sort_parquet_low_memory()` - Uses DuckDB DESCRIBE query to check existing columns
+  - `_stream_parquet_with_columns()` - Checks PyArrow schema for existing columns
+  - `merge_and_sort_streaming()` - Checks CSV/parquet header for existing columns
+- **Files modified**: `skyline_prism/data_io.py`
+
+### Fixed: CV Calculation Scale Issue in Rollup Comparison Report
+
+Fixed incorrect CV values displayed in the rollup comparison report:
+
+- **Problem**: The rollup comparison report showed dramatically different CVs than the main QC report (e.g., 105.9% vs 34% for sum method). This occurred because `peptide_df` was in LOG2 scale, but `compute_cv_linear()` expected LINEAR scale data.
+- **Solution**: Read corrected peptides from `corrected_peptides.parquet` which is already in LINEAR scale, rather than using the internal `peptide_df` variable.
+- **Files modified**: `skyline_prism/cli.py`
+
+### Fixed: ZeroDivisionError on Empty Input Data
+
+Fixed a crash when input data contains no peptides:
+
+- **Problem**: Division by zero error when calculating average transitions per peptide (`n_transitions / n_peptides`) when `n_peptides = 0` due to empty or corrupted input files.
+- **Solution**: Added guard to only perform division when `n_peptides > 0`, and added early exit with helpful error message if no data is found.
+- **Files modified**: `skyline_prism/cli.py`
+
+### Improved: Rollup Comparison Summary Plot Formatting
+
+Improved the readability of summary plots in the rollup comparison report:
+
+- **X-axis labels**: Reduced font size from 6 to 4 to prevent crowding with many samples
+- **Stats box position**: Moved from upper-right to lower-right to avoid overlapping with bar charts
+- **R-squared label**: Changed from "R²" to "Mean R²" to clarify that it represents the average across samples
+- **Files modified**: `skyline_prism/rollup_comparison_report.py`
+
 **Why parquet format matters:**
 
 Skyline (version 24.1+) can now export reports directly to parquet format, which offers:
@@ -139,8 +176,10 @@ Skyline (version 24.1+) can now export reports directly to parquet format, which
 
 ## Testing
 
-- All existing tests passing (307 tests)
+- All existing tests passing (328 tests)
 - Added 6 new tests for `find_column()` function
+- Added tests for rollup comparison functionality
+- Added 3 new tests for duplicate column prevention when re-processing parquet files
 - Tested with real Skyline parquet exports (117M rows)
 - Verified handling of mixed metadata file formats
 

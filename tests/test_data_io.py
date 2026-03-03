@@ -7,6 +7,7 @@ import pytest
 from skyline_prism.data_io import (
     _standardize_columns,
     load_sample_metadata,
+    merge_and_sort_streaming,
     merge_skyline_reports_streaming,
     validate_skyline_report,
 )
@@ -747,3 +748,176 @@ class TestSampleIdHelpers:
         # Missing sample_type column
         metadata_df = pd.DataFrame({"sample": ["Sample_A1", "Sample_A2"]})
         assert build_sample_type_map(sample_cols, metadata_df) == {}
+
+
+class TestDuplicateColumnPrevention:
+    """Tests to verify that reprocessing parquet files doesn't create duplicate columns.
+
+    When a parquet file already contains metadata columns (Batch, Source Document,
+    Sample ID), running PRISM again should not create duplicate columns like
+    Batch_1, Source Document_1, Sample ID_1.
+    """
+
+    def test_merge_parquet_with_existing_metadata_columns(self, tmp_path):
+        """Test that merge doesn't duplicate existing metadata columns in parquet."""
+        # Create a parquet file that already has the metadata columns
+        # (simulating output from a previous PRISM run)
+        df_with_metadata = pd.DataFrame(
+            {
+                "Protein": ["P1", "P1", "P2", "P2"],
+                "Peptide Modified Sequence Unimod Ids": ["PEPTIDEK", "PEPTIDEK", "ANOTHERK", "ANOTHERK"],
+                "Precursor Charge": [2, 2, 2, 2],
+                "Fragment Ion": ["y5", "y6", "y5", "y6"],
+                "Product Charge": [1, 1, 1, 1],
+                "Product Mz": [500.0, 600.0, 500.0, 600.0],
+                "Area": [1000, 2000, 3000, 4000],
+                "Replicate Name": ["Sample1", "Sample1", "Sample2", "Sample2"],
+                # Metadata columns that already exist from previous run
+                "Batch": ["Plate1", "Plate1", "Plate1", "Plate1"],
+                "Source Document": ["original_file", "original_file", "original_file", "original_file"],
+                "Sample ID": ["Sample1__@__Plate1", "Sample1__@__Plate1", "Sample2__@__Plate1", "Sample2__@__Plate1"],
+            }
+        )
+
+        input_parquet = tmp_path / "already_processed.parquet"
+        df_with_metadata.to_parquet(input_parquet, index=False)
+
+        # Now run merge on this file (simulating re-running PRISM)
+        output_path = tmp_path / "output" / "merged.parquet"
+        output_path.parent.mkdir(exist_ok=True)
+
+        # Use merge_and_sort_streaming which handles parquet files properly
+        result_path, samples_by_batch, total_rows = merge_and_sort_streaming(
+            report_paths=[input_parquet],
+            output_path=output_path,
+            batch_names=["NewBatch"],
+        )
+
+        # Read the output and check for duplicate columns
+        result_df = pd.read_parquet(result_path)
+
+        # Should NOT have any _1 suffix columns
+        column_names = result_df.columns.tolist()
+        duplicate_cols = [c for c in column_names if c.endswith("_1")]
+        assert len(duplicate_cols) == 0, f"Found duplicate columns: {duplicate_cols}"
+
+        # Original columns should still exist exactly once
+        assert column_names.count("Batch") == 1
+        assert column_names.count("Source Document") == 1
+        assert column_names.count("Sample ID") == 1
+
+        # Data should be preserved
+        assert len(result_df) == 4
+
+    def test_merge_csv_then_reprocess_parquet(self, tmp_path):
+        """Test full round-trip: CSV -> parquet -> parquet doesn't create duplicates."""
+        # Step 1: Create original CSV without metadata columns
+        csv_file = tmp_path / "original.csv"
+        df = pd.DataFrame(
+            {
+                "Protein": ["P1", "P1"],
+                "Peptide Modified Sequence Unimod Ids": ["PEPTIDEK", "PEPTIDEK"],
+                "Precursor Charge": [2, 2],
+                "Fragment Ion": ["y5", "y6"],
+                "Product Charge": [1, 1],
+                "Product Mz": [500.0, 600.0],
+                "Area": [1000, 2000],
+                "Replicate Name": ["Sample1", "Sample1"],
+            }
+        )
+        df.to_csv(csv_file, index=False)
+
+        # Step 2: First merge (CSV -> parquet with metadata columns added)
+        first_output = tmp_path / "first_run" / "merged.parquet"
+        first_output.parent.mkdir(exist_ok=True)
+
+        # Use merge_and_sort_streaming which handles both CSV and parquet
+        result_path1, _, _ = merge_and_sort_streaming(
+            report_paths=[csv_file],
+            output_path=first_output,
+            batch_names=["Batch1"],
+        )
+
+        # Verify first merge added metadata columns
+        df1 = pd.read_parquet(result_path1)
+        assert "Batch" in df1.columns
+        assert "Source Document" in df1.columns
+        assert "Sample ID" in df1.columns
+
+        # Step 3: Second merge (parquet -> parquet, should not duplicate)
+        second_output = tmp_path / "second_run" / "merged.parquet"
+        second_output.parent.mkdir(exist_ok=True)
+
+        result_path2, _, _ = merge_and_sort_streaming(
+            report_paths=[result_path1],
+            output_path=second_output,
+            batch_names=["Batch2"],
+        )
+
+        # Verify second merge didn't create duplicate columns
+        df2 = pd.read_parquet(result_path2)
+        column_names = df2.columns.tolist()
+
+        duplicate_cols = [c for c in column_names if "_1" in c]
+        assert len(duplicate_cols) == 0, f"Found duplicate columns: {duplicate_cols}"
+
+        # Should have exactly one of each metadata column
+        assert column_names.count("Batch") == 1
+        assert column_names.count("Source Document") == 1
+        assert column_names.count("Sample ID") == 1
+
+    def test_merge_mixed_files_with_and_without_metadata(self, tmp_path):
+        """Test merging files where some have metadata columns and some don't."""
+        # File 1: parquet WITH existing metadata columns
+        df_with = pd.DataFrame(
+            {
+                "Protein": ["P1"],
+                "Peptide Modified Sequence Unimod Ids": ["PEPTIDEK"],
+                "Precursor Charge": [2],
+                "Fragment Ion": ["y5"],
+                "Product Charge": [1],
+                "Product Mz": [500.0],
+                "Area": [1000],
+                "Replicate Name": ["Sample1"],
+                "Batch": ["OldBatch"],
+                "Source Document": ["old_file"],
+                "Sample ID": ["Sample1__@__OldBatch"],
+            }
+        )
+        parquet_with = tmp_path / "with_metadata.parquet"
+        df_with.to_parquet(parquet_with, index=False)
+
+        # File 2: CSV WITHOUT metadata columns
+        df_without = pd.DataFrame(
+            {
+                "Protein": ["P2"],
+                "Peptide Modified Sequence Unimod Ids": ["ANOTHERK"],
+                "Precursor Charge": [2],
+                "Fragment Ion": ["y5"],
+                "Product Charge": [1],
+                "Product Mz": [500.0],
+                "Area": [2000],
+                "Replicate Name": ["Sample2"],
+            }
+        )
+        csv_without = tmp_path / "without_metadata.csv"
+        df_without.to_csv(csv_without, index=False)
+
+        # Merge both files using merge_and_sort_streaming
+        output_path = tmp_path / "merged.parquet"
+        result_path, _, _ = merge_and_sort_streaming(
+            report_paths=[parquet_with, csv_without],
+            output_path=output_path,
+            batch_names=["Batch1", "Batch2"],
+        )
+
+        result_df = pd.read_parquet(result_path)
+        column_names = result_df.columns.tolist()
+
+        # No duplicate columns
+        duplicate_cols = [c for c in column_names if "_1" in c]
+        assert len(duplicate_cols) == 0, f"Found duplicate columns: {duplicate_cols}"
+
+        # Both rows should be present
+        assert len(result_df) == 2
+        assert set(result_df["Protein"].unique()) == {"P1", "P2"}

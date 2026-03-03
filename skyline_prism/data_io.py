@@ -844,14 +844,28 @@ def _stream_parquet_with_columns(
     # Collect unique samples while streaming
     unique_samples: set[str] = set()
 
-    # Create writer with extended schema
+    # Check which columns already exist
     original_schema = pf.schema_arrow
-    new_fields = [
-        pa.field("Batch", pa.string()),
-        pa.field("Source Document", pa.string()),
-        pa.field("Sample ID", pa.string()),
-    ]
-    new_schema = pa.schema(list(original_schema) + new_fields)
+    existing_cols = set(original_schema.names)
+
+    # Only add columns that don't already exist
+    new_fields = []
+    add_batch = "Batch" not in existing_cols
+    add_source = "Source Document" not in existing_cols
+    add_sample_id = "Sample ID" not in existing_cols
+
+    if add_batch:
+        new_fields.append(pa.field("Batch", pa.string()))
+    if add_source:
+        new_fields.append(pa.field("Source Document", pa.string()))
+    if add_sample_id:
+        new_fields.append(pa.field("Sample ID", pa.string()))
+
+    # Create writer with extended schema (only if adding new fields)
+    if new_fields:
+        new_schema = pa.schema(list(original_schema) + new_fields)
+    else:
+        new_schema = original_schema
 
     # Add fingerprint metadata
     existing_metadata = original_schema.metadata or {}
@@ -874,22 +888,24 @@ def _stream_parquet_with_columns(
                 if val:
                     unique_samples.add(str(val))
 
-            # Create new columns
-            batch_col = pa.array([batch_name] * len(batch), type=pa.string())
-            source_col = pa.array([stem_name] * len(batch), type=pa.string())
+            # Build list of columns - start with existing columns
+            columns = list(batch.columns)
 
-            # Create Sample ID: replicate__@__batch
-            sample_ids = [
-                f"{rep}__@__{batch_name}" if rep else f"__@__{batch_name}"
-                for rep in replicate_array.to_pylist()
-            ]
-            sample_id_col = pa.array(sample_ids, type=pa.string())
+            # Only add new columns that don't already exist
+            if add_batch:
+                columns.append(pa.array([batch_name] * len(batch), type=pa.string()))
+            if add_source:
+                columns.append(pa.array([stem_name] * len(batch), type=pa.string()))
+            if add_sample_id:
+                # Create Sample ID: replicate__@__batch
+                sample_ids = [
+                    f"{rep}__@__{batch_name}" if rep else f"__@__{batch_name}"
+                    for rep in replicate_array.to_pylist()
+                ]
+                columns.append(pa.array(sample_ids, type=pa.string()))
 
-            # Append columns to batch
-            new_batch = pa.RecordBatch.from_arrays(
-                list(batch.columns) + [batch_col, source_col, sample_id_col],
-                schema=new_schema,
-            )
+            # Create new batch with all columns
+            new_batch = pa.RecordBatch.from_arrays(columns, schema=new_schema)
             writer.write_batch(new_batch)
 
             batch_rows_processed += len(batch)
@@ -940,13 +956,30 @@ def _sort_parquet_low_memory(
     stem_escaped = input_path.stem.replace("'", "''")
     path_str = str(input_path).replace("'", "''")
 
-    # Sort and add columns
+    # Check which columns already exist in the input
+    existing_cols = conn.execute(f"""
+        SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('{path_str}') LIMIT 0)
+    """).fetchdf()["column_name"].tolist()
+
+    # Build column additions - only add if not already present
+    add_cols = []
+    if "Batch" not in existing_cols:
+        add_cols.append(f"'{batch_escaped}' AS \"Batch\"")
+    if "Source Document" not in existing_cols:
+        add_cols.append(f"'{stem_escaped}' AS \"Source Document\"")
+    if "Sample ID" not in existing_cols:
+        add_cols.append(f"\"{replicate_col}\" || '__@__' || '{batch_escaped}' AS \"Sample ID\"")
+
+    # Build SELECT clause
+    if add_cols:
+        select_clause = "SELECT *, " + ", ".join(add_cols)
+    else:
+        select_clause = "SELECT *"
+
+    # Sort and add columns (only if they don't already exist)
     conn.execute(f"""
         COPY (
-            SELECT *,
-                   '{batch_escaped}' AS "Batch",
-                   '{stem_escaped}' AS "Source Document",
-                   "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+            {select_clause}
             FROM read_parquet('{path_str}')
             ORDER BY "{sort_column}"
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
@@ -1144,22 +1177,31 @@ def merge_and_sort_streaming(
                 f"Looked for: Replicate Name, Replicate_Name, ReplicateName"
             )
 
+        # Check which columns already exist to avoid duplicates
+        add_cols = []
+        if "Batch" not in header:
+            add_cols.append(f"'{batch_escaped}' AS \"Batch\"")
+        if "Source Document" not in header:
+            add_cols.append(f"'{stem_escaped}' AS \"Source Document\"")
+        if "Sample ID" not in header:
+            add_cols.append(f"\"{replicate_col}\" || '__@__' || '{batch_escaped}' AS \"Sample ID\"")
+
+        # Build SELECT clause
+        if add_cols:
+            select_clause = "SELECT *, " + ", ".join(add_cols)
+        else:
+            select_clause = "SELECT *"
+
         if is_parquet:
             # Read parquet file directly
             union_parts.append(f"""
-                SELECT *,
-                       '{batch_escaped}' AS "Batch",
-                       '{stem_escaped}' AS "Source Document",
-                       "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+                {select_clause}
                 FROM read_parquet('{path_str}')
             """)
         else:
             # Read CSV/TSV file
             union_parts.append(f"""
-                SELECT *,
-                       '{batch_escaped}' AS "Batch",
-                       '{stem_escaped}' AS "Source Document",
-                       "{replicate_col}" || '__@__' || '{batch_escaped}' AS "Sample ID"
+                {select_clause}
                 FROM read_csv('{path_str}',
                               header=true,
                               delim='{delimiter}',

@@ -1291,7 +1291,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     logger.info(f"  Unique peptides: {n_peptides:,}")
     logger.info(f"  Unique transitions: {n_transitions:,}")
     logger.info(f"  Samples: {n_samples:,}")
-    logger.info(f"  Avg transitions per peptide: {n_transitions / n_peptides:.1f}")
+    if n_peptides > 0:
+        logger.info(f"  Avg transitions per peptide: {n_transitions / n_peptides:.1f}")
+
+    # Check for empty data
+    if n_peptides == 0 or n_samples == 0:
+        logger.error("No data found in input file. The merged parquet may be corrupted.")
+        logger.error("Try deleting the cached parquet and re-running: rm <output_dir>/merged_data.parquet")
+        return 1
 
     # =========================================================================
     # Stage 2: Transition -> Peptide rollup
@@ -3254,6 +3261,238 @@ def cmd_viewer(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Compare peptide CVs between two PRISM runs with library fitting visualization.
+
+    Generates a detailed report showing:
+    - CV comparison between the two rollup methods
+    - Library fitting visualization for top N peptides (raw, scaled, outliers)
+
+    Args:
+        args: Command-line arguments containing run1, run2, output, etc.
+
+    Returns:
+        Exit code (0 = success).
+
+    """
+    import json
+
+    import duckdb
+    import pandas as pd
+
+    from .rollup_comparison import compare_library_vs_sum
+    from .rollup_comparison_report import generate_rollup_comparison_report
+    from .spectral_library import SpectralLibraryRollup
+
+    run1_dir = Path(args.run1)
+    run2_dir = Path(args.run2)
+    output_path = Path(args.output)
+
+    # Validate input directories
+    if not run1_dir.exists():
+        logger.error(f"Directory not found: {run1_dir}")
+        return 1
+    if not run2_dir.exists():
+        logger.error(f"Directory not found: {run2_dir}")
+        return 1
+
+    # Check for required files
+    for run_dir, name in [(run1_dir, "run1"), (run2_dir, "run2")]:
+        if not (run_dir / "corrected_peptides.parquet").exists():
+            logger.error(f"{name}: Missing corrected_peptides.parquet in {run_dir}")
+            return 1
+        if not (run_dir / "metadata.json").exists():
+            logger.error(f"{name}: Missing metadata.json in {run_dir}")
+            return 1
+
+    # Load metadata from both runs
+    with open(run1_dir / "metadata.json") as f:
+        meta1 = json.load(f)
+    with open(run2_dir / "metadata.json") as f:
+        meta2 = json.load(f)
+
+    # Get method names
+    method1 = meta1.get("config", {}).get("transition_rollup", {}).get("method", "method1")
+    method2 = meta2.get("config", {}).get("transition_rollup", {}).get("method", "method2")
+
+    # Get library path from run2 (the library_assist run)
+    lib_config = meta2.get("config", {}).get("transition_rollup", {}).get("library_assist", {})
+    library_path = lib_config.get("library_path")
+
+    if not library_path:
+        logger.error("Run2 must have a library_assist configuration with library_path")
+        logger.error("The comparison requires a spectral library for fitting visualization")
+        return 1
+
+    logger.info("=" * 60)
+    logger.info("PRISM Rollup Method Comparison")
+    logger.info("=" * 60)
+    logger.info(f"  Run 1 ({method1}): {run1_dir}")
+    logger.info(f"  Run 2 ({method2}): {run2_dir}")
+    logger.info(f"  Sample type: {args.sample_type}")
+    logger.info(f"  Ranking: {args.ranking}")
+    logger.info(f"  Top N peptides: {args.top_n}")
+
+    try:
+        # Load corrected peptides from BOTH runs (LINEAR scale)
+        logger.info("Loading corrected peptides...")
+        pep1_df = pd.read_parquet(run1_dir / "corrected_peptides.parquet")
+        pep2_df = pd.read_parquet(run2_dir / "corrected_peptides.parquet")
+
+        # Determine peptide column
+        peptide_col = "Peptide Modified Sequence"
+        if peptide_col not in pep1_df.columns:
+            # Try alternative names
+            for alt in ["peptide", "Peptide"]:
+                if alt in pep1_df.columns:
+                    peptide_col = alt
+                    break
+
+        # Set index for lookup
+        pep1_df = pep1_df.set_index(peptide_col)
+        pep2_df = pep2_df.set_index(peptide_col)
+
+        # Load sample metadata to filter by sample type
+        sample_metadata_path = run2_dir / "sample_metadata.csv"
+        if sample_metadata_path.exists():
+            sample_meta_df = pd.read_csv(sample_metadata_path)
+        else:
+            sample_meta_df = None
+
+        # Find reference/qc samples based on sample_type argument
+        meta_cols = ["n_transitions", "mean_rt"]
+        sample_cols = [c for c in pep2_df.columns if c not in meta_cols]
+
+        if args.sample_type == "all":
+            comparison_samples = sample_cols
+        elif sample_meta_df is not None and "sample_type" in sample_meta_df.columns:
+            sample_col_meta = "sample" if "sample" in sample_meta_df.columns else "sample_id"
+            filtered = sample_meta_df[sample_meta_df["sample_type"] == args.sample_type]
+            comparison_samples = [s for s in filtered[sample_col_meta].tolist() if s in sample_cols]
+        else:
+            # Fall back to using all samples
+            logger.warning(f"Could not filter by sample_type={args.sample_type}, using all samples")
+            comparison_samples = sample_cols
+
+        if len(comparison_samples) < 2:
+            logger.error(f"Not enough samples for comparison ({len(comparison_samples)} found, need >= 2)")
+            return 1
+
+        logger.info(f"  Using {len(comparison_samples)} {args.sample_type} samples")
+
+        # Load spectral library
+        logger.info(f"Loading spectral library: {library_path}")
+        lib_path = Path(library_path)
+        if not lib_path.is_absolute():
+            # Try relative to run2 directory
+            lib_path = run2_dir / lib_path
+            if not lib_path.exists():
+                # Try relative to cwd
+                lib_path = Path.cwd() / library_path
+
+        if not lib_path.exists():
+            logger.error(f"Spectral library not found: {library_path}")
+            return 1
+
+        library = SpectralLibraryRollup(str(lib_path))
+        library.load_library()
+        logger.info(f"  Loaded {len(library.library)} spectra")
+
+        # Load transition data from run2 for visualization
+        # (both runs should have the same raw data, but run2 is the library_assist run)
+        transition_parquet = run2_dir / "merged_data.parquet"
+        if not transition_parquet.exists():
+            logger.error(f"Missing merged_data.parquet in {run2_dir}")
+            return 1
+
+        logger.info("Loading transition data for visualization...")
+        sample_list_sql = ",".join(f"'{s}'" for s in comparison_samples)
+
+        # Determine sample column name
+        con = duckdb.connect()
+        cols_df = con.execute(
+            f"SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('{transition_parquet}') LIMIT 0)"
+        ).fetchdf()
+        available_cols = cols_df["column_name"].tolist()
+        con.close()
+
+        sample_col = "Sample ID"
+        if sample_col not in available_cols:
+            sample_col = "Replicate Name" if "Replicate Name" in available_cols else available_cols[0]
+
+        # Also find peptide column in transition data
+        trans_peptide_col = "Peptide Modified Sequence"
+        if trans_peptide_col not in available_cols:
+            for alt in ["Peptide Modified Sequence Unimod Ids", "Peptide"]:
+                if alt in available_cols:
+                    trans_peptide_col = alt
+                    break
+
+        con = duckdb.connect()
+        transition_df = con.execute(f"""
+            SELECT *
+            FROM read_parquet('{transition_parquet}')
+            WHERE "{sample_col}" IN ({sample_list_sql})
+        """).fetchdf()
+        con.close()
+
+        logger.info(f"  Loaded {len(transition_df):,} transitions")
+
+        # Run comparison with library fitting visualization
+        logger.info("Running comparison analysis...")
+        result = compare_library_vs_sum(
+            transition_data=transition_df,
+            corrected_peptides_sum=pep1_df,
+            corrected_peptides_library=pep2_df,
+            samples=comparison_samples,
+            library=library,
+            library_path=str(lib_path),
+            peptide_col=trans_peptide_col,
+            precursor_charge_col="Precursor Charge",
+            fragment_col="Fragment Ion",
+            product_mz_col="Product Mz",
+            sample_col=sample_col,
+            abundance_col="Area",
+            library_config=lib_config,
+            normalization_applied=True,  # Both runs have normalization
+            batch_correction_applied=True,  # Both runs have batch correction
+            top_n=args.top_n,
+            ranking_criterion=args.ranking,
+        )
+
+        # Update sample type in result
+        result.sample_type = args.sample_type
+
+        # Generate report with full library fitting visualization
+        logger.info("Generating comparison report...")
+        generate_rollup_comparison_report(
+            result,
+            output_path=output_path,
+            save_plots=args.save_plots,
+            embed_plots=True,
+        )
+
+        # Print summary
+        logger.info("-" * 60)
+        logger.info("Comparison Summary")
+        logger.info("-" * 60)
+        logger.info(f"  {method1} median CV: {result.summary.sum_median_cv * 100:.1f}%")
+        logger.info(f"  {method2} median CV: {result.summary.library_median_cv * 100:.1f}%")
+        logger.info(f"  Peptides improved: {result.summary.n_peptides_improved}")
+        logger.info(f"  Peptides worsened: {result.summary.n_peptides_worsened}")
+        logger.info(f"  Peptides unchanged: {result.summary.n_peptides_unchanged}")
+        logger.info(f"  Report saved to: {output_path}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Comparison failed: {e}")
+        import traceback
+
+        logger.debug(traceback.format_exc())
+        return 1
+
+
 def main() -> int:
     """Provide main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -3385,6 +3624,45 @@ def main() -> int:
         help="PRISM output directory containing processed parquet files",
     )
 
+    # Compare command - compare two PRISM output directories
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare rollup methods between two PRISM runs with library fitting visualization",
+        description="Compare two PRISM output directories and generate a detailed comparison report. "
+        "Uses CV comparison to select peptides, then visualizes the library fitting process "
+        "for the top N peptides showing raw transitions, library scaling, and outlier detection.",
+    )
+    compare_parser.add_argument(
+        "-1", "--run1", required=True,
+        help="First PRISM output directory (baseline method, e.g., sum)",
+    )
+    compare_parser.add_argument(
+        "-2", "--run2", required=True,
+        help="Second PRISM output directory (comparison method, e.g., library_assist)",
+    )
+    compare_parser.add_argument(
+        "-o", "--output", default="comparison_report.html",
+        help="Output report path (default: comparison_report.html)",
+    )
+    compare_parser.add_argument(
+        "-s", "--sample-type", default="reference",
+        choices=["reference", "qc", "all"],
+        help="Sample type to use for comparison (default: reference)",
+    )
+    compare_parser.add_argument(
+        "-n", "--top-n", type=int, default=100,
+        help="Number of top peptides to show in report (default: 100)",
+    )
+    compare_parser.add_argument(
+        "-r", "--ranking", default="most_improved",
+        choices=["most_improved", "most_worsened", "highest_cv", "largest_difference"],
+        help="How to rank peptides for display (default: most_improved)",
+    )
+    compare_parser.add_argument(
+        "--save-plots", action="store_true",
+        help="Save individual PNG plots to a subdirectory",
+    )
+
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -3399,6 +3677,8 @@ def main() -> int:
         return cmd_config_template(args)
     elif args.command == "viewer":
         return cmd_viewer(args)
+    elif args.command == "compare":
+        return cmd_compare(args)
     else:
         parser.print_help()
         return 1

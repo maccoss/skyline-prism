@@ -493,3 +493,47 @@ qc_report:
     # Shows precision improvement for reference and QC samples
     # Generated separately for reference and pool sample types
     cv_distribution: true
+
+# =============================================================================
+# Rollup Method Comparison (Optional QC Feature)
+# =============================================================================
+# Generates a separate QC report comparing transition rollup methods.
+# Currently supports comparing library_assist vs sum method.
+# Shows step-by-step library fitting process for top N peptides.
+#
+# REQUIRES: transition_rollup.library_assist.library_path to be set
+
+rollup_comparison:
+  # Enable/disable the comparison feature
+  enabled: false
+
+  # Methods to compare (library_assist vs sum initially)
+  # Future versions may support: median_polish, adaptive, topn, consensus
+  methods:
+    - "sum"
+    - "library_assist"
+
+  # Sample type to use for comparison
+  # Options: "reference" (inter-experiment), "qc" (intra-experiment)
+  # Reference samples are recommended as they should have only technical variation
+  sample_type: "reference"
+
+  # Number of top peptides to display in the report
+  # Peptides are ranked by the ranking_criterion below
+  top_n_peptides: 20
+
+  # How to rank peptides for display
+  # Options:
+  #   - "most_improved": Peptides where library_assist improves CV most vs sum
+  #   - "most_worsened": Peptides where library_assist worsens CV most vs sum
+  #   - "highest_cv": Peptides with highest CV (worst precision) using sum
+  #   - "largest_difference": Peptides with largest CV difference between methods
+  ranking_criterion: "most_improved"
+
+  # Output settings
+  output:
+    # Output filename (relative to output directory)
+    filename: "rollup_comparison_report.html"
+
+    # Save individual PNG plots to rollup_comparison_plots/ subdirectory
+    save_individual_plots: true
