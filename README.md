@@ -30,16 +30,46 @@ cd skyline-prism
 pip install -e ".[dev,viz]"
 ```
 
+## Input File Formats
+
+PRISM accepts Skyline reports in three formats:
+
+| Format  | Extensions     | Notes                                    |
+| ------- | -------------- | ---------------------------------------- |
+| Parquet | `.parquet`     | Fastest I/O, smaller files (recommended) |
+| CSV     | `.csv`         | Standard Skyline export format           |
+| TSV     | `.tsv`, `.txt` | Tab-separated variant                    |
+
+Skyline 24.1+ can export reports directly to parquet via **File > Export > Report** (select parquet format). Parquet is 2-10x faster to read and 5-10x smaller than CSV equivalents.
+
+**Multiple input files** can be provided in a single run (from different batches or plates):
+
+```bash
+# Multiple parquet reports (one per plate/batch)
+prism run -i plate1.parquet plate2.parquet plate3.parquet -o output/ -c config.yaml
+
+# Mixed formats from different instruments/labs
+prism run -i site1.csv site2.parquet site3.tsv -o output/ -c config.yaml
+```
+
+Column names are automatically matched regardless of whether spaces are present (`Fragment Ion` vs `FragmentIon`), underscored (`Fragment_Ion`), or space-free (invariant export format). This handles all Skyline export variants.
+
 ## Quick Start
 
 ### Run the full pipeline
 
 ```bash
-# Run complete PRISM pipeline (recommended)
+# Single parquet report (recommended format)
+prism run -i skyline_report.parquet -o output_dir/ -c config.yaml -m sample_metadata.csv
+
+# Single CSV report
 prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.csv
 
+# Multiple reports (merged and batch-corrected together)
+prism run -i plate1.parquet plate2.parquet plate3.parquet -o output/ -c config.yaml -m metadata.csv
+
 # Multiple metadata files are automatically merged
-prism run -i data.csv -o output/ -c config.yaml -m batch1_meta.csv batch2_meta.csv
+prism run -i data.parquet -o output/ -c config.yaml -m batch1_meta.csv batch2_meta.csv
 ```
 
 This produces:
@@ -117,9 +147,20 @@ prism config-template --minimal -o config.yaml
 
 ### Merge multiple Skyline reports
 
+The `prism merge` command merges multiple reports into a single sorted parquet file without running the full pipeline. Accepts CSV, TSV, and parquet inputs in any combination:
+
 ```bash
+# Merge CSV reports
 prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.csv
+
+# Merge parquet reports (faster)
+prism merge plate1.parquet plate2.parquet plate3.parquet -o unified_data.parquet
+
+# Mixed formats
+prism merge site1.csv site2.parquet -o unified_data.parquet -m metadata.csv
 ```
+
+Note: `prism run` also accepts multiple input files directly and performs the merge internally, so `prism merge` is mainly useful when you want the merged parquet for downstream use outside PRISM.
 
 ### Compare rollup methods
 
@@ -204,7 +245,7 @@ All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML r
 The pipeline follows a two-arm design with batch correction applied at the reporting level:
 
 ```text
-Stage 1: Merge CSVs (streaming)
+Stage 1: Merge reports (CSV/TSV/parquet, streaming)
         │
         ▼
 Stage 2: Transition → Peptide rollup (Tukey median polish)

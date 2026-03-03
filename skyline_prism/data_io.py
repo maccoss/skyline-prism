@@ -17,6 +17,32 @@ logger = logging.getLogger(__name__)
 # Size threshold for using streaming reader (1 GB)
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024
 
+
+def _get_available_memory_mb() -> int:
+    """Return available system memory in MB from /proc/meminfo, fallback 2048."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024
+    except Exception:
+        pass
+    return 2048
+
+
+def _get_available_memory_mb() -> int:
+    """Return available system memory in MB. Falls back to 2048 if undetectable."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024
+    except Exception:
+        pass
+    return 2048
+
 # Standard Skyline column names (as exported from Skyline reports)
 # These are the exact names as they appear in Skyline report exports.
 # Users can configure different column names in their config file if needed.
@@ -936,11 +962,17 @@ def _sort_parquet_low_memory(
     input_path = Path(input_path)
     output_path = Path(output_path)
 
-    # Use more conservative memory limit for large single files
-    # DuckDB will spill to disk when this is exceeded
-    effective_memory = min(sort_buffer_mb, 4096)  # Cap at 4GB for single file
+    # Use 75% of available system RAM so DuckDB can sort in memory on large machines
+    # while still leaving headroom.  Also respect the caller's sort_buffer_mb cap.
+    available_mb = _get_available_memory_mb()
+    effective_memory = min(sort_buffer_mb, int(available_mb * 0.75))
 
-    temp_dir = output_path.parent / ".duckdb_temp"
+    # Prefer /tmp (local disk) for spill files — NAS mounts block DuckDB disk spilling
+    local_tmp = Path("/tmp")
+    if local_tmp.exists() and local_tmp.is_dir():
+        temp_dir = local_tmp / ".duckdb_temp"
+    else:
+        temp_dir = output_path.parent / ".duckdb_temp"
     temp_dir.mkdir(exist_ok=True)
 
     conn = duckdb.connect()
@@ -949,8 +981,10 @@ def _sort_parquet_low_memory(
     conn.execute("SET enable_progress_bar=true")
     # Enable external sorting for large datasets
     conn.execute("SET preserve_insertion_order=false")
+    # Limit threads to reduce per-thread sort buffer memory
+    conn.execute("SET threads=2")
 
-    logger.info(f"  Memory limit: {effective_memory}MB, temp dir: {temp_dir}")
+    logger.info(f"  Memory limit: {effective_memory}MB, threads: 2, temp dir: {temp_dir}")
 
     batch_escaped = batch_name.replace("'", "''")
     stem_escaped = input_path.stem.replace("'", "''")

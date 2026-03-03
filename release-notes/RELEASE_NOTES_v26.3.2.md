@@ -75,13 +75,17 @@ output_dir/
 
 ### Robust Column Name Detection
 
-Added `find_column()` helper function that handles both space-separated and underscore-separated column names:
+Added `find_column()` helper function that handles space-separated, underscore-separated, and space-free (invariant) column name formats:
 
-- **Problem**: Parquet files from Skyline may use underscores (`Fragment_Ion`, `Protein_Accession`) while CSV exports use spaces (`Fragment Ion`, `Protein Accession`). This caused column detection failures when processing parquet inputs.
-- **Solution**: New `find_column()` function tries multiple name variants:
+- **Problem**: Skyline exports column names differently depending on export format and locale:
+  - CSV exports use spaces: `Fragment Ion`, `Protein Accession`
+  - Some parquet exports use underscores: `Fragment_Ion`, `Protein_Accession`
+  - Invariant-language parquet exports remove all spaces: `FragmentIon`, `ProteinAccession`
+- **Solution**: `find_column()` tries four name variants in order:
   1. Exact match (e.g., `Fragment Ion`)
   2. Space-to-underscore variant (e.g., `Fragment_Ion`)
   3. Underscore-to-space variant (e.g., `Fragment Ion`)
+  4. Space-removed variant (e.g., `FragmentIon`) — handles invariant export format
 - **Columns affected**: All auto-detected columns now use this robust matching:
   - `peptide_col` (Peptide Modified Sequence, etc.)
   - `sample_col` (Sample ID, Replicate Name)
@@ -174,9 +178,43 @@ Skyline (version 24.1+) can now export reports directly to parquet format, which
 - **Type preservation** - No string->number conversion issues
 - **Memory efficient** - Columnar format uses less RAM
 
+### Fixed: Out-of-Memory Error When Sorting Parquet Files on Network Storage
+
+Fixed an `OutOfMemoryException` that occurred when sorting parquet files stored on NAS or network-mounted filesystems:
+
+- **Root cause 1 - NAS temp directory**: DuckDB spills intermediate sort data to a temp directory. When the temp directory was on a NAS mount (e.g., `/mnt/UNAS-DataAnalysis/...`), DuckDB could not perform disk spilling, causing it to exhaust its memory budget.
+- **Root cause 2 - Hardcoded memory cap**: The DuckDB memory limit was hardcoded to 4096 MB regardless of how much RAM was available. On machines with large RAM (e.g., 44 GB free), DuckDB was unnecessarily constrained.
+- **Root cause 3 - Thread memory overhead**: Multiple sort threads each maintain independent memory buffers, multiplying peak memory usage.
+
+**Fixes applied:**
+
+1. **Local temp directory**: DuckDB now uses `/tmp/.duckdb_temp` (local disk) for spill files, falling back to the output directory only if `/tmp` is unavailable. This ensures disk spilling works on NAS-mounted output directories.
+2. **Dynamic memory limit**: The memory limit is now set to 75% of available system RAM (read from `/proc/meminfo`) rather than a fixed 4096 MB cap. On a machine with 44 GB free, this gives DuckDB ~33 GB, allowing large files to be sorted entirely in memory with no spilling needed.
+3. **Reduced thread count**: Thread count is limited to 2 during sorting to reduce per-thread buffer overhead.
+
+- **Files modified**: `skyline_prism/data_io.py`
+
+### Improved: Config Template Default Settings
+
+Updated both config templates (`prism config-template` and `prism config-template --minimal`) to use the recommended analysis settings as defaults:
+
+| Setting | Old default | New default |
+| ------- | ----------- | ----------- |
+| `transition_rollup.method` | `sum` | `library_assist` |
+| `protein_rollup.method` | `sum` | `median_polish` |
+| `batch_correction.enabled` | `false` (minimal) | `true` |
+
+The `library_assist` transition rollup and `median_polish` protein rollup are the methods that produce the best quantification precision in typical LC-MS/MS experiments. `batch_correction` is now enabled by default and automatically skipped when only one batch is detected.
+
+Both templates now include prominent `<<< EDIT REQUIRED` markers on the two paths users must provide before running:
+- `transition_rollup.library_assist.library_path` — spectral library (`.blib` or `.tsv`)
+- `parsimony.fasta_path` — FASTA database used for the original search
+
+- **Files modified**: `skyline_prism/cli.py`
+
 ## Testing
 
-- All existing tests passing (328 tests)
+- All tests passing (328 tests)
 - Added 6 new tests for `find_column()` function
 - Added tests for rollup comparison functionality
 - Added 3 new tests for duplicate column prevention when re-processing parquet files

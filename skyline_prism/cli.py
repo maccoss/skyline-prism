@@ -123,6 +123,10 @@ def find_column(available_columns: set[str], *candidates: str) -> str | None:
         space_variant = name.replace("_", " ")
         if space_variant in available_columns:
             return space_variant
+        # Try with all spaces removed (invariant/parquet export format)
+        no_space_variant = name.replace(" ", "")
+        if no_space_variant in available_columns:
+            return no_space_variant
     return None
 
 
@@ -1379,15 +1383,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                     transition_col,
                     sample_col,
                     abundance_col,
-                    "Product Mz",
-                    "Shape Correlation",
-                    "Product Charge",
-                    "Precursor Charge",
+                    mz_col,
+                    shape_corr_col,
+                    product_charge_col,
+                    precursor_charge_col,
                 ]
                 # Also include Replicate Name if we're using Sample ID
                 # (needed for matching metadata sample names)
                 if sample_col == "Sample ID":
-                    needed_cols.append("Replicate Name")
+                    rep_col = find_column(available_columns, "Replicate Name")
+                    if rep_col is not None:
+                        needed_cols.append(rep_col)
                 # Filter to columns that exist
                 col_check = learn_con.execute(f"""
                     SELECT column_name FROM (
@@ -1436,8 +1442,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                     transition_col=transition_col,
                     sample_col=filter_col,  # Use filter_col since samples match this column
                     abundance_col=abundance_col,
-                    mz_col="Product Mz",
-                    shape_corr_col="Shape Correlation",
+                    mz_col=mz_col,
+                    shape_corr_col=shape_corr_col,
                     n_iterations=100,
                     initial_params=adaptive_params,
                 )
@@ -2789,6 +2795,10 @@ def get_minimal_config_template() -> str:
 # For all options, run: prism config-template
 #
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
+#
+# BEFORE RUNNING - edit the two paths marked EDIT REQUIRED below:
+#   1. transition_rollup.library_assist.library_path  (spectral library)
+#   2. parsimony.fasta_path                           (search FASTA database)
 
 # =============================================================================
 # Sample Type Detection (IMPORTANT - customize for your naming convention)
@@ -2809,13 +2819,11 @@ sample_annotations:
     - "StudyPool"
 
 # =============================================================================
-# Protein Parsimony (REQUIRED - path to your search FASTA)
+# Protein Parsimony
 # =============================================================================
+# EDIT REQUIRED: Set fasta_path to the FASTA database used for your search.
 parsimony:
-  # Path to the FASTA database used for the original search
-  fasta_path: "/path/to/your/search_database.fasta"
-
-  # Strategy for shared peptides: all_groups, unique_only, razor
+  fasta_path: null  # <<< EDIT REQUIRED: "/path/to/your/search_database.fasta"
   shared_peptide_handling: "all_groups"
 
 # =============================================================================
@@ -2825,50 +2833,76 @@ processing:
   # Number of parallel workers (0 = all CPUs, 1 = single-threaded)
   n_workers: 1
 
+# =============================================================================
+# Transition to Peptide Rollup
+# =============================================================================
+# library_assist uses a spectral library to detect and exclude interfered
+# transitions before summing. This gives the best CVs when a library is available.
+#
+# EDIT REQUIRED: Set library_path to your spectral library (.blib or .tsv).
 transition_rollup:
-  # Method: sum (default), consensus, median_polish, adaptive, topn, library_assist
-  method: "sum"
-
-  # Minimum transitions required per peptide
+  method: "library_assist"
   min_transitions: 3
+  library_assist:
+    library_path: null  # <<< EDIT REQUIRED: "/path/to/your/library.blib"
+    fitting_method: "median_polish"  # RECOMMENDED: robust to 1-2 interfered transitions
+    outlier_threshold: 1.0           # obs > 2x predicted = interference
+    remove_outliers: true
 
-  # For library_assist method: path to spectral library (.blib or .tsv)
-  # library_assist:
-  #   library_path: "/path/to/library.blib"
-  #   fitting_method: "median_polish"  # or "least_squares"
-  #   outlier_threshold: 1.0  # 1.0=obs>2x pred, 2.0=obs>3x pred (conservative)
-  #   remove_outliers: true   # Set false to disable outlier removal (debugging)
-
+# =============================================================================
+# Global (Peptide-Level) Normalization
+# =============================================================================
+# rt_lowess corrects RT-dependent systematic effects (ion suppression, gradient
+# drift) in addition to overall loading differences.
 global_normalization:
   method: "rt_lowess"
   rt_lowess:
     frac: 0.3
     n_grid_points: 100
 
-protein_rollup:
-  # Method: sum (default), median_polish, topn, ibaq, maxlfq
-  method: "sum"
+# =============================================================================
+# Batch Correction
+# =============================================================================
+# ComBat empirical Bayes batch correction. Automatically skipped when only
+# one batch is detected.
+batch_correction:
+  enabled: true
+  method: "combat"
 
+# =============================================================================
+# Protein Rollup
+# =============================================================================
+# median_polish is robust to outlier peptides (e.g., those with interference
+# or PTMs that escape detection).
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+# =============================================================================
+# Protein Normalization
+# =============================================================================
 protein_normalization:
-  # Method: median (default), none
-  # Median normalization centers all samples to the same median protein abundance
-  # Use 'none' to skip protein-level normalization
   method: "median"
 
 # =============================================================================
 # Output Options
 # =============================================================================
 output:
-  # File format: parquet, csv, tsv
   format: "parquet"
-
-  # Include residuals for outlier analysis
   include_residuals: true
 
+# =============================================================================
+# QC Report
+# =============================================================================
 qc_report:
   enabled: true
   save_plots: true
   embed_plots: true
+  plots:
+    intensity_distribution: true
+    pca_comparison: true
+    control_correlation: true
+    cv_distribution: true
 """
 
 
@@ -2886,6 +2920,10 @@ def get_full_config_template() -> str:
 #
 # This template includes ALL configuration options with detailed documentation.
 # Copy this file and modify for your experiment.
+#
+# BEFORE RUNNING - edit the two paths marked EDIT REQUIRED below:
+#   1. transition_rollup.library_assist.library_path  (spectral library)
+#   2. parsimony.fasta_path                           (search FASTA database)
 #
 # Usage:
 #   prism run -i skyline_report.csv -o output_dir/ -c config.yaml
@@ -3028,7 +3066,7 @@ transition_rollup:
   #   topn           - Select top N transitions by correlation
   #   library_assist - Uses spectral library to detect/exclude interfered transitions
   #                    via iterative least squares fitting (recommended with library)
-  method: "sum"
+  method: "library_assist"
 
   # Include MS1 precursor signal? (false = MS2 only, recommended)
   use_ms1: false
@@ -3063,7 +3101,7 @@ transition_rollup:
   # Only HIGH residuals are outliers (signal > expected = interference).
   # Low or negative residuals are valid - they indicate low abundance, not interference.
   library_assist:
-    library_path: null          # Path to .blib or .tsv spectral library (REQUIRED)
+    library_path: null          # <<< EDIT REQUIRED: "/path/to/your/library.blib" or ".tsv"
     mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
     min_matched_fragments: 3    # Minimum fragments for valid fit (else NaN)
     fitting_method: "median_polish"  # "median_polish" (RECOMMENDED) or "least_squares"
@@ -3131,8 +3169,8 @@ batch_correction:
 # IMPORTANT: Requires the FASTA database used for the original search.
 
 parsimony:
-  # Path to search FASTA database (REQUIRED)
-  fasta_path: null  # e.g., "/path/to/uniprot_human_reviewed.fasta"
+  # EDIT REQUIRED: Path to the FASTA database used for your original search.
+  fasta_path: null  # <<< EDIT REQUIRED: "/path/to/your/search_database.fasta"
 
   # Strategy for shared peptides:
   #   all_groups  - Apply to all protein groups (recommended)
@@ -3147,12 +3185,12 @@ parsimony:
 
 protein_rollup:
   # Method:
-  #   sum           - Simple sum (default)
-  #   median_polish - Tukey median polish (robust to outliers)
+  #   median_polish - Tukey median polish (robust to outliers, recommended)
+  #   sum           - Simple sum
   #   topn          - Average of top N most intense peptides
   #   ibaq          - Intensity-Based Absolute Quantification
   #   maxlfq        - Maximum LFQ algorithm (MaxQuant-style)
-  method: "sum"
+  method: "median_polish"
 
   # Minimum peptides required per protein
   min_peptides: 2
