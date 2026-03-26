@@ -33,7 +33,7 @@ Optional quality columns:
 
 | Column | Description |
 | ------ | ----------- |
-| `Shape Correlation` | R^2^ of the transition XIC trace to the median trace (0-1) |
+| `Shape Correlation` | R² of the transition XIC trace to the median trace (0-1) |
 | `Product Mz` | Fragment ion m/z |
 | `Precursor Charge` | Precursor ion charge state |
 | `Product Charge` | Fragment ion charge state |
@@ -98,14 +98,22 @@ A novel approach that weights transitions by their consistency across samples. T
    - $\beta_j$ = sample-specific abundance (peptide quantity)
    - $\epsilon_{ij}$ = residual (measurement error, interference)
 
-2. **Estimate offsets:** $\hat{\alpha}_i = \text{median}_j(\log_2(I_{ij}))$
+2. **Estimate offsets:**
 
-3. **Estimate sample effects:** $\hat{\beta}_j = \text{median}_i(\log_2(I_{ij}) - \hat{\alpha}_i)$
+   $$\hat\alpha_i = \mathrm{median_j}(\log_2(I_{ij}))$$
 
-4. **Calculate residuals:** $\hat{\epsilon}_{ij} = \log_2(I_{ij}) - \hat{\alpha}_i - \hat{\beta}_j$
+3. **Estimate sample effects:**
 
-5. **Compute weights:** $w_i = \frac{1}{\text{Var}(\hat{\epsilon}_{i,\cdot}) + \lambda}$
-   
+   $$\hat\beta_j = \mathrm{median_i}(\log_2(I_{ij}) - \hat\alpha_i)$$
+
+4. **Calculate residuals:**
+
+   $$\hat\epsilon_{ij} = \log_2(I_{ij}) - \hat\alpha_i - \hat\beta_j$$
+
+5. **Compute weights:**
+
+   $$w_i = \frac{1}{\mathrm{Var}(\hat\epsilon_{i,\cdot}) + \lambda}$$
+
    Where $\lambda$ is a regularization parameter (default: 0.1).
 
 6. **Weighted aggregation:** 
@@ -129,8 +137,8 @@ The column effects ($\beta_j$) represent sample-specific peptide abundance.
 
 1. Initialize residuals $R = \log_2(I)$
 2. Iterate until convergence:
-   - Sweep row medians: $\alpha_i \leftarrow \alpha_i + \text{median}_j(R_{i,\cdot}); R \leftarrow R - \text{median}_j(R_{i,\cdot})$
-   - Sweep column medians: $\beta_j \leftarrow \beta_j + \text{median}_i(R_{\cdot,j}); R \leftarrow R - \text{median}_i(R_{\cdot,j})$
+   - Sweep row medians: $\alpha_i \leftarrow \alpha_i + \mathrm{median_j}(R_{i,\cdot});\; R \leftarrow R - \mathrm{median_j}(R_{i,\cdot})$
+   - Sweep column medians: $\beta_j \leftarrow \beta_j + \mathrm{median_i}(R_{\cdot,j});\; R \leftarrow R - \mathrm{median_i}(R_{\cdot,j})$
 3. Return $\beta_j$ as peptide abundances
 
 **Strengths:** Robust to outliers; provides residuals for detecting sample × transition interactions.
@@ -148,7 +156,9 @@ Optimizes transition weights to minimize coefficient of variation (CV) on refere
 **Algorithm:**
 
 1. Pre-compute per-transition metrics across reference samples
-2. Optimize weight function: $\log(w_t) = \beta_{mz} \cdot \text{norm\_mz} + \beta_{outlier} \cdot f_{outlier}$
+2. Optimize weight function:
+
+   $$\log(w_t) = \beta_{mz} \cdot \mathrm{norm_{mz}} + \beta_{outlier} \cdot f_{outlier}$$
 3. Minimize median CV on reference samples
 4. Validate on QC samples
 5. Fall back to sum if no improvement
@@ -198,21 +208,22 @@ Where:
 **Algorithm:**
 
 1. **Estimate scale via median:** For each sample $s$:
-   $$\hat{\beta}_s = \text{median}_t\left(\log(O_{t,s}) - \log(L_t)\right)$$
+
+   $$\hat\beta_s = \mathrm{median_t}\left(\log(O_{t,s}) - \log(L_t)\right)$$
    
    The median automatically ignores up to 50% outliers, making this robust to 1-2 interfered transitions out of 4-6 total.
 
-2. **Compute predicted values:** $\hat{O}_{t,s} = L_t \times e^{\hat{\beta}_s}$
+2. **Compute predicted values:** $\hat O_{t,s} = L_t \times e^{\hat\beta_s}$
 
 3. **Identify outliers:** Compute normalized residuals:
-   $$r_{t,s} = \frac{O_{t,s} - \hat{O}_{t,s}}{\hat{O}_{t,s}}$$
+   $$r_{t,s} = \frac{O_{t,s} - \hat O_{t,s}}{\hat O_{t,s}}$$
    
    Only HIGH positive residuals indicate interference (signal > expected). Interference can only **add** signal, never remove it.
 
 4. **Iterative removal:** Remove the worst outlier (highest $r_{t,s}$) if it exceeds threshold (default 1.0 = observed > 2x predicted). Repeat until convergence.
 
 5. **Calculate final abundance:**
-   $$I_{peptide,s} = e^{\hat{\beta}_s} \times \sum_{t} L_t$$
+   $$I_{peptide,s} = e^{\hat\beta_s} \times \sum_{t} L_t$$
    
    Uses the **full library sum** so all samples quantify the same total signal.
 
@@ -274,7 +285,7 @@ For peptide `SAMPLE(unimod:21)PK` detected in +2 and +3 charge states:
 | **Zeros are valid** | A low-abundance peptide may only have signal in the top 1-2 most intense library fragments. Zeros in minor fragments confirm absence of interference. |
 | **Only HIGH residuals are outliers** | Interference adds signal (observed > expected). Low/zero signal is not interference, it's low abundance or noise. |
 | **Iterative outlier removal** | Fragments with large positive residuals are removed and the model is refit to get a cleaner scale estimate. |
-| **Abundance from scaled library** | Final abundance = $s \times \sum L_i$ uses the library sum, not the observed sum, for consistent quantification. |
+| **Abundance from scaled library** | Final abundance is the scale factor times the library sum, ensuring consistent quantification across samples. |
 | **Flag poor fits** | Peptides with R² < 0.5 across all replicates may indicate false positive identifications. |
 
 **Detailed Algorithm:**
@@ -372,8 +383,15 @@ Retention time-dependent normalization using locally weighted scatterplot smooth
 1. **Define RT grid:** Create uniform grid of N points (default: 100) across the RT range
 2. **Fit per-sample curves:** For each sample, fit LOWESS to $\log_2(\text{abundance})$ vs. RT
 3. **Compute global curve:** Take median of all sample curves at each RT point
-4. **Calculate corrections:** $\text{correction}_{s,rt} = \text{global}_{rt} - \text{sample}_{s,rt}$
-5. **Apply corrections:** $\log_2(I'_{p,s}) = \log_2(I_{p,s}) + \text{correction}_{s,RT_p}$
+4. **Calculate corrections:**
+
+   $$C_{s,rt} = G_{rt} - S_{s,rt}$$
+
+   Where $G$ is the global (median) curve and $S$ is the per-sample fitted curve.
+
+5. **Apply corrections:**
+
+   $$\log_2(I_{p,s}') = \log_2(I_{p,s}) + C_{s,RT_p}$$
 
 **Parameters:**
 - `frac`: Fraction of data used for local regression (default: 0.3)
@@ -383,13 +401,15 @@ Retention time-dependent normalization using locally weighted scatterplot smooth
 
 Simple global shift to align sample medians:
 
-$$\log_2(I'_{p,s}) = \log_2(I_{p,s}) - \text{median}_p(\log_2(I_{p,s})) + \text{global\_median}$$
+$$\log_2(I_{p,s}') = \log_2(I_{p,s}) - \mathrm{median_p}(\log_2(I_{p,s})) + M_{global}$$
+
+Where $M_{global}$ is the global median across all samples.
 
 ### Variance Stabilizing Normalization (VSN)
 
 Applies arcsinh transformation to stabilize variance across intensity ranges:
 
-$$I'_{p,s} = \text{arcsinh}(a \cdot I_{p,s})$$
+$$I_{p,s}' = \mathrm{arcsinh}(a \cdot I_{p,s})$$
 
 Where $a$ is optimized to minimize heteroscedasticity.
 
@@ -484,10 +504,11 @@ Maximum label-free quantification algorithm (Cox et al., 2014).
 **Algorithm:**
 
 1. For each pair of samples (i, j), compute median peptide log-ratio:
-   $$r_{ij} = \text{median}_p(\log_2(I_{p,i}) - \log_2(I_{p,j}))$$
+   $$r_{ij} = \mathrm{median_p}(\log_2(I_{p,i}) - \log_2(I_{p,j}))$$
 
 2. Solve for protein abundances that best explain these ratios:
-   $$\hat{\beta}_s = \text{mean}_j(r_{sj})$$
+
+   $$\hat\beta_s = \mathrm{mean_j}(r_{sj})$$
 
 3. Center and scale to preserve absolute level
 
