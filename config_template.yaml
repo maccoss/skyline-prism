@@ -1,313 +1,229 @@
+# =============================================================================
 # PRISM Configuration Template
+# =============================================================================
 # Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
 #
+# Normalization and batch correction for LC-MS proteomics data exported from
+# Skyline, with robust protein quantification using Tukey median polish and
+# reference-anchored batch correction.
+#
+# This template includes ALL configuration options with detailed documentation.
 # Copy this file and modify for your experiment.
-# See SPECIFICATION.md for detailed documentation of all options.
+#
+# BEFORE RUNNING - edit the two paths marked EDIT REQUIRED below:
+#   1. transition_rollup.library_assist.library_path  (spectral library)
+#   2. parsimony.fasta_path                           (search FASTA database)
+#
+# Usage:
+#   prism run -i skyline_report.csv -o output_dir/ -c config.yaml
+#
+# For a minimal template with only common options, run:
+#   prism config-template --minimal
+#
+# See https://github.com/maccoss/skyline-prism for full documentation.
+# =============================================================================
 
 # =============================================================================
 # Data Column Mapping
 # =============================================================================
 # Map your Skyline report column names to PRISM internal names.
 # These are the defaults for standard Skyline exports.
+#
+# IMPORTANT: Verify these match your Skyline report column headers.
 
 data:
   # Abundance measurement column (usually from transitions)
-  abundance_column: "TotalAreaFragment"  # or "TotalAreaMs1" for MS1 quant
-  
+  abundance_column: "Area"
+
   # Retention time column
-  rt_column: "BestRetentionTime"
-  
-  # Peptide identification
-  peptide_column: "PeptideModifiedSequence"  # Modified forms are separate peptides
-  
-  # For transition-level data (optional)
-  precursor_column: "PrecursorCharge"
-  fragment_column: "FragmentIon"
-  
+  rt_column: "Retention Time"
+
+  # Peptide identification (modified sequence distinguishes peptidoforms)
+  peptide_column: "Peptide Modified Sequence"
+
   # Protein identification
-  protein_column: "ProteinAccession"  # UniProt accessions preferred
-  protein_name_column: "ProteinName"
-  
+  protein_column: "Protein Accession"
+  protein_name_column: "Protein Name"
+
   # Sample identification
-  sample_column: "ReplicateName"
-  batch_column: "Batch"
-  run_order_column: "RunOrder"
-  sample_type_column: "SampleType"
+  sample_column: "Replicate Name"
 
 # =============================================================================
 # Sample Type Detection
 # =============================================================================
 # Patterns to automatically identify sample types from replicate names.
-# These are substring matches (not regex) checked in order.
-# Can be a single pattern string or a list of patterns.
+# These are substring matches (case-sensitive) checked in order.
+#
+# Sample types:
+# - reference: Inter-experiment reference (e.g., commercial plasma pool)
+#              Used for learning technical variation (RT correction, etc.)
+# - qc: Intra-experiment QC (e.g., pooled study samples)
+#       Used for validating corrections without overfitting
+# - experimental: All other samples
 
 sample_annotations:
-  # Inter-experiment reference (commercial pool for RT model learning)
-  # Samples matching these patterns are used to learn technical variation
+  # Inter-experiment reference samples
+  # CUSTOMIZE these patterns for your sample naming convention
   reference_pattern:
     - "-Pool_"
-    - "-Pool"
     - "_Pool_"
     - "GoldenWest"
     - "CommercialPool"
     - "InterExpRef"
-  
-  # Intra-experiment QC (pooled experimental samples for validation)
-  # Samples matching these patterns are used to validate corrections
+
+  # Intra-experiment QC samples
   qc_pattern:
-    - "-Carl_"
     - "-QC_"
     - "_QC_"
     - "StudyPool"
     - "IntraPool"
-  
-  # Experimental samples: everything not matching above patterns
-  experimental_pattern: "^(?!.*(Pool|Ref)).*"
 
 # =============================================================================
 # Batch Estimation
 # =============================================================================
-# When batch information is not provided in metadata, PRISM estimates batches
-# using: 1) source_document, 2) acquisition time gaps, or 3) equal division.
+# When batch information is not provided in metadata, PRISM can estimate batches
+# from acquisition timestamps.
 #
-# Include "Result File > Acquired Time" in your Skyline report for best results.
+# TIP: Include "Result File > Acquired Time" in your Skyline report for best
+# automatic batch detection.
 
 batch_estimation:
-  # Expected samples per batch (for validation and fallback estimation)
-  min_samples_per_batch: 12   # Typical 96-well plate minimum
-  max_samples_per_batch: 100  # Typical 96-well plate maximum
-  
-  # IQR multiplier for outlier gap detection
-  # A gap is considered a batch break if: gap > Q3 + (multiplier * IQR)
-  # 
-  # Example: If runs are typically 65 min apart (±2 min), the IQR would be ~4 min.
-  # With multiplier=1.5, threshold ≈ 67 + 1.5*4 = 73 min.
-  # An overnight break (e.g., 90 min gap) would be detected as a batch boundary.
-  gap_iqr_multiplier: 1.5
-  
-  # Force a specific number of batches (null = automatic estimation)
-  # Only used if other estimation methods fail
+  # Estimation method:
+  #   "auto"  - Try gap detection first, fall back to fixed if no gaps found
+  #   "fixed" - Divide evenly into n_batches by acquisition time order
+  #   "gap"   - Only use gap detection (skip batch correction if no gaps)
+  method: "auto"
+
+  # Number of batches for "fixed" method (required for fixed, optional fallback for auto)
+  # Set to null to disable fixed-count batch estimation
   n_batches: null
+
+  # IQR multiplier for gap detection (lower = more sensitive to time gaps)
+  # A gap > Q3 + (gap_iqr_multiplier * IQR) is considered a batch break
+  gap_iqr_multiplier: 1.5
 
 # =============================================================================
 # Sample Outlier Detection
 # =============================================================================
-# Automatically detect and optionally exclude samples with abnormally low signal.
-# This identifies samples with potential failed injections, degradation, or other
-# technical issues that would compromise downstream analysis.
-#
-# Detection is performed on LINEAR scale (not log) to avoid scale compression.
-# Only LOW outliers are flagged (one-sided) - high signal samples are not excluded.
+# Detect samples with abnormally low signal (potential failed injections).
+# Detection is one-sided (only flags low outliers, not high).
 
 sample_outlier_detection:
-  enabled: true  # Enable outlier detection
-  
-  # Action to take when outliers are detected:
-  # - "report": Log outliers but include them in analysis (default)
-  # - "exclude": Exclude outliers from analysis
+  enabled: true
+
+  # Action when outliers detected: "report" (log only) or "exclude"
   action: "report"
-  
+
   # Detection method: "iqr" or "fold_median"
-  # - iqr: Samples below Q1 - (multiplier * IQR) on linear scale
-  # - fold_median: Samples with median intensity < threshold * overall median
   method: "iqr"
-  
-  # IQR multiplier for outlier threshold (used if method: iqr)
-  # Lower values = more aggressive outlier detection
+
+  # IQR multiplier (for iqr method): lower = more aggressive detection
   iqr_multiplier: 1.5
-  
-  # Fold-change threshold (used if method: fold_median)
-  # Sample is outlier if: sample_median < (fold_threshold * overall_median)
-  # E.g., 0.1 means samples with <10% of overall median are flagged
+
+  # Fold threshold (for fold_median method): e.g., 0.1 = 10% of median
   fold_threshold: 0.1
 
 # =============================================================================
 # Processing Performance
 # =============================================================================
-# Settings for parallel processing and memory management.
-# Adjust based on your machine's CPU and RAM availability.
+# Parallel processing settings. Adjust based on your machine.
 
 processing:
   # Number of parallel workers for peptide rollup
-  # - 1: Single-threaded (default, lowest memory usage)
-  # - 0: Use all available CPUs
-  # - N: Use N worker processes
-  #
-  # Parallel processing can significantly speed up large datasets.
-  # Memory usage scales approximately with n_workers * peptide_batch_size.
+  #   1 = single-threaded (lowest memory, recommended for most cases)
+  #   0 = use all available CPUs
+  #   N = use N worker processes
   n_workers: 1
-  
-  # Number of peptides to process in each batch
-  # Larger batches are more efficient but use more memory.
-  # Recommended: 500-2000 depending on available RAM.
+
+  # Peptides per batch (larger = faster but more memory)
   peptide_batch_size: 1000
 
 # =============================================================================
-# Stage 0: Transition to Peptide Rollup
+# Transition to Peptide Rollup
 # =============================================================================
+# Aggregate transition-level data to peptide-level quantities.
 # Only used if input is transition-level data from Skyline.
 
 transition_rollup:
-  enabled: true  # Set true if input has individual transitions
-  
-  # Rollup method: sum, median_polish, adaptive, topn, library_assist
-  # - sum: Simple sum of all fragment intensities (default, robust)
-  # - median_polish: Tukey median polish (robust to interference)
-  # - adaptive: Learned weight function based on intensity, m/z, and shape correlation
-  # - topn: Select top N transitions by correlation consistency, weight by sqrt(intensity)
-  # - library_assist: Uses spectral library to detect and exclude interfered transitions
-  #                   via iterative least squares fitting. Compares observed fragment ratios
-  #                   to library and removes outliers (likely interference). Falls back to
-  #                   simple sum when library doesn't improve the fit.
-  #
-  # Note: Sum is recommended for most datasets. library_assist is recommended when you
-  # have a high-quality spectral library and want to detect/exclude interfered transitions.
+  enabled: true
+
+  # Rollup method:
+  #   sum            - Simple sum of fragment intensities (default, robust)
+  #   consensus      - Inverse-variance weighted sum (down-weights outlier transitions)
+  #   median_polish  - Tukey median polish (robust to interference)
+  #   adaptive       - Learned weights based on intensity, m/z, shape correlation
+  #   topn           - Select top N transitions by correlation
+  #   library_assist - Uses spectral library to detect/exclude interfered transitions
+  #                    via iterative least squares fitting (recommended with library)
   method: "sum"
-  
-  # Whether to include MS1 precursor signal in quantification
-  # - false: Use only MS2 fragment ions (recommended, more specific)
-  # - true: Include MS1 precursor isotopes
+
+  # Include MS1 precursor signal? (false = MS2 only, recommended)
   use_ms1: false
-  
+
   # Minimum transitions required per peptide
   min_transitions: 3
-  
-  # -------------------------------------------------------------------------
-  # Top-N Method Parameters (only used if method: topn)
-  # -------------------------------------------------------------------------
-  # Number of transitions to select per peptide (same transitions for all samples)
+
+  # Top-N method parameters (only used if method: topn)
   topn_count: 3
-  
-  # Selection method: how to choose which transitions to use
-  # - correlation: select transitions with highest median shape correlation
-  # - intensity: select transitions with highest mean intensity
-  topn_selection: "correlation"
-  
-  # Weighting method: how to combine selected transitions
-  # - sum: simple sum of selected transitions (equal weights)
-  # - sqrt: weight by sqrt(intensity) before summing
-  topn_weighting: "sqrt"
-  
-  # -------------------------------------------------------------------------
-  # Adaptive Rollup Parameters (only used if method: adaptive)
-  # -------------------------------------------------------------------------
-  # Learn parameters from reference samples (recommended for adaptive method)
-  # When true, optimizes beta parameters by minimizing median CV across peptides
-  # in reference samples. Validated on QC samples to ensure generalization.
-  # Requires at least 2 reference samples.
-  # Default: true when method=adaptive, false otherwise
-  learn_adaptive_weights: true  # Learn parameters from reference samples
-  
-  # Adaptive rollup uses a learned weight function with 4 features:
-  #
-  #   log(w) = beta_relative_intensity * relative_intensity
-  #          + beta_mz * normalized_mz
-  #          + beta_shape_corr * median_shape_corr
-  #          + beta_shape_corr_outlier * low_fraction
-  #
-  # Features:
-  # - relative_intensity: Transition intensity / max intensity in the peptide [0,1]
-  #                       Computed per-peptide so the most intense transition = 1.0
-  # - normalized_mz: Fragment ion m/z normalized to [0,1] range
-  # - median_shape_corr: Median shape correlation across all replicates
-  # - low_fraction: Fraction of replicates with low shape correlation
-  #                 (below shape_corr_low_threshold, default 0.7)
-  #
-  # Not optimized (reserved for future use):
-  # - beta_shape_corr_max: Max shape correlation - kept at 0.0
-  #
-  # Key insight: When all betas = 0, weights = 1 for all transitions,
-  # equivalent to simple sum. This is the baseline for comparison.
-  #
-  # Constraints:
-  # - beta_relative_intensity >= 0 (higher intensity should not decrease weight)
-  # - Other betas are unconstrained (can be positive or negative)
-  #
-  # When learn_weights: true, 4 betas are optimized simultaneously.
-  # Normalization parameters (centers, scales, thresholds) are computed 
-  # from reference samples and saved in metadata.json for reproducibility.
-  #
+  topn_selection: "correlation"  # or "intensity"
+  topn_weighting: "sqrt"         # or "sum"
+
+  # Adaptive method parameters (only used if method: adaptive)
+  # The optimizer learns beta_mz and beta_shape_corr_outlier from reference samples
+  # by minimizing CV. These weights adjust transition contributions based on:
+  #   - beta_mz: Higher m/z transitions may have better signal (positive = favor high m/z)
+  #   - beta_shape_corr_outlier: Down-weight transitions with interference (negative = penalize)
+  learn_adaptive_weights: true
   adaptive_rollup:
-    beta_relative_intensity: 0.0  # Weight by relative intensity [0,1] (>= 0)
-    beta_mz: 0.0                  # Weight by m/z (any value)
-    beta_shape_corr: 0.0          # Weight by median shape correlation (any value)
-    beta_shape_corr_outlier: 0.0  # Weight by low-fraction (any value)
-    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation (0-1)
-    mz_normalize: true            # Normalize m/z to [0,1] range
-    
-    # Minimum CV improvement (%) required to use learned adaptive weights vs simple sum
-    # If adaptive doesn't improve CV by at least this amount, falls back to simple sum
-    # This is specific to the adaptive method - library_assist always uses library fitting
-    min_improvement_pct: 5.0
+    # Starting values for optimization (usually left at 0)
+    beta_mz: 0.0
+    beta_shape_corr_outlier: 0.0
+    # Threshold for "low" shape correlation (transitions often below this have interference)
+    shape_corr_low_threshold: 0.7
+    # Minimum improvement required to use learned weights vs simple sum
+    # This is specific to adaptive method - library_assist always uses library fitting
+    min_improvement_pct: 0.1
 
-  # -------------------------------------------------------------------------
-  # Library-Assist Method Parameters (only used if method: library_assist)
-  # -------------------------------------------------------------------------
-  # Uses a spectral library to detect interfered transitions via least squares.
-  # For each peptide, fits: observed_i = scale * library_i + residual_i
-  # Transitions with large positive residuals (interference) are iteratively removed.
-  # Low or negative residuals are fine - they indicate low abundance or noise, not interference.
-  #
-  # Supports .blib (BiblioSpec) or .tsv (Carafe/EncyclopeDIA) libraries.
+  # Library-assist parameters (if method: library_assist)
+  # Uses spectral library as a prior for transition ionization efficiency (row effects).
+  # Compares observed fragment ratios to library and removes outliers iteratively.
+  # Only HIGH residuals are outliers (signal > expected = interference).
+  # Low or negative residuals are valid - they indicate low abundance, not interference.
   library_assist:
-    # Path to spectral library file (REQUIRED for library_assist method)
-    library_path: null  # e.g., "/path/to/library.blib" or "/path/to/library.tsv"
-    
-    # m/z tolerance for matching transitions to library fragments (in Da)
-    mz_tolerance: 0.02
-    
-    # Outlier detection threshold (normalized residual)
-    # Uses normalized residual = (observed - predicted) / predicted
-    # A transition is flagged as outlier if: norm_res > outlier_threshold
-    #
-    # Default (1.0):  Detected as outlier if observed > 2× predicted (standard sensitivity)
-    # Conservative (2.0): Detected as outlier if observed > 3× predicted (strict filtering)
-    #
-    # Higher threshold = more conservative (removes only severe interference)
-    # Lower threshold = more aggressive (removes more potential interference)
-    #
-    # Removes one outlier at a time, stops if removing more would go below min_transitions.
-    # This respects your min_transitions constraint to avoid over-removal.
-    outlier_threshold: 1.0
-    
-    # Minimum R-squared for a "good" library fit
-    # Below this threshold, the result is flagged as potentially unreliable
-    r_squared_threshold: 0.8
-    
-    # Minimum matched fragments required for a valid fit
-    # Peptides with fewer matches return NaN (insufficient data)
-    min_matched_fragments: 3
+    library_path: null          # <<< EDIT REQUIRED: "/path/to/your/library.blib" or ".tsv"
+    mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
+    min_matched_fragments: 3    # Minimum fragments for valid fit (else NaN)
+    fitting_method: "median_polish"  # "median_polish" (RECOMMENDED) or "least_squares"
+                                # median_polish: Uses MEDIAN to estimate sample scale factor
+                                #   - Robust to 1-2 interfered transitions automatically
+                                #   - Based on: log(obs) = log(lib) + beta_s + epsilon
+                                # least_squares: Classic OLS: scale = (lib . obs) / (lib . lib)
+                                #   - More sensitive to outliers
+                                #   - May be better for very clean data
+    outlier_threshold: 1.0      # Normalized residual threshold: (obs-pred)/pred > threshold
+                                # 1.0 = observed > 2x predicted (standard sensitivity)
+                                # 2.0 = observed > 3x predicted (conservative)
+                                # Removes one outlier at a time, respects min_matched_fragments
+    remove_outliers: true       # Set to false to disable outlier removal entirely
+                                # Useful for debugging or when median robustness is sufficient
 
 # =============================================================================
-# Stage 1: Global Normalization
+# Global Normalization
 # =============================================================================
-# Address overall sample loading differences.
+# Correct for overall sample loading differences.
 
 global_normalization:
-  # Method: median, rt_lowess, vsn, quantile, none
-  #
-  # median    - Subtract sample median; shifts all samples to common baseline
-  #             Simple, robust, and preserves original log2 scale
-  #             RECOMMENDED for most proteomics experiments
-  #
-  # rt_lowess - RT-dependent normalization using lowess smoothing
-  #             Fits lowess curve (abundance vs RT) for each sample,
-  #             then normalizes all samples to the global median curve.
-  #             Corrects for RT-dependent systematic effects (e.g., gradient
-  #             issues, ion suppression). Takes ~1 min for 238 samples.
-  #             Use when batch effects vary with retention time.
-  #
-  # vsn       - Variance Stabilizing Normalization using arcsinh transformation
-  #             Stabilizes variance across intensity range (heteroscedasticity)
-  #             Output is on arcsinh-transformed scale, NOT log2
-  #             Use when low-abundance proteins show high variance
-  #
-  # quantile  - Forces identical sample distributions
-  #             Strong normalization that may over-correct
-  #
-  # none      - Skip global normalization
-  #
-  method: "median"
+  # Method:
+  #   median    - Subtract sample median (recommended for simple cases)
+  #   rt_lowess - RT-dependent Lowess normalization (RECOMMENDED default)
+  #               Corrects for RT-dependent systematic effects (ion suppression, gradient issues)
+  #   quantile  - Force identical distributions across all samples (aggressive)
+  #               Ranks values, maps to mean quantile. Good when you expect similar distributions.
+  #   vsn       - Variance Stabilizing Normalization (arcsinh transformation)
+  #               Stabilizes variance across intensity range, good for heteroscedastic data.
+  #               NOTE: Output is on arcsinh scale, NOT log2. Negative values are expected.
+  #   none      - Skip normalization
+  method: "rt_lowess"
 
   # RT-lowess parameters (only used when method: rt_lowess)
   rt_lowess:
@@ -318,55 +234,37 @@ global_normalization:
     # Number of RT grid points for interpolation
     n_grid_points: 100
 
-  # VSN parameters (only used when method: vsn)
+  # VSN parameters (only used if method: vsn)
+  # WARNING: VSN output is NOT on log2 scale - it's arcsinh transformed.
+  # Negative values are valid and represent low-abundance peptides/proteins.
+  # Do not use log2 back-transform (2^x) on VSN data - values are already interpretable.
   vsn_params:
-    # Whether to optimize transformation parameters per sample
-    # - false (default): Use fast median-based scaling (a = 1/median)
-    # - true: Optimize parameters to minimize variance heterogeneity
-    #         using Nelder-Mead optimization. Slower but may give
-    #         better variance stabilization for some datasets.
-    optimize_params: false
+    optimize_params: false  # Set true for better variance stabilization (slower)
 
 # =============================================================================
-# Stage 3: Batch Correction
+# Batch Correction
 # =============================================================================
 # Remove systematic batch effects using ComBat (empirical Bayes).
 
 batch_correction:
   enabled: true
-  
-  # Method: combat, none
-  # ComBat uses empirical Bayes shrinkage for robust batch effect estimation
   method: "combat"
 
 # =============================================================================
 # Protein Parsimony
 # =============================================================================
-# How to handle shared peptides that map to multiple proteins.
+# Handle shared peptides that map to multiple proteins.
 #
-# IMPORTANT: Parsimony requires the search FASTA database to correctly
-# determine peptide-to-protein mappings. Peptides are matched to proteins
-# using direct sequence lookup.
+# IMPORTANT: Requires the FASTA database used for the original search.
 
 parsimony:
-  # Path to the FASTA database used for the original search
-  # REQUIRED for correct peptide-to-protein mapping
-  fasta_path: example-files/uniprot_mouse_may2025_contam_yeastENO1.fasta  # e.g., "/path/to/uniprot_human_reviewed.fasta"
-  
-  # Strategy: all_groups, unique_only, razor
-  # 
-  # all_groups (recommended): Apply shared peptides to ALL protein groups
-  #   - Acknowledges proteoform complexity
-  #   - Avoids assumptions based on FASTA annotations
-  #
-  # unique_only: Only use peptides unique to a single protein group
-  #   - Most conservative
-  #   - May lose proteins with few unique peptides
-  #
-  # razor: Assign shared peptides to group with most peptides
-  #   - MaxQuant-style
-  #   - Makes strong assumptions about protein presence
-  
+  # EDIT REQUIRED: Path to the FASTA database used for your original search.
+  fasta_path: null  # <<< EDIT REQUIRED: "/path/to/your/search_database.fasta"
+
+  # Strategy for shared peptides:
+  #   all_groups  - Apply to all protein groups (recommended)
+  #   unique_only - Only use peptides unique to one protein
+  #   razor       - Assign to group with most peptides (MaxQuant-style)
   shared_peptide_handling: "all_groups"
 
 # =============================================================================
@@ -375,165 +273,82 @@ parsimony:
 # Combine peptides into protein-level quantities.
 
 protein_rollup:
-  # Method for combining peptides into protein abundances:
-  #
-  # sum (default): Simple sum of all peptide intensities
-  #   - Fast and straightforward
-  #   - Good baseline for most analyses
-  #
-  # median_polish: Tukey median polish - robust two-way decomposition
-  #   - Separates peptide ionization effects from sample abundances
-  #   - Automatically downweights outliers through median operation
-  #   - Handles missing values naturally
-  #
-  # topn: Average of top N most intense peptides (SAME peptides across all samples)
-  #   - Selects N peptides with highest median abundance across samples
-  #   - Uses those SAME peptides for all samples (ensures comparability)
-  #   - Simple and interpretable
-  #   - Selected peptides are reported in output
-  #
-  # ibaq: iBAQ (Intensity-Based Absolute Quantification)
-  #   - Sum of intensities / theoretical peptide count
-  #   - Enables cross-protein abundance comparison
-  #   - Requires FASTA and enzyme settings (see ibaq section below)
-  #
-  # maxlfq: Maximum LFQ algorithm (MaxQuant-style)
-  #   - Uses median pairwise peptide ratios between samples
-  #   - Good when relative quantification is more reliable than absolute
-  #
-  method: "sum"
-  
-  # Top-N specific settings (used when method: topn)
+  # Method:
+  #   median_polish - Tukey median polish (robust to outliers, recommended)
+  #   sum           - Simple sum
+  #   topn          - Average of top N most intense peptides
+  #   ibaq          - Intensity-Based Absolute Quantification
+  #   maxlfq        - Maximum LFQ algorithm (MaxQuant-style)
+  method: "median_polish"
+
+  # Minimum peptides required per protein
+  min_peptides: 2
+
+  # Top-N parameters (if method: topn)
   topn:
-    n: 3                              # Number of top peptides to use
-    selection: "median_abundance"     # How to rank: median_abundance, frequency
-  
-  # iBAQ specific settings (REQUIRED when method: ibaq)
-  # iBAQ normalizes protein abundances by the number of theoretical peptides
-  ibaq:
-    fasta_path: null                  # Path to search FASTA (REQUIRED for iBAQ)
-    enzyme: "trypsin"                 # Enzyme for theoretical digestion
-    missed_cleavages: 0               # Typically 0 for iBAQ counting
-    min_peptide_length: 6             # Minimum peptide length
-    max_peptide_length: 30            # Maximum peptide length
-  
-  # For topn method
-  topn:
-    n: 3  # Number of peptides to select
-    # Selection criterion: how to rank peptides for selection
-    # Options:
-    #   - median_abundance: Peptides with highest median across samples (default)
-    #   - frequency: Peptides detected in most samples, then by abundance
+    n: 3
     selection: "median_abundance"
-  
-  # For median_polish method
+
+  # iBAQ parameters (if method: ibaq)
+  ibaq:
+    fasta_path: null
+    enzyme: "trypsin"
+    missed_cleavages: 0
+    min_peptide_length: 6
+    max_peptide_length: 30
+
+  # Median polish parameters
   median_polish:
     max_iterations: 20
     convergence_tolerance: 0.0001
+
+# =============================================================================
+# Protein Normalization
+# =============================================================================
+# Global normalization applied at the protein level after peptide-to-protein rollup.
+# This is separate from peptide-level normalization (global_normalization section).
+
+protein_normalization:
+  # Method:
+  #   median - Subtract sample median, add global median (default)
+  #            Centers all samples to the same median protein abundance
+  #   none   - Skip protein-level normalization
+  #            Use this if you prefer to handle normalization downstream
+  #            or if peptide-level normalization is sufficient
+  method: "median"
 
 # =============================================================================
 # Output Options
 # =============================================================================
 
 output:
-  # File format: parquet, csv, tsv
+  # File format: parquet (recommended), csv, tsv
   format: "parquet"
-  
-  # Output directory (relative to working directory or absolute path)
-  # output_dir: "prism_output/"
-  
-  # The pipeline always produces both:
-  # - corrected_peptides.parquet: peptide-level quantities (batch-corrected)
-  # - corrected_proteins.parquet: protein-level quantities (batch-corrected)
-  # - protein_groups.tsv: protein group definitions from parsimony
-  
+
   # Include median polish residuals for outlier analysis
-  # Following Plubell et al. 2022, residuals may indicate biologically
-  # interesting variation (proteoforms, PTMs, protein processing)
   include_residuals: true
-  
+
   # Compress output files
   compress: true
 
 # =============================================================================
-# QC Report Options
+# QC Report
 # =============================================================================
+# HTML report with diagnostic plots for quality assessment.
 
 qc_report:
-  # Generate QC report
   enabled: true
-  
-  # Output filename (relative to output directory)
   filename: "qc_report.html"
-  
-  # Save individual PNG plots to qc_plots/ subdirectory
+
+  # Save individual PNG plots
   save_plots: true
-  
-  # Embed plots directly in HTML (larger file but self-contained)
+
+  # Embed plots in HTML (makes file self-contained but larger)
   embed_plots: true
-  
-  # Plots to include (all enabled by default)
-  # Each plot type is generated for both peptide and protein levels
-  # showing before/after normalization and batch correction comparisons
+
+  # Plots to include
   plots:
-    # Intensity distribution density plots
-    # Shows sample distribution alignment before/after correction
     intensity_distribution: true
-    
-    # PCA comparison plots
-    # Shows batch effects and sample grouping before/after correction
-    # Samples are colored by type (experimental, reference, pool)
     pca_comparison: true
-    
-    # Correlation heatmap for control samples
-    # Shows reproducibility of reference and QC samples after correction
     control_correlation: true
-    
-    # CV (coefficient of variation) histograms
-    # Shows precision improvement for reference and QC samples
-    # Generated separately for reference and pool sample types
     cv_distribution: true
-
-# =============================================================================
-# Rollup Method Comparison (Optional QC Feature)
-# =============================================================================
-# Generates a separate QC report comparing transition rollup methods.
-# Currently supports comparing library_assist vs sum method.
-# Shows step-by-step library fitting process for top N peptides.
-#
-# REQUIRES: transition_rollup.library_assist.library_path to be set
-
-rollup_comparison:
-  # Enable/disable the comparison feature
-  enabled: false
-
-  # Methods to compare (library_assist vs sum initially)
-  # Future versions may support: median_polish, adaptive, topn, consensus
-  methods:
-    - "sum"
-    - "library_assist"
-
-  # Sample type to use for comparison
-  # Options: "reference" (inter-experiment), "qc" (intra-experiment)
-  # Reference samples are recommended as they should have only technical variation
-  sample_type: "reference"
-
-  # Number of top peptides to display in the report
-  # Peptides are ranked by the ranking_criterion below
-  top_n_peptides: 20
-
-  # How to rank peptides for display
-  # Options:
-  #   - "most_improved": Peptides where library_assist improves CV most vs sum
-  #   - "most_worsened": Peptides where library_assist worsens CV most vs sum
-  #   - "highest_cv": Peptides with highest CV (worst precision) using sum
-  #   - "largest_difference": Peptides with largest CV difference between methods
-  ranking_criterion: "most_improved"
-
-  # Output settings
-  output:
-    # Output filename (relative to output directory)
-    filename: "rollup_comparison_report.html"
-
-    # Save individual PNG plots to rollup_comparison_plots/ subdirectory
-    save_individual_plots: true
