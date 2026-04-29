@@ -34,6 +34,7 @@ def _extract_protein_entry_name(identifier: str) -> str:
 
     Returns:
         Clean entry name or original identifier
+
     """
     # Match UniProt format: sp|accession|entry_name or tr|accession|entry_name
     match = re.match(r"^[sptr]{2}\|[^|]+\|([^\s]+)", identifier)
@@ -338,26 +339,33 @@ def build_peptide_protein_map_from_fasta(
 
 
 def _find_subsumable_proteins(protein_to_peptides: dict[str, set[str]]) -> dict[str, str]:
-    """Find proteins whose peptides are a subset of another protein's peptides.
+    """Find proteins whose peptides are a strict subset of another protein's peptides.
+
+    Each subsumed protein is mapped to the lexicographically smallest valid
+    subsumer. This matches Osprey's "lowest group ID wins" tiebreaker rule
+    for protein-group selection (docs/16-protein-parsimony.md), so the
+    subsumed_proteins list reported per group is deterministic regardless of
+    the input dict's iteration order.
 
     Returns:
         Dict mapping subsumed protein -> subsuming protein
 
     """
-    subsumed = {}
-    proteins = list(protein_to_peptides.keys())
+    proteins = sorted(protein_to_peptides.keys())
+    subsumed: dict[str, str] = {}
 
-    for i, prot_a in enumerate(proteins):
+    for prot_a in proteins:
         peps_a = protein_to_peptides[prot_a]
-
-        for prot_b in proteins[i + 1 :]:
+        # Find every strict superset of A among the other proteins, then pick
+        # the lexicographically smallest. Iterating sorted() guarantees the
+        # smallest subsumer wins.
+        for prot_b in proteins:
+            if prot_a == prot_b:
+                continue
             peps_b = protein_to_peptides[prot_b]
-
-            if peps_a < peps_b:  # A is proper subset of B
+            if peps_a < peps_b:  # A is a strict subset of B
                 subsumed[prot_a] = prot_b
-                break
-            elif peps_b < peps_a:  # B is proper subset of A
-                subsumed[prot_b] = prot_a
+                break  # smallest valid B found, done with A
 
     return subsumed
 
@@ -489,39 +497,53 @@ def compute_protein_groups(
         can = list(peptide_to_canonical[pep])[0]  # Only one by definition
         canonical_to_unique_peps[can].add(pep)
 
-    # Greedy assignment of shared peptides
-    remaining_shared = shared_peptides.copy()
+    # Razor: iterative greedy set cover, ported from Osprey's
+    # protein_parsimony documentation (docs/16-protein-parsimony.md):
+    #
+    #   while any shared peptides remain unassigned:
+    #     pick the group G with the MOST unique peptides that still has at
+    #       least one unassigned shared peptide (tiebreak: lowest group ID)
+    #     claim all of G's unassigned shared peptides in one batch
+    #
+    # Determinism rules:
+    #   1. shared peptides are collected in sorted order at the start so
+    #      every iteration sees a stable view of remaining work.
+    #   2. winner selection: max_by_key((unique_count, Reverse(group_id))).
+    #      Ties on unique-peptide count are broken by the LOWEST canonical
+    #      protein string (the group ID surrogate). The previous tiebreaker
+    #      was (-ord(can[0]), n_remaining), which only differentiated by
+    #      first character of the accession and then preferred groups with
+    #      more shared peptides remaining; that was not in the spec and
+    #      produced different assignments than Osprey on tie cases.
+    #   3. candidate iteration is over a sorted list of canonical proteins
+    #      so the candidate set construction is order-stable.
+    #   4. claimed peptides per round are sorted alphabetically before
+    #      being added to the razor set; sets are unordered so this has no
+    #      semantic effect on the final result, but matches the spec for
+    #      byte-identical reproducibility.
+    remaining_shared: set[str] = set(sorted(shared_peptides))
     canonical_to_razor_peps: dict[str, set[str]] = defaultdict(set)
+    sorted_canonical_proteins = sorted(canonical_proteins)
 
     while remaining_shared:
-        # Find protein(s) that would gain the most remaining peptides
-        # Prioritize by: 1) unique peptide count, 2) alphabetical
+        candidates = [
+            can
+            for can in sorted_canonical_proteins
+            if protein_to_peptides[canonical_to_members[can][0]] & remaining_shared
+        ]
+        if not candidates:
+            break
 
-        best_can = None
-        best_score = (-1, "")
+        # Highest unique count wins; ties broken by lowest canonical string.
+        best_can = min(
+            candidates,
+            key=lambda c: (-len(canonical_to_unique_peps[c]), c),
+        )
 
-        for can in canonical_proteins:
-            # How many remaining shared peptides would this protein get?
-            can_peps = protein_to_peptides[canonical_to_members[can][0]]  # Use first member
-            remaining_for_can = can_peps & remaining_shared
-
-            n_unique = len(canonical_to_unique_peps[can])
-            n_remaining = len(remaining_for_can)
-
-            if n_remaining > 0:
-                score = (n_unique, -ord(can[0]) if can else 0, n_remaining)
-                if score > best_score:
-                    best_score = score
-                    best_can = can
-
-        if best_can is None:
-            break  # No more assignable peptides
-
-        # Assign remaining shared peptides to this protein
         can_peps = protein_to_peptides[canonical_to_members[best_can][0]]
-        to_assign = can_peps & remaining_shared
+        to_assign = sorted(can_peps & remaining_shared)
         canonical_to_razor_peps[best_can].update(to_assign)
-        remaining_shared -= to_assign
+        remaining_shared -= set(to_assign)
 
     # Step 5: Create ProteinGroup objects
     protein_groups = []

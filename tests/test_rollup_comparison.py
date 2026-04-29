@@ -2,12 +2,10 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from skyline_prism.rollup_comparison import (
     LibraryFitStep,
     PeptideLibraryComparison,
-    RollupComparisonResult,
     RollupComparisonSummary,
     compute_cv_linear,
     compute_ranking_score,

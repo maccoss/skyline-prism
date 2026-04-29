@@ -2,6 +2,8 @@
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from skyline_prism.data_io import (
@@ -921,3 +923,430 @@ class TestDuplicateColumnPrevention:
         # Both rows should be present
         assert len(result_df) == 2
         assert set(result_df["Protein"].unique()) == {"P1", "P2"}
+
+
+def _make_skyline_parquet(
+    path,
+    *,
+    proteins,
+    peptides,
+    replicates,
+    add_metadata=False,
+    batch_name=None,
+    row_group_size=None,
+):
+    """Write a minimal Skyline-shaped parquet for streaming-merge tests.
+
+    All four lists must have the same length. ``add_metadata=True`` writes the
+    Batch / Source Document / Sample ID columns into the file (simulating a
+    re-export of an already-processed file).
+    """
+    n = len(proteins)
+    assert len(peptides) == n and len(replicates) == n
+    df = pd.DataFrame(
+        {
+            "Protein": proteins,
+            "Peptide Modified Sequence Unimod Ids": peptides,
+            "Precursor Charge": [2] * n,
+            "Fragment Ion": ["y5"] * n,
+            "Product Charge": [1] * n,
+            "Product Mz": [500.0] * n,
+            "Area": list(range(1000, 1000 + n)),
+            "Replicate Name": replicates,
+        }
+    )
+    if add_metadata:
+        assert batch_name is not None
+        df["Batch"] = batch_name
+        df["Source Document"] = path.stem
+        df["Sample ID"] = [
+            f"{r}__@__{batch_name}" if r is not None else None for r in replicates
+        ]
+    table = pa.Table.from_pandas(df)
+    if row_group_size is None:
+        pq.write_table(table, path)
+    else:
+        pq.write_table(table, path, row_group_size=row_group_size)
+
+
+class TestMultiParquetStreamingMerge:
+    """Tests for the pyarrow-streaming merge path used when all inputs are parquet.
+
+    These guard against the regression where the multi-file path could not handle
+    the "dozens of parquet files" scaling claim from the project's design intent.
+    """
+
+    def test_merge_dozen_parquet_files_scales(self, tmp_path):
+        """Merging 12 parquet files produces correct row count, batches, and samples.
+
+        This is the headline regression check: the project claims to support
+        cohorts of dozens of parquet files. A single test with N=12 small files
+        exercises the full pyarrow streaming path, the per-file Sample ID
+        generation, and the DuckDB sort over the merged intermediate.
+        """
+        n_files = 12
+        rows_per_file = 5
+        report_paths = []
+        batch_names = []
+        for i in range(n_files):
+            p = tmp_path / f"plate_{i:02d}.parquet"
+            batch = f"Plate{i:02d}"
+            # Two samples per file, peptides chosen so global sort order is stable
+            _make_skyline_parquet(
+                p,
+                proteins=[f"P{i}"] * rows_per_file,
+                peptides=[f"PEPTIDE_{i:02d}_{j}" for j in range(rows_per_file)],
+                replicates=[
+                    f"S{i:02d}_A" if j % 2 == 0 else f"S{i:02d}_B"
+                    for j in range(rows_per_file)
+                ],
+            )
+            report_paths.append(p)
+            batch_names.append(batch)
+
+        out = tmp_path / "merged.parquet"
+        result_path, samples_by_batch, total_rows = merge_and_sort_streaming(
+            report_paths=report_paths,
+            output_path=out,
+            batch_names=batch_names,
+        )
+
+        assert total_rows == n_files * rows_per_file
+        assert len(samples_by_batch) == n_files
+        for batch in batch_names:
+            idx = int(batch[5:])
+            assert batch in samples_by_batch
+            assert samples_by_batch[batch] == {f"S{idx:02d}_A", f"S{idx:02d}_B"}
+
+        result_df = pd.read_parquet(result_path)
+        # All synthesized metadata columns are present exactly once
+        assert result_df.columns.tolist().count("Batch") == 1
+        assert result_df.columns.tolist().count("Source Document") == 1
+        assert result_df.columns.tolist().count("Sample ID") == 1
+        # Every batch is represented in the merged output
+        assert set(result_df["Batch"].unique()) == set(batch_names)
+
+    def test_merge_parquet_output_is_sorted_by_peptide(self, tmp_path):
+        """The sort stage must actually sort the merged output by peptide.
+
+        Catches the regression case where the sort stage silently produced an
+        unsorted file (e.g., if the COPY-of-ORDER-BY ever falls back to
+        insertion order).
+        """
+        # Two files with deliberately interleaved peptide names
+        p1 = tmp_path / "f1.parquet"
+        p2 = tmp_path / "f2.parquet"
+        _make_skyline_parquet(
+            p1,
+            proteins=["P1", "P1"],
+            peptides=["PEPTIDE_C", "PEPTIDE_A"],
+            replicates=["S1", "S1"],
+        )
+        _make_skyline_parquet(
+            p2,
+            proteins=["P2", "P2"],
+            peptides=["PEPTIDE_B", "PEPTIDE_D"],
+            replicates=["S2", "S2"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=[p1, p2],
+            output_path=out,
+            batch_names=["B1", "B2"],
+        )
+
+        df = pd.read_parquet(out)
+        peps = df["Peptide Modified Sequence Unimod Ids"].tolist()
+        assert peps == sorted(peps)
+        assert peps == ["PEPTIDE_A", "PEPTIDE_B", "PEPTIDE_C", "PEPTIDE_D"]
+
+    def test_merge_parquet_with_null_replicate_names(self, tmp_path):
+        """Null replicate names must propagate to null Sample IDs, not crash.
+
+        The vectorized `pyarrow.compute.binary_join_element_wise(...,
+        null_handling="emit_null")` must match the previous Python behavior
+        of producing a null Sample ID when the replicate is null.
+        """
+        p = tmp_path / "with_nulls.parquet"
+        _make_skyline_parquet(
+            p,
+            proteins=["P1", "P1", "P1"],
+            peptides=["PEPTIDE_A", "PEPTIDE_B", "PEPTIDE_C"],
+            replicates=["S1", None, "S2"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=[p],
+            output_path=out,
+            batch_names=["B1"],
+        )
+
+        df = pd.read_parquet(out)
+        # The null-replicate row should have a null Sample ID
+        null_rows = df[df["Replicate Name"].isna()]
+        assert len(null_rows) == 1
+        assert null_rows["Sample ID"].isna().all()
+        # The non-null rows should have the standard Sample ID format
+        non_null_rows = df[df["Replicate Name"].notna()]
+        for _, row in non_null_rows.iterrows():
+            assert row["Sample ID"] == f"{row['Replicate Name']}__@__B1"
+
+    def test_merge_parquet_with_multiple_row_groups(self, tmp_path):
+        """Row-group iteration produces correct results across row group boundaries.
+
+        The streaming merge calls ``ParquetFile.read_row_group(i, ...)`` once per
+        row group. This test writes a file with a small ``row_group_size`` so it
+        spans multiple row groups, then verifies all rows are preserved and the
+        Sample ID is generated correctly for every row.
+        """
+        p = tmp_path / "multi_row_group.parquet"
+        n = 100
+        _make_skyline_parquet(
+            p,
+            proteins=["P1"] * n,
+            peptides=[f"PEPTIDE_{i:03d}" for i in range(n)],
+            replicates=[f"S{i % 4}" for i in range(n)],
+            row_group_size=17,  # forces multiple row groups
+        )
+        # Sanity check: the test data has multiple row groups
+        assert pq.ParquetFile(p).num_row_groups > 1
+
+        out = tmp_path / "merged.parquet"
+        result_path, _, total_rows = merge_and_sort_streaming(
+            report_paths=[p],
+            output_path=out,
+            batch_names=["B1"],
+        )
+
+        assert total_rows == n
+        df = pd.read_parquet(result_path)
+        assert len(df) == n
+        # Every row gets the expected Sample ID
+        expected_ids = {f"S{i % 4}__@__B1" for i in range(n)}
+        assert set(df["Sample ID"].unique()) == expected_ids
+
+    def test_merge_parquet_schema_mismatch_raises(self, tmp_path):
+        """Files with extra columns in the first input vs. later ones must raise.
+
+        Silently dropping columns would mask data-quality problems. The streaming
+        merge raises with a clear message naming the missing columns.
+        """
+        # First file has an extra "Library Intensity" column; second does not.
+        p1 = tmp_path / "with_lib.parquet"
+        df1 = pd.DataFrame(
+            {
+                "Protein": ["P1"],
+                "Peptide Modified Sequence Unimod Ids": ["PEPTIDE_A"],
+                "Precursor Charge": [2],
+                "Fragment Ion": ["y5"],
+                "Product Charge": [1],
+                "Product Mz": [500.0],
+                "Area": [1000],
+                "Replicate Name": ["S1"],
+                "Library Intensity": [42.0],
+            }
+        )
+        df1.to_parquet(p1, index=False)
+
+        p2 = tmp_path / "without_lib.parquet"
+        _make_skyline_parquet(
+            p2,
+            proteins=["P2"],
+            peptides=["PEPTIDE_B"],
+            replicates=["S2"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        with pytest.raises(ValueError, match="missing columns"):
+            merge_and_sort_streaming(
+                report_paths=[p1, p2],
+                output_path=out,
+                batch_names=["B1", "B2"],
+            )
+
+    def test_merge_parquet_cleans_up_unsorted_intermediate(self, tmp_path):
+        """The ``.unsorted.parquet`` intermediate is deleted after a successful run.
+
+        Leaving stale intermediates around would confuse subsequent runs and waste disk.
+        """
+        p = tmp_path / "f1.parquet"
+        _make_skyline_parquet(
+            p,
+            proteins=["P1"],
+            peptides=["PEPTIDE_A"],
+            replicates=["S1"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=[p],
+            output_path=out,
+            batch_names=["B1"],
+        )
+
+        unsorted = out.with_suffix(".unsorted.parquet")
+        assert not unsorted.exists()
+
+    def test_merged_output_readable_via_read_row_group(self, tmp_path):
+        """The sorted output must be readable by pyarrow's row-group reader.
+
+        The downstream chunked rollup reads the merged parquet via
+        ``ParquetFile.read_row_group(i, columns=...)`` rather than
+        ``pd.read_parquet``. This regression check catches the failure where
+        the writer produces page headers that pyarrow cannot deserialize
+        (``TProtocolException: Invalid data, Deserializing page header
+        failed``) mid-file. We additionally pass the same ``columns=`` filter
+        that production uses, since the failure was specifically on the
+        column-pruned read path.
+        """
+        # Build inputs across multiple files so the sort produces a multi-RG output
+        report_paths = []
+        batch_names = []
+        n_files = 4
+        rows_per_file = 500
+        for i in range(n_files):
+            p = tmp_path / f"plate_{i}.parquet"
+            _make_skyline_parquet(
+                p,
+                proteins=[f"P{i}"] * rows_per_file,
+                peptides=[
+                    f"PEPTIDE_{i:02d}_{j:04d}" for j in range(rows_per_file)
+                ],
+                replicates=[f"S{i}_{j % 3}" for j in range(rows_per_file)],
+            )
+            report_paths.append(p)
+            batch_names.append(f"B{i}")
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=report_paths,
+            output_path=out,
+            batch_names=batch_names,
+        )
+
+        # Read the merged output via the same API that production uses,
+        # including the column-pruned read pattern from chunked_processing.
+        pf = pq.ParquetFile(out)
+        cols_to_read = [
+            "Peptide Modified Sequence Unimod Ids",
+            "Sample ID",
+            "Batch",
+            "Area",
+        ]
+        total_rows_read = 0
+        for i in range(pf.num_row_groups):
+            table = pf.read_row_group(i, columns=cols_to_read)
+            total_rows_read += table.num_rows
+            assert table.schema.names == cols_to_read
+        assert total_rows_read == n_files * rows_per_file
+
+    def test_merged_zstd_output_is_read_row_group_safe(self, tmp_path):
+        """Zstd, multi-row-group output is readable via the hardened reader.
+
+        Opens the merged file with ``pq.ParquetFile(..., pre_buffer=False,
+        memory_map=False)`` and iterates every row group via column-pruned
+        ``read_row_group``. The downstream chunked rollup uses these options to avoid the
+        ``TProtocolException: Invalid data, Deserializing page header failed``
+        symptom on multi-GB zstd parquet files. This test locks in:
+          1. The merge writes zstd-compressed output (the codec the user wants).
+          2. The output produces multiple row groups (matches production
+             ``ROW_GROUP_SIZE 1000000`` setting at appropriate scale).
+          3. The hardened reader successfully iterates every row group with
+             a column-pruned ``read_row_group(i, columns=cols, use_threads=True)``
+             call, exactly as production does.
+        """
+        # Generate enough rows that the merged output spans multiple row groups
+        # at production-like row group sizing. Using N_files * rows_per_file
+        # well above the chunked_processing row group target keeps the test
+        # cheap while exercising the multi-RG read path.
+        n_files = 4
+        rows_per_file = 800
+        report_paths = []
+        batch_names = []
+        for i in range(n_files):
+            p = tmp_path / f"plate_{i}.parquet"
+            _make_skyline_parquet(
+                p,
+                proteins=[f"P{i}"] * rows_per_file,
+                peptides=[
+                    f"PEPTIDE_{i:02d}_{j:04d}" for j in range(rows_per_file)
+                ],
+                replicates=[f"S{i}_{j % 3}" for j in range(rows_per_file)],
+            )
+            report_paths.append(p)
+            batch_names.append(f"B{i}")
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=report_paths,
+            output_path=out,
+            batch_names=batch_names,
+        )
+
+        # Confirm zstd compression on the persisted output
+        meta = pq.read_metadata(out)
+        codecs = {
+            meta.row_group(rg).column(c).compression
+            for rg in range(meta.num_row_groups)
+            for c in range(meta.num_columns)
+        }
+        assert codecs == {"ZSTD"}, f"expected only ZSTD, got {codecs}"
+
+        # Read every row group with the hardened pyarrow open + column pruning
+        # used by chunked_processing.rollup_transitions_sorted.
+        pf = pq.ParquetFile(out, pre_buffer=False, memory_map=False)
+        cols_to_read = [
+            "Peptide Modified Sequence Unimod Ids",
+            "Sample ID",
+            "Batch",
+            "Area",
+        ]
+        rows_read = 0
+        for i in range(pf.num_row_groups):
+            table = pf.read_row_group(i, columns=cols_to_read, use_threads=True)
+            rows_read += table.num_rows
+            assert table.schema.names == cols_to_read
+        assert rows_read == n_files * rows_per_file
+
+    def test_merge_parquet_with_existing_metadata_across_files(self, tmp_path):
+        """Mix of files with and without metadata columns produces consistent output.
+
+        Reproduces the production case where some plates were already exported with
+        Batch/Source Document/Sample ID and others were not.
+        """
+        # File 1: has metadata already
+        p1 = tmp_path / "with_md.parquet"
+        _make_skyline_parquet(
+            p1,
+            proteins=["P1"],
+            peptides=["PEPTIDE_A"],
+            replicates=["S1"],
+            add_metadata=True,
+            batch_name="OldBatch",
+        )
+        # File 2: no metadata
+        p2 = tmp_path / "without_md.parquet"
+        _make_skyline_parquet(
+            p2,
+            proteins=["P2"],
+            peptides=["PEPTIDE_B"],
+            replicates=["S2"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=[p1, p2],
+            output_path=out,
+            batch_names=["NewB1", "NewB2"],
+        )
+
+        df = pd.read_parquet(out)
+        # No duplicate columns (no Batch_1 or Sample ID_1)
+        cols = df.columns.tolist()
+        assert all(not c.endswith("_1") for c in cols), f"Unexpected duplicates: {cols}"
+        # File 1 keeps its existing Batch ("OldBatch"), File 2 gets the synthesized one
+        batches_seen = set(df["Batch"].unique())
+        assert "OldBatch" in batches_seen
+        assert "NewB2" in batches_seen

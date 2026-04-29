@@ -750,38 +750,38 @@ def least_squares_rollup_vectorized(
 
         # Only HIGH residuals are outliers (interference = signal > expected)
         # Low or negative residuals are valid - just low abundance
-        
+
         # Compute normalized residuals: (obs - pred) / pred for included fragments
         norm_residuals = np.zeros_like(residuals)
         valid_pred = predicted > 0
         norm_residuals[valid_pred] = residuals[valid_pred] / predicted[valid_pred]
-        
+
         # Find worst outlier per sample
         # Only among included fragments that exceed threshold
         worst_outliers_found = False
         new_excluded = np.zeros_like(included, dtype=bool)
-        
+
         for s in range(n_samples):
             included_idx = np.where(included[:, s])[0]
             n_included_s = len(included_idx)
-            
+
             if n_included_s <= min_fragments:
                 continue
-            
+
             # Get normalized residuals for included fragments
             norm_res_s = norm_residuals[included_idx, s]
-            
+
             # Find worst (highest positive) residual
             worst_local_idx = np.argmax(norm_res_s)
             worst_norm_res = norm_res_s[worst_local_idx]
-            
+
             # Check if it exceeds threshold
             if worst_norm_res > outlier_threshold:
                 # Mark as excluded in the full array
                 worst_global_idx = included_idx[worst_local_idx]
                 new_excluded[worst_global_idx, s] = True
                 worst_outliers_found = True
-        
+
         if not worst_outliers_found:
             # Converged - no outliers exceed threshold
             break
@@ -1178,26 +1178,26 @@ def least_squares_rollup(
 
         # Only HIGH residuals are outliers (interference = signal > expected)
         # Low or negative residuals are fine - just low abundance or noise
-        
+
         # Find worst outlier using normalized residuals
         # normalized_residual = (observed - predicted) / predicted
         # threshold=1.0 means observed > 2× predicted (detected as outlier)
         worst_idx = -1
         worst_norm_res = 0.0
-        
+
         for i in range(len(obs_iter)):
             if predicted[i] > 0:
                 norm_res = residuals[i] / predicted[i]
                 if norm_res > worst_norm_res:
                     worst_norm_res = norm_res
                     worst_idx = i
-        
+
         # Check if worst outlier exceeds threshold
         if worst_norm_res > outlier_threshold and n_included > min_fragments:
             # Mark this fragment as outlier in included_mask
             included_positions = np.where(included_mask)[0]
             included_mask[included_positions[worst_idx]] = False
-            
+
             # Record in original indices
             orig_idx = valid_indices[included_positions[worst_idx]]
             all_outlier_indices.append(int(orig_idx))

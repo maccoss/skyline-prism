@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.csv as pa_csv
 import pyarrow.parquet as pq
 
@@ -962,11 +963,6 @@ def _sort_parquet_low_memory(
     input_path = Path(input_path)
     output_path = Path(output_path)
 
-    # Use 75% of available system RAM so DuckDB can sort in memory on large machines
-    # while still leaving headroom.  Also respect the caller's sort_buffer_mb cap.
-    available_mb = _get_available_memory_mb()
-    effective_memory = min(sort_buffer_mb, int(available_mb * 0.75))
-
     # Prefer /tmp (local disk) for spill files — NAS mounts block DuckDB disk spilling
     local_tmp = Path("/tmp")
     if local_tmp.exists() and local_tmp.is_dir():
@@ -976,7 +972,7 @@ def _sort_parquet_low_memory(
     temp_dir.mkdir(exist_ok=True)
 
     conn = duckdb.connect()
-    conn.execute(f"SET memory_limit='{effective_memory}MB'")
+    conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
     conn.execute(f"SET temp_directory='{temp_dir}'")
     conn.execute("SET enable_progress_bar=true")
     # Enable external sorting for large datasets
@@ -984,7 +980,7 @@ def _sort_parquet_low_memory(
     # Limit threads to reduce per-thread sort buffer memory
     conn.execute("SET threads=2")
 
-    logger.info(f"  Memory limit: {effective_memory}MB, threads: 2, temp dir: {temp_dir}")
+    logger.info(f"  Memory limit: {sort_buffer_mb}MB, threads: 2, temp dir: {temp_dir}")
 
     batch_escaped = batch_name.replace("'", "''")
     stem_escaped = input_path.stem.replace("'", "''")
@@ -1046,6 +1042,95 @@ def _sort_parquet_low_memory(
     logger.info(f"  Sorting complete: {total_rows:,} rows, {len(unique_samples)} samples")
 
     return output_path, {batch_name: unique_samples}, total_rows
+
+
+def _stream_concat_parquet(
+    report_paths: list[Path],
+    batch_names: list[str],
+    output_path: Path,
+) -> None:
+    """Stream-concatenate parquet files into one parquet, adding metadata columns.
+
+    Sequentially iterates each input parquet by row group with threaded
+    decompression and writes one ParquetWriter. Memory is bounded by one
+    row group at a time, regardless of input file count or total size, so
+    this scales cleanly to 100s of parquet files.
+
+    DuckDB's parallel parquet reader pulls full row groups across all
+    input files concurrently into per-thread buffers, which on multi-GB
+    inputs allocates more than the configured memory cap before any rows
+    reach the sort. Doing the concat in pyarrow with sequential
+    file-by-file processing avoids that buffer explosion. The output is a
+    single unsorted parquet file that DuckDB can then sort in a much
+    cheaper one-source pass.
+
+    Adds Batch / Source Document / Sample ID columns when missing on the
+    input side. Snappy compression on the intermediate: it is deleted
+    right after the sort, so codec choice is purely about writer-thread
+    speed.
+    """
+    writer: pq.ParquetWriter | None = None
+    target_schema: pa.Schema | None = None
+
+    for file_path, batch_name in zip(report_paths, batch_names):
+        file_path = Path(file_path)
+        pf = pq.ParquetFile(file_path, pre_buffer=False, memory_map=False)
+        existing_cols = set(pf.schema_arrow.names)
+
+        replicate_col = None
+        for col in ("Replicate Name", "Replicate_Name", "ReplicateName"):
+            if col in existing_cols:
+                replicate_col = col
+                break
+        if replicate_col is None:
+            raise ValueError(
+                f"Could not find replicate column in {file_path.name}. "
+                f"Looked for: Replicate Name, Replicate_Name, ReplicateName"
+            )
+
+        for rg_idx in range(pf.num_row_groups):
+            table = pf.read_row_group(rg_idx, use_threads=True)
+            n = table.num_rows
+
+            if "Batch" not in existing_cols:
+                table = table.append_column(
+                    "Batch", pa.array([batch_name] * n, type=pa.string())
+                )
+            if "Source Document" not in existing_cols:
+                table = table.append_column(
+                    "Source Document",
+                    pa.array([file_path.stem] * n, type=pa.string()),
+                )
+            if "Sample ID" not in existing_cols:
+                rep_arr = table.column(replicate_col).cast(pa.string())
+                batch_const = pa.array([batch_name] * n, type=pa.string())
+                sample_ids = pc.binary_join_element_wise(
+                    rep_arr, batch_const, "__@__", null_handling="emit_null"
+                )
+                table = table.append_column("Sample ID", sample_ids)
+
+            if writer is None:
+                target_schema = table.schema
+                writer = pq.ParquetWriter(
+                    str(output_path), target_schema, compression="snappy"
+                )
+            elif table.schema != target_schema:
+                missing = [
+                    name
+                    for name in target_schema.names
+                    if name not in table.schema.names
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{file_path.name} is missing columns present in "
+                        f"{report_paths[0].name}: {missing[:10]}"
+                    )
+                table = table.select(target_schema.names)
+
+            writer.write_table(table)
+
+    if writer is not None:
+        writer.close()
 
 
 def merge_and_sort_streaming(
@@ -1152,7 +1237,7 @@ def merge_and_sort_streaming(
         if col_name in header:
             replicate_col = col_name
             break
-    
+
     if replicate_col is None:
         raise ValueError(
             f"Could not find replicate column in {first_file.name}. "
@@ -1174,151 +1259,229 @@ def merge_and_sort_streaming(
         )
 
 
-    # Build UNION ALL query with batch columns added per file
-    # DuckDB will read all files (CSV or parquet), add the columns, union, sort, and write in one pass
+    # =========================================================================
+    # Multi-file path: single-pass DuckDB merge + sort + write
+    #
+    # Each input file gets a per-file SELECT that adds Batch / Source Document /
+    # Sample ID columns when missing, preserving them when present. The N
+    # SELECTs are UNION ALL'd, sorted by the peptide column, and written to one
+    # zstd-compressed parquet file in a single COPY operation.
+    #
+    # The OOMs we hit previously on this query were caused by configuration,
+    # not by the query shape:
+    #   - preserve_insertion_order=true (default) made the sort materialize the
+    #     full union output instead of spilling cleanly
+    #   - temp_directory defaulted to next-to-output, which on a NAS mount
+    #     prevents DuckDB from disk-spilling
+    #   - default ROW_GROUP_SIZE at multi-GB scale produced too many small row
+    #     groups, which amplified read-side issues downstream
+    # All three are fixed by the SET statements and COPY options below.
+    # =========================================================================
+
+    # Pre-validate schemas. UNION ALL only works when every per-file SELECT
+    # produces the same column set; otherwise DuckDB raises a Binder error.
+    # We catch the mismatch up front so the user gets a clear message naming
+    # the missing columns rather than a SQL stack trace.
+    file_headers: list[list[str]] = []
+    for file_path in report_paths:
+        fp = Path(file_path)
+        fsuf = fp.suffix.lower()
+        if fsuf == ".parquet":
+            file_headers.append(pq.ParquetFile(fp).schema.names)
+        else:
+            fdelim = "\t" if fsuf in [".tsv", ".txt"] else ","
+            with open(fp) as fh:
+                file_headers.append(fh.readline().strip().split(fdelim))
+
+    # Only flag mismatches in DATA columns. The synthesized metadata columns
+    # (Batch, Source Document, Sample ID) are intentionally allowed to differ
+    # between files because the per-file SELECT below fills them in when
+    # missing, producing union-compatible row shapes.
+    synth_metadata_cols = {"Batch", "Source Document", "Sample ID"}
+    first_data_cols = set(file_headers[0]) - synth_metadata_cols
+    for fp, hdr in zip(report_paths[1:], file_headers[1:], strict=False):
+        hdr_data = set(hdr) - synth_metadata_cols
+        missing = sorted(first_data_cols - hdr_data)
+        if missing:
+            raise ValueError(
+                f"{Path(fp).name} is missing columns present in "
+                f"{Path(report_paths[0]).name}: {missing[:10]}"
+            )
+
     union_parts = []
-    for file_path, batch_name in zip(report_paths, batch_names):
+    for file_path, batch_name, file_header in zip(
+        report_paths, batch_names, file_headers, strict=False
+    ):
         file_path = Path(file_path)
-        # Escape single quotes in batch name and path
         batch_escaped = batch_name.replace("'", "''")
         stem_escaped = file_path.stem.replace("'", "''")
         path_str = str(file_path).replace("'", "''")
 
-        # Detect file type from extension
-        suffix = file_path.suffix.lower()
-        is_parquet = suffix == ".parquet"
-        delimiter = "\\t" if suffix in [".tsv", ".txt"] else ","
+        file_suffix = file_path.suffix.lower()
+        is_parquet = file_suffix == ".parquet"
 
-        # Detect replicate column name (spaces vs underscores)
-        # Skyline CSV uses "Replicate Name", parquet uses "Replicate_Name"
-        if is_parquet:
-            pf = pq.ParquetFile(file_path)
-            header = pf.schema.names
-        else:
-            with open(file_path) as f:
-                header_line = f.readline().strip()
-                header = header_line.split("\\t" if suffix in [".tsv", ".txt"] else ",")
-
-        replicate_col = None
-        for col_name in ["Replicate Name", "Replicate_Name", "ReplicateName"]:
-            if col_name in header:
-                replicate_col = col_name
+        file_replicate_col = None
+        for col_name in ("Replicate Name", "Replicate_Name", "ReplicateName"):
+            if col_name in file_header:
+                file_replicate_col = col_name
                 break
-        
-        if replicate_col is None:
+        if file_replicate_col is None:
             raise ValueError(
                 f"Could not find replicate column in {file_path.name}. "
                 f"Looked for: Replicate Name, Replicate_Name, ReplicateName"
             )
 
-        # Check which columns already exist to avoid duplicates
+        # Add metadata columns only when not already present
         add_cols = []
-        if "Batch" not in header:
+        if "Batch" not in file_header:
             add_cols.append(f"'{batch_escaped}' AS \"Batch\"")
-        if "Source Document" not in header:
+        if "Source Document" not in file_header:
             add_cols.append(f"'{stem_escaped}' AS \"Source Document\"")
-        if "Sample ID" not in header:
-            add_cols.append(f"\"{replicate_col}\" || '__@__' || '{batch_escaped}' AS \"Sample ID\"")
-
-        # Build SELECT clause
-        if add_cols:
-            select_clause = "SELECT *, " + ", ".join(add_cols)
-        else:
-            select_clause = "SELECT *"
+        if "Sample ID" not in file_header:
+            add_cols.append(
+                f'"{file_replicate_col}" || \'__@__\' || \'{batch_escaped}\' AS "Sample ID"'
+            )
+        select_clause = (
+            "SELECT *, " + ", ".join(add_cols) if add_cols else "SELECT *"
+        )
 
         if is_parquet:
-            # Read parquet file directly
-            union_parts.append(f"""
-                {select_clause}
-                FROM read_parquet('{path_str}')
-            """)
+            union_parts.append(
+                f"{select_clause} FROM read_parquet('{path_str}')"
+            )
         else:
-            # Read CSV/TSV file
-            union_parts.append(f"""
-                {select_clause}
-                FROM read_csv('{path_str}',
-                              header=true,
-                              delim='{delimiter}',
-                              ignore_errors=true,
-                              all_varchar=false)
-            """)
+            sql_delim = "\\t" if file_suffix in [".tsv", ".txt"] else ","
+            union_parts.append(
+                f"{select_clause} FROM read_csv('{path_str}', "
+                f"header=true, delim='{sql_delim}', "
+                f"ignore_errors=true, all_varchar=false)"
+            )
 
     union_query = " UNION ALL ".join(union_parts)
 
-    # Configure DuckDB for large file handling
-    temp_dir = output_path.parent / ".duckdb_temp"
+    # /tmp for spill (local disk, NAS-safe). When unavailable, fall back to
+    # output dir (which works for non-NAS outputs).
+    local_tmp = Path("/tmp")
+    if local_tmp.exists() and local_tmp.is_dir():
+        temp_dir = local_tmp / ".duckdb_temp"
+    else:
+        temp_dir = output_path.parent / ".duckdb_temp"
     temp_dir.mkdir(exist_ok=True)
 
     conn = duckdb.connect()
     conn.execute(f"SET memory_limit='{sort_buffer_mb}MB'")
     conn.execute(f"SET temp_directory='{temp_dir}'")
     conn.execute("SET enable_progress_bar=true")
+    # Required so the external sort spills to disk instead of materializing
+    # the full sorted output in memory.
+    conn.execute("SET preserve_insertion_order=false")
 
-    logger.info(f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}")
-    logger.info(f"  Sorting by: {sort_column}")
+    logger.info(
+        f"  Memory limit: {sort_buffer_mb}MB, temp dir: {temp_dir}, "
+        f"sort by: {sort_column}"
+    )
 
-    # Merge + sort + write in one operation
+    # Two-stage merge then sort. A single-pass COPY-of-(UNION ALL of
+    # read_parquet ...) ORDER BY ... query OOMs reproducibly on multi-file
+    # parquet inputs, even when given tens of GB of memory headroom: the
+    # parallel parquet readers + sort + writer pipeline cannot spill
+    # cleanly enough to stay inside any reasonable cap.
+    #
+    # Stage A streams each input parquet sequentially with bounded per-row-
+    # group memory into one unsorted intermediate. This is the bound that
+    # lets us scale to 100s of input files.
+    #
+    # Stage B then runs a single-source ORDER BY over that intermediate,
+    # which is the proven low-memory sort path: external (disk-spill)
+    # k-way merge that stays inside the configured memory cap. The output
+    # is written by DuckDB directly with zstd compression and explicit
+    # ROW_GROUP_SIZE so the downstream chunked rollup can read it cleanly.
+    output_path_escaped = str(output_path).replace("'", "''")
+    unsorted_path = output_path.with_suffix(".unsorted.parquet")
+    unsorted_str = str(unsorted_path).replace("'", "''")
+
+    all_parquet = all(Path(p).suffix.lower() == ".parquet" for p in report_paths)
+    if all_parquet:
+        logger.info("  Stage A: streaming parquet concat (pyarrow) to unsorted intermediate...")
+        _stream_concat_parquet(report_paths, batch_names, unsorted_path)
+    else:
+        logger.info("  Stage A: streaming union (DuckDB) to unsorted intermediate...")
+        conn.execute(f"""
+            COPY (
+                {union_query}
+            ) TO '{unsorted_str}' (
+                FORMAT PARQUET,
+                COMPRESSION SNAPPY
+            )
+        """)
+
+    logger.info("  Stage B: sorting merged parquet (DuckDB external sort, zstd)...")
+    # ROW_GROUP_SIZE 1_000_000 keeps the row-group count proportional to
+    # dataset size (~167 row groups for 167M rows) instead of the thousands
+    # of tiny groups produced by default sizing.
     conn.execute(f"""
         COPY (
-            SELECT * FROM ({union_query})
+            SELECT * FROM read_parquet('{unsorted_str}')
             ORDER BY "{sort_column}"
-        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        ) TO '{output_path_escaped}' (
+            FORMAT PARQUET,
+            COMPRESSION ZSTD,
+            ROW_GROUP_SIZE 1000000
+        )
     """)
+    conn.close()
 
-    # Detect replicate column name in output (may be "Replicate Name" or "Replicate_Name")
-    output_cols = conn.execute(f"""
-        DESCRIBE SELECT * FROM read_parquet('{output_path}') LIMIT 0
-    """).fetchall()
-    output_col_names = [row[0] for row in output_cols]
-    
+    # Drop the unsorted intermediate
+    try:
+        unsorted_path.unlink()
+    except OSError:
+        pass
+
+    # Post-write enumeration: pyarrow on a freshly-opened file. The hardened
+    # open (pre_buffer=False, memory_map=False) matches the read path used in
+    # the downstream chunked rollup, so any read issue here surfaces before we
+    # leave Stage 1.
+    sorted_pf = pq.ParquetFile(output_path, pre_buffer=False, memory_map=False)
+    output_col_names = sorted_pf.schema_arrow.names
+
     replicate_col_out = None
-    for col_name in ["Replicate Name", "Replicate_Name", "ReplicateName"]:
+    for col_name in ("Replicate Name", "Replicate_Name", "ReplicateName"):
         if col_name in output_col_names:
             replicate_col_out = col_name
             break
-    
     if replicate_col_out is None:
         raise ValueError(
             f"Could not find replicate column in merged output. "
             f"Available columns: {output_col_names[:10]}..."
         )
 
-    # Get row count and sample info
-    result = conn.execute(f"""
-        SELECT COUNT(*) as total_rows,
-               COUNT(DISTINCT "{replicate_col_out}") as n_samples
-        FROM read_parquet('{output_path}')
-    """).fetchone()
-    total_rows = result[0] if result else 0
+    total_rows = sorted_pf.metadata.num_rows
 
-    # Get samples per batch
+    # Column-pruned read of (Batch, Replicate) pairs, deduplicated in Arrow C++.
+    pair_table = pq.read_table(
+        output_path, columns=["Batch", replicate_col_out]
+    )
+    unique_pairs = pair_table.group_by(["Batch", replicate_col_out]).aggregate([])
+    batch_arr = unique_pairs.column("Batch").to_pylist()
+    rep_arr = unique_pairs.column(replicate_col_out).to_pylist()
+
     all_samples: dict[str, set[str]] = {}
-    samples_result = conn.execute(f"""
-        SELECT "Batch", "{replicate_col_out}"
-        FROM read_parquet('{output_path}')
-        GROUP BY "Batch", "{replicate_col_out}"
-    """).fetchall()
-
-
-    for batch, sample in samples_result:
+    for batch, sample in zip(batch_arr, rep_arr):
         if batch not in all_samples:
             all_samples[batch] = set()
         if sample is not None:
             all_samples[batch].add(sample)
 
-    conn.close()
-
-    # Clean up temp directory
     import shutil
 
     if temp_dir.exists():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # Write fingerprints
     _add_fingerprints_to_parquet(output_path, fingerprints)
 
-    logger.info(f"Merge and sort complete: {total_rows:,} total rows -> {output_path.name}")
-
+    logger.info(
+        f"Merge and sort complete: {total_rows:,} total rows -> {output_path.name}"
+    )
     return output_path, all_samples, total_rows
 
 
@@ -1459,7 +1622,7 @@ def load_skyline_report(
         validation = validate_skyline_report(filepath)
         if not validation.is_valid:
             raise ValueError(f"Invalid Skyline report: {validation}")
-        
+
         # For parquet files, do additional check to ensure it's not a PRISM output
         if filepath.suffix.lower() == ".parquet":
             _check_not_prism_output(filepath)

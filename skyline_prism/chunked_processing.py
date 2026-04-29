@@ -515,7 +515,7 @@ def get_unique_values_from_parquet(
     column: str,
 ) -> list:
     """Get unique values from a column without loading entire file."""
-    pf = pq.ParquetFile(parquet_path)
+    pf = pq.ParquetFile(parquet_path, pre_buffer=False, memory_map=False)
     # Read just the one column
     table = pf.read(columns=[column])
     unique = table.column(column).unique().to_pylist()
@@ -540,7 +540,7 @@ def stream_peptide_groups(
     required_cols, optional_cols = _get_required_columns(config)
 
     # Read parquet metadata
-    pf = pq.ParquetFile(parquet_path)
+    pf = pq.ParquetFile(parquet_path, pre_buffer=False, memory_map=False)
 
     # Determine which optional columns exist
     schema_names = set(pf.schema_arrow.names)
@@ -941,8 +941,12 @@ def rollup_transitions_sorted(
     if use_parallel:
         logger.info(f"  Using {n_workers} parallel workers")
 
-    # Step 2: Stream through sorted file
-    pf = pq.ParquetFile(sorted_path)
+    # Step 2: Stream through sorted file. Open with pre_buffer=False and
+    # memory_map=False: the defaults prefetch column data and use mmap, which
+    # on multi-GB zstd parquet (still hot in the kernel page cache after a
+    # recent write) have produced "TProtocolException: Invalid data,
+    # Deserializing page header failed" on column-pruned read_row_group calls.
+    pf = pq.ParquetFile(sorted_path, pre_buffer=False, memory_map=False)
     required_cols, optional_cols = _get_required_columns(config)
     schema_names = set(pf.schema_arrow.names)
     cols_to_read = required_cols.copy()
@@ -1086,7 +1090,7 @@ def rollup_transitions_sorted(
 
     # Stream through row groups
     for i in range(pf.metadata.num_row_groups):
-        table = pf.read_row_group(i, columns=cols_to_read)
+        table = pf.read_row_group(i, columns=cols_to_read, use_threads=True)
         df = table.to_pandas()
 
         for peptide in df[config.peptide_col].unique():
@@ -1338,7 +1342,7 @@ def rollup_proteins_streaming(
     # Read peptide parquet - for protein rollup we CAN load the full peptide matrix
     # because it's much smaller than transitions (83K rows vs 197M rows)
     # But we'll do it efficiently
-    pf = pq.ParquetFile(peptide_parquet_path)
+    pf = pq.ParquetFile(peptide_parquet_path, pre_buffer=False, memory_map=False)
 
     if is_wide_format:
         # Wide format: peptide_col as a column, samples as other columns
@@ -1534,7 +1538,7 @@ def run_streaming_pipeline(
     logger.info("=" * 60)
 
     # Read just the columns needed for parsimony
-    pf = pq.ParquetFile(transition_parquet)
+    pf = pq.ParquetFile(transition_parquet, pre_buffer=False, memory_map=False)
     pep_col = config.transition_config.peptide_col
     prot_col = config.protein_col
     prot_name_col = config.protein_name_col

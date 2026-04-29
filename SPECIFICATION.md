@@ -2147,7 +2147,7 @@ This section documents the current implementation status of PRISM features as of
 **Data Processing:**
 
 - **Streaming CSV merge**: Memory-efficient merging of multiple Skyline reports (~47GB datasets tested)
-- **Merge-and-sort streaming**: Single-pass DuckDB operation for CSV merge + sort (`data_io.py` -> `merge_and_sort_streaming()`)
+- **Merge-and-sort streaming**: Two-stage merge then sort in `data_io.py` -> `merge_and_sort_streaming()`. Stage A streams each input parquet sequentially with bounded per-row-group memory (`_stream_concat_parquet()`); Stage B sorts the unsorted intermediate via DuckDB's external (disk-spill) sort and writes a zstd-compressed parquet with `ROW_GROUP_SIZE 1000000`. Scales to 100s of input files. CSV/mixed inputs use a DuckDB UNION ALL Stage A.
 - **Automatic column detection**: Handles different Skyline export formats with column name normalization
 - **Metadata handling**: Support for both PRISM format (`sample`, `sample_type`, `batch`) and Skyline format (`Replicate Name`, `Sample Type`, `Batch Name`)
 - **Sample type detection**: Pattern-based automatic assignment of reference/qc/experimental samples

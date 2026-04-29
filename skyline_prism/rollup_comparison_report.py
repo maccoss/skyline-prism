@@ -18,7 +18,6 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from .rollup_comparison import (
-        LibraryFitStep,
         PeptideLibraryComparison,
         RollupComparisonResult,
     )
@@ -61,7 +60,7 @@ def plot_transition_bar(
     highlight_outliers: list[str] | None = None,
     predicted: pd.Series | None = None,
     figsize: tuple[float, float] = (3.0, 2.5),
-) -> "plt.Figure":
+) -> plt.Figure:
     """Create a bar plot of transition intensities vs m/z.
 
     Args:
@@ -75,6 +74,7 @@ def plot_transition_bar(
 
     Returns:
         matplotlib Figure object
+
     """
     if not HAS_MATPLOTLIB:
         raise ImportError("matplotlib is required for plotting")
@@ -160,7 +160,7 @@ def plot_summary_stats(
     sample_order: list[str] | None = None,
     r_squared: float | None = None,
     figsize: tuple[float, float] = (3.0, 2.5),
-) -> "plt.Figure":
+) -> plt.Figure:
     """Create a summary plot with statistics.
 
     Args:
@@ -173,6 +173,7 @@ def plot_summary_stats(
 
     Returns:
         matplotlib Figure object
+
     """
     if not HAS_MATPLOTLIB:
         raise ImportError("matplotlib is required for plotting")
@@ -197,7 +198,7 @@ def plot_summary_stats(
 
         # Add mean line
         mean_val = valid.mean()
-        ax.axhline(y=mean_val, color="red", linestyle="--", linewidth=1.5, label=f"Mean")
+        ax.axhline(y=mean_val, color="red", linestyle="--", linewidth=1.5, label="Mean")
 
         # Add stats text - position in lower right to avoid overlap with bars
         stats_text = f"Mean: {mean_val:.2e}\nStd: {valid.std():.2e}\nCV: {cv*100:.1f}%"
@@ -225,7 +226,7 @@ def plot_summary_stats(
     return fig
 
 
-def _encode_figure_base64(fig: "plt.Figure", dpi: int = 100) -> str:
+def _encode_figure_base64(fig: plt.Figure, dpi: int = 100) -> str:
     """Convert matplotlib figure to base64-encoded PNG."""
     buffer = BytesIO()
     fig.savefig(buffer, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
@@ -236,7 +237,7 @@ def _encode_figure_base64(fig: "plt.Figure", dpi: int = 100) -> str:
 
 
 def _save_and_embed_plot(
-    fig: "plt.Figure",
+    fig: plt.Figure,
     name: str,
     plots_dir: Path,
     save_plots: bool,
@@ -255,6 +256,7 @@ def _save_and_embed_plot(
 
     Returns:
         Tuple of (HTML string for embedding, path if saved)
+
     """
     plot_path = None
     html = ""
@@ -456,7 +458,7 @@ def _get_short_sample_name(full_name: str) -> str:
 
 
 def create_peptide_plot_grid(
-    peptide_result: "PeptideLibraryComparison",
+    peptide_result: PeptideLibraryComparison,
     samples: list[str],
     plots_dir: Path,
     save_plots: bool = True,
@@ -480,6 +482,7 @@ def create_peptide_plot_grid(
 
     Returns:
         HTML string for the peptide plot grid
+
     """
     if not HAS_MATPLOTLIB:
         return "<p>matplotlib not available for plotting</p>"
@@ -650,7 +653,7 @@ def create_peptide_plot_grid(
 
 
 def generate_rollup_comparison_report(
-    result: "RollupComparisonResult",
+    result: RollupComparisonResult,
     output_path: str | Path,
     save_plots: bool = True,
     embed_plots: bool = True,
@@ -665,6 +668,7 @@ def generate_rollup_comparison_report(
 
     Returns:
         Dict mapping plot names to file paths (if save_plots=True)
+
     """
     if not HAS_MATPLOTLIB:
         logger.warning("matplotlib not available, cannot generate rollup comparison report")
@@ -695,7 +699,7 @@ def generate_rollup_comparison_report(
     html_parts.append("<h2>Configuration</h2>")
     html_parts.append('<table class="config-table">')
     html_parts.append("<tr><th>Setting</th><th>Value</th></tr>")
-    html_parts.append(f"<tr><td>Comparison</td><td>library_assist vs sum</td></tr>")
+    html_parts.append("<tr><td>Comparison</td><td>library_assist vs sum</td></tr>")
     html_parts.append(f"<tr><td>Sample Type</td><td>{result.sample_type} ({len(result.samples)} replicates)</td></tr>")
     html_parts.append(f"<tr><td>Spectral Library</td><td>{result.library_path}</td></tr>")
     html_parts.append(f"<tr><td>Ranking Criterion</td><td>{result.ranking_criterion}</td></tr>")

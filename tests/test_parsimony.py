@@ -147,6 +147,153 @@ class TestComputeProteinGroups:
         p001_group = next(g for g in groups if g.leading_protein == "P001")
         assert "SHARED" in p001_group.peptides
 
+    def test_razor_cascading_assignment(self):
+        """Two-round razor: cascading assignment after first-round claims.
+
+        Mirrors Osprey docs/16-protein-parsimony.md Example 2.
+        Round 1: P1 has 3 unique (most) -> claims X and Y in one batch.
+        Round 2: P2 and P3 tie at 1 unique -> P2 wins on lower group ID
+                 -> claims Z. Done.
+        """
+        prot_to_pep = {
+            "P1": {"A", "B", "C", "X", "Y"},
+            "P2": {"D", "X", "Z"},
+            "P3": {"E", "Y", "Z"},
+        }
+        pep_to_prot = {
+            "A": {"P1"},
+            "B": {"P1"},
+            "C": {"P1"},
+            "D": {"P2"},
+            "E": {"P3"},
+            "X": {"P1", "P2"},
+            "Y": {"P1", "P3"},
+            "Z": {"P2", "P3"},
+        }
+        prot_to_name = {"P1": "Prot1", "P2": "Prot2", "P3": "Prot3"}
+
+        groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+
+        p1 = next(g for g in groups if g.leading_protein == "P1")
+        p2 = next(g for g in groups if g.leading_protein == "P2")
+        p3 = next(g for g in groups if g.leading_protein == "P3")
+
+        # Round 1: P1 dominates and claims both X and Y
+        assert "X" in p1.razor_peptides
+        assert "Y" in p1.razor_peptides
+        assert "X" not in p2.razor_peptides
+        assert "Y" not in p3.razor_peptides
+
+        # Round 2: P2 and P3 tie at 1 unique; lowest group ID (P2) wins Z
+        assert "Z" in p2.razor_peptides
+        assert "Z" not in p3.razor_peptides
+
+    def test_razor_tiebreaker_lowest_group_id(self):
+        """Tie on unique-peptide count is broken by the lowest canonical string.
+
+        The previous tiebreaker was (-ord(first_char), n_remaining), which
+        only differentiated by first character of the accession and then
+        favored the group with more remaining shared peptides. This test
+        forces a tie on unique count where the two groups share one peptide
+        each. With the Osprey rule, the alphabetically smaller accession wins.
+        """
+        prot_to_pep = {
+            "P_BETA": {"PEP_B", "SHARED"},  # 1 unique + 1 shared
+            "P_ALPHA": {"PEP_A", "SHARED"},  # 1 unique + 1 shared
+        }
+        pep_to_prot = {
+            "PEP_A": {"P_ALPHA"},
+            "PEP_B": {"P_BETA"},
+            "SHARED": {"P_ALPHA", "P_BETA"},
+        }
+        prot_to_name = {"P_ALPHA": "Alpha", "P_BETA": "Beta"}
+
+        groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+
+        alpha = next(g for g in groups if g.leading_protein == "P_ALPHA")
+        beta = next(g for g in groups if g.leading_protein == "P_BETA")
+
+        # P_ALPHA wins the shared peptide because it sorts before P_BETA
+        assert "SHARED" in alpha.razor_peptides
+        assert "SHARED" not in beta.razor_peptides
+
+    def test_razor_deterministic_across_repeated_runs(self):
+        """Repeated runs on the same input produce identical razor assignments.
+
+        Guards against HashMap iteration order, set iteration order, or any
+        other non-deterministic Python source affecting the result.
+        """
+        prot_to_pep = {
+            "P1": {"A", "B", "X", "Y"},
+            "P2": {"C", "X", "Z"},
+            "P3": {"D", "Y", "Z"},
+            "P4": {"E", "X", "Y", "Z"},
+        }
+        pep_to_prot = {
+            "A": {"P1"},
+            "B": {"P1"},
+            "C": {"P2"},
+            "D": {"P3"},
+            "E": {"P4"},
+            "X": {"P1", "P2", "P4"},
+            "Y": {"P1", "P3", "P4"},
+            "Z": {"P2", "P3", "P4"},
+        }
+        prot_to_name = {f"P{i}": f"Prot{i}" for i in range(1, 5)}
+
+        baseline = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+        baseline_assignments = {
+            g.leading_protein: (
+                tuple(sorted(g.razor_peptides)),
+                tuple(sorted(g.unique_peptides)),
+            )
+            for g in baseline
+        }
+
+        for _ in range(10):
+            groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+            assignments = {
+                g.leading_protein: (
+                    tuple(sorted(g.razor_peptides)),
+                    tuple(sorted(g.unique_peptides)),
+                )
+                for g in groups
+            }
+            assert assignments == baseline_assignments
+
+    def test_subsumable_choice_lowest_group_id(self):
+        """Lexicographically smallest superset wins when a protein has multiple supersets.
+
+        Without sorting the iteration, the choice depends on dict insertion
+        order. With the new deterministic ``_find_subsumable_proteins``, the
+        subsumed_proteins list reported per group is stable.
+        """
+        prot_to_pep = {
+            "P_SUB": {"X", "Y"},
+            "P_SUPER_B": {"X", "Y", "B1"},
+            "P_SUPER_A": {"X", "Y", "A1"},
+        }
+        pep_to_prot = {
+            "X": {"P_SUB", "P_SUPER_A", "P_SUPER_B"},
+            "Y": {"P_SUB", "P_SUPER_A", "P_SUPER_B"},
+            "A1": {"P_SUPER_A"},
+            "B1": {"P_SUPER_B"},
+        }
+        prot_to_name = {
+            "P_SUB": "Sub",
+            "P_SUPER_A": "SuperA",
+            "P_SUPER_B": "SuperB",
+        }
+
+        groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name)
+
+        # P_SUPER_A is the alphabetically smallest superset of P_SUB,
+        # so it should claim P_SUB in its subsumed list.
+        super_a = next(g for g in groups if g.leading_protein == "P_SUPER_A")
+        super_b = next(g for g in groups if g.leading_protein == "P_SUPER_B")
+        assert "P_SUB" in super_a.subsumed_proteins
+        assert "P_SUB" not in super_b.subsumed_proteins
+
 
 class TestProteinGroup:
     """Tests for ProteinGroup data structure."""

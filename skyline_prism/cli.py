@@ -993,7 +993,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         input_paths = [Path(args.input)]
 
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        # On NAS / network mounts, Path.mkdir(exist_ok=True) can raise
+        # FileExistsError on a perfectly usable directory because the stat-
+        # based "is this a directory?" probe misreports it. os.path.isdir()
+        # also fails on the same paths. The reliable test is to actually use
+        # the directory: if we can list its contents, it is usable.
+        import os
+
+        try:
+            os.listdir(output_dir)
+        except OSError as exc:
+            raise FileExistsError(
+                f"Output path exists but is not a usable directory: {output_dir}"
+            ) from exc
 
     # Set up file logging to output directory
     from datetime import datetime

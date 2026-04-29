@@ -454,37 +454,103 @@ Modified ComBat that preserves the variance structure of reference samples (pool
 
 ## Protein Parsimony
 
-Assigns peptides to protein groups using a minimal set cover approach.
+Assigns peptides to protein groups using a minimal set cover approach. The
+algorithm is aligned with the Osprey reference design documented in
+`osprey/docs/16-protein-parsimony.md`, so PRISM and Osprey produce
+deterministic, byte-identical razor assignments on the same peptide-protein
+graph.
 
 ### Algorithm
 
-1. **Build peptide-protein mappings** from Skyline export or FASTA database
+1. **Build peptide-protein mappings** from Skyline export or FASTA database. A
+   peptide can map to multiple proteins (paralogs, isoforms, homologs).
 
-2. **Identify subsumable proteins:** Proteins whose peptides are a strict subset of another protein's peptides are marked as "subsumable" and merged with the subsuming protein.
+2. **Identify subsumable proteins.** A protein whose peptide set is a *strict*
+   subset of another protein's peptide set provides no additional evidence and
+   is removed. When a subsumed protein has multiple valid supersets, the
+   lexicographically smallest accession is recorded as its subsumer so the
+   `subsumed_proteins` list reported per group is deterministic.
 
-3. **Identify indistinguishable proteins:** Proteins with identical peptide sets are grouped together.
+3. **Identify indistinguishable proteins.** Proteins with *identical* peptide
+   sets are collapsed into a single group with multiple member accessions. The
+   alphabetically-first accession is selected as the canonical (leading)
+   protein for the group.
 
-4. **Greedy assignment of shared peptides:**
-   - Peptides mapping to a single protein/group are "unique"
-   - Shared peptides are assigned to the group with the most unique peptides ("razor" peptides)
+4. **Classify peptides** as **unique** (map to exactly one canonical protein)
+   or **shared** (map to two or more).
+
+5. **Razor: iterative greedy set cover.** Shared peptides are assigned to a
+   single group each:
+
+   ```text
+   while any shared peptides remain unassigned:
+     pick the group G with the MOST unique peptides that still has at
+       least one unassigned shared peptide (tiebreak: lowest group ID,
+       i.e. lexicographically smallest canonical accession)
+     claim ALL of G's unassigned shared peptides in one batch
+   ```
+
+   The iterative form looks at the **global state** at every step, so when a
+   group claims peptides in one round, the updated unique counts are used to
+   pick the winner of the next round. A naive single-pass approach can
+   produce different (path-dependent) assignments.
+
+   **Tiebreaker.** When two candidate groups have the same unique-peptide
+   count, the group with the lexicographically smallest canonical accession
+   wins. This matches Osprey's `max_by_key((unique_count, Reverse(group_id)))`.
+   Earlier versions of PRISM used a coarser tiebreaker that only inspected the
+   first character of the accession and then preferred the group with more
+   shared peptides remaining, which produced different (and non-deterministic)
+   assignments on tie cases.
+
+   **Determinism.** Shared peptides are collected in sorted order at the start
+   of the loop; canonical proteins are iterated in sorted order; claimed
+   peptides per round are sorted alphabetically before being added to the
+   razor set. Repeated runs on the same input produce identical razor
+   assignments regardless of Python `dict`/`set` iteration order.
 
 ### Protein Groups
 
 Each protein group contains:
-- **Leading protein:** Representative protein (sorted alphabetically or by evidence)
-- **Leading metadata:** Group-level identifiers and names are taken from the leading protein and exposed as `leading_uniprot_id`, `leading_gene_name`, and `leading_description` in outputs.
-- **Member proteins:** Indistinguishable proteins with identical peptides
-- **Subsumed proteins:** Proteins whose peptides are a subset
-- **Unique peptides:** Map exclusively to this group
-- **Razor peptides:** Shared peptides assigned to this group
+- **Leading protein:** Canonical (alphabetically-first) accession of the group.
+- **Leading metadata:** Group-level identifiers and names are taken from the
+  leading protein and exposed as `leading_uniprot_id`, `leading_gene_name`,
+  and `leading_description` in outputs.
+- **Member proteins:** Indistinguishable proteins with identical peptide sets.
+- **Subsumed proteins:** Proteins whose peptide sets are strict subsets of
+  this group's; recorded against the lexicographically smallest valid superset.
+- **Unique peptides:** Map exclusively to this group's canonical protein.
+- **Razor peptides:** Shared peptides assigned to this group by the iterative
+  greedy algorithm.
 
 ### Shared Peptide Handling Options
 
+PRISM splits the three shared-peptide modes between two layers: parsimony
+always produces the unique + razor split, and the rollup stage decides which
+peptides to use for protein quantification.
+
 | Option | Description |
 |--------|-------------|
-| `all_groups` | Include shared peptides in ALL groups they map to (full intensity, no splitting) |
-| `razor` | Assign each shared peptide to one group only (the one with most unique peptides) |
-| `unique_only` | Use only unique peptides for quantification |
+| `all_groups` | Include shared peptides in ALL groups they map to (full intensity, no splitting). Maximum sensitivity. |
+| `razor` | Use only each group's unique peptides plus its razor-assigned shared peptides. Matches MaxQuant's razor logic. |
+| `unique_only` | Use only unique peptides for quantification. Most conservative. |
+
+The `razor` mode is where the iterative-greedy algorithm above directly
+controls quantification; `all_groups` and `unique_only` are alternative views
+on the same parsimony output.
+
+### Example: cascading razor
+
+```text
+Group P1 peptides: {A, B, C, X, Y}    ← 3 unique (A, B, C), 2 shared (X, Y)
+Group P2 peptides: {D, X, Z}          ← 1 unique (D),       2 shared (X, Z)
+Group P3 peptides: {E, Y, Z}          ← 1 unique (E),       2 shared (Y, Z)
+
+Round 1: P1 has 3 unique (most) → claims X and Y in one batch
+         Remaining shared: {Z}
+Round 2: P2 and P3 tie at 1 unique → P2 wins on lower group ID → claims Z
+         Done.
+```
 
 ---
 

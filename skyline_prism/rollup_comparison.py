@@ -17,15 +17,14 @@ from __future__ import annotations
 
 import logging
 import warnings
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-    from .spectral_library import FragmentSpectrum, SpectralLibraryRollup
+    from .spectral_library import SpectralLibraryRollup
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +137,7 @@ def compute_cv_linear(abundances: pd.Series) -> float:
 
     Returns:
         CV as a decimal (e.g., 0.15 for 15% CV)
+
     """
     if abundances.isna().all():
         return np.nan
@@ -169,6 +169,7 @@ def compute_ranking_score(
 
     Returns:
         Ranking score (higher = more interesting)
+
     """
     if np.isnan(sum_cv) or np.isnan(library_cv):
         return -np.inf  # Put NaN peptides at the end
@@ -211,6 +212,7 @@ def rank_peptides(
 
     Returns:
         List of top N peptide names, ordered by rank (best first)
+
     """
     scores = []
     for peptide, result in peptide_results.items():
@@ -262,6 +264,7 @@ def fit_library_single_sample(
         - abundance: Final peptide abundance (LINEAR scale)
         - r_squared: Final R² of fit
         - steps: List of LibraryFitStep objects capturing each stage
+
     """
     steps = []
 
@@ -455,7 +458,7 @@ def compare_library_vs_sum(
     corrected_peptides_sum: pd.DataFrame,
     corrected_peptides_library: pd.DataFrame,
     samples: list[str],
-    library: "SpectralLibraryRollup",
+    library: SpectralLibraryRollup,
     library_path: str,
     peptide_col: str = "Peptide Modified Sequence",
     precursor_charge_col: str = "Precursor Charge",
@@ -492,6 +495,7 @@ def compare_library_vs_sum(
 
     Returns:
         RollupComparisonResult with all comparison data
+
     """
     if library_config is None:
         library_config = {}
