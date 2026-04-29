@@ -1350,3 +1350,77 @@ class TestMultiParquetStreamingMerge:
         batches_seen = set(df["Batch"].unique())
         assert "OldBatch" in batches_seen
         assert "NewB2" in batches_seen
+
+    def test_merge_parquet_metadata_string_vs_large_string_types(self, tmp_path):
+        """Mixing string and large_string typed metadata columns merges cleanly.
+
+        Reproduces the CI failure where File 1 had pre-existing
+        Batch / Source Document / Sample ID columns typed as ``large_string``
+        (the default pandas+pyarrow on some platforms produces for object
+        columns) and File 2's synthesized metadata columns came in as
+        ``string``. Without an explicit cast in ``_stream_concat_parquet``,
+        pyarrow's ParquetWriter rejected the second file with
+        ``ValueError: Table schema does not match schema used to create file``.
+        """
+        # File 1: write a schema that explicitly types metadata cols as large_string
+        schema = pa.schema(
+            [
+                ("Protein", pa.string()),
+                ("Peptide Modified Sequence Unimod Ids", pa.string()),
+                ("Precursor Charge", pa.int64()),
+                ("Fragment Ion", pa.string()),
+                ("Product Charge", pa.int64()),
+                ("Product Mz", pa.float64()),
+                ("Area", pa.int64()),
+                ("Replicate Name", pa.string()),
+                ("Batch", pa.large_string()),
+                ("Source Document", pa.large_string()),
+                ("Sample ID", pa.large_string()),
+            ]
+        )
+        table = pa.table(
+            {
+                "Protein": ["P1"],
+                "Peptide Modified Sequence Unimod Ids": ["PEPTIDE_A"],
+                "Precursor Charge": [2],
+                "Fragment Ion": ["y5"],
+                "Product Charge": [1],
+                "Product Mz": [500.0],
+                "Area": [1000],
+                "Replicate Name": ["S1"],
+                "Batch": ["OldBatch"],
+                "Source Document": ["with_md_large"],
+                "Sample ID": ["S1__@__OldBatch"],
+            },
+            schema=schema,
+        )
+        p1 = tmp_path / "with_md_large_string.parquet"
+        pq.write_table(table, p1)
+
+        # Sanity check: the file really does use large_string for the metadata cols
+        f1_schema = pq.ParquetFile(p1).schema_arrow
+        assert f1_schema.field("Batch").type == pa.large_string()
+        assert f1_schema.field("Sample ID").type == pa.large_string()
+
+        # File 2: no metadata; the merge will synthesize Batch/Source Document/Sample ID
+        # as plain pa.string(). The cast in _stream_concat_parquet must reconcile
+        # the types so the writer accepts both files.
+        p2 = tmp_path / "without_md.parquet"
+        _make_skyline_parquet(
+            p2,
+            proteins=["P2"],
+            peptides=["PEPTIDE_B"],
+            replicates=["S2"],
+        )
+
+        out = tmp_path / "merged.parquet"
+        merge_and_sort_streaming(
+            report_paths=[p1, p2],
+            output_path=out,
+            batch_names=["NewB1", "NewB2"],
+        )
+
+        # Both rows present; pre-existing Batch on File 1 preserved; File 2 synthesized.
+        df = pd.read_parquet(out)
+        assert len(df) == 2
+        assert {"OldBatch", "NewB2"}.issubset(set(df["Batch"].unique()))

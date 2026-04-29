@@ -1125,7 +1125,14 @@ def _stream_concat_parquet(
                         f"{file_path.name} is missing columns present in "
                         f"{report_paths[0].name}: {missing[:10]}"
                     )
-                table = table.select(target_schema.names)
+                # Project columns AND cast to the writer's schema. Different
+                # input files can have the same logical columns but different
+                # storage types (e.g., pandas writes string columns as
+                # large_string, while our synthesized pa.array(..., type=pa.string())
+                # produces string). Without an explicit cast, pyarrow's
+                # ParquetWriter.write_table rejects the second file with
+                # "Table schema does not match schema used to create file".
+                table = table.select(target_schema.names).cast(target_schema)
 
             writer.write_table(table)
 
