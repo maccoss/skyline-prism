@@ -682,23 +682,34 @@ def tukey_median_polish(
     for iteration in range(max_iter):
         old_residuals = residuals.copy()
 
-        # Step 1: Row sweep (subtract row medians)
+        # Step 1: Row sweep (subtract row medians from each row)
         row_medians = np.nanmedian(residuals, axis=1)
         residuals = residuals - row_medians[:, np.newaxis]
+        row_effects += row_medians
 
-        # Update row effects
-        row_effect_update = row_medians - np.nanmedian(row_medians)
-        row_effects += row_effect_update
-        overall += np.nanmedian(row_medians)
+        # Re-center col_effects so median(col_effects) == 0. Tukey median polish
+        # requires median(row_effects) == median(col_effects) == 0 at convergence
+        # (see Tukey 1977, Ch. 10, and R's stats::medpolish reference
+        # implementation). Centering each iteration's row_effect_update is not
+        # equivalent: a sum of median-0 vectors does not have median 0 in
+        # general, so the cumulative effects drift away from 0 across iterations.
+        # Without these re-centering steps, overall + col_effects[j] is biased by
+        # an unspecified per-matrix constant (the running median of the cumulative
+        # effects), which can be hundreds of % linear for pathological inputs.
+        cdelta = np.nanmedian(col_effects)
+        col_effects -= cdelta
+        overall += cdelta
 
-        # Step 2: Column sweep (subtract column medians)
+        # Step 2: Column sweep (subtract column medians from each column)
         col_medians = np.nanmedian(residuals, axis=0)
         residuals = residuals - col_medians[np.newaxis, :]
+        col_effects += col_medians
 
-        # Update column effects
-        col_effect_update = col_medians - np.nanmedian(col_medians)
-        col_effects += col_effect_update
-        overall += np.nanmedian(col_medians)
+        # Re-center row_effects so median(row_effects) == 0 (same justification
+        # as the col_effects re-centering above).
+        rdelta = np.nanmedian(row_effects)
+        row_effects -= rdelta
+        overall += rdelta
 
         # Check convergence
         max_change = np.nanmax(np.abs(residuals - old_residuals))

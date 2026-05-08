@@ -139,6 +139,77 @@ class TestTukeyMedianPolish:
         diff = result.col_effects["Sample2"] - result.col_effects["Sample1"]
         assert abs(diff - 1.0) < 0.1
 
+    def test_tukey_normalization_at_convergence(self):
+        """At convergence, median(row_effects) and median(col_effects - overall)
+        must both be zero. This is the Tukey-1977 normalization that makes the
+        (overall, row_effects, col_effects) decomposition unique, and is what
+        R's stats::medpolish enforces.
+
+        Without this property, the partition between overall, row_effects, and
+        col_effects is ambiguous (any constant can shift between them), and
+        downstream output overall + col_effects[j] is biased by an unspecified
+        per-matrix constant.
+        """
+        # A matrix that makes the bias visible: row medians and column medians
+        # don't trivially align with each other, so the polish takes >1
+        # iteration to converge. With the original (un-recentered) algorithm,
+        # cumulative row_effects acquires a non-zero median.
+        data = pd.DataFrame(
+            {
+                "S1": [15.77, 13.46, 15.20, 14.63, 13.74],
+                "S2": [16.84, 14.92, 15.43, 16.36, 14.62],
+                "S3": [17.16, 15.36, 17.09, 16.41, 14.98],
+            },
+            index=[f"P{i}" for i in range(5)],
+        )
+
+        result = tukey_median_polish(data, max_iter=50)
+
+        assert result.converged
+        # row_effects centered: median exactly 0 (within fp noise)
+        assert abs(np.nanmedian(result.row_effects.values)) < 1e-9
+        # col_effects on the original scale = overall + centered col_effects.
+        # Subtracting overall should yield centered col_effects with median 0.
+        centered_col = result.col_effects.values - result.overall
+        assert abs(np.nanmedian(centered_col)) < 1e-9
+
+    def test_matches_r_medpolish_reference(self):
+        """Compares against the canonical R stats::medpolish output for a
+        known matrix. With both row_effects and col_effects re-centered to
+        median 0 each iteration (Tukey 1977 normalization), tukey_median_polish
+        produces the same overall and per-sample col_effects as R.
+
+        > x <- matrix(c(15.77,16.84,17.16,
+        >              13.46,14.92,15.36,
+        >              15.20,15.43,17.09,
+        >              14.63,16.36,16.41,
+        >              13.74,14.62,14.98), nrow=5, byrow=TRUE)
+        > medpolish(x, eps=1e-9, maxiter=50, trace=FALSE)
+        # overall = 16.054
+        # row    = c(0.788, -1.137, 0.215, 0, -1.435)   # median 0
+        # col    = c(-1.069, 0, 0.361)                    # median 0
+        """
+        data = pd.DataFrame(
+            {
+                "S1": [15.77, 13.46, 15.20, 14.63, 13.74],
+                "S2": [16.84, 14.92, 15.43, 16.36, 14.62],
+                "S3": [17.16, 15.36, 17.09, 16.41, 14.98],
+            },
+            index=[f"P{i}" for i in range(5)],
+        )
+
+        result = tukey_median_polish(data, max_iter=50)
+
+        # col_effects in the result are reported as overall + centered_col_effects.
+        # R's centered col_effects are [-1.069, 0, 0.361] and overall = 16.054,
+        # so expected per-sample totals are 16.054 + [-1.069, 0, 0.361].
+        expected_col_total = np.array([14.985, 16.054, 16.415])
+        np.testing.assert_allclose(
+            result.col_effects.values, expected_col_total, atol=0.02
+        )
+        # And overall itself should match R.
+        assert abs(result.overall - 16.054) < 0.02
+
 
 class TestRollupMethods:
     """Tests for different rollup method implementations."""
