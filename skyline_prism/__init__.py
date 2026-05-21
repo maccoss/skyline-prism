@@ -14,6 +14,7 @@ __all__ = [
     "ComBatResult",
     "combat",
     "combat_from_long",
+    "combat_reference_anchored",
     "combat_with_reference_samples",
     "evaluate_batch_correction",
     # data_io
@@ -114,6 +115,7 @@ from .batch_correction import (
     ComBatResult,
     combat,
     combat_from_long,
+    combat_reference_anchored,
     combat_with_reference_samples,
     evaluate_batch_correction,
 )

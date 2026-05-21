@@ -9,7 +9,7 @@
 ## Key Features
 
 - **Robust quantification with Tukey median polish**: Can be used for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
-- **Reference-anchored ComBat batch correction**: Full implementation of empirical Bayes batch correction with automatic QC evaluation using reference/QC samples
+- **ComBat batch correction (standard or reference-anchored)**: Full empirical Bayes implementation. Standard grand-mean ComBat by default; opt-in reference-anchored ComBat performs per-analyte single-point reference calibration (Pino et al. 2020) stabilized with empirical-Bayes shrinkage, estimating each batch's technical effect from inter-experiment reference samples only. Reference and QC sample CVs are reported before/after correction.
 - **Dual-control validation**: Uses intra-experiment QC samples to validate that corrections work without overfitting
 - **Sample outlier detection**: Automatic detection of samples with abnormally low signal (failed injections, degradation) with optional exclusion
 - **Flexible protein inference**: Multiple strategies for handling shared peptides (all_groups, unique_only, razor)
@@ -359,6 +359,8 @@ rt_correction:
 batch_correction:
   enabled: true
   method: "combat"  # Full empirical Bayes implementation
+  reference_anchored: false  # true = single-point reference calibration + EB shrinkage
+  reference_type: "reference"  # sample_type used as the inter-batch calibrant
 
 # Protein parsimony (applied before protein rollup)
 parsimony:
@@ -637,7 +639,7 @@ transition_rollup:
 PRISM includes a full implementation of the ComBat algorithm (Johnson et al. 2007) for empirical Bayes batch correction:
 
 ```python
-from skyline_prism import combat, combat_from_long, combat_with_reference_samples
+from skyline_prism import combat, combat_from_long, combat_reference_anchored
 
 # For wide-format data (features × samples)
 corrected = combat(data, batch, covar_mod=covariates)
@@ -651,20 +653,24 @@ corrected_df = combat_from_long(
     abundance_col='abundance'
 )
 
-# With automatic evaluation using reference/QC samples
-result = combat_with_reference_samples(
-    data,
-    sample_type_col='sample_type',
-    # ... other parameters
-)
+# Reference-anchored: estimate each batch's technical effect from the
+# inter-batch reference samples only (single-point calibration + EB shrinkage)
+reference_mask = [t == 'reference' for t in sample_types]
+corrected = combat_reference_anchored(data, batch, reference_mask)
 ```
+
+### Standard vs reference-anchored ComBat
+
+- **Standard ComBat** (`reference_anchored: false`, default): aligns every batch to the across-batch grand mean. Estimates batch effects from all samples in each batch, assuming comparable biological composition per batch.
+- **Reference-anchored ComBat** (`reference_anchored: true`): estimates each batch's additive offset (and, where ≥2 reference replicates are available, multiplicative scale) from the inter-experiment **reference samples only** — identical material run in every batch — and applies the correction to all samples. Because the reference is identical material, the per-batch difference is purely technical, so no biology is removed. ComBat's empirical-Bayes shrinkage stabilizes the per-analyte calibration so an analyte poorly measured in the reference borrows strength from the batch-wide consensus. This is per-analyte single-point external reference calibration (Pino et al. 2020) with EB stabilization. Output is calibrated **absolute** abundance, not a ratio to the reference. Batches without reference samples fall back to standard grand-mean ComBat with a warning.
 
 **Key features:**
 
 - Parametric and non-parametric prior options
-- Reference batch support (adjust other batches to match reference)
+- Reference batch support (adjust other batches to match a reference batch)
+- Reference-anchored mode (calibrate every batch on inter-batch reference samples)
 - Mean-only correction option (for unequal batch sizes)
-- Automatic evaluation using reference and QC sample CVs
+- Reference and QC sample CVs reported before/after correction
 
 ## Residual Analysis for Proteoform Discovery
 

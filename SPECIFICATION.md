@@ -14,7 +14,7 @@ PRISM is designed to work with data exported from [Skyline](https://skyline.ms),
 
 1. **Robust protein quantification via Tukey median polish**: Use Tukey median polish for both transition→peptide and peptide→protein rollups, minimizing the influence of outliers without explicit filtering.
 
-2. **Reference-anchored ComBat batch correction**: Use inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality.
+2. **Reference-anchored ComBat batch correction** (opt-in): Estimate each batch's technical effect from the inter-experiment reference samples only (single-point external reference calibration, Pino et al. 2020), stabilized with ComBat's empirical-Bayes shrinkage so poorly-measured analytes borrow strength from the batch-wide consensus. The default remains standard grand-mean ComBat; reference and intra-experiment QC sample CVs are reported before/after for validation.
 
 3. **Validation with held-out control**: Use the intra-experiment QC to validate that corrections improved data quality without overfitting.
 

@@ -729,6 +729,298 @@ def combat(
         return bayes_data
 
 
+def combat_reference_anchored(
+    data: np.ndarray | pd.DataFrame,
+    batch: np.ndarray | list | pd.Series,
+    reference_mask: np.ndarray | list | pd.Series,
+    *,
+    par_prior: bool = True,
+    no_reference_batch: str = "fallback",
+) -> np.ndarray | pd.DataFrame:
+    """Reference-anchored ComBat: single-point calibration with EB shrinkage.
+
+    Performs per-analyte single-point external reference calibration (Pino et al.,
+    PMC6854904) stabilized by ComBat's empirical-Bayes shrinkage (Johnson et al.
+    2007). Unlike standard ``combat``, which aligns every batch to the across-batch
+    grand mean (assuming equal biological composition per batch), this estimates the
+    per-batch technical effect from the **reference samples only** (identical material
+    run in every batch) and applies the correction to all samples. Because the
+    reference is identical material, any per-batch difference in it is purely
+    technical, so no biology is removed.
+
+    Model per feature ``g``, batch ``i`` (log2 abundance ``Y``):
+        ``alpha[g]``     = pooled mean of Y[g] over all reference samples (all batches)
+        ``gamma[i,g]``   = additive offset: mean over refs in batch i minus alpha[g]
+        ``delta[i,g]``   = multiplicative scale: spread of the standardized reference
+                           replicates in batch i (estimated only when batch i has >=2
+                           references; otherwise 1, i.e. location-only for that batch)
+
+    Both effects are empirical-Bayes shrunk **across features within a batch** so a
+    feature poorly measured in the references borrows strength from the batch-wide
+    consensus. The location shrinkage weight scales with the number of reference
+    replicates in the batch (heavy shrinkage with one reference, lighter as replicates
+    grow). The correction is applied to all samples; output is calibrated absolute
+    log2 abundance on the input scale (not a ratio to the reference).
+
+    Args:
+        data: Expression matrix (features x samples), log2 scale. Array or DataFrame.
+        batch: Batch label per sample (length = n_samples).
+        reference_mask: Boolean per sample, True for inter-batch reference samples.
+        par_prior: Use parametric empirical Bayes (recommended).
+        no_reference_batch: Behavior for a batch with zero reference samples:
+            "fallback" (default) corrects it with standard grand-mean estimation and
+            warns; "skip" leaves it uncorrected and warns; "error" raises.
+
+    Returns:
+        Batch-corrected matrix in the same format as the input, on the input log2 scale.
+
+    Raises:
+        ValueError: If inputs are inconsistent, no reference samples are present, or a
+            batch lacks references and ``no_reference_batch="error"``.
+
+    References:
+        Pino LK, et al. (2020) Calibration using a single-point external reference
+            material harmonizes quantitative mass spectrometry proteomics data between
+            platforms and laboratories. (PMC6854904)
+        Johnson WE, Li C, Rabinovic A. (2007) Adjusting batch effects in microarray
+            expression data using empirical Bayes methods. Biostatistics 8(1):118-127.
+
+    """
+    is_dataframe = isinstance(data, pd.DataFrame)
+    if is_dataframe:
+        feature_names = data.index
+        sample_names = data.columns
+        data_array = data.values.astype(np.float64)
+    else:
+        feature_names = None
+        sample_names = None
+        data_array = np.asarray(data, dtype=np.float64)
+
+    if isinstance(batch, pd.Series):
+        batch = batch.values
+    batch = np.asarray(batch)
+    if isinstance(reference_mask, pd.Series):
+        reference_mask = reference_mask.values
+    reference_mask = np.asarray(reference_mask, dtype=bool)
+
+    if data_array.ndim != 2:
+        raise ValueError("Data must be a 2D matrix (features x samples)")
+    n_features, n_samples = data_array.shape
+    if len(batch) != n_samples:
+        raise ValueError(
+            f"Batch length ({len(batch)}) must match number of samples ({n_samples})"
+        )
+    if len(reference_mask) != n_samples:
+        raise ValueError(
+            f"reference_mask length ({len(reference_mask)}) must match "
+            f"number of samples ({n_samples})"
+        )
+    if no_reference_batch not in ("fallback", "skip", "error"):
+        raise ValueError(
+            f"no_reference_batch must be 'fallback', 'skip', or 'error', "
+            f"got {no_reference_batch!r}"
+        )
+
+    def _return(arr: np.ndarray) -> np.ndarray | pd.DataFrame:
+        if is_dataframe:
+            return pd.DataFrame(arr, index=feature_names, columns=sample_names)
+        return arr
+
+    if not reference_mask.any():
+        raise ValueError(
+            "Reference-anchored ComBat requires at least one reference sample "
+            "(reference_mask is all False)."
+        )
+
+    # Preserve first-seen batch order
+    unique_batches = list(dict.fromkeys(batch.tolist()))
+    n_batch = len(unique_batches)
+    if n_batch < 2:
+        logger.warning("Only one batch found - returning data unchanged")
+        return _return(data_array)
+
+    ref_batch_labels = set(batch[reference_mask].tolist())
+    if len(ref_batch_labels) < 2:
+        logger.warning(
+            "Reference samples are present in only one batch; reference-anchored "
+            "calibration cannot align batches and is effectively a no-op for other batches."
+        )
+
+    logger.info(
+        f"Reference-anchored ComBat: {n_features} features, {n_samples} samples, "
+        f"{n_batch} batches, {int(reference_mask.sum())} reference samples"
+    )
+
+    # Hold out zero-variance features (corrected as identity)
+    row_vars = np.nanvar(data_array, axis=1)
+    zero_var_mask = (row_vars == 0) | np.isnan(row_vars)
+    if np.any(zero_var_mask):
+        logger.warning(
+            f"Found {int(zero_var_mask.sum())} zero-variance features; "
+            "passing them through uncorrected."
+        )
+    work = data_array[~zero_var_mask, :]
+    n_work = work.shape[0]
+
+    # Per-batch sample / reference index lists
+    batch_indices = [np.where(batch == b)[0] for b in unique_batches]
+    batch_ref_indices = [
+        np.where((batch == b) & reference_mask)[0] for b in unique_batches
+    ]
+    n_ref_per_batch = np.array([len(r) for r in batch_ref_indices], dtype=int)
+
+    if np.any(n_ref_per_batch == 0):
+        missing = [
+            unique_batches[i] for i in range(n_batch) if n_ref_per_batch[i] == 0
+        ]
+        if no_reference_batch == "error":
+            raise ValueError(
+                f"Batches {missing} have no reference samples; cannot reference-anchor. "
+                "Provide references in every batch or set no_reference_batch='fallback'/'skip'."
+            )
+        logger.warning(
+            f"Batches {missing} have no reference samples. "
+            + (
+                "Correcting them with standard grand-mean estimation (not reference-anchored)."
+                if no_reference_batch == "fallback"
+                else "Leaving them uncorrected."
+            )
+        )
+
+    # alpha[g]: pooled reference level for each feature
+    alpha = np.nanmean(work[:, reference_mask], axis=1)
+    # If a feature is NaN in every reference, fall back to the all-sample mean so the
+    # standardized data is still finite (its gamma will be ~0 / fully shrunk).
+    alpha_nan = np.isnan(alpha)
+    if np.any(alpha_nan):
+        alpha[alpha_nan] = np.nanmean(work[alpha_nan, :], axis=1)
+
+    # Raw additive offsets per batch (log2). Anchored batches use references; fallback
+    # batches use all their samples (grand-mean estimand for that batch).
+    gamma_raw = np.zeros((n_batch, n_work))
+    for bi in range(n_batch):
+        if n_ref_per_batch[bi] >= 1:
+            gamma_raw[bi, :] = np.nanmean(work[:, batch_ref_indices[bi]], axis=1) - alpha
+        elif no_reference_batch == "fallback":
+            gamma_raw[bi, :] = np.nanmean(work[:, batch_indices[bi]], axis=1) - alpha
+        # "skip": gamma_raw stays 0 (no correction)
+    gamma_raw = np.nan_to_num(gamma_raw, nan=0.0)
+
+    # var_pooled[g]: the standardization scale. For location+scale to be coherent it
+    # must be the TECHNICAL variance, i.e. the pooled within-batch variance of the
+    # reference replicates (mirrors standard ComBat, where var_pooled is the pooled
+    # within-batch residual variance). Estimated from batches with >=2 references.
+    # Standardizing by this makes delta_hat (reference-replicate variance / var_pooled)
+    # average ~1 across batches, so dividing by sqrt(delta) harmonizes technical
+    # dispersion rather than inflating the data.
+    sumsq = np.zeros(n_work)
+    pooled_df = 0
+    for bi in range(n_batch):
+        if n_ref_per_batch[bi] >= 2:
+            ref_cols = work[:, batch_ref_indices[bi]]
+            ref_mean = np.nanmean(ref_cols, axis=1, keepdims=True)
+            resid = ref_cols - ref_mean
+            sumsq += np.nansum(resid**2, axis=1)
+            pooled_df += n_ref_per_batch[bi] - 1
+
+    scale_estimable = pooled_df > 0
+    if scale_estimable:
+        var_pooled = sumsq / pooled_df
+    else:
+        # No batch has >=2 references: technical variance is not estimable, so scale
+        # correction is impossible (delta forced to 1 below). Use the all-sample
+        # residual variance purely as a homoscedastic scale for the location EB prior;
+        # it cancels on back-transform and only affects shrinkage weighting.
+        residual = work - alpha[:, None]
+        for bi in range(n_batch):
+            idx = batch_indices[bi]
+            residual[:, idx] = residual[:, idx] - gamma_raw[bi, :][:, None]
+        var_pooled = np.nanvar(residual, axis=1, ddof=1)
+
+    positive = var_pooled[(var_pooled > 0) & np.isfinite(var_pooled)]
+    fill = np.median(positive) if positive.size else 1.0
+    var_pooled[~((var_pooled > 0) & np.isfinite(var_pooled))] = fill
+    std_pooled = np.sqrt(var_pooled)
+
+    # Standardized data and standardized raw effects
+    s_data = (work - alpha[:, None]) / std_pooled[:, None]
+    gamma_hat = np.nan_to_num(gamma_raw / std_pooled[None, :], nan=0.0)
+
+    # Scale effects: variance of standardized reference replicates per batch (>=2 refs),
+    # which averages ~1 across batches because var_pooled is the pooled reference
+    # variance. Forced to 1 when scale is not estimable.
+    delta_hat = np.ones((n_batch, n_work))
+    if scale_estimable:
+        for bi in range(n_batch):
+            if n_ref_per_batch[bi] >= 2:
+                dv = np.nanvar(s_data[:, batch_ref_indices[bi]], axis=1, ddof=1)
+                dv = np.nan_to_num(dv, nan=1.0)
+                dv[dv <= 0] = 1.0
+                delta_hat[bi, :] = dv
+
+    # Empirical-Bayes priors. _compute_priors derives gamma_bar/t2 (and a/b for delta)
+    # PER BATCH from that batch's own features, so anchored and fallback batches never
+    # share a prior pool even though they are computed in one call.
+    gamma_bar, t2, a_prior, b_prior = _compute_priors(gamma_hat, delta_hat, mean_only=False)
+
+    gamma_star = np.zeros_like(gamma_hat)
+    delta_star = np.ones_like(delta_hat)
+
+    for bi in range(n_batch):
+        n_ref = n_ref_per_batch[bi]
+        if n_ref == 0 and no_reference_batch == "skip":
+            # leave uncorrected
+            continue
+        if n_ref >= 2:
+            # Joint location+scale EB on the reference columns only, so the iterative
+            # delta update sees reference replicate spread, not experimental biology.
+            if par_prior:
+                g_star, d_star = _it_sol(
+                    s_data[:, batch_ref_indices[bi]],
+                    gamma_hat[bi, :],
+                    delta_hat[bi, :],
+                    gamma_bar[bi],
+                    t2[bi],
+                    a_prior[bi],
+                    b_prior[bi],
+                )
+            else:
+                g_star, d_star = _int_eprior(
+                    s_data[:, batch_ref_indices[bi]],
+                    gamma_hat[bi, :],
+                    delta_hat[bi, :],
+                )
+            gamma_star[bi, :] = g_star
+            delta_star[bi, :] = d_star
+        else:
+            # Location-only: single-reference batch (n_ref=1) or grand-mean fallback
+            # (n_ref=0). Shrinkage sample size = references (1) or full batch size.
+            n_eff = n_ref if n_ref >= 1 else len(batch_indices[bi])
+            gamma_star[bi, :] = _postmean(
+                gamma_hat[bi, :], gamma_bar[bi], n_eff, np.ones(n_work), t2[bi]
+            )
+            delta_star[bi, :] = 1.0
+
+    # Apply correction to ALL samples (stand_mean = alpha, broadcast across samples)
+    bayes_work = _adjust_data(
+        s_data,
+        gamma_star,
+        delta_star,
+        batch_indices,
+        var_pooled,
+        alpha.reshape(-1, 1),
+    )
+
+    # Restore zero-variance features
+    if np.any(zero_var_mask):
+        full = np.empty((n_features, n_samples), dtype=np.float64)
+        full[~zero_var_mask, :] = bayes_work
+        full[zero_var_mask, :] = data_array[zero_var_mask, :]
+        bayes_work = full
+
+    return _return(bayes_work)
+
+
 def combat_from_long(
     data: pd.DataFrame,
     abundance_col: str = "abundance",

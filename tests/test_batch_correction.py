@@ -11,6 +11,7 @@ from skyline_prism.batch_correction import (
     _postvar,
     combat,
     combat_from_long,
+    combat_reference_anchored,
 )
 
 
@@ -782,3 +783,247 @@ class TestBatchCorrectionEvaluation:
             corrected["abundance_batch_corrected"].values,
             corrected["abundance"].values,
         )
+
+
+def _build_reference_anchored_data(
+    n_feat,
+    batches,
+    n_ref,
+    n_exp,
+    offsets,
+    mu,
+    bio_sd=1.0,
+    noise=0.05,
+    seed=0,
+    ref_noise=None,
+):
+    """Build a (features x samples) matrix with known per-batch additive offsets.
+
+    References are identical material (mu + offset + small noise); experimental
+    samples add biological deviation. Returns (data_in, batch, reference_mask, info).
+    ``n_ref`` may be an int (same for all batches) or a dict batch->count.
+    ``ref_noise`` optionally overrides the reference replicate SD per batch
+    (dict batch->sd) to create scale differences.
+    """
+    rng = np.random.default_rng(seed)
+    cols, batch, ref_mask = [], [], []
+    for b in batches:
+        nref_b = n_ref[b] if isinstance(n_ref, dict) else n_ref
+        rsd = noise if ref_noise is None else ref_noise.get(b, noise)
+        for _ in range(nref_b):
+            cols.append(mu + offsets[b] + rng.normal(0, rsd, n_feat))
+            batch.append(b)
+            ref_mask.append(True)
+        for _ in range(n_exp):
+            bio = rng.normal(0, bio_sd, n_feat)
+            cols.append(mu + bio + offsets[b] + rng.normal(0, noise, n_feat))
+            batch.append(b)
+            ref_mask.append(False)
+    data_in = np.array(cols).T
+    return data_in, np.array(batch), np.array(ref_mask)
+
+
+class TestReferenceAnchoredComBat:
+    """Tests for reference-anchored ComBat (single-point calibration + EB)."""
+
+    def test_additive_offset_removed_references_align(self):
+        """Pure per-batch additive offsets captured by clean references are
+        removed; reference samples align across batches afterward.
+        """
+        n_feat = 60
+        mu = np.linspace(12, 18, n_feat)
+        offsets = {"A": 0.0, "B": 0.8, "C": -0.5}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B", "C"], n_ref=2, n_exp=4, offsets=offsets, mu=mu, seed=1
+        )
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+
+        ref_idx = np.where(ref_mask)[0]
+        before = data_in[:, ref_idx].std(axis=1).mean()
+        after = corrected[:, ref_idx].std(axis=1).mean()
+        # Cross-batch reference spread should collapse to ~noise
+        assert after < 0.15 * before
+
+    def test_biological_signal_preserved(self):
+        """Experimental biological deviation (relative to reference) survives
+        correction; only the batch offset is removed.
+        """
+        n_feat = 60
+        mu = np.full(n_feat, 15.0)
+        offsets = {"A": 0.0, "B": 1.0}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B"], n_ref=3, n_exp=5, offsets=offsets, mu=mu, seed=2
+        )
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+
+        # Within batch B, the experimental-vs-reference contrast must be
+        # preserved (offset is common to both, so it cancels in the contrast).
+        exp_b = np.where((batch == "B") & ~ref_mask)[0]
+        ref_b = np.where((batch == "B") & ref_mask)[0]
+        before_contrast = data_in[:, exp_b].mean(axis=1) - data_in[:, ref_b].mean(axis=1)
+        after_contrast = corrected[:, exp_b].mean(axis=1) - corrected[:, ref_b].mean(axis=1)
+        # Biology is preserved up to the (legitimate) scale harmonization, which
+        # rescales deviations by ~1/sqrt(delta) (delta ~ 1 here). Strong but not
+        # necessarily perfect correlation; near-identity magnitude.
+        corr = np.corrcoef(before_contrast, after_contrast)[0, 1]
+        assert corr > 0.99
+        np.testing.assert_allclose(before_contrast, after_contrast, atol=0.2)
+
+    def test_output_is_absolute_scale_not_ratio(self):
+        """With zero offsets, output stays on the absolute log2 scale and the
+        corrected reference mean ~ alpha (the reference level), NOT ~0 (which is
+        what a ratio-to-reference would produce).
+        """
+        n_feat = 40
+        mu = np.linspace(10, 20, n_feat)
+        offsets = {"A": 0.0, "B": 0.0, "C": 0.0}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B", "C"], n_ref=2, n_exp=3, offsets=offsets, mu=mu,
+            noise=0.02, seed=3
+        )
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+
+        # Corrected references center on the reference level (mu), not 0 — this is
+        # the key check that output is calibrated absolute abundance, not a ratio.
+        ref_idx = np.where(ref_mask)[0]
+        corrected_ref_mean = corrected[:, ref_idx].mean(axis=1)
+        np.testing.assert_allclose(corrected_ref_mean, mu, atol=0.2)
+        assert corrected_ref_mean.mean() > 10  # nowhere near 0
+        # References (zero offset, tiny noise) are essentially unchanged.
+        np.testing.assert_allclose(data_in[:, ref_idx], corrected[:, ref_idx], atol=0.2)
+        # Whole matrix stays in a sane absolute range around mu (10..20) plus
+        # experimental biological spread (~3 SD), not collapsed near 0 or inflated.
+        assert corrected.min() > 5 and corrected.max() < 25
+        # And the output range tracks the input range (no scale collapse/blowup).
+        assert abs((corrected.max() - corrected.min()) - (data_in.max() - data_in.min())) < 2.0
+
+    def test_noisy_feature_shrunk_toward_consensus(self):
+        """A feature with a spurious single-reference delta in one batch is
+        pulled toward the batch consensus (EB shrinkage), so its applied shift
+        is smaller than the naive single-point delta.
+        """
+        n_feat = 80
+        mu = np.full(n_feat, 15.0)
+        # Single reference per batch -> heavy shrinkage; clean consensus offset 0.6
+        offsets = {"A": 0.0, "B": 0.6}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B"], n_ref=1, n_exp=4, offsets=offsets, mu=mu,
+            noise=0.01, seed=4
+        )
+        # Corrupt feature 0's single reference in batch B: reads offset ~2.5 (wrong)
+        b_ref = np.where((batch == "B") & ref_mask)[0][0]
+        data_in[0, b_ref] = mu[0] + 2.5
+
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+
+        # Applied shift for batch B (location-only): input - output, constant per sample
+        b_samples = np.where(batch == "B")[0]
+        applied_shift = (data_in[:, b_samples] - corrected[:, b_samples]).mean(axis=1)
+        naive_delta_f0 = 2.5  # what naive single-point would subtract
+        consensus = np.median(applied_shift)  # ~0.6
+        # Feature 0's shift is pulled well below the naive delta, toward consensus
+        assert applied_shift[0] < naive_delta_f0
+        assert abs(applied_shift[0] - consensus) < abs(naive_delta_f0 - consensus)
+
+    def test_no_reference_batch_fallback_warns(self, caplog):
+        """A batch with zero references is corrected by grand-mean fallback and
+        a warning is emitted; reference batches still align.
+        """
+        import logging
+
+        n_feat = 50
+        mu = np.full(n_feat, 14.0)
+        offsets = {"A": 0.0, "B": 0.7, "C": -0.4}
+        # Batch C has NO references
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat,
+            ["A", "B", "C"],
+            n_ref={"A": 2, "B": 2, "C": 0},
+            n_exp=4,
+            offsets=offsets,
+            mu=mu,
+            seed=5,
+        )
+        with caplog.at_level(logging.WARNING):
+            corrected = combat_reference_anchored(data_in, batch, ref_mask, no_reference_batch="fallback")
+
+        assert any("no reference samples" in r.message.lower() for r in caplog.records)
+        # Reference batches A and B still align after correction
+        ref_ab = np.where(ref_mask & np.isin(batch, ["A", "B"]))[0]
+        assert corrected[:, ref_ab].std(axis=1).mean() < 0.2
+        # Output still on absolute scale (fallback batch corrected, not blown up)
+        assert 10 < corrected.mean() < 18
+
+    def test_no_reference_batch_error_mode(self):
+        """no_reference_batch='error' raises when a batch lacks references."""
+        n_feat = 20
+        mu = np.full(n_feat, 14.0)
+        offsets = {"A": 0.0, "B": 0.5}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B"], n_ref={"A": 2, "B": 0}, n_exp=3, offsets=offsets, mu=mu, seed=6
+        )
+        with pytest.raises(ValueError, match="no reference samples"):
+            combat_reference_anchored(data_in, batch, ref_mask, no_reference_batch="error")
+
+    def test_eb_shrinkage_reduces_noisy_delta_dispersion(self):
+        """Empirical-Bayes shrinkage pulls noisy per-feature reference deltas
+        toward the batch consensus, so the applied per-feature shifts are LESS
+        dispersed than the raw (un-shrunk) single-point deltas.
+        """
+        n_feat = 200
+        rng = np.random.default_rng(11)
+        mu = rng.normal(15, 1.5, n_feat)
+        # All features share the same TRUE batch-B offset (0.5); per-feature
+        # variation in the measured reference delta is pure estimation noise.
+        offsets = {"A": 0.0, "B": 0.5}
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat, ["A", "B"], n_ref=2, n_exp=4, offsets=offsets, mu=mu,
+            noise=0.3, seed=11  # substantial reference noise -> noisy raw deltas
+        )
+
+        # Raw single-point delta per feature for batch B (vs pooled reference mean)
+        a_ref = np.where((batch == "A") & ref_mask)[0]
+        b_ref = np.where((batch == "B") & ref_mask)[0]
+        alpha = np.concatenate([data_in[:, a_ref], data_in[:, b_ref]], axis=1).mean(axis=1)
+        raw_delta_b = data_in[:, b_ref].mean(axis=1) - alpha
+
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+        b_samples = np.where(batch == "B")[0]
+        applied_shift = (data_in[:, b_samples] - corrected[:, b_samples]).mean(axis=1)
+
+        # The true per-feature offset is identical, so all variation in raw_delta_b
+        # is noise. EB shrinkage toward the consensus should shrink that spread.
+        assert applied_shift.std() < raw_delta_b.std()
+
+    def test_scale_harmonized_when_replicates_available(self):
+        """With >=2 references per batch and unequal reference dispersion, the
+        noisier batch's spread is harmonized toward the other batch.
+        """
+        n_feat = 80
+        mu = np.full(n_feat, 15.0)
+        offsets = {"A": 0.0, "B": 0.0}
+        # Batch B references are 6x noisier than batch A references
+        data_in, batch, ref_mask = _build_reference_anchored_data(
+            n_feat,
+            ["A", "B"],
+            n_ref=6,
+            n_exp=4,
+            offsets=offsets,
+            mu=mu,
+            ref_noise={"A": 0.1, "B": 0.6},
+            seed=8,
+        )
+        corrected = combat_reference_anchored(data_in, batch, ref_mask)
+
+        a_ref = np.where((batch == "A") & ref_mask)[0]
+        b_ref = np.where((batch == "B") & ref_mask)[0]
+        spread_a_before = data_in[:, a_ref].std(axis=1).mean()
+        spread_b_before = data_in[:, b_ref].std(axis=1).mean()
+        spread_a_after = corrected[:, a_ref].std(axis=1).mean()
+        spread_b_after = corrected[:, b_ref].std(axis=1).mean()
+
+        # Before: B much noisier than A. After: ratio much closer to 1.
+        ratio_before = spread_b_before / spread_a_before
+        ratio_after = spread_b_after / spread_a_after
+        assert ratio_before > 3.0
+        assert ratio_after < 0.5 * ratio_before

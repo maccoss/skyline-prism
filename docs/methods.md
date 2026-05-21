@@ -446,9 +446,28 @@ This "borrows strength" across features to improve estimation when batches have 
 
 **Reference batch option:** One batch can be designated as reference and left unadjusted.
 
-### ComBat with Reference Sample Preservation
+By default PRISM applies **standard grand-mean ComBat**: $\gamma_{ig}$ and $\delta_{ig}$ are estimated from all samples in batch $i$, aligning every batch to the across-batch grand mean. This assumes each batch has a comparable biological composition.
 
-Modified ComBat that preserves the variance structure of reference samples (pooled QC). Uses reference samples to estimate the target variance, then applies correction to align all batches.
+### Reference-anchored ComBat (single-point calibration with empirical-Bayes shrinkage)
+
+Enabled with `batch_correction.reference_anchored: true`. This is PRISM's recommended correction when inter-experiment **reference samples** (identical material run in every batch) are available. It combines single-point external reference calibration (Pino et al., 2020) with ComBat's empirical-Bayes shrinkage.
+
+**Concept.** Rather than estimating the batch effect from all samples (which conflates technical and biological variation when batches differ biologically), PRISM estimates each batch's technical effect from the **reference samples only**. Because the reference is identical material, any per-batch difference in it is purely technical, so the correction removes no biology.
+
+**Model, per feature $g$, batch $i$ (log2 abundance $Y$):**
+- $\alpha_g$ = pooled mean of $Y_g$ over all reference samples across all batches (the reference material's level)
+- $\gamma_{ig}$ = additive offset = (mean of $Y_g$ over references in batch $i$) $- \alpha_g$
+- $\delta_{ig}$ = multiplicative scale = dispersion of the standardized reference replicates in batch $i$, estimated only when batch $i$ has $\geq 2$ reference replicates (otherwise $\delta_{ig}=1$, location-only for that batch)
+
+**Empirical-Bayes shrinkage across features within a batch** stabilizes the per-analyte calibration: an analyte poorly measured in the reference borrows strength from the batch-wide consensus shift rather than being dictated by one noisy reference measurement. The additive shrinkage weight is $\tau^2 n / (\tau^2 n + 1)$ where $n$ is the number of reference replicates in the batch, so a single reference per batch produces heavy shrinkage and additional replicates progressively trust the directly measured per-analyte offset (converging to raw single-point calibration).
+
+**Standardization scale.** The standardization variance is the pooled within-batch reference-replicate variance (the technical variance), mirroring standard ComBat's use of the within-batch pooled variance. This makes $\delta$ average $\approx 1$ across batches so dividing by $\sqrt{\delta}$ harmonizes technical dispersion rather than rescaling biology.
+
+**Output.** Calibrated absolute log2 abundance on the input scale, applied to all samples (experimental, QC, and reference). The result is **not** a ratio to the reference; it is each sample's own abundance with the reference-derived technical offset (and, where estimable, dispersion) removed.
+
+**No-reference batches.** A batch with no reference samples cannot be reference-anchored. By default (`no_reference_batch="fallback"`) such a batch is corrected with standard grand-mean estimation and a warning is logged.
+
+**Implementation:** `skyline_prism/batch_correction.py` -> `combat_reference_anchored()`.
 
 ---
 

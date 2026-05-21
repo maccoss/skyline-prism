@@ -548,6 +548,8 @@ KNOWN_CONFIG_KEYS = {
     "batch_correction": {
         "enabled",
         "method",
+        "reference_anchored",
+        "reference_type",
     },
     "parsimony": {
         "enabled",
@@ -629,6 +631,8 @@ def load_config(config_path: Path | None) -> dict:
         "batch_correction": {
             "enabled": True,
             "method": "combat",
+            "reference_anchored": False,
+            "reference_type": "reference",
         },
         "parsimony": {
             "shared_peptide_handling": "all_groups",
@@ -899,6 +903,39 @@ class PipelineResult:
     method_log: list[str]
     peptide_residuals: pd.DataFrame | None = None
     transition_residuals: pd.DataFrame | None = None
+
+
+def _run_combat(
+    data_matrix: np.ndarray,
+    batch_labels: list,
+    sample_cols: list[str],
+    sample_to_type: dict[str, str],
+    config: dict,
+    level: str,
+) -> np.ndarray:
+    """Run ComBat, choosing reference-anchored vs standard based on config.
+
+    When batch_correction.reference_anchored is True and reference samples are
+    present, uses combat_reference_anchored (single-point reference calibration
+    with empirical-Bayes shrinkage). Otherwise uses standard grand-mean combat.
+    Falls back to standard combat with a warning if reference anchoring is
+    requested but no reference samples are found.
+    """
+    from .batch_correction import combat, combat_reference_anchored
+
+    bc_config = config.get("batch_correction", {})
+    if bc_config.get("reference_anchored", False):
+        reference_type = bc_config.get("reference_type", "reference")
+        ref_mask = [sample_to_type.get(c) == reference_type for c in sample_cols]
+        if any(ref_mask):
+            logger.info(f"  Applying reference-anchored ComBat ({level})...")
+            return combat_reference_anchored(data_matrix, batch_labels, ref_mask)
+        logger.warning(
+            f"  batch_correction.reference_anchored=true but no '{reference_type}' "
+            f"samples found ({level}); falling back to standard ComBat"
+        )
+    logger.info(f"  Applying ComBat ({level})...")
+    return combat(data_matrix, batch_labels)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -2133,8 +2170,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             if n_batches < 2:
                 logger.warning(f"Only {n_batches} batch - skipping batch correction")
             else:
-                from .batch_correction import combat
-
                 # Get sample types for reference-anchored ComBat (if metadata available)
                 sample_to_type = (
                     build_sample_type_map(sample_cols, metadata_df)
@@ -2146,10 +2181,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 data_matrix = peptide_df[sample_cols].values
                 batch_labels = [sample_to_batch.get(s, "unknown") for s in sample_cols]
 
-                logger.info(f"  Applying ComBat across {n_batches} batches...")
-
-                # Run ComBat - returns corrected matrix directly
-                corrected_matrix = combat(data_matrix, batch_labels)
+                # Run ComBat (reference-anchored or standard per config)
+                corrected_matrix = _run_combat(
+                    data_matrix, batch_labels, sample_cols, sample_to_type, config, "peptide"
+                )
 
                 # Replace sample columns with corrected values
                 for i, col in enumerate(sample_cols):
@@ -2454,9 +2489,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if n_batches < 2:
                 logger.warning(f"Only {n_batches} batch - skipping batch correction")
             else:
-                from .batch_correction import combat
-
-                # Get sample types for CV reporting (if metadata available)
+                # Get sample types for reference-anchored ComBat / CV reporting
                 sample_to_type = (
                     build_sample_type_map(prot_sample_cols, metadata_df)
                     if metadata_df is not None
@@ -2467,10 +2500,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                 prot_data_matrix = protein_df[prot_sample_cols].values
                 prot_batch_labels = [sample_to_batch.get(s, "unknown") for s in prot_sample_cols]
 
-                logger.info(f"  Applying ComBat across {n_batches} batches...")
-
-                # Run ComBat - returns corrected matrix directly
-                prot_corrected = combat(prot_data_matrix, prot_batch_labels)
+                # Run ComBat (reference-anchored or standard per config)
+                prot_corrected = _run_combat(
+                    prot_data_matrix,
+                    prot_batch_labels,
+                    prot_sample_cols,
+                    sample_to_type,
+                    config,
+                    "protein",
+                )
 
                 # Replace sample columns with corrected values
                 for i, col in enumerate(prot_sample_cols):
@@ -2566,6 +2604,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             "batch_correction": {
                 "enabled": batch_correction_enabled,
                 "method": config.get("batch_correction", {}).get("method", "combat"),
+                "reference_anchored": config.get("batch_correction", {}).get(
+                    "reference_anchored", False
+                ),
+                "reference_type": config.get("batch_correction", {}).get(
+                    "reference_type", "reference"
+                ),
             },
         },
         "method_log": method_log,
@@ -2889,9 +2933,20 @@ global_normalization:
 # =============================================================================
 # ComBat empirical Bayes batch correction. Automatically skipped when only
 # one batch is detected.
+#
+# reference_anchored: when true (and reference samples are present), estimate
+# each batch's technical effect from the inter-batch reference samples only
+# (single-point external reference calibration, Pino et al. 2020) and stabilize
+# the per-analyte calibration with ComBat's empirical-Bayes shrinkage. This
+# anchors correction on identical reference material rather than the grand mean,
+# so it does not assume equal biological composition across batches. Requires
+# reference samples (sample_type == reference_type) in every batch; batches
+# without references fall back to standard grand-mean ComBat with a warning.
 batch_correction:
   enabled: true
   method: "combat"
+  reference_anchored: false
+  reference_type: "reference"
 
 # =============================================================================
 # Protein Rollup
@@ -3188,6 +3243,28 @@ global_normalization:
 batch_correction:
   enabled: true
   method: "combat"
+
+  # reference_anchored: estimate each batch's technical effect from the
+  # inter-batch reference samples ONLY (single-point external reference
+  # calibration, Pino et al. 2020), then stabilize the per-analyte calibration
+  # with ComBat's empirical-Bayes shrinkage so that an analyte poorly measured
+  # in the reference borrows strength from the batch-wide consensus shift.
+  #
+  #   false (default) - standard ComBat: align every batch to the grand mean
+  #                     across all samples (assumes equal biological composition
+  #                     per batch).
+  #   true            - reference-anchored ComBat: align each batch so its
+  #                     reference reads a consistent level (additive offset), and
+  #                     additionally harmonize technical dispersion (multiplicative
+  #                     scale) for any batch with >=2 reference replicates. Does
+  #                     not assume equal biology across batches. Output is
+  #                     calibrated absolute abundance, NOT a ratio to the reference.
+  #
+  # Requires reference samples (sample_type == reference_type) ideally in every
+  # batch; batches without references fall back to standard grand-mean ComBat
+  # with a warning.
+  reference_anchored: false
+  reference_type: "reference"
 
 # =============================================================================
 # Protein Parsimony

@@ -231,7 +231,9 @@ These files are useful for debugging, custom analysis, or re-running specific st
     },
     "batch_correction": {
       "enabled": true,
-      "method": "combat"
+      "method": "combat",
+      "reference_anchored": false,
+      "reference_type": "reference"
     }
   },
   "method_log": [
