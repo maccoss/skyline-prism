@@ -1030,8 +1030,15 @@ def rollup_transitions_sorted(
             peptide_schema_target
         )
         if peptide_writer is None:
+            # Snappy on streaming-flush writers (peptide, residual, diag below).
+            # pyarrow ParquetWriter + zstd + many sequential write_table calls has
+            # repeatedly produced files whose zstd frames cannot be decoded on
+            # read-back ("ZSTD decompression failed: Unknown frame descriptor"),
+            # especially on NAS-mounted outputs. Snappy round-trips reliably in
+            # this codebase; the absolute size difference for these intermediate
+            # files is small and they are read immediately by the next stage.
             peptide_writer = pq.ParquetWriter(
-                output_path, peptide_schema_target, compression="zstd"
+                output_path, peptide_schema_target, compression="snappy"
             )
         peptide_writer.write_table(table)
         peptide_rows.clear()
@@ -1046,7 +1053,7 @@ def rollup_transitions_sorted(
         )
         if residual_writer is None:
             residual_writer = pq.ParquetWriter(
-                residuals_path, residual_schema_target, compression="zstd"
+                residuals_path, residual_schema_target, compression="snappy"
             )
         residual_writer.write_table(table)
         residual_rows.clear()
@@ -1060,7 +1067,7 @@ def rollup_transitions_sorted(
         if diag_writer is None:
             diag_schema_target = table.schema
             diag_writer = pq.ParquetWriter(
-                diag_path_parquet, diag_schema_target, compression="zstd"
+                diag_path_parquet, diag_schema_target, compression="snappy"
             )
         else:
             table = table.cast(diag_schema_target)
