@@ -1338,6 +1338,43 @@ def generate_comprehensive_qc_report(
         metrics_html += "</table>"
 
     # =========================================================================
+    # Build the explicit reference/QC sample lists block. The Dataset Summary
+    # box just shows counts; users often want to see which actual samples are
+    # being used to compute the reference and QC median CVs. Show them in a
+    # collapsed <details> so the report stays compact for typical viewing but
+    # the list is one click away.
+    # =========================================================================
+    _ref_samples_list = [c for c in sample_cols if sample_types.get(c) == "reference"]
+    _qc_samples_list = [c for c in sample_cols if sample_types.get(c) == "qc"]
+
+    def _samples_html(samples: list[str]) -> str:
+        if not samples:
+            return "<em>(none)</em>"
+        items = "".join(f"<li><code>{s}</code></li>" for s in samples)
+        return f"<ul style='margin: 4px 0 4px 20px; padding: 0;'>{items}</ul>"
+
+    sample_lists_html = f"""
+        <details style="margin: 10px 0;">
+            <summary style="cursor: pointer; color: #0066cc;">
+                Show samples used for Reference and QC median CV computations
+            </summary>
+            <div style="margin-top: 8px; padding-left: 16px;">
+                <p style="margin: 6px 0;"><strong>Reference samples (n={len(_ref_samples_list)}):</strong></p>
+                {_samples_html(_ref_samples_list)}
+                <p style="margin: 6px 0;"><strong>QC samples (n={len(_qc_samples_list)}):</strong></p>
+                {_samples_html(_qc_samples_list)}
+                <p style="margin: 8px 0 4px 0; color: #555; font-size: 0.9em;">
+                    Sample types come from the <code>Sample Type</code> column of the
+                    input metadata (Skyline values <code>Standard</code> &rarr; reference,
+                    <code>Quality Control</code> &rarr; QC, <code>Unknown</code> &rarr; experimental).
+                    Configuration <code>sample_annotations.reference_pattern</code> and
+                    <code>qc_pattern</code> are used only when no metadata file is provided.
+                </p>
+            </div>
+        </details>
+"""
+
+    # =========================================================================
     # Build pipeline metadata HTML
     # =========================================================================
     import socket
@@ -1466,6 +1503,7 @@ def generate_comprehensive_qc_report(
                     <td></td>
                 </tr>
             </table>
+            {sample_lists_html}
         </div>
 
         <div class="summary-box" style="background: #f0fff0; border-color: #90ee90;">

@@ -875,7 +875,9 @@ def plot_cv_distribution(
             pct_under_threshold = np.sum(np.array(cv_values) < cv_threshold) / len(cv_values) * 100
             pct_under_10 = np.sum(np.array(cv_values) < 10) / len(cv_values) * 100
 
-            # Median line
+            # Median and threshold reference lines. All stats are folded into
+            # the legend labels so there is only one annotation element in the
+            # plot area and the legend cannot collide with a separate text box.
             ax.axvline(
                 median_cv,
                 color="red",
@@ -883,30 +885,17 @@ def plot_cv_distribution(
                 linewidth=2,
                 label=f"Median: {median_cv:.1f}%",
             )
-
-            # Threshold line
             ax.axvline(
                 cv_threshold,
                 color="orange",
                 linestyle=":",
                 linewidth=2,
                 alpha=0.8,
-                label=f"Threshold: {cv_threshold}%",
-            )
-
-            # Stats text
-            stats_text = (
-                f"{pct_under_threshold:.1f}% < {cv_threshold}% CV\n{pct_under_10:.1f}% < 10% CV"
-            )
-            ax.text(
-                0.95,
-                0.95,
-                stats_text,
-                transform=ax.transAxes,
-                fontsize=10,
-                verticalalignment="top",
-                horizontalalignment="right",
-                bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+                label=(
+                    f"Threshold: {cv_threshold}% "
+                    f"({pct_under_threshold:.1f}% < {cv_threshold}%, "
+                    f"{pct_under_10:.1f}% < 10%)"
+                ),
             )
 
             ax.set_xlim(0, min(100, np.percentile(cv_values, 99)))
@@ -2177,6 +2166,9 @@ def plot_cv_comparison_wide(
             median_cv = np.median(cv_values)
             pct_under = np.sum(cv_values < cv_threshold) / len(cv_values) * 100
 
+            # Median and threshold reference lines. All stats fold into the
+            # legend labels so there is only one annotation element on the plot
+            # and the legend cannot collide with a separate text box.
             ax.axvline(
                 median_cv,
                 color="red",
@@ -2190,18 +2182,7 @@ def plot_cv_comparison_wide(
                 linestyle=":",
                 linewidth=2,
                 alpha=0.8,
-                label=f"Threshold: {cv_threshold}%",
-            )
-
-            ax.text(
-                0.95,
-                0.95,
-                f"Median: {median_cv:.1f}%\n{pct_under:.1f}% < {cv_threshold}%",
-                transform=ax.transAxes,
-                fontsize=10,
-                va="top",
-                ha="right",
-                bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+                label=f"Threshold: {cv_threshold}% ({pct_under:.1f}% under)",
             )
 
             ax.set_xlim(0, min(100, np.percentile(cv_values, 99)))

@@ -1805,6 +1805,32 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Uses build_sample_type_map to handle Sample ID vs Replicate Name mismatch
     sample_to_type = build_sample_type_map(sample_cols, metadata_df)
 
+    # Make it explicit which samples are used for the reference and QC median
+    # CVs in the console output and the qc_report.html. This avoids confusion
+    # between (a) the Skyline "Sample Type" column in the user's metadata, which
+    # is mapped to PRISM's reference / qc / experimental, and (b) the regex-based
+    # sample_annotations patterns in the YAML config, which only apply when no
+    # metadata file is provided.
+    if sample_to_type:
+        ref_samples_listed = [c for c in sample_cols if sample_to_type.get(c) == "reference"]
+        qc_samples_listed = [c for c in sample_cols if sample_to_type.get(c) == "qc"]
+        if ref_samples_listed:
+            logger.info(
+                f"  Reference samples used for CV (n={len(ref_samples_listed)}): "
+                f"{ref_samples_listed}"
+            )
+        else:
+            logger.info(
+                "  No reference samples found in metadata (sample_type=='reference')"
+            )
+        if qc_samples_listed:
+            logger.info(
+                f"  QC samples used for CV (n={len(qc_samples_listed)}): "
+                f"{qc_samples_listed}"
+            )
+        else:
+            logger.info("  No QC samples found in metadata (sample_type=='qc')")
+
     if norm_method == "rt_lowess":
         # RT-lowess normalization: align all samples to global median lowess curve
         from .normalization import apply_rt_lowess_normalization
