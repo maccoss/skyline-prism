@@ -2139,6 +2139,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Stage 2c: Peptide ComBat Batch Correction
     # -------------------------------------------------------------------------
     batch_correction_enabled = config.get("batch_correction", {}).get("enabled", True)
+    # Tracker for which source (Source Document, metadata, acquisition time)
+    # ended up providing batch labels. Stays None if batch correction is
+    # disabled or skipped (e.g. only one batch detected); set inside Stage 2c
+    # once the priority chain resolves a non-empty mapping.
+    batch_source_used: str | None = None
 
     if batch_correction_enabled:
         logger.info("-" * 60)
@@ -2192,6 +2197,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             logger.info(f"  Batches found: {sorted(unique_batches)}")
             for b_name, b_count in sorted(batch_counts.items()):
                 logger.info(f"    {b_name}: {b_count} samples")
+
+            # Persist the resolved batch source so the qc_report and the
+            # metadata.json provenance can show which path PRISM took
+            # (Source Document, metadata column, or acquisition-time estimation).
+            batch_source_used = batch_source
 
             if n_batches < 2:
                 logger.warning(f"Only {n_batches} batch - skipping batch correction")
@@ -2636,6 +2646,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "reference_type": config.get("batch_correction", {}).get(
                     "reference_type", "reference"
                 ),
+                # Records the priority chain outcome from Stage 2c: one of
+                # "source documents", "metadata", "acquisition time estimation",
+                # or null when batch correction was disabled / skipped.
+                "batch_source": batch_source_used,
             },
         },
         "method_log": method_log,
@@ -2689,6 +2703,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 rt_lowess_result=rt_lowess_result,
                 sample_batches=sample_batches_map,
                 pipeline_metadata=metadata,
+                batch_source=batch_source_used,
             )
             method_log.append(f"QC report: {qc_report_path}")
         except Exception as e:
@@ -2959,6 +2974,18 @@ global_normalization:
 # =============================================================================
 # ComBat empirical Bayes batch correction. Automatically skipped when only
 # one batch is detected.
+#
+# Where batch labels come from (no YAML setting required): PRISM resolves
+# batches automatically in this priority order:
+#   1. Source Document column inside the merged parquet (one input file = one
+#      batch). Only fires when there are >=2 distinct source documents.
+#   2. The 'batch' column of your metadata CSV (Skyline 'Batch Name' and
+#      plain 'Batch' are accepted as aliases). This is the path most single-
+#      input-file runs take.
+#   3. Estimation from acquisition-time gaps (controlled by the
+#      batch_estimation: block below).
+# After a run, look for 'Batch source: ...' in the console log or the
+# 'Batch source' line in qc_report.html to confirm which path was used.
 #
 # reference_anchored: when true (and reference samples are present), estimate
 # each batch's technical effect from the inter-batch reference samples only
@@ -3265,6 +3292,18 @@ global_normalization:
 # Batch Correction
 # =============================================================================
 # Remove systematic batch effects using ComBat (empirical Bayes).
+#
+# Where batch labels come from (no YAML setting required): PRISM resolves
+# batches automatically in this priority order:
+#   1. Source Document column inside the merged parquet (one input file = one
+#      batch). Only fires when there are >=2 distinct source documents.
+#   2. The 'batch' column of your metadata CSV (Skyline 'Batch Name' and
+#      plain 'Batch' are accepted as aliases). This is the path most single-
+#      input-file runs take.
+#   3. Estimation from acquisition-time gaps (controlled by the
+#      batch_estimation: block elsewhere in this template).
+# After a run, look for 'Batch source: ...' in the console log or the
+# 'Batch source' line in qc_report.html to confirm which path was used.
 
 batch_correction:
   enabled: true

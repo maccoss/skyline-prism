@@ -423,6 +423,34 @@ Forces all samples to have identical intensity distributions by ranking and repl
 
 Removes systematic differences between experimental batches while preserving biological variation.
 
+### Where do batch labels come from?
+
+ComBat needs to know which batch each sample belongs to. PRISM resolves this automatically by trying three sources in a fixed priority order, and the source it ended up using is printed in the console log (`Batch source: ...`) and shown in `qc_report.html`.
+
+| Priority | Source | When it is used |
+|---|---|---|
+| 1 | `Source Document` column inside the merged transition parquet (one input file = one batch) | Only when there are **two or more** distinct source documents. Single-input-file runs skip this. |
+| 2 | The `batch` column of your sample metadata CSV | Whenever Priority 1 produces nothing and a metadata file is provided. |
+| 3 | Estimation from acquisition-time gaps | Fallback when the first two produce nothing. Controlled by the `batch_estimation:` block of the YAML. |
+
+**Using the metadata `Batch` column.** This is the path most multi-batch single-file runs take. The metadata column is auto-detected by name. Any of `batch`, `Batch`, or `Batch Name` works (Skyline's default header is `Batch Name`); they are all renamed internally to `batch`. No YAML change is needed. When the metadata column is recognized, the console logs `Renamed 'Batch' column to 'batch'` during loading, and Stage 2c later logs `Batch source: metadata`.
+
+**Verifying after a run.** Look for these three log lines:
+
+```text
+Renamed 'Batch' column to 'batch'     # metadata column was found
+Batch source: metadata                # Priority 2 (your CSV) is what's driving ComBat
+Batches found: [batch_a, batch_b, ...]  # the unique batch labels found
+```
+
+If `Batch source:` says `source documents` (Priority 1) or `acquisition time estimation` (Priority 3), then your metadata `Batch` column is not what is being used.
+
+**Edge cases.**
+
+- Samples missing a batch in metadata are reported with a warning (`N samples without batch assignment`) but the rest of the cohort is corrected normally.
+- If every sample ends up in the same batch (`n_batches < 2`), batch correction is skipped automatically with a benign log line.
+- For multi-input-file runs where you want metadata to override the Source Document split, no YAML option exists today; the workaround is to merge upstream into a single parquet so Priority 1 does not fire. Tell us if you would like a config flag for this.
+
 ### ComBat (Empirical Bayes)
 
 Implementation of the ComBat algorithm (Johnson et al., 2007).

@@ -12,7 +12,15 @@
       "Bash(python -c:*)",
       "Bash(prism compare --help:*)",
       "Bash(pytest:*)",
-      "Bash(prism config-template --minimal)"
+      "Bash(prism config-template --minimal)",
+      "Bash(cd /mnt/nas/2026-04-Shock-ITP-Plasma)",
+      "Bash(/mnt/d/GitHub-Repo/maccoss/skyline-prism/.venv/bin/python -)",
+      "Bash(cd /mnt/nas/2026-04-Shock-ITP-Plasma 2>/dev/null && grep -niA6 \"transition_rollup\" prism-sum-RTlowess-medianpolish-combat.yaml | head -30)",
+      "Read(//mnt/nas/2026-04-Shock-ITP-Plasma/**)",
+      "Bash(touch .prism_write_test)",
+      "Bash(rm -f .prism_write_test)",
+      "Bash(cd /mnt/nas/2026-04-Shock-ITP-EV)",
+      "Bash(ls -la --time-style=+%Y-%m-%d_%H:%M *.parquet)"
     ]
   }
 }

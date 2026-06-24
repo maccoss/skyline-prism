@@ -702,6 +702,7 @@ def generate_comprehensive_qc_report(
     rt_lowess_result: "RTLowessResult | None" = None,
     sample_batches: dict[str, str] | None = None,
     pipeline_metadata: dict | None = None,
+    batch_source: str | None = None,
 ) -> dict[str, str]:
     """Generate comprehensive QC report with multi-stage plots for peptides and proteins.
 
@@ -1338,6 +1339,39 @@ def generate_comprehensive_qc_report(
         metrics_html += "</table>"
 
     # =========================================================================
+    # Build the "Batch source" line. PRISM resolves batch labels from three
+    # possible sources in priority order (Source Document column -> metadata
+    # 'batch' column -> acquisition-time estimation). Recording which one
+    # actually fired prevents the common confusion of "I edited my metadata
+    # Batch column but is it being used?". Renders only when set.
+    # =========================================================================
+    _batch_source_descriptions = {
+        "source documents": (
+            "<code>Source Document</code> column inside the merged transition "
+            "parquet (one input file = one batch)"
+        ),
+        "metadata": (
+            "the <code>batch</code> column of the input metadata file "
+            "(also accepts Skyline's <code>Batch Name</code> and plain <code>Batch</code>)"
+        ),
+        "acquisition time estimation": (
+            "automatic estimation from gaps in the <code>AcquiredTime</code> column "
+            "(no explicit batch labels were provided)"
+        ),
+    }
+    if batch_source:
+        _bs_desc = _batch_source_descriptions.get(batch_source, batch_source)
+        batch_source_html = f"""
+        <p style="margin: 8px 0 4px 0;">
+            <strong>Batch source:</strong>
+            <code>{batch_source}</code>
+            <span style="color: #555;">(batch labels came from {_bs_desc})</span>
+        </p>
+"""
+    else:
+        batch_source_html = ""
+
+    # =========================================================================
     # Build the explicit reference/QC sample lists block. The Dataset Summary
     # box just shows counts; users often want to see which actual samples are
     # being used to compute the reference and QC median CVs. Show them in a
@@ -1503,6 +1537,7 @@ def generate_comprehensive_qc_report(
                     <td></td>
                 </tr>
             </table>
+            {batch_source_html}
             {sample_lists_html}
         </div>
 
