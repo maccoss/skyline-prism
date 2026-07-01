@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -7,11 +8,16 @@ using System.Text;
 namespace SkylinePrism.Core.Parsimony;
 
 /// <summary>
-/// Reads/writes the protein_groups.csv produced by Stage 3, whose columns are:
+/// Reads/writes protein_groups.csv (Stage 3 output). Columns:
 /// GroupID, LeadingProtein, LeadingUniProtID, LeadingGeneName, LeadingName,
 /// LeadingDescription, MemberProteins, SubsumedProteins, NPeptides, NUniquePeptides,
 /// NRazorPeptides, NAllMappedPeptides, UniquePeptides, RazorPeptides, AllPeptides.
-/// Peptide lists are ';'-separated inside a field.
+/// Peptide/protein lists are ';'-separated inside a field.
+///
+/// Note: the CSV's AllPeptides column is the parsimony-assigned set (unique ∪ razor), not
+/// the full all-mapped set (only its COUNT is stored). When reading, AllMappedPeptides is
+/// set to that same list as a best-effort proxy (exact when there are no shared peptides).
+/// The pipeline passes in-memory groups (with true all-mapped peptides) to the rollup.
 /// </summary>
 public static class ProteinGroupsCsv
 {
@@ -34,7 +40,7 @@ public static class ProteinGroupsCsv
             var f = ParseLine(lines[r]);
 
             string Get(string name) => col.TryGetValue(name, out var idx) && idx < f.Count ? f[idx] : "";
-            List<string> Peptides(string name)
+            List<string> Split(string name)
             {
                 var v = Get(name);
                 return string.IsNullOrEmpty(v)
@@ -42,6 +48,7 @@ public static class ProteinGroupsCsv
                     : v.Split(';', StringSplitOptions.RemoveEmptyEntries).ToList();
             }
 
+            var peptides = Split("AllPeptides");
             groups.Add(new ProteinGroup
             {
                 GroupId = Get("GroupID"),
@@ -50,12 +57,54 @@ public static class ProteinGroupsCsv
                 LeadingGeneName = Get("LeadingGeneName"),
                 LeadingName = Get("LeadingName"),
                 LeadingDescription = Get("LeadingDescription"),
-                UniquePeptides = Peptides("UniquePeptides"),
-                RazorPeptides = Peptides("RazorPeptides"),
-                AllMappedPeptides = Peptides("AllPeptides"),
+                MemberProteins = Split("MemberProteins"),
+                SubsumedProteins = Split("SubsumedProteins"),
+                Peptides = peptides,
+                UniquePeptides = Split("UniquePeptides"),
+                RazorPeptides = Split("RazorPeptides"),
+                AllMappedPeptides = peptides,
             });
         }
         return groups;
+    }
+
+    public static void Write(IReadOnlyList<ProteinGroup> groups, string path)
+    {
+        var sb = new StringBuilder();
+        sb.Append("GroupID,LeadingProtein,LeadingUniProtID,LeadingGeneName,LeadingName,")
+          .Append("LeadingDescription,MemberProteins,SubsumedProteins,NPeptides,NUniquePeptides,")
+          .Append("NRazorPeptides,NAllMappedPeptides,UniquePeptides,RazorPeptides,AllPeptides\n");
+
+        foreach (var g in groups)
+        {
+            var fields = new[]
+            {
+                g.GroupId,
+                g.LeadingProtein,
+                g.LeadingUniProtId,
+                g.LeadingGeneName,
+                g.LeadingName,
+                g.LeadingDescription,
+                string.Join(";", g.MemberProteins),
+                string.Join(";", g.SubsumedProteins),
+                g.Peptides.Count.ToString(CultureInfo.InvariantCulture),
+                g.UniquePeptides.Count.ToString(CultureInfo.InvariantCulture),
+                g.RazorPeptides.Count.ToString(CultureInfo.InvariantCulture),
+                g.AllMappedPeptides.Count.ToString(CultureInfo.InvariantCulture),
+                string.Join(";", g.UniquePeptides.OrderBy(x => x, StringComparer.Ordinal)),
+                string.Join(";", g.RazorPeptides.OrderBy(x => x, StringComparer.Ordinal)),
+                string.Join(";", g.Peptides.OrderBy(x => x, StringComparer.Ordinal)),
+            };
+            sb.Append(string.Join(",", fields.Select(Escape))).Append('\n');
+        }
+        File.WriteAllText(path, sb.ToString());
+    }
+
+    private static string Escape(string field)
+    {
+        if (field.Contains(',') || field.Contains('"') || field.Contains('\n'))
+            return "\"" + field.Replace("\"", "\"\"") + "\"";
+        return field;
     }
 
     /// <summary>Minimal RFC4180 line parser (handles double-quoted fields with embedded commas).</summary>
