@@ -33,12 +33,17 @@ public sealed class PrismPipeline
         Directory.CreateDirectory(outputDir);
         var report = log ?? (_ => { });
 
-        // Stage 1: merge.
+        report("============================================================");
+        report("Stage 1: Merge / prepare input");
+        report("============================================================");
         var mergedPath = Path.Combine(outputDir, "merged_data.parquet");
-        DuckDbMerge.MergeAndSort(inputs, mergedPath);
+        var merge = DuckDbMerge.MergeAndSort(inputs, mergedPath);
+        report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
 
         var cols = SkylineColumns.Detect(ParquetTable.Load(mergedPath).ColumnNames.ToHashSet());
         var samples = MergedParquetReader.GetSortedSamples(mergedPath, cols.Sample);
+        report($"  Columns: peptide='{cols.Peptide}', sample='{cols.Sample}', abundance='{cols.Abundance}'.");
+        report($"  Samples: {samples.Count}.");
 
         // Resolve per-sample batch and type: prefer the Replicates metadata (Batch annotation /
         // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
@@ -63,6 +68,9 @@ public sealed class PrismPipeline
             + (combatEnabled ? "enabled" : "skipped (needs >= 2 batches)") + ".");
 
         // Stage 2: transition -> peptide.
+        report("============================================================");
+        report($"Stage 2: Transition -> peptide rollup ({config.TransitionRollup.Method})");
+        report("============================================================");
         var peptidesRollupPath = Path.Combine(outputDir, "peptides_rollup.parquet");
         var transitionCfg = new TransitionRollupConfig
         {
@@ -71,10 +79,13 @@ public sealed class PrismPipeline
             MinTransitions = config.TransitionRollup.MinTransitions,
             UseMs1 = config.TransitionRollup.UseMs1,
         };
-        TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
+        var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
+        report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
 
         // Stage 2b/2c: peptide normalization + ComBat -> peptides_log2_internal (LOG2) +
         // corrected_peptides (LINEAR).
+        report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
+            + (combatEnabled ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
         var correctedPepPath = Path.Combine(outputDir, "corrected_peptides." + config.Output.Format);
         var nPeptides = NormalizeAndCorrect(
@@ -82,12 +93,20 @@ public sealed class PrismPipeline
             new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
             samples, batchLabels, combatEnabled, config.GlobalNormalization.Method,
             internalPath, correctedPepPath);
+        report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
+        report("============================================================");
+        report("Stage 3: Protein parsimony");
+        report("============================================================");
         var groups = ParsimonyEngine.Run(mergedPath, cols);
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
+        report($"  Computed {groups.Count:N0} protein groups.");
 
         // Stage 4: peptide -> protein.
+        report("============================================================");
+        report($"Stage 4: Peptide -> protein rollup ({config.ProteinRollup.Method})");
+        report("============================================================");
         var proteinsRawPath = Path.Combine(outputDir, "proteins_raw.parquet");
         var proteinCfg = new ProteinRollupConfig
         {
@@ -96,6 +115,9 @@ public sealed class PrismPipeline
             MinPeptides = config.ProteinRollup.MinPeptides,
         };
         var protResult = ProteinRollup.Run(internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples);
+        report($"  Rolled up to {protResult.NProteins:N0} proteins.");
+        report($"Stage 4b: Protein normalization ({config.ProteinNormalization.Method})"
+            + (combatEnabled ? " + 4c: ComBat" : "") + "...");
 
         // Stage 4b/4c: protein normalization + ComBat -> corrected_proteins (LINEAR).
         var correctedProtPath = Path.Combine(outputDir, "corrected_proteins." + config.Output.Format);
@@ -110,12 +132,24 @@ public sealed class PrismPipeline
             proteinsRawPath, proteinMeta, samples, batchLabels, combatEnabled,
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath);
 
+        report("============================================================");
+        report("Stage 5: Output generation");
+        report("============================================================");
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
+        var nRef = resolvedType.Values.Count(t => t == "reference");
+        var nQc = resolvedType.Values.Count(t => t == "qc");
+        report($"  Sample types: {nRef} reference, {nQc} qc, {resolvedType.Count - nRef - nQc} experimental.");
+        report($"  Wrote corrected_peptides / corrected_proteins ({config.Output.Format}, linear) and sample_metadata.csv.");
 
         // Stage 5b: QC report.
         if (config.QcReport.Enabled)
+        {
+            report("Stage 5b: Generating QC report (qc_report.html)...");
             QcReport.Generate(outputDir, config, savePlots: config.QcReport.SavePlots);
+        }
 
+        report($"PRISM complete: {nPeptides:N0} peptides, {nProteins:N0} proteins, {samples.Count:N0} samples, "
+            + $"{batches.Count} batch(es).");
         return new Result(nPeptides, nProteins, samples.Count, batches);
     }
 

@@ -51,6 +51,34 @@ public partial class MainWindow : Window
         Log(_session is not null
             ? "Connected. Set an output directory and click Run PRISM."
             : "Not connected to Skyline. Launch this tool from Skyline's Tools menu.");
+
+        MetadataReportCombo.Items.Add(DefaultMetadataItem);
+        MetadataReportCombo.SelectedIndex = 0;
+        if (_session is not null)
+            _ = LoadReportsAsync();
+    }
+
+    private const string DefaultMetadataItem = "(default) PRISM-Replicates";
+
+    private async Task LoadReportsAsync()
+    {
+        if (_session is null)
+            return;
+        try
+        {
+            var session = _session;
+            var reports = await Task.Run(() => new SkylineReportDriver(session).ListAvailableReports());
+            MetadataReportCombo.Items.Clear();
+            MetadataReportCombo.Items.Add(DefaultMetadataItem);
+            foreach (var r in reports.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                MetadataReportCombo.Items.Add(r);
+            MetadataReportCombo.SelectedIndex = 0;
+            Log($"Loaded {reports.Count} report(s) from the document into the Metadata report list.");
+        }
+        catch (Exception ex)
+        {
+            Log("(could not load the document's report list: " + ex.Message + ")");
+        }
     }
 
     private void OnBrowse(object sender, RoutedEventArgs e)
@@ -74,11 +102,14 @@ public partial class MainWindow : Window
 
         var outputDir = OutputDirBox.Text;
         var batchColumn = BatchColumnBox.Text?.Trim();
+        var metadataReport = MetadataReportCombo.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(metadataReport) || metadataReport == DefaultMetadataItem)
+            metadataReport = null;
         var session = _session;
 
         try
         {
-            await Task.Run(() => RunPipeline(session, outputDir, batchColumn));
+            await Task.Run(() => RunPipeline(session, outputDir, batchColumn, metadataReport));
             _lastReportPath = Path.Combine(outputDir, "qc_report.html");
             OpenReportButton.IsEnabled = File.Exists(_lastReportPath);
             LoadPcaPlot(outputDir);
@@ -99,14 +130,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RunPipeline(SkylineSession session, string outputDir, string? batchColumn)
+    private void RunPipeline(SkylineSession session, string outputDir, string? batchColumn, string? metadataReport)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
 
         Log("Exporting reports from Skyline...");
         var driver = new SkylineReportDriver(session, Log);
-        var reports = driver.Export(reportsDir);
+        var reports = driver.Export(reportsDir, metadataReport);
 
         Log($"Running PRISM pipeline on the {(reports.InputIsParquet ? "parquet" : "CSV")} report "
             + $"({Path.GetFileName(reports.InputPath)})...");

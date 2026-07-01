@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<views>
+  <view name="PRISM-Replicates" rowsource="pwiz.Skyline.Model.Databinding.Entities.Replicate" uimode="proteomic">
+    <column name="" />
+    <column name="SampleType" />
+    <column name="BatchName" />
+    <column name="AnalyteConcentration" />
+    <column name="SampleDilutionFactor" />
+  </view>
+</views>

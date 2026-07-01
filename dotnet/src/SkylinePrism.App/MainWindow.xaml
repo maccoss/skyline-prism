@@ -34,13 +34,17 @@
         <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="180" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="Batch annotation column (optional):" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <TextBox Grid.Column="1" x:Name="BatchColumnBox" VerticalAlignment="Center" />
-            <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
-                       Text="Replicates-report column that holds the batch/plate label. Leave blank to auto-detect (single batch otherwise)." TextWrapping="Wrap" />
+            <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
+            <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
+                       Text="Pick the report carrying replicate annotations (default = our PRISM-Replicates), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
 
         <TabControl Grid.Row="4">

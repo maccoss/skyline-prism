@@ -32,7 +32,7 @@ public sealed class SkylineReportDriver
     public sealed record ExportedReports(
         string InputPath, bool InputIsParquet, string? ReplicatesCsv, string? DocumentPath);
 
-    public ExportedReports Export(string workDir)
+    public ExportedReports Export(string workDir, string? metadataReportName = null)
     {
         Directory.CreateDirectory(workDir);
 
@@ -42,7 +42,7 @@ public sealed class SkylineReportDriver
         if (version is not null)
             _log($"Skyline version: {version}");
 
-        EnsurePrismReport();
+        EnsureReportsInstalled();
 
         // Preferred path: export PRISM directly as parquet. Skyline determines the format
         // from the file extension, the same mechanism that produced the CSV.
@@ -61,7 +61,7 @@ public sealed class SkylineReportDriver
         {
             _log($"Exported PRISM report (parquet): {prismParquet} "
                  + $"({new FileInfo(prismParquet).Length:N0} bytes)");
-            return new ExportedReports(prismParquet, true, ExportReplicates(workDir), docPath);
+            return new ExportedReports(prismParquet, true, ExportMetadataReport(workDir, metadataReportName), docPath);
         }
 
         // Fallback: invariant CSV (older Skyline builds without parquet report export).
@@ -70,43 +70,52 @@ public sealed class SkylineReportDriver
         var prismCsv = Path.Combine(workDir, "PRISM.csv");
         _session.Execute(c => c.ExportReport("PRISM", prismCsv, "invariant"));
         _log($"Exported PRISM report (invariant CSV): {prismCsv}");
-        return new ExportedReports(prismCsv, false, ExportReplicates(workDir), docPath);
+        return new ExportedReports(prismCsv, false, ExportMetadataReport(workDir, metadataReportName), docPath);
     }
 
-    private string? ExportReplicates(string workDir)
+    /// <summary>
+    /// Export the replicate-annotation metadata report. The user names it (its columns are
+    /// annotation-dependent and Skyline's built-in "Replicates" view is not in the exportable
+    /// saved-report list); if unspecified, we try a saved "Replicates" report and otherwise
+    /// skip (the pipeline auto-generates metadata from replicate names).
+    /// </summary>
+    private string? ExportMetadataReport(string workDir, string? requestedName)
     {
-        // Resolve the built-in Replicates report name (its columns are annotation-dependent).
-        var reportName = "Replicates";
-        try
+        var available = GetAvailableReportNames();
+        if (available.Count > 0)
+            _log("Available Skyline reports: " + string.Join(", ", available));
+
+        string? reportName;
+        if (!string.IsNullOrWhiteSpace(requestedName))
         {
-            var available = GetAvailableReportNames();
-            if (available.Count > 0)
-            {
-                _log("Available Skyline reports: " + string.Join(", ", available));
-                var match = available.FirstOrDefault(
-                    n => string.Equals(n, "Replicates", StringComparison.OrdinalIgnoreCase));
-                if (match is not null)
-                    reportName = match;
-            }
+            reportName = available.FirstOrDefault(
+                n => string.Equals(n, requestedName, StringComparison.OrdinalIgnoreCase)) ?? requestedName;
         }
-        catch (Exception ex)
+        else
         {
-            _log($"(could not enumerate reports: {ex.Message})");
+            // Default to our own installed PRISM-Replicates report (Skyline's built-in
+            // Replicates view is not exportable via the saved-report API).
+            reportName = available.FirstOrDefault(
+                             n => string.Equals(n, "PRISM-Replicates", StringComparison.OrdinalIgnoreCase))
+                         ?? "PRISM-Replicates";
         }
 
-        var replicatesCsv = Path.Combine(workDir, "Replicates.csv");
+        var csv = Path.Combine(workDir, "Metadata.csv");
         try
         {
-            _session.Execute(c => c.ExportReport(reportName, replicatesCsv, "invariant"));
-            _log($"Exported '{reportName}' report: {replicatesCsv}");
-            return replicatesCsv;
+            _session.Execute(c => c.ExportReport(reportName, csv, "invariant"));
+            _log($"Exported metadata report '{reportName}': {csv}");
+            return csv;
         }
         catch (Exception ex)
         {
-            _log($"Replicates report export skipped: {ex.Message}");
+            _log($"Metadata report '{reportName}' export skipped: {ex.Message}");
             return null;
         }
     }
+
+    /// <summary>The saved report names available in the document (for a metadata-report picker).</summary>
+    public IReadOnlyList<string> ListAvailableReports() => GetAvailableReportNames();
 
     private List<string> GetAvailableReportNames()
     {
@@ -127,12 +136,18 @@ public sealed class SkylineReportDriver
         return names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().ToList();
     }
 
-    private void EnsurePrismReport()
+    private void EnsureReportsInstalled()
     {
-        var skyr = Path.Combine(AppContext.BaseDirectory, "Reports", "Skyline-PRISM.skyr");
+        InstallReport("Skyline-PRISM.skyr", "PRISM");
+        InstallReport("Skyline-PRISM-Replicates.skyr", "PRISM-Replicates");
+    }
+
+    private void InstallReport(string fileName, string displayName)
+    {
+        var skyr = Path.Combine(AppContext.BaseDirectory, "Reports", fileName);
         if (!File.Exists(skyr))
         {
-            _log($"PRISM report definition not bundled at {skyr}; assuming it is already installed in Skyline.");
+            _log($"{displayName} report definition not bundled at {skyr}; assuming it is already installed in Skyline.");
             return;
         }
         try
@@ -142,11 +157,11 @@ public sealed class SkylineReportDriver
                 $"--report-add={skyr}",
                 "--report-conflict-resolution=overwrite",
             }));
-            _log("Installed/updated the PRISM report definition in Skyline.");
+            _log($"Installed/updated the {displayName} report definition in Skyline.");
         }
         catch (Exception ex)
         {
-            _log($"Could not add PRISM report (it may already exist): {ex.Message}");
+            _log($"Could not add {displayName} report (it may already exist): {ex.Message}");
         }
     }
 

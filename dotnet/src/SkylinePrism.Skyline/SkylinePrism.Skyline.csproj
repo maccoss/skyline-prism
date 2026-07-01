@@ -26,9 +26,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The PRISM report definition, staged next to the tool so it can be installed into
-         a Skyline document that does not already have it. -->
+    <!-- The PRISM report definitions, staged next to the tool so they can be installed into
+         a Skyline document: the transition-level PRISM report and the replicate-level
+         PRISM-Replicates metadata report (Skyline's built-in Replicates view is not in the
+         exportable saved-report list, so we ship our own equivalent). -->
     <None Include="Reports\Skyline-PRISM.skyr" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Reports\Skyline-PRISM-Replicates.skyr" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
