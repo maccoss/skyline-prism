@@ -48,7 +48,9 @@ public sealed class PrismConfig
 
     public sealed class GlobalNormalizationSection
     {
-        public string Method { get; set; } = "median";
+        // RT-lowess is the recommended default: it removes RT-dependent systematic variation
+        // (ion suppression, gradient drift) in addition to overall loading differences.
+        public string Method { get; set; } = "rt_lowess";
     }
 
     public sealed class BatchCorrectionSection

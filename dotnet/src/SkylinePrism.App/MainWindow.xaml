@@ -67,6 +67,7 @@
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <TextBlock Text="2. Peptide normalization:" Width="230" VerticalAlignment="Center" />
                             <ComboBox x:Name="PeptideNormCombo" Width="160">
+                                <ComboBoxItem>rt_lowess</ComboBoxItem>
                                 <ComboBoxItem>median</ComboBoxItem>
                                 <ComboBoxItem>none</ComboBoxItem>
                             </ComboBox>

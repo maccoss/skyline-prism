@@ -96,7 +96,7 @@ public sealed class PrismPipeline
             peptidesRollupPath,
             new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
             samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
-            internalPath, correctedPepPath);
+            internalPath, correctedPepPath, rtColumn: "mean_rt");
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
@@ -172,7 +172,8 @@ public sealed class PrismPipeline
         bool combatEnabled,
         string normMethod,
         string? internalLog2Path,
-        string correctedLinearPath)
+        string correctedLinearPath,
+        string? rtColumn = null)
     {
         var table = ParquetTable.Load(wideParquet);
         var nAll = table.RowCount;
@@ -203,9 +204,23 @@ public sealed class PrismPipeline
             for (var j = 0; j < samples.Count; j++)
                 matrix[r, j] = matrixAll[keep[r], j];
 
-        var normalized = normMethod is "none"
-            ? matrix
-            : Normalizer.MedianNormalize(matrix);
+        double[,] normalized;
+        if (normMethod is "rt_lowess" && rtColumn is not null && table.HasColumn(rtColumn))
+        {
+            var rtAll = table.GetDouble(rtColumn);
+            var rtKept = new double[n];
+            for (var r = 0; r < n; r++)
+                rtKept[r] = rtAll[keep[r]] ?? double.NaN;
+            normalized = Normalizer.RtLowessNormalize(matrix, rtKept);
+        }
+        else if (normMethod is "none")
+        {
+            normalized = matrix;
+        }
+        else
+        {
+            normalized = Normalizer.MedianNormalize(matrix);
+        }
         var corrected = combatEnabled ? ComBat.Run(normalized, batchLabels) : normalized;
 
         // Meta columns (filtered to kept rows).

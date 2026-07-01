@@ -72,7 +72,7 @@ public partial class MainWindow : Window
         c.TransitionRollup.MinTransitions = ParseInt(MinTransitionsBox.Text, 3);
         c.TransitionRollup.UseMs1 = UseMs1Check.IsChecked == true;
 
-        c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "median");
+        c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "rt_lowess");
 
         var pepBatch = PeptideBatchCheck.IsChecked == true;
         var protBatch = ProteinBatchCheck.IsChecked == true;
