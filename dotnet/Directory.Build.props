@@ -1,0 +1,21 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Allows cross-compiling Windows-targeted projects (net8.0-windows, WPF)
+         on non-Windows hosts (Linux / macOS / CI agents). No effect on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <!-- Single source of truth for the assembly version. The Skyline tool
+         manifest version lives separately in
+         src/SkylinePrism.App/tool-inf/info.properties and must be kept in sync
+         at release time; dotnet-release.yml verifies the match before publishing. -->
+    <Version>0.1.0</Version>
+
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

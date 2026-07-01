@@ -1,0 +1,19 @@
+## .NET build outputs
+bin/
+obj/
+publish/
+build/staging/
+build/staging-dev/
+out/
+*.zip
+
+## Rider / VS
+.idea/
+.vs/
+*.user
+
+## Test / coverage
+[Tt]est[Rr]esults/
+coverage/
+*.coverage
+*.trx

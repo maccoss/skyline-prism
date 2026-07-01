@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The WinExe that Skyline launches as an external tool. WPF + interactive
+         ScottPlot views (Layer 11). AssemblyName must match the Command in the
+         tool-inf manifest (SkylinePrism.exe). -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>SkylinePrism</AssemblyName>
+    <RootNamespace>SkylinePrism.App</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+    <ProjectReference Include="..\SkylinePrism.Skyline\SkylinePrism.Skyline.csproj" />
+  </ItemGroup>
+
+</Project>

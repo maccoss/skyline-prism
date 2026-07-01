@@ -1,0 +1,10 @@
+<Window x:Class="SkylinePrism.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Skyline-PRISM" Height="600" Width="900">
+    <Grid>
+        <TextBlock Text="Skyline-PRISM"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   FontSize="24" />
+    </Grid>
+</Window>
