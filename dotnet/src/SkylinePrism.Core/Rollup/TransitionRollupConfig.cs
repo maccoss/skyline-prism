@@ -26,6 +26,9 @@ public sealed class TransitionRollupConfig
 
     public bool LogTransform { get; init; } = true;
 
+    /// <summary>When set (median_polish only), write per-transition residuals to this parquet.</summary>
+    public string? ResidualsPath { get; init; }
+
     // --- Library-assisted rollup (method == LibraryAssist) ---
 
     /// <summary>Path to the spectral library (.blib) used for library-assisted rollup.</summary>

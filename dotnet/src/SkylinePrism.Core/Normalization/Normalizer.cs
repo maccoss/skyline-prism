@@ -152,4 +152,118 @@ public static class Normalizer
             return double.NaN;
         return Stats.Interp(x, xp, fp);
     }
+
+    /// <summary>
+    /// Quantile normalization (cli.py Stage 2b): force identical distributions across samples.
+    /// Reference = per-rank mean of the sorted columns; each value is mapped to the reference by
+    /// interpolating its average rank. Operates on LOG2; NaN preserved.
+    /// </summary>
+    public static double[,] QuantileNormalize(double[,] log2Matrix)
+    {
+        var nRows = log2Matrix.GetLength(0);
+        var nCols = log2Matrix.GetLength(1);
+
+        var ranks = new double[nRows, nCols];
+        var sortedCols = new double[nCols][];
+        for (var j = 0; j < nCols; j++)
+        {
+            var validIdx = new List<int>(nRows);
+            for (var i = 0; i < nRows; i++)
+                if (!double.IsNaN(log2Matrix[i, j]))
+                    validIdx.Add(i);
+
+            var validVals = new double[validIdx.Count];
+            for (var k = 0; k < validIdx.Count; k++)
+                validVals[k] = log2Matrix[validIdx[k], j];
+            var r = Stats.RankAverage(validVals); // 1-based average ranks over valid entries
+            for (var i = 0; i < nRows; i++)
+                ranks[i, j] = double.NaN;
+            for (var k = 0; k < validIdx.Count; k++)
+                ranks[validIdx[k], j] = r[k];
+
+            var col = new double[nRows];
+            for (var i = 0; i < nRows; i++)
+                col[i] = log2Matrix[i, j];
+            Array.Sort(col, NanLast); // ascending, NaN last (np.sort)
+            sortedCols[j] = col;
+        }
+
+        var reference = new double[nRows];
+        for (var i = 0; i < nRows; i++)
+        {
+            double sum = 0;
+            var cnt = 0;
+            for (var j = 0; j < nCols; j++)
+            {
+                var v = sortedCols[j][i];
+                if (!double.IsNaN(v))
+                {
+                    sum += v;
+                    cnt++;
+                }
+            }
+            reference[i] = cnt > 0 ? sum / cnt : double.NaN;
+        }
+
+        var result = new double[nRows, nCols];
+        for (var j = 0; j < nCols; j++)
+        {
+            var maxRank = 0;
+            for (var i = 0; i < nRows; i++)
+                if (!double.IsNaN(log2Matrix[i, j]))
+                    maxRank++;
+            var xp = new double[maxRank];
+            var fp = new double[maxRank];
+            for (var k = 0; k < maxRank; k++)
+            {
+                xp[k] = k + 1;
+                fp[k] = reference[k];
+            }
+            for (var i = 0; i < nRows; i++)
+                result[i, j] = double.IsNaN(log2Matrix[i, j]) || maxRank == 0
+                    ? double.NaN
+                    : Stats.Interp(ranks[i, j], xp, fp);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// VSN (variance-stabilizing normalization) via arcsinh (cli.py Stage 2b): per sample,
+    /// arcsinh(linear / median(linear)). Input LOG2 -> linear internally; OUTPUT IS ON THE
+    /// ARCSINH SCALE, not log2 (negative values are expected). Parameter optimization is off by
+    /// default in the pipeline and is not ported.
+    /// </summary>
+    public static double[,] VsnNormalize(double[,] log2Matrix)
+    {
+        var nRows = log2Matrix.GetLength(0);
+        var nCols = log2Matrix.GetLength(1);
+        var result = new double[nRows, nCols];
+        for (var j = 0; j < nCols; j++)
+        {
+            var pos = new List<double>(nRows);
+            for (var i = 0; i < nRows; i++)
+            {
+                var v = log2Matrix[i, j];
+                if (!double.IsNaN(v))
+                    pos.Add(Math.Pow(2, v)); // 2^x is always > 0
+            }
+            var median = pos.Count > 0 ? Stats.NanMedian(pos.ToArray()) : 0.0;
+            var a = median > 0 ? 1.0 / median : 1.0;
+            for (var i = 0; i < nRows; i++)
+            {
+                var v = log2Matrix[i, j];
+                result[i, j] = double.IsNaN(v) ? double.NaN : Math.Asinh(a * Math.Pow(2, v));
+            }
+        }
+        return result;
+    }
+
+    private static readonly Comparison<double> NanLast = (a, b) =>
+    {
+        if (double.IsNaN(a))
+            return double.IsNaN(b) ? 0 : 1;
+        if (double.IsNaN(b))
+            return -1;
+        return a.CompareTo(b);
+    };
 }

@@ -90,11 +90,64 @@ public sealed class PrismPipeline
             LibraryMinFragments = config.TransitionRollup.LibraryMinFragments,
             LibraryMzTolerance = config.TransitionRollup.LibraryMzTolerance,
             LibraryOutlierThreshold = config.TransitionRollup.LibraryOutlierThreshold,
+            ResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "peptide_residuals.parquet")
+                : null,
         };
         if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
             report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
         var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
+        if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
+            report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
+
+        // Stage 2a: sample outlier detection (one-sided low signal, on the peptide matrix).
+        if (config.SampleOutlierDetection.Enabled)
+        {
+            var pepTable = ParquetTable.Load(peptidesRollupPath);
+            var m = new double[pepTable.RowCount, samples.Count];
+            for (var j = 0; j < samples.Count; j++)
+            {
+                var col = pepTable.GetDouble(samples[j]);
+                for (var i = 0; i < pepTable.RowCount; i++)
+                    m[i, j] = col[i] ?? double.NaN;
+            }
+            var odMethod = config.SampleOutlierDetection.Method == "fold_median"
+                ? OutlierDetector.Method.FoldMedian : OutlierDetector.Method.Iqr;
+            var od = OutlierDetector.Detect(m, samples, odMethod,
+                config.SampleOutlierDetection.IqrMultiplier, config.SampleOutlierDetection.FoldThreshold);
+
+            if (od.Outliers.Count == 0)
+            {
+                report("  Sample outlier detection: no low-signal outliers.");
+            }
+            else if (config.SampleOutlierDetection.Action == "exclude")
+            {
+                report($"  Sample outlier detection: EXCLUDING {od.Outliers.Count} low-signal sample(s): "
+                    + string.Join(", ", od.Outliers));
+                var excluded = new HashSet<string>(od.Outliers, StringComparer.Ordinal);
+                var keptSamples = new List<string>(samples.Count);
+                var keptBatch = new List<string>(samples.Count);
+                for (var j = 0; j < samples.Count; j++)
+                {
+                    if (excluded.Contains(samples[j]))
+                        continue;
+                    keptSamples.Add(samples[j]);
+                    keptBatch.Add(batchLabels[j]);
+                }
+                samples = keptSamples;
+                batchLabels = keptBatch;
+                batches = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+                var mb = batches.Count >= 2;
+                peptideCombat = config.BatchCorrection.Enabled && config.BatchCorrection.PeptideLevel && mb;
+                proteinCombat = config.BatchCorrection.Enabled && config.BatchCorrection.ProteinLevel && mb;
+            }
+            else
+            {
+                report($"  Sample outlier detection: {od.Outliers.Count} low-signal sample(s) flagged "
+                    + "(report only, kept): " + string.Join(", ", od.Outliers));
+            }
+        }
 
         // Stage 2b/2c: peptide normalization + ComBat -> peptides_log2_internal (LOG2) +
         // corrected_peptides (LINEAR).
@@ -150,6 +203,10 @@ public sealed class PrismPipeline
         report("Stage 5: Output generation");
         report("============================================================");
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
+        Provenance.Write(
+            Path.Combine(outputDir, "metadata.json"), config, inputs,
+            new Provenance.Stats(samples.Count, nPeptides, nProteins, groups.Count),
+            DateTime.UtcNow.ToString("o"));
         var nRef = resolvedType.Values.Count(t => t == "reference");
         var nQc = resolvedType.Values.Count(t => t == "qc");
         report($"  Sample types: {nRef} reference, {nQc} qc, {resolvedType.Count - nRef - nQc} experimental.");
@@ -223,13 +280,15 @@ public sealed class PrismPipeline
                 rtKept[r] = rtAll[keep[r]] ?? double.NaN;
             normalized = Normalizer.RtLowessNormalize(matrix, rtKept);
         }
-        else if (normMethod is "none")
-        {
-            normalized = matrix;
-        }
         else
         {
-            normalized = Normalizer.MedianNormalize(matrix);
+            normalized = normMethod switch
+            {
+                "quantile" => Normalizer.QuantileNormalize(matrix),
+                "vsn" => Normalizer.VsnNormalize(matrix),
+                "none" => matrix,
+                _ => Normalizer.MedianNormalize(matrix),
+            };
         }
         var corrected = combatEnabled ? ComBat.Run(normalized, batchLabels) : normalized;
 

@@ -49,6 +49,10 @@ public sealed class TransitionRollup
             library = SpectralLibrary.LoadBlib(cfg.LibraryPath);
         }
 
+        var captureResiduals = !isLibrary && cfg.Method == TransitionRollupMethod.MedianPolish
+            && !string.IsNullOrEmpty(cfg.ResidualsPath);
+        var sink = captureResiduals ? new ResidualSink() : null;
+
         var rows = new List<(string Pep, long Nt, double Rt, double[] Vals)>();
         var nFiltered = 0;
 
@@ -56,7 +60,7 @@ public sealed class TransitionRollup
         {
             var res = isLibrary
                 ? ProcessPeptideLibrary(block, cfg, samples.Count, sampleIndex, library!)
-                : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!);
+                : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!, sink);
             if (res is null)
             {
                 nFiltered++;
@@ -66,6 +70,8 @@ public sealed class TransitionRollup
         }
 
         WriteOutput(outputPath, cols.Peptide, samples, rows);
+        if (sink is not null)
+            WriteResiduals(cfg.ResidualsPath!, cols.Peptide, samples, sink);
         return new Result(rows.Count, nFiltered, samples);
     }
 
@@ -74,10 +80,12 @@ public sealed class TransitionRollup
         TransitionRollupConfig cfg,
         int nSamples,
         IReadOnlyDictionary<string, int> sampleIndex,
-        IRollupMethod method)
+        IRollupMethod method,
+        ResidualSink? residuals = null)
     {
         // Non-precursor rows + distinct transition ids (first-appearance order).
         var tidIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var tidNames = new List<string>();
         var rowIdxs = new List<int>(block.RowCount);
         for (var i = 0; i < block.RowCount; i++)
         {
@@ -86,7 +94,10 @@ public sealed class TransitionRollup
             rowIdxs.Add(i);
             var tid = TransitionId(block, i);
             if (!tidIndex.ContainsKey(tid))
+            {
                 tidIndex[tid] = tidIndex.Count;
+                tidNames.Add(tid);
+            }
         }
 
         var nt = tidIndex.Count;
@@ -118,8 +129,56 @@ public sealed class TransitionRollup
 
         var meanRt = Stats.NanMean(rtBuf.ToArray());
         var pre = RollupPreprocess.ImputeAndLog2(matrix, cfg.LogTransform);
+
+        if (residuals is not null)
+        {
+            // Median-polish residuals path: capture per-transition residuals (interference /
+            // proteoform signal) alongside the peptide abundance (col effects + log2(n)).
+            var polish = TukeyMedianPolish.Run(pre.Log2Matrix);
+            var scale = Math.Log2(nt);
+            var vals2 = new double[nSamples];
+            for (var j = 0; j < nSamples; j++)
+                vals2[j] = polish.ColEffects[j] + scale;
+            for (var r = 0; r < nt; r++)
+            {
+                var row = new double[nSamples];
+                for (var j = 0; j < nSamples; j++)
+                    row[j] = polish.Residuals[r, j];
+                residuals.Peptide.Add(block.Peptide);
+                residuals.TransitionId.Add(tidNames[r]);
+                residuals.Values.Add(row);
+            }
+            return (block.Peptide, nt, meanRt, vals2);
+        }
+
         var vals = method.Aggregate(pre.Log2Matrix);
         return (block.Peptide, nt, meanRt, vals);
+    }
+
+    private sealed class ResidualSink
+    {
+        public readonly List<string> Peptide = new();
+        public readonly List<string> TransitionId = new();
+        public readonly List<double[]> Values = new();
+    }
+
+    private static void WriteResiduals(
+        string path, string peptideCol, IReadOnlyList<string> samples, ResidualSink sink)
+    {
+        var n = sink.Peptide.Count;
+        var sampleCols = new double[samples.Count][];
+        for (var s = 0; s < samples.Count; s++)
+        {
+            sampleCols[s] = new double[n];
+            for (var r = 0; r < n; r++)
+                sampleCols[s][r] = sink.Values[r][s];
+        }
+        var meta = new List<ParquetWideWriter.MetaColumn>
+        {
+            ParquetWideWriter.Strings(peptideCol, sink.Peptide.ToArray()),
+            ParquetWideWriter.Strings("transition_id", sink.TransitionId.ToArray()),
+        };
+        ParquetWideWriter.Write(path, meta, samples, sampleCols, n);
     }
 
     /// <summary>

@@ -109,6 +109,68 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnOpenProvenance(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Open provenance (metadata.json)",
+            Filter = "PRISM provenance (metadata.json)|metadata.json|JSON (*.json)|*.json|All files (*.*)|*.*",
+        };
+        if (dlg.ShowDialog() != true)
+            return;
+        try
+        {
+            var config = Provenance.LoadConfig(dlg.FileName);
+            ApplyConfigToUi(config);
+            Log($"Loaded settings from provenance: {dlg.FileName}");
+        }
+        catch (Exception ex)
+        {
+            Log("Could not load provenance: " + ex.Message);
+            MessageBox.Show("Could not load provenance: " + ex.Message, "Open provenance",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>Populate the Settings controls from a loaded config (provenance reproduction).</summary>
+    private void ApplyConfigToUi(PrismConfig c)
+    {
+        SelectCombo(TransitionRollupCombo, c.TransitionRollup.Method);
+        MinTransitionsBox.Text = c.TransitionRollup.MinTransitions.ToString();
+        UseMs1Check.IsChecked = c.TransitionRollup.UseMs1;
+        if (!string.IsNullOrWhiteSpace(c.TransitionRollup.LibraryPath))
+        {
+            if (!LibraryCombo.Items.Contains(c.TransitionRollup.LibraryPath))
+                LibraryCombo.Items.Add(c.TransitionRollup.LibraryPath);
+            LibraryCombo.Text = c.TransitionRollup.LibraryPath;
+        }
+        LibraryRow.IsEnabled = c.TransitionRollup.Method == "library_assist";
+
+        SelectCombo(PeptideNormCombo, c.GlobalNormalization.Method);
+        ExcludeOutliersCheck.IsChecked = c.SampleOutlierDetection.Action == "exclude";
+        PeptideBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.PeptideLevel;
+        ProteinBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.ProteinLevel;
+        ParsimonyCheck.IsChecked = c.Parsimony.Enabled;
+        SelectCombo(ProteinRollupCombo, c.ProteinRollup.Method);
+        MinPeptidesBox.Text = c.ProteinRollup.MinPeptides.ToString();
+        SelectCombo(ProteinNormCombo, c.ProteinNormalization.Method);
+    }
+
+    private static void SelectCombo(System.Windows.Controls.ComboBox cb, string value)
+    {
+        foreach (var item in cb.Items)
+        {
+            if (item is System.Windows.Controls.ComboBoxItem ci
+                && string.Equals(ci.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase))
+            {
+                cb.SelectedItem = ci;
+                return;
+            }
+        }
+        if (cb.IsEditable)
+            cb.Text = value;
+    }
+
     /// <summary>Build the pipeline config from the Settings tab controls (call on the UI thread).</summary>
     private PrismConfig BuildConfigFromUi()
     {
@@ -123,6 +185,9 @@ public partial class MainWindow : Window
         }
 
         c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "rt_lowess");
+
+        c.SampleOutlierDetection.Enabled = true;
+        c.SampleOutlierDetection.Action = ExcludeOutliersCheck.IsChecked == true ? "exclude" : "report";
 
         var pepBatch = PeptideBatchCheck.IsChecked == true;
         var protBatch = ProteinBatchCheck.IsChecked == true;

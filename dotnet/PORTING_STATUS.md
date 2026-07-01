@@ -26,9 +26,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `median` — `Normalizer.MedianNormalize`
 - [x] `rt_lowess` (default) — `Normalizer.RtLowessNormalize` + `Lowess`
 - [x] `none`
-- [ ] `quantile`
-- [ ] `vsn`
-- [~] Sample outlier detection — `OutlierDetector` detects; `exclude` action not wired into the pipeline
+- [x] `quantile` — `Normalizer.QuantileNormalize`
+- [x] `vsn` (arcsinh; param optimization off, as in the pipeline default) — `Normalizer.VsnNormalize`
+- [x] Sample outlier detection (iqr / fold_median) with report **and** exclude actions — wired at Stage 2a
 
 ## Batch correction (Stage 2c / 4c)
 - [x] Standard ComBat (empirical Bayes), per-level peptide/protein toggles — `ComBat`
@@ -54,9 +54,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 ## Output (Stage 5)
 - [x] parquet (LINEAR), csv/tsv writers
 - [x] `protein_groups.csv`, `sample_metadata.csv`
-- [ ] `metadata.json` provenance
-- [ ] residuals output (`*_residuals.parquet`)
-- [ ] `--from-provenance` re-run
+- [x] `metadata.json` provenance (embeds the full config) — `Provenance.Write`
+- [x] residuals output (`peptide_residuals.parquet`, per-transition median-polish residuals)
+- [x] `--from-provenance` re-run (CLI) + "Open provenance" in the tool — `Provenance.LoadConfig`
 
 ## QC report (Stage 5b)
 - [x] CV metrics (median CV, linear) — `CvMetrics`
@@ -74,6 +74,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Dynamic annotation column (`annotation_<Name>`) for batch
 - [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist
+- [x] "Open provenance" - load a prior run's metadata.json and propagate settings into the UI
 
 ## Cross-language parity fixtures
 - [x] `mini/merge`, `mini/e2e-sum` (sum pipeline)

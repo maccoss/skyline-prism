@@ -42,17 +42,32 @@ public static class Program
     private static int CmdRun(string[] args)
     {
         var opts = ParseOptions(args, multiValue: new HashSet<string> { "-i", "--input" });
-        var inputs = opts.GetList("-i", "--input");
+        var inputs = new List<string>(opts.GetList("-i", "--input"));
         var outputDir = opts.GetSingle("-o", "--output-dir");
         var configPath = opts.GetSingleOrNull("-c", "--config");
+        var provenancePath = opts.GetSingleOrNull("--from-provenance");
+
+        PrismConfig config;
+        if (provenancePath is not null)
+        {
+            config = Provenance.LoadConfig(provenancePath);
+            if (inputs.Count == 0)
+                foreach (var s in Provenance.SourceFiles(provenancePath))
+                    inputs.Add(s);
+            Console.WriteLine($"PRISM: loaded settings from provenance {provenancePath}");
+        }
+        else
+        {
+            config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
+        }
 
         if (inputs.Count == 0 || outputDir is null)
         {
-            Console.Error.WriteLine("Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>]");
+            Console.Error.WriteLine(
+                "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [--from-provenance <metadata.json>]");
             return 2;
         }
 
-        var config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
         Console.WriteLine($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
         var result = PrismPipeline.Run(inputs, outputDir, config);
         Console.WriteLine(
