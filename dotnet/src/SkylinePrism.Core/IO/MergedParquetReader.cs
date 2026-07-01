@@ -88,6 +88,9 @@ public static class MergedParquetReader
         _ => Convert.ToString(v, CultureInfo.InvariantCulture) ?? "nan",
     };
 
+    // Skyline exports missing/non-detected values as tokens like "#N/A", so numeric columns
+    // can arrive as text (DuckDB infers VARCHAR). Parse tolerantly: unparseable tokens become
+    // NaN, which the rollup imputes exactly as a genuine missing measurement.
     private static double ToDouble(object? v) => v switch
     {
         null or DBNull => double.NaN,
@@ -97,8 +100,12 @@ public static class MergedParquetReader
         int n => n,
         short s => s,
         decimal m => (double)m,
-        _ => Convert.ToDouble(v, CultureInfo.InvariantCulture),
+        string str => ParseNumber(str),
+        _ => ParseNumber(Convert.ToString(v, CultureInfo.InvariantCulture)),
     };
+
+    private static double ParseNumber(string? str) =>
+        double.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out var r) ? r : double.NaN;
 
     private static string Esc(string path) => path.Replace("'", "''");
 }
