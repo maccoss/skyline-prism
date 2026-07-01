@@ -19,4 +19,12 @@
     <ProjectReference Include="..\..\src\SkylinePrism.Cli\SkylinePrism.Cli.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Cross-language golden fixtures produced by the Python pipeline, copied next to
+         the test assembly and resolved via AppContext.BaseDirectory. -->
+    <Content Include="..\fixtures\**\*.*"
+             Link="fixtures\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
