@@ -34,8 +34,10 @@ public static class MergedParquetReader
     /// Stream <see cref="PeptideBlock"/>s ordered by peptide. Consecutive rows sharing a
     /// peptide value are grouped into one block.
     /// </summary>
-    public static IEnumerable<PeptideBlock> StreamPeptideBlocks(string parquetPath, SkylineColumns cols)
+    public static IEnumerable<PeptideBlock> StreamPeptideBlocks(
+        string parquetPath, SkylineColumns cols, bool includeProductMz = false)
     {
+        var withMz = includeProductMz && cols.ProductMz is not null;
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -47,7 +49,8 @@ public static class MergedParquetReader
             $"\"{cols.ProductCharge}\" AS zz, " +
             $"\"{cols.Sample}\" AS samp, " +
             $"\"{cols.Abundance}\" AS area, " +
-            $"\"{cols.RetentionTime}\" AS rt " +
+            $"\"{cols.RetentionTime}\" AS rt" +
+            (withMz ? $", \"{cols.ProductMz}\" AS mz " : " ") +
             $"FROM read_parquet('{Esc(parquetPath)}') " +
             $"ORDER BY \"{cols.Peptide}\"";
         using var reader = cmd.ExecuteReader();
@@ -69,6 +72,8 @@ public static class MergedParquetReader
             current.Sample.Add(reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
             current.Area.Add(ToDouble(reader.GetValue(5)));
             current.RetentionTime.Add(ToDouble(reader.GetValue(6)));
+            if (withMz)
+                current.ProductMz.Add(ToDouble(reader.GetValue(7)));
         }
         if (current is not null)
             yield return current;

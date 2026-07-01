@@ -5,6 +5,7 @@ public enum TransitionRollupMethod
 {
     Sum,
     MedianPolish,
+    LibraryAssist,
 }
 
 /// <summary>
@@ -24,4 +25,18 @@ public sealed class TransitionRollupConfig
     public bool ExcludePrecursor => !UseMs1;
 
     public bool LogTransform { get; init; } = true;
+
+    // --- Library-assisted rollup (method == LibraryAssist) ---
+
+    /// <summary>Path to the spectral library (.blib) used for library-assisted rollup.</summary>
+    public string? LibraryPath { get; init; }
+
+    /// <summary>Minimum matched library fragments required for a library fit (default 3).</summary>
+    public int LibraryMinFragments { get; init; } = 3;
+
+    /// <summary>m/z tolerance (Da) for matching transitions to library fragments.</summary>
+    public double LibraryMzTolerance { get; init; } = 0.02;
+
+    /// <summary>Normalized-residual threshold above which a transition is treated as interfered.</summary>
+    public double LibraryOutlierThreshold { get; init; } = 1.0;
 }

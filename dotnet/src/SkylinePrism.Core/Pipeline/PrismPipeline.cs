@@ -78,11 +78,21 @@ public sealed class PrismPipeline
         var peptidesRollupPath = Path.Combine(outputDir, "peptides_rollup.parquet");
         var transitionCfg = new TransitionRollupConfig
         {
-            Method = config.TransitionRollup.Method is "median_polish"
-                ? TransitionRollupMethod.MedianPolish : TransitionRollupMethod.Sum,
+            Method = config.TransitionRollup.Method switch
+            {
+                "median_polish" => TransitionRollupMethod.MedianPolish,
+                "library_assist" or "library-assisted" or "library_assisted" => TransitionRollupMethod.LibraryAssist,
+                _ => TransitionRollupMethod.Sum,
+            },
             MinTransitions = config.TransitionRollup.MinTransitions,
             UseMs1 = config.TransitionRollup.UseMs1,
+            LibraryPath = config.TransitionRollup.LibraryPath,
+            LibraryMinFragments = config.TransitionRollup.LibraryMinFragments,
+            LibraryMzTolerance = config.TransitionRollup.LibraryMzTolerance,
+            LibraryOutlierThreshold = config.TransitionRollup.LibraryOutlierThreshold,
         };
+        if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
+            report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
         var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
 

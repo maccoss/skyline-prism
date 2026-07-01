@@ -117,6 +117,28 @@ public sealed class SkylineReportDriver
     /// <summary>The saved report names available in the document (for a metadata-report picker).</summary>
     public IReadOnlyList<string> ListAvailableReports() => GetAvailableReportNames();
 
+    /// <summary>
+    /// Spectral libraries (.blib) available to the document: the .blib files that sit next to the
+    /// .sky file (Skyline stores the document library and any local BiblioSpec libraries there),
+    /// with the document-named library listed first as the likely active one.
+    /// </summary>
+    public IReadOnlyList<string> ListDocumentLibraries()
+    {
+        var docPath = Try(() => _session.Execute(c => c.GetDocumentPath()));
+        if (string.IsNullOrWhiteSpace(docPath))
+            return Array.Empty<string>();
+        var dir = Path.GetDirectoryName(docPath);
+        if (dir is null || !Directory.Exists(dir))
+            return Array.Empty<string>();
+
+        var docBlib = Path.Combine(dir, Path.GetFileNameWithoutExtension(docPath) + ".blib");
+        var blibs = Directory.GetFiles(dir, "*.blib", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(f => string.Equals(f, docBlib, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return blibs;
+    }
+
     private List<string> GetAvailableReportNames()
     {
         var names = new List<string>();

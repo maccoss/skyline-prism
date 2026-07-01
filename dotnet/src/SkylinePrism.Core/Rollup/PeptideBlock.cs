@@ -17,5 +17,8 @@ public sealed class PeptideBlock
     public List<double> Area { get; } = new();
     public List<double> RetentionTime { get; } = new();
 
+    /// <summary>Product (fragment) m/z per row; populated only for library-assisted rollup.</summary>
+    public List<double> ProductMz { get; } = new();
+
     public int RowCount => Ion.Count;
 }

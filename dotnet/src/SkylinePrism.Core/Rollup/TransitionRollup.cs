@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Library;
 using SkylinePrism.Core.Numerics;
 
 namespace SkylinePrism.Core.Rollup;
@@ -27,20 +30,33 @@ public sealed class TransitionRollup
         for (var i = 0; i < samples.Count; i++)
             sampleIndex[samples[i]] = i;
 
-        IRollupMethod method = cfg.Method switch
+        var isLibrary = cfg.Method == TransitionRollupMethod.LibraryAssist;
+        IRollupMethod? method = cfg.Method switch
         {
             TransitionRollupMethod.Sum => new SumRollup(),
             TransitionRollupMethod.MedianPolish =>
                 new MedianPolishRollup(addLog2NOffset: true, minTransitions: cfg.MinTransitions),
+            TransitionRollupMethod.LibraryAssist => null,
             _ => throw new NotSupportedException($"Unsupported method {cfg.Method}"),
         };
+
+        SpectralLibrary? library = null;
+        if (isLibrary)
+        {
+            if (string.IsNullOrWhiteSpace(cfg.LibraryPath))
+                throw new InvalidOperationException(
+                    "Library-assisted rollup requires a spectral library (.blib) path.");
+            library = SpectralLibrary.LoadBlib(cfg.LibraryPath);
+        }
 
         var rows = new List<(string Pep, long Nt, double Rt, double[] Vals)>();
         var nFiltered = 0;
 
-        foreach (var block in MergedParquetReader.StreamPeptideBlocks(mergedParquet, cols))
+        foreach (var block in MergedParquetReader.StreamPeptideBlocks(mergedParquet, cols, includeProductMz: isLibrary))
         {
-            var res = ProcessPeptide(block, cfg, samples.Count, sampleIndex, method);
+            var res = isLibrary
+                ? ProcessPeptideLibrary(block, cfg, samples.Count, sampleIndex, library!)
+                : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!);
             if (res is null)
             {
                 nFiltered++;
@@ -104,6 +120,121 @@ public sealed class TransitionRollup
         var pre = RollupPreprocess.ImputeAndLog2(matrix, cfg.LogTransform);
         var vals = method.Aggregate(pre.Log2Matrix);
         return (block.Peptide, nt, meanRt, vals);
+    }
+
+    /// <summary>
+    /// Library-assisted per-peptide rollup, porting the chunked_processing "library-assisted"
+    /// branch: impute to LINEAR, group transitions by precursor charge, match each to the library
+    /// by product m/z, median-polish fit per charge, sum charge abundances (LINEAR), then log2.
+    /// </summary>
+    private static (string Pep, long Nt, double Rt, double[] Vals)? ProcessPeptideLibrary(
+        PeptideBlock block,
+        TransitionRollupConfig cfg,
+        int nSamples,
+        IReadOnlyDictionary<string, int> sampleIndex,
+        SpectralLibrary library)
+    {
+        var tidIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var rowIdxs = new List<int>(block.RowCount);
+        var tidCharge = new List<int>();
+        var tidMz = new List<double>();
+        for (var i = 0; i < block.RowCount; i++)
+        {
+            if (cfg.ExcludePrecursor && block.Ion[i].StartsWith("precursor", StringComparison.Ordinal))
+                continue;
+            rowIdxs.Add(i);
+            var tid = TransitionId(block, i);
+            if (!tidIndex.ContainsKey(tid))
+            {
+                tidIndex[tid] = tidIndex.Count;
+                tidCharge.Add(ParseChargeOrDefault(block.PrecursorCharge[i]));
+                tidMz.Add(i < block.ProductMz.Count ? block.ProductMz[i] : double.NaN);
+            }
+        }
+
+        var nt = tidIndex.Count;
+        if (nt < cfg.MinTransitions)
+            return null;
+
+        var matrix = new double[nt, nSamples];
+        var filled = new bool[nt, nSamples];
+        for (var a = 0; a < nt; a++)
+            for (var b = 0; b < nSamples; b++)
+                matrix[a, b] = double.NaN;
+
+        var rtBuf = new List<double>(rowIdxs.Count);
+        foreach (var i in rowIdxs)
+        {
+            var ti = tidIndex[TransitionId(block, i)];
+            if (sampleIndex.TryGetValue(block.Sample[i], out var si))
+            {
+                var area = block.Area[i];
+                if (!filled[ti, si] && !double.IsNaN(area))
+                {
+                    matrix[ti, si] = area;
+                    filled[ti, si] = true;
+                }
+            }
+            rtBuf.Add(block.RetentionTime[i]);
+        }
+        var meanRt = Stats.NanMean(rtBuf.ToArray());
+
+        // Impute in log2 then back to linear = 2**(imputed log2 matrix), as in Python.
+        var pre = RollupPreprocess.ImputeAndLog2(matrix, logTransform: true);
+        var linear = new double[nt, nSamples];
+        for (var a = 0; a < nt; a++)
+            for (var b = 0; b < nSamples; b++)
+                linear[a, b] = Math.Pow(2, pre.Log2Matrix[a, b]);
+
+        var charges = tidCharge.Where(c => c > 0).Distinct().OrderBy(c => c).ToList();
+        if (charges.Count == 0)
+            charges.Add(2);
+
+        var final = new double[nSamples];
+        var hasValue = new bool[nSamples];
+        foreach (var charge in charges)
+        {
+            var idxs = new List<int>();
+            for (var tt = 0; tt < nt; tt++)
+                if (tidCharge[tt] == charge)
+                    idxs.Add(tt);
+            if (idxs.Count == 0)
+                continue;
+
+            var obs = new double[idxs.Count, nSamples];
+            var mz = new double[idxs.Count];
+            for (var r = 0; r < idxs.Count; r++)
+            {
+                mz[r] = tidMz[idxs[r]];
+                for (var b = 0; b < nSamples; b++)
+                    obs[r, b] = linear[idxs[r], b];
+            }
+
+            var abund = LibraryRollup.RollupCharge(
+                library, block.Peptide, charge, mz, obs,
+                cfg.LibraryMinFragments, cfg.LibraryMzTolerance, cfg.LibraryOutlierThreshold);
+            for (var b = 0; b < nSamples; b++)
+            {
+                var v = abund[b];
+                if (!double.IsNaN(v) && v > 0)
+                {
+                    final[b] += v;
+                    hasValue[b] = true;
+                }
+            }
+        }
+
+        var vals = new double[nSamples];
+        for (var b = 0; b < nSamples; b++)
+            vals[b] = hasValue[b] ? Math.Log2(final[b]) : double.NaN;
+        return (block.Peptide, nt, meanRt, vals);
+    }
+
+    private static int ParseChargeOrDefault(string s)
+    {
+        if (int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var c))
+            return c;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (int)d : 0;
     }
 
     private static string TransitionId(PeptideBlock block, int i)

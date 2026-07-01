@@ -44,6 +44,12 @@ public sealed class PrismConfig
         public string Method { get; set; } = "sum";
         public int MinTransitions { get; set; } = 3;
         public bool UseMs1 { get; set; }
+
+        // Library-assisted rollup (method: library_assist).
+        public string? LibraryPath { get; set; }
+        public int LibraryMinFragments { get; set; } = 3;
+        public double LibraryMzTolerance { get; set; } = 0.02;
+        public double LibraryOutlierThreshold { get; set; } = 1.0;
     }
 
     public sealed class GlobalNormalizationSection

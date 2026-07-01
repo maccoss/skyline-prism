@@ -61,7 +61,52 @@ public partial class MainWindow : Window
         ProteinNormCombo.SelectedIndex = 0;
 
         if (_session is not null)
+        {
             _ = LoadReportsAsync();
+            _ = LoadLibrariesAsync();
+        }
+    }
+
+    private async Task LoadLibrariesAsync()
+    {
+        if (_session is null)
+            return;
+        try
+        {
+            var session = _session;
+            var libs = await Task.Run(() => new SkylineReportDriver(session).ListDocumentLibraries());
+            LibraryCombo.Items.Clear();
+            foreach (var l in libs)
+                LibraryCombo.Items.Add(l);
+            if (LibraryCombo.Items.Count > 0)
+                LibraryCombo.SelectedIndex = 0;
+            Log($"Found {libs.Count} spectral library file(s) next to the document.");
+        }
+        catch (Exception ex)
+        {
+            Log("(could not scan for spectral libraries: " + ex.Message + ")");
+        }
+    }
+
+    private void OnTransitionRollupChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (LibraryRow is not null)
+            LibraryRow.IsEnabled = ComboText(TransitionRollupCombo, "sum") == "library_assist";
+    }
+
+    private void OnBrowseLibrary(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select spectral library",
+            Filter = "BiblioSpec library (*.blib)|*.blib|All files (*.*)|*.*",
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            if (!LibraryCombo.Items.Contains(dlg.FileName))
+                LibraryCombo.Items.Add(dlg.FileName);
+            LibraryCombo.Text = dlg.FileName;
+        }
     }
 
     /// <summary>Build the pipeline config from the Settings tab controls (call on the UI thread).</summary>
@@ -71,6 +116,11 @@ public partial class MainWindow : Window
         c.TransitionRollup.Method = ComboText(TransitionRollupCombo, "sum");
         c.TransitionRollup.MinTransitions = ParseInt(MinTransitionsBox.Text, 3);
         c.TransitionRollup.UseMs1 = UseMs1Check.IsChecked == true;
+        if (c.TransitionRollup.Method == "library_assist")
+        {
+            var lib = LibraryCombo.Text?.Trim();
+            c.TransitionRollup.LibraryPath = string.IsNullOrWhiteSpace(lib) ? null : lib;
+        }
 
         c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "rt_lowess");
 

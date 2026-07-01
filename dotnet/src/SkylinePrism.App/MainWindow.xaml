@@ -55,13 +55,20 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <TextBlock Text="1. Transition &#8594; peptide rollup:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="TransitionRollupCombo" Width="160">
+                            <ComboBox x:Name="TransitionRollupCombo" Width="160" SelectionChanged="OnTransitionRollupChanged">
                                 <ComboBoxItem>sum</ComboBoxItem>
                                 <ComboBoxItem>median_polish</ComboBoxItem>
+                                <ComboBoxItem>library_assist</ComboBoxItem>
                             </ComboBox>
                             <TextBlock Text="min transitions:" VerticalAlignment="Center" Margin="20,0,6,0" />
                             <TextBox x:Name="MinTransitionsBox" Width="46" Text="3" />
                             <CheckBox x:Name="UseMs1Check" Content="include MS1 precursors" VerticalAlignment="Center" Margin="20,0,0,0" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="LibraryRow" Orientation="Horizontal" Margin="0,2,0,6" IsEnabled="False">
+                            <TextBlock Text="    Spectral library (.blib):" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <ComboBox x:Name="LibraryCombo" Width="330" IsEditable="True" />
+                            <Button Content="Browse..." Margin="8,0,0,0" Padding="8,2" Click="OnBrowseLibrary" />
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
