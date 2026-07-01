@@ -1,7 +1,7 @@
 # C# port status — Python feature coverage
 
 Tracks which Python `skyline_prism` features are implemented in the C# port (`dotnet/`).
-Legend: **[x]** done · **[~]** partial · **[ ]** not yet.
+Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (not planned for now).
 
 ## Data I/O & merge
 - [x] Streaming CSV/parquet merge (DuckDB) — `DuckDbMerge`
@@ -16,7 +16,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet.
 - [x] `sum` — `SumRollup`
 - [x] `median_polish` (+log2(n) offset) — `MedianPolishRollup`
 - [ ] `topn`
-- [ ] `adaptive` (learned weights, L-BFGS-B)
+- [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
 - [ ] `consensus`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
       (median-polish with library prior, interference removal, per-charge sum); library picker in
