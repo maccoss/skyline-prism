@@ -1,0 +1,17 @@
+# Normalize line endings for the .NET tree so Windows/Linux/macOS CI stay consistent.
+*.cs        text eol=lf
+*.csproj    text eol=lf
+*.sln       text eol=crlf
+*.slnf      text eol=lf
+*.props     text eol=lf
+*.targets   text eol=lf
+*.proj      text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.xaml      text eol=lf
+*.md        text eol=lf
+
+# Fixtures: keep parquet binary, CSV as-is (byte-faithful slices of Skyline exports).
+*.parquet   binary
+*.blib      binary
+fixtures/**/*.csv -text
