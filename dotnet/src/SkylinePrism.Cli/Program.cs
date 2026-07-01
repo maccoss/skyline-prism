@@ -4,6 +4,7 @@ using System.IO;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
+using SkylinePrism.Core.Qc;
 
 namespace SkylinePrism.Cli;
 
@@ -24,6 +25,7 @@ public static class Program
             {
                 "run" => CmdRun(args[1..]),
                 "merge" => CmdMerge(args[1..]),
+                "qc" => CmdQc(args[1..]),
                 "config-template" => CmdConfigTemplate(args[1..]),
                 "--version" or "-v" or "version" => PrintVersion(),
                 "--help" or "-h" or "help" => PrintUsage(),
@@ -71,6 +73,22 @@ public static class Program
         }
         var result = DuckDbMerge.MergeAndSort(inputs, output);
         Console.WriteLine($"Merged {inputs.Count} file(s) -> {result.OutputPath} ({result.TotalRows} rows)");
+        return 0;
+    }
+
+    private static int CmdQc(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>());
+        var dir = opts.GetSingle("-d", "--dir") ?? opts.GetSingle("-o", "--output-dir");
+        var configPath = opts.GetSingleOrNull("-c", "--config");
+        if (dir is null)
+        {
+            Console.Error.WriteLine("Usage: prism qc -d <output-dir> [-c config]");
+            return 2;
+        }
+        var config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
+        var path = QcReport.Generate(dir, config, savePlots: config.QcReport.SavePlots);
+        Console.WriteLine($"QC report written to: {path}");
         return 0;
     }
 

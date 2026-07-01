@@ -10,6 +10,7 @@ using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Normalization;
 using SkylinePrism.Core.Parsimony;
+using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Rollup;
 
 namespace SkylinePrism.Core.Pipeline;
@@ -89,6 +90,10 @@ public sealed class PrismPipeline
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath);
 
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, batchMap, config);
+
+        // Stage 5b: QC report.
+        if (config.QcReport.Enabled)
+            QcReport.Generate(outputDir, config, savePlots: config.QcReport.SavePlots);
 
         return new Result(nPeptides, nProteins, samples.Count, batches);
     }
