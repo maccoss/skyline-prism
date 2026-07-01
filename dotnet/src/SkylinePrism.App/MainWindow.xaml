@@ -34,7 +34,7 @@
             <TabItem Header="Log">
                 <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
                          VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
-                         HorizontalScrollBarVisibility="Auto" Background="#1e1e1e" Foreground="#dcdcdc" />
+                         HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
             </TabItem>
             <TabItem Header="Peptide PCA">
                 <sp:WpfPlot x:Name="PcaPlot" />

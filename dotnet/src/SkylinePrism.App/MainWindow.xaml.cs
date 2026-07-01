@@ -45,6 +45,12 @@ public partial class MainWindow : Window
                 "Not connected to a running Skyline instance. Launch this tool from Skyline's Tools menu. "
                 + $"({ex.Message})";
         }
+
+        Log("Skyline-PRISM tool ready.");
+        Log("Diagnostic log: " + App.LogFilePath);
+        Log(_session is not null
+            ? "Connected. Set an output directory and click Run PRISM."
+            : "Not connected to Skyline. Launch this tool from Skyline's Tools menu.");
     }
 
     private void OnBrowse(object sender, RoutedEventArgs e)
@@ -80,6 +86,11 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log("ERROR: " + ex.Message);
+            App.WriteLog("Run failed: " + ex);
+            MessageBox.Show(
+                ex.ToString() + Environment.NewLine + Environment.NewLine
+                + "See the full log at:" + Environment.NewLine + App.LogFilePath,
+                "PRISM run failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -207,11 +218,20 @@ public partial class MainWindow : Window
 
     private void Log(string message)
     {
+        // Persist to the diagnostic file first so a hard crash still leaves a trail.
+        App.WriteLog(message);
+
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.Invoke(() => Log(message));
+            // BeginInvoke (async) so a UI-thread stall never deadlocks the worker.
+            Dispatcher.BeginInvoke(() => AppendLine(message));
             return;
         }
+        AppendLine(message);
+    }
+
+    private void AppendLine(string message)
+    {
         LogBox.AppendText(message + Environment.NewLine);
         LogBox.ScrollToEnd();
     }
