@@ -26,9 +26,12 @@ public sealed class PrismPipeline
     public sealed record Result(
         int NPeptides, int NProteins, int NSamples, IReadOnlyList<string> Batches);
 
-    public static Result Run(IReadOnlyList<string> inputs, string outputDir, PrismConfig config)
+    public static Result Run(
+        IReadOnlyList<string> inputs, string outputDir, PrismConfig config,
+        string? metadataPath = null, Action<string>? log = null)
     {
         Directory.CreateDirectory(outputDir);
+        var report = log ?? (_ => { });
 
         // Stage 1: merge.
         var mergedPath = Path.Combine(outputDir, "merged_data.parquet");
@@ -36,10 +39,28 @@ public sealed class PrismPipeline
 
         var cols = SkylineColumns.Detect(ParquetTable.Load(mergedPath).ColumnNames.ToHashSet());
         var samples = MergedParquetReader.GetSortedSamples(mergedPath, cols.Sample);
-        var batchMap = GetBatchMap(mergedPath, cols);
-        var batchLabels = samples.Select(s => batchMap.GetValueOrDefault(s, "batch1")).ToList();
+
+        // Resolve per-sample batch and type: prefer the Replicates metadata (Batch annotation /
+        // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
+        var sourceBatchMap = GetBatchMap(mergedPath, cols);
+        var metadata = ReplicateMetadata.TryLoad(
+            metadataPath, report, config.Metadata.SampleTypeColumn, config.Metadata.BatchColumn);
+        var resolvedBatch = new Dictionary<string, string>(StringComparer.Ordinal);
+        var resolvedType = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in samples)
+        {
+            var rep = SampleIdToReplicate(s);
+            resolvedBatch[s] = metadata?.BatchByReplicate.GetValueOrDefault(rep)
+                ?? sourceBatchMap.GetValueOrDefault(s, "batch1");
+            resolvedType[s] = metadata?.TypeByReplicate.GetValueOrDefault(rep)
+                ?? ClassifySampleType(s, rep, config);
+        }
+
+        var batchLabels = samples.Select(s => resolvedBatch[s]).ToList();
         var batches = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
         var combatEnabled = config.BatchCorrection.Enabled && batches.Count >= 2;
+        report($"Batches: {batches.Count} ({string.Join(", ", batches)}); ComBat "
+            + (combatEnabled ? "enabled" : "skipped (needs >= 2 batches)") + ".");
 
         // Stage 2: transition -> peptide.
         var peptidesRollupPath = Path.Combine(outputDir, "peptides_rollup.parquet");
@@ -89,7 +110,7 @@ public sealed class PrismPipeline
             proteinsRawPath, proteinMeta, samples, batchLabels, combatEnabled,
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath);
 
-        WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, batchMap, config);
+        WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
 
         // Stage 5b: QC report.
         if (config.QcReport.Enabled)
@@ -224,14 +245,15 @@ public sealed class PrismPipeline
     }
 
     private static void WriteSampleMetadata(
-        string path, IReadOnlyList<string> samples, IReadOnlyDictionary<string, string> batchMap, PrismConfig config)
+        string path, IReadOnlyList<string> samples,
+        IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType)
     {
         var sb = new StringBuilder("sample_id,sample,sample_type,batch\n");
         foreach (var sampleId in samples)
         {
             var replicate = SampleIdToReplicate(sampleId);
-            var batch = batchMap.GetValueOrDefault(sampleId, "batch1");
-            var type = ClassifySampleType(sampleId, replicate, config);
+            var batch = resolvedBatch.GetValueOrDefault(sampleId, "batch1");
+            var type = resolvedType.GetValueOrDefault(sampleId, "experimental");
             sb.Append(Csv(sampleId)).Append(',').Append(Csv(replicate)).Append(',')
               .Append(type).Append(',').Append(Csv(batch)).Append('\n');
         }

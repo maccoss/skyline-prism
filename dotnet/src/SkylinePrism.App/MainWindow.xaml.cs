@@ -73,11 +73,12 @@ public partial class MainWindow : Window
         LogBox.Clear();
 
         var outputDir = OutputDirBox.Text;
+        var batchColumn = BatchColumnBox.Text?.Trim();
         var session = _session;
 
         try
         {
-            await Task.Run(() => RunPipeline(session, outputDir));
+            await Task.Run(() => RunPipeline(session, outputDir, batchColumn));
             _lastReportPath = Path.Combine(outputDir, "qc_report.html");
             OpenReportButton.IsEnabled = File.Exists(_lastReportPath);
             LoadPcaPlot(outputDir);
@@ -98,7 +99,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RunPipeline(SkylineSession session, string outputDir)
+    private void RunPipeline(SkylineSession session, string outputDir, string? batchColumn)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
@@ -107,24 +108,17 @@ public partial class MainWindow : Window
         var driver = new SkylineReportDriver(session, Log);
         var reports = driver.Export(reportsDir);
 
-        // Prefer parquet when Skyline produced it, else the invariant CSV.
-        var input = reports.PrismParquet is not null && File.Exists(reports.PrismParquet)
-            ? reports.PrismParquet
-            : reports.PrismCsv;
-        Log($"Running PRISM pipeline on {Path.GetFileName(input)}...");
+        Log($"Running PRISM pipeline on the {(reports.InputIsParquet ? "parquet" : "CSV")} report "
+            + $"({Path.GetFileName(reports.InputPath)})...");
 
         var config = new PrismConfig();
         config.QcReport.Enabled = true;
         config.QcReport.SavePlots = false;
+        if (!string.IsNullOrWhiteSpace(batchColumn))
+            config.Metadata.BatchColumn = batchColumn;
 
-        var inputs = new List<string> { input };
-        var metadata = reports.ReplicatesCsv is not null && File.Exists(reports.ReplicatesCsv)
-            ? reports.ReplicatesCsv
-            : null;
-        if (metadata is not null)
-            Log($"(Replicates metadata available: {Path.GetFileName(metadata)})");
-
-        var result = PrismPipeline.Run(inputs, outputDir, config);
+        var inputs = new List<string> { reports.InputPath };
+        var result = PrismPipeline.Run(inputs, outputDir, config, reports.ReplicatesCsv, Log);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
     }

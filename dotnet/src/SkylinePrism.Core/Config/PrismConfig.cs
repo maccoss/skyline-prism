@@ -22,6 +22,7 @@ public sealed class PrismConfig
     public OutputSection Output { get; set; } = new();
     public QcReportSection QcReport { get; set; } = new();
     public SampleOutlierDetectionSection SampleOutlierDetection { get; set; } = new();
+    public MetadataSection Metadata { get; set; } = new();
 
     public static PrismConfig Load(string path)
     {
@@ -92,6 +93,19 @@ public sealed class PrismConfig
         public bool Enabled { get; set; } = true;
         public bool SavePlots { get; set; } = true;
         public bool EmbedPlots { get; set; } = true;
+    }
+
+    public sealed class MetadataSection
+    {
+        /// <summary>
+        /// Explicit column name in the Replicates report to use as the batch label. The report's
+        /// columns are annotation-dependent, so this may need to be set per document. Null =
+        /// auto-detect a "Batch"-like column (and fall back to the Source Document otherwise).
+        /// </summary>
+        public string? BatchColumn { get; set; }
+
+        /// <summary>Explicit Sample Type column name; null = auto-detect (usually "Sample Type").</summary>
+        public string? SampleTypeColumn { get; set; }
     }
 
     public sealed class SampleOutlierDetectionSection
