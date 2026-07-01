@@ -108,6 +108,34 @@ public sealed class ParquetTable
         return result;
     }
 
+    /// <summary>Column coerced to long[] (nulls -&gt; 0), from any integer/float source.</summary>
+    public long[] GetLong(string name)
+    {
+        var d = GetDouble(name);
+        var result = new long[d.Length];
+        for (var i = 0; i < d.Length; i++)
+            result[i] = d[i].HasValue ? (long)d[i]!.Value : 0L;
+        return result;
+    }
+
+    /// <summary>Column coerced to bool[] (nulls -&gt; false).</summary>
+    public bool[] GetBool(string name)
+    {
+        var arr = Column(name);
+        var result = new bool[arr.Length];
+        for (var i = 0; i < arr.Length; i++)
+        {
+            var v = arr.GetValue(i);
+            result[i] = v switch
+            {
+                null => false,
+                bool b => b,
+                _ => Convert.ToBoolean(v),
+            };
+        }
+        return result;
+    }
+
     /// <summary>Column coerced to string?[] (null preserved).</summary>
     public string?[] GetString(string name)
     {

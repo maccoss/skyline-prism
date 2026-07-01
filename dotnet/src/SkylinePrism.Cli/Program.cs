@@ -1,29 +1,94 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using SkylinePrism.Core.Config;
+using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 
 namespace SkylinePrism.Cli;
 
 /// <summary>
-/// Entry point for the cross-platform `prism` CLI. Subcommands (run / merge / qc /
-/// config-template / compare) are wired up in Layer 9; this scaffold establishes the
-/// dispatch surface and version banner.
+/// Entry point for the cross-platform `prism` CLI. Mirrors the Python subcommands
+/// (run / merge / config-template / version). QC report generation (qc) arrives with Layer 8.
 /// </summary>
 public static class Program
 {
     public static int Main(string[] args)
     {
         if (args.Length == 0)
+            return PrintUsage();
+
+        try
         {
-            PrintUsage();
+            return args[0] switch
+            {
+                "run" => CmdRun(args[1..]),
+                "merge" => CmdMerge(args[1..]),
+                "config-template" => CmdConfigTemplate(args[1..]),
+                "--version" or "-v" or "version" => PrintVersion(),
+                "--help" or "-h" or "help" => PrintUsage(),
+                _ => Unknown(args[0]),
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
+    }
 
-        var command = args[0];
-        return command switch
+    private static int CmdRun(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-i", "--input" });
+        var inputs = opts.GetList("-i", "--input");
+        var outputDir = opts.GetSingle("-o", "--output-dir");
+        var configPath = opts.GetSingleOrNull("-c", "--config");
+
+        if (inputs.Count == 0 || outputDir is null)
         {
-            "--version" or "-v" or "version" => PrintVersion(),
-            "--help" or "-h" or "help" => PrintUsage(),
-            _ => Unimplemented(command),
-        };
+            Console.Error.WriteLine("Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>]");
+            return 2;
+        }
+
+        var config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
+        Console.WriteLine($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
+        var result = PrismPipeline.Run(inputs, outputDir, config);
+        Console.WriteLine(
+            $"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
+            + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+        return 0;
+    }
+
+    private static int CmdMerge(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>(), positional: true);
+        var output = opts.GetSingle("-o", "--output");
+        var inputs = opts.Positional;
+        if (inputs.Count == 0 || output is null)
+        {
+            Console.Error.WriteLine("Usage: prism merge <input...> -o <output.parquet>");
+            return 2;
+        }
+        var result = DuckDbMerge.MergeAndSort(inputs, output);
+        Console.WriteLine($"Merged {inputs.Count} file(s) -> {result.OutputPath} ({result.TotalRows} rows)");
+        return 0;
+    }
+
+    private static int CmdConfigTemplate(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>());
+        var outPath = opts.GetSingleOrNull("-o", "--output");
+        var yaml = ConfigTemplate.Default();
+        if (outPath is not null)
+        {
+            File.WriteAllText(outPath, yaml);
+            Console.WriteLine($"Configuration template written to: {outPath}");
+        }
+        else
+        {
+            Console.WriteLine(yaml);
+        }
+        return 0;
     }
 
     private static int PrintVersion()
@@ -40,18 +105,81 @@ public static class Program
         Console.WriteLine("Usage: prism <command> [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  run              Run the full PRISM pipeline");
-        Console.WriteLine("  merge            Merge Skyline reports into a unified parquet");
-        Console.WriteLine("  qc               Regenerate the QC report from an output directory");
-        Console.WriteLine("  config-template  Emit an annotated configuration template");
-        Console.WriteLine("  compare          Compare rollup methods");
-        Console.WriteLine("  version          Print the version");
+        Console.WriteLine("  run -i <input...> -o <dir> [-c config]   Run the full PRISM pipeline");
+        Console.WriteLine("  merge <input...> -o <out.parquet>        Merge Skyline reports");
+        Console.WriteLine("  config-template [-o file]                Emit a configuration template");
+        Console.WriteLine("  version                                  Print the version");
         return 0;
     }
 
-    private static int Unimplemented(string command)
+    private static int Unknown(string command)
     {
-        Console.Error.WriteLine($"Command '{command}' is not implemented yet.");
+        Console.Error.WriteLine($"Unknown command '{command}'. Run 'prism help'.");
         return 2;
+    }
+
+    // Minimal option parser: -flag value (repeatable for multiValue flags); leftover tokens
+    // are positional.
+    private static ParsedOptions ParseOptions(string[] args, HashSet<string> multiValue, bool positional = false)
+    {
+        var single = new Dictionary<string, string>(StringComparer.Ordinal);
+        var lists = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var pos = new List<string>();
+
+        var i = 0;
+        while (i < args.Length)
+        {
+            var tok = args[i];
+            if (tok.StartsWith('-'))
+            {
+                if (multiValue.Contains(tok))
+                {
+                    var list = lists.TryGetValue(tok, out var l) ? l : lists[tok] = new List<string>();
+                    i++;
+                    while (i < args.Length && !args[i].StartsWith('-'))
+                        list.Add(args[i++]);
+                }
+                else if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                {
+                    single[tok] = args[i + 1];
+                    i += 2;
+                }
+                else
+                {
+                    single[tok] = "true";
+                    i++;
+                }
+            }
+            else
+            {
+                pos.Add(tok);
+                i++;
+            }
+        }
+        return new ParsedOptions(single, lists, pos);
+    }
+
+    private sealed record ParsedOptions(
+        Dictionary<string, string> Single,
+        Dictionary<string, List<string>> Lists,
+        List<string> Positional)
+    {
+        public string? GetSingleOrNull(params string[] keys)
+        {
+            foreach (var k in keys)
+                if (Single.TryGetValue(k, out var v))
+                    return v;
+            return null;
+        }
+
+        public string? GetSingle(params string[] keys) => GetSingleOrNull(keys);
+
+        public List<string> GetList(params string[] keys)
+        {
+            foreach (var k in keys)
+                if (Lists.TryGetValue(k, out var v))
+                    return v;
+            return new List<string>();
+        }
     }
 }
