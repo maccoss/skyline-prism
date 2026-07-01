@@ -16,4 +16,10 @@
     <ProjectReference Include="..\SkylinePrism.Skyline\SkylinePrism.Skyline.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Skyline tool manifest, copied next to the exe and staged into the tool zip. -->
+    <None Include="tool-inf\info.properties" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="tool-inf\SkylinePrism.properties" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,49 @@
+# C# (.NET 8) release - triggered by a dotnet-v* tag (distinct from the Python v* tags,
+# so the two release cadences do not collide).
+name: dotnet-release
+
+on:
+  push:
+    tags: ['dotnet-v*']
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: dotnet
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      # Guard: the tool-inf manifest version must match the git tag (tag dotnet-vX.Y.Z -> X.Y.Z).
+      - name: Verify version matches tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#dotnet-v}"
+          VER=$(sed -n 's/^Version = //p' src/SkylinePrism.App/tool-inf/info.properties | tr -d '[:space:]')
+          echo "tag=$TAG manifest=$VER"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::info.properties Version ($VER) does not match tag ($TAG)"
+            exit 1
+          fi
+
+      - name: Test
+        run: dotnet test SkylinePrism.sln --configuration Release
+
+      - name: Package SkylinePrism.zip
+        run: dotnet msbuild build/package.proj /p:Configuration=Release
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dotnet/publish/SkylinePrism.zip
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
