@@ -63,9 +63,13 @@ public sealed class PrismPipeline
 
         var batchLabels = samples.Select(s => resolvedBatch[s]).ToList();
         var batches = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
-        var combatEnabled = config.BatchCorrection.Enabled && batches.Count >= 2;
-        report($"Batches: {batches.Count} ({string.Join(", ", batches)}); ComBat "
-            + (combatEnabled ? "enabled" : "skipped (needs >= 2 batches)") + ".");
+        var multiBatch = batches.Count >= 2;
+        var peptideCombat = config.BatchCorrection.Enabled && config.BatchCorrection.PeptideLevel && multiBatch;
+        var proteinCombat = config.BatchCorrection.Enabled && config.BatchCorrection.ProteinLevel && multiBatch;
+        var combatNote = !multiBatch ? "skipped (needs >= 2 batches)"
+            : !config.BatchCorrection.Enabled ? "disabled"
+            : $"peptide={(peptideCombat ? "on" : "off")}, protein={(proteinCombat ? "on" : "off")}";
+        report($"Batches: {batches.Count} ({string.Join(", ", batches)}); ComBat {combatNote}.");
 
         // Stage 2: transition -> peptide.
         report("============================================================");
@@ -85,23 +89,23 @@ public sealed class PrismPipeline
         // Stage 2b/2c: peptide normalization + ComBat -> peptides_log2_internal (LOG2) +
         // corrected_peptides (LINEAR).
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
-            + (combatEnabled ? " + 2c: ComBat batch correction" : "") + "...");
+            + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
         var correctedPepPath = Path.Combine(outputDir, "corrected_peptides." + config.Output.Format);
         var nPeptides = NormalizeAndCorrect(
             peptidesRollupPath,
             new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
-            samples, batchLabels, combatEnabled, config.GlobalNormalization.Method,
+            samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
             internalPath, correctedPepPath);
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
         report("============================================================");
-        report("Stage 3: Protein parsimony");
+        report(config.Parsimony.Enabled ? "Stage 3: Protein parsimony" : "Stage 3: Protein grouping (parsimony disabled)");
         report("============================================================");
-        var groups = ParsimonyEngine.Run(mergedPath, cols);
+        var groups = ParsimonyEngine.Run(mergedPath, cols, config.Parsimony.Enabled);
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
-        report($"  Computed {groups.Count:N0} protein groups.");
+        report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
 
         // Stage 4: peptide -> protein.
         report("============================================================");
@@ -117,7 +121,7 @@ public sealed class PrismPipeline
         var protResult = ProteinRollup.Run(internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples);
         report($"  Rolled up to {protResult.NProteins:N0} proteins.");
         report($"Stage 4b: Protein normalization ({config.ProteinNormalization.Method})"
-            + (combatEnabled ? " + 4c: ComBat" : "") + "...");
+            + (proteinCombat ? " + 4c: ComBat" : "") + "...");
 
         // Stage 4b/4c: protein normalization + ComBat -> corrected_proteins (LINEAR).
         var correctedProtPath = Path.Combine(outputDir, "corrected_proteins." + config.Output.Format);
@@ -129,7 +133,7 @@ public sealed class PrismPipeline
             ("n_unique_peptides", MetaType.Long), ("low_confidence", MetaType.Bool),
         };
         var nProteins = NormalizeAndCorrect(
-            proteinsRawPath, proteinMeta, samples, batchLabels, combatEnabled,
+            proteinsRawPath, proteinMeta, samples, batchLabels, proteinCombat,
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath);
 
         report("============================================================");

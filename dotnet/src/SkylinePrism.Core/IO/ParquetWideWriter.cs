@@ -52,7 +52,7 @@ public static class ParquetWideWriter
         var schema = new ParquetSchema(fields);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        await using var fs = File.Create(path);
+        await using var fs = await OpenWriteWithRetryAsync(path);
         using var writer = await ParquetWriter.CreateAsync(schema, fs);
         writer.CompressionMethod = CompressionMethod.Snappy;
 
@@ -64,6 +64,35 @@ public static class ParquetWideWriter
             await rg.WriteColumnAsync(new DataColumn((DataField)fields[fieldIndex++], sampleColumns[s]));
 
         _ = rowCount; // row count is implied by the column lengths
+    }
+
+    /// <summary>
+    /// Open the output file for writing, retrying on transient IO locks. New parquet files in
+    /// watched folders (e.g. Downloads) are briefly locked by Windows Defender / the search
+    /// indexer / cloud sync; a short backoff clears those. A persistent lock (the file open in
+    /// a viewer) throws with a clear hint after the retries.
+    /// </summary>
+    private static async Task<FileStream> OpenWriteWithRetryAsync(
+        string path, int maxAttempts = 15, int delayMs = 300)
+    {
+        IOException? last = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+            }
+            catch (IOException ex)
+            {
+                last = ex;
+                await Task.Delay(delayMs);
+            }
+        }
+        throw new IOException(
+            $"Could not write '{path}' after {maxAttempts} attempts - it is locked by another process "
+            + "(often antivirus scanning the Downloads folder, cloud sync, or the file open in a viewer). "
+            + "Use an output directory outside Downloads/OneDrive, or close any program viewing the file.",
+            last);
     }
 
     private static Field MakeField(string name, Type elementType)

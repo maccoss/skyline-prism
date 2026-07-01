@@ -53,7 +53,15 @@ public sealed class PrismConfig
 
     public sealed class BatchCorrectionSection
     {
+        /// <summary>Master switch. When false, neither peptide nor protein ComBat runs.</summary>
         public bool Enabled { get; set; } = true;
+
+        /// <summary>Apply ComBat at the peptide level (Stage 2c).</summary>
+        public bool PeptideLevel { get; set; } = true;
+
+        /// <summary>Apply ComBat at the protein level (Stage 4c).</summary>
+        public bool ProteinLevel { get; set; } = true;
+
         public string Method { get; set; } = "combat";
         public bool ReferenceAnchored { get; set; }
         public string ReferenceType { get; set; } = "reference";
@@ -78,6 +86,8 @@ public sealed class PrismConfig
 
     public sealed class ParsimonySection
     {
+        /// <summary>When false, each protein accession is its own group (no grouping/razor).</summary>
+        public bool Enabled { get; set; } = true;
         public string? FastaPath { get; set; }
         public string SharedPeptideHandling { get; set; } = "all_groups";
     }

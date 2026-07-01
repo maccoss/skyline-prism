@@ -32,7 +32,7 @@ public sealed class SkylineReportDriver
     public sealed record ExportedReports(
         string InputPath, bool InputIsParquet, string? ReplicatesCsv, string? DocumentPath);
 
-    public ExportedReports Export(string workDir, string? metadataReportName = null)
+    public ExportedReports Export(string workDir, string? metadataReportName = null, string? batchAnnotation = null)
     {
         Directory.CreateDirectory(workDir);
 
@@ -42,7 +42,7 @@ public sealed class SkylineReportDriver
         if (version is not null)
             _log($"Skyline version: {version}");
 
-        EnsureReportsInstalled();
+        EnsureReportsInstalled(batchAnnotation);
 
         // Preferred path: export PRISM directly as parquet. Skyline determines the format
         // from the file extension, the same mechanism that produced the CSV.
@@ -136,11 +136,58 @@ public sealed class SkylineReportDriver
         return names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().ToList();
     }
 
-    private void EnsureReportsInstalled()
+    private void EnsureReportsInstalled(string? batchAnnotation)
     {
         InstallReport("Skyline-PRISM.skyr", "PRISM");
-        InstallReport("Skyline-PRISM-Replicates.skyr", "PRISM-Replicates");
+        InstallReplicatesReport(batchAnnotation);
     }
+
+    /// <summary>
+    /// Install the PRISM-Replicates report. When a batch annotation name is provided, generate
+    /// the view on the fly to include that dynamic annotation column (annotation_&lt;Name&gt;),
+    /// since Skyline's built-in Replicates view is not exportable via the RPC. Falls back to the
+    /// bundled static report if the dynamic definition is rejected.
+    /// </summary>
+    private void InstallReplicatesReport(string? batchAnnotation)
+    {
+        if (string.IsNullOrWhiteSpace(batchAnnotation))
+        {
+            InstallReport("Skyline-PRISM-Replicates.skyr", "PRISM-Replicates");
+            return;
+        }
+
+        var ann = batchAnnotation!.Trim();
+        var annColumn = ann.StartsWith("annotation_", StringComparison.OrdinalIgnoreCase) ? ann : "annotation_" + ann;
+        var xml =
+            "<?xml version=\"1.0\"?>\n<views>\n"
+            + "  <view name=\"PRISM-Replicates\" rowsource=\"pwiz.Skyline.Model.Databinding.Entities.Replicate\" uimode=\"proteomic\">\n"
+            + "    <column name=\"\" />\n"
+            + "    <column name=\"SampleType\" />\n"
+            + "    <column name=\"BatchName\" />\n"
+            + $"    <column name=\"{XmlEscape(annColumn)}\" />\n"
+            + "  </view>\n</views>\n";
+
+        var tempSkyr = Path.Combine(Path.GetTempPath(), "PRISM-Replicates.skyr");
+        try
+        {
+            File.WriteAllText(tempSkyr, xml);
+            _session.Execute(c => c.RunCommandSilent(new[]
+            {
+                $"--report-add={tempSkyr}",
+                "--report-conflict-resolution=overwrite",
+            }));
+            _log($"Installed PRISM-Replicates report including the '{ann}' annotation column.");
+        }
+        catch (Exception ex)
+        {
+            _log($"Could not add PRISM-Replicates with annotation '{ann}' ({ex.Message}); "
+                 + "using the bundled report (SampleType + BatchName only).");
+            InstallReport("Skyline-PRISM-Replicates.skyr", "PRISM-Replicates");
+        }
+    }
+
+    private static string XmlEscape(string s) => s
+        .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 
     private void InstallReport(string fileName, string displayName)
     {

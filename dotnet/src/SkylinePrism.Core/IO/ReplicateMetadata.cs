@@ -52,8 +52,10 @@ public sealed class ReplicateMetadata
         var typeIdx = !string.IsNullOrWhiteSpace(sampleTypeColumn)
             ? FindColumn(header, new[] { sampleTypeColumn! })
             : FindColumn(header, SampleTypeCols);
+        // For an explicit batch column, also match the "annotation_<Name>" form and the
+        // annotation display name (Skyline may export either).
         var batchIdx = !string.IsNullOrWhiteSpace(batchColumn)
-            ? FindColumn(header, new[] { batchColumn! })
+            ? FindColumn(header, new[] { batchColumn!, "annotation_" + batchColumn })
             : FindColumn(header, BatchCols);
 
         if (!string.IsNullOrWhiteSpace(batchColumn) && batchIdx < 0)

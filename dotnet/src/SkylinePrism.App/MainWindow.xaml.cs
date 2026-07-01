@@ -54,9 +54,49 @@ public partial class MainWindow : Window
 
         MetadataReportCombo.Items.Add(DefaultMetadataItem);
         MetadataReportCombo.SelectedIndex = 0;
+
+        TransitionRollupCombo.SelectedIndex = 0;
+        PeptideNormCombo.SelectedIndex = 0;
+        ProteinRollupCombo.SelectedIndex = 0;
+        ProteinNormCombo.SelectedIndex = 0;
+
         if (_session is not null)
             _ = LoadReportsAsync();
     }
+
+    /// <summary>Build the pipeline config from the Settings tab controls (call on the UI thread).</summary>
+    private PrismConfig BuildConfigFromUi()
+    {
+        var c = new PrismConfig();
+        c.TransitionRollup.Method = ComboText(TransitionRollupCombo, "sum");
+        c.TransitionRollup.MinTransitions = ParseInt(MinTransitionsBox.Text, 3);
+        c.TransitionRollup.UseMs1 = UseMs1Check.IsChecked == true;
+
+        c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "median");
+
+        var pepBatch = PeptideBatchCheck.IsChecked == true;
+        var protBatch = ProteinBatchCheck.IsChecked == true;
+        c.BatchCorrection.Enabled = pepBatch || protBatch;
+        c.BatchCorrection.PeptideLevel = pepBatch;
+        c.BatchCorrection.ProteinLevel = protBatch;
+
+        c.Parsimony.Enabled = ParsimonyCheck.IsChecked == true;
+
+        c.ProteinRollup.Method = ComboText(ProteinRollupCombo, "median_polish");
+        c.ProteinRollup.MinPeptides = ParseInt(MinPeptidesBox.Text, 3);
+        c.ProteinNormalization.Method = ComboText(ProteinNormCombo, "median");
+
+        c.QcReport.Enabled = true;
+        c.QcReport.SavePlots = false;
+        return c;
+    }
+
+    private static string ComboText(System.Windows.Controls.ComboBox cb, string fallback)
+        => (cb.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content?.ToString()
+           ?? (string.IsNullOrWhiteSpace(cb.Text) ? fallback : cb.Text);
+
+    private static int ParseInt(string? s, int fallback)
+        => int.TryParse(s, out var v) && v > 0 ? v : fallback;
 
     private const string DefaultMetadataItem = "(default) PRISM-Replicates";
 
@@ -105,11 +145,14 @@ public partial class MainWindow : Window
         var metadataReport = MetadataReportCombo.Text?.Trim();
         if (string.IsNullOrWhiteSpace(metadataReport) || metadataReport == DefaultMetadataItem)
             metadataReport = null;
+        var config = BuildConfigFromUi();
+        if (!string.IsNullOrWhiteSpace(batchColumn))
+            config.Metadata.BatchColumn = batchColumn;
         var session = _session;
 
         try
         {
-            await Task.Run(() => RunPipeline(session, outputDir, batchColumn, metadataReport));
+            await Task.Run(() => RunPipeline(session, outputDir, metadataReport, config));
             _lastReportPath = Path.Combine(outputDir, "qc_report.html");
             OpenReportButton.IsEnabled = File.Exists(_lastReportPath);
             LoadPcaPlot(outputDir);
@@ -130,23 +173,20 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RunPipeline(SkylineSession session, string outputDir, string? batchColumn, string? metadataReport)
+    private void RunPipeline(SkylineSession session, string outputDir, string? metadataReport, PrismConfig config)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
 
         Log("Exporting reports from Skyline...");
         var driver = new SkylineReportDriver(session, Log);
-        var reports = driver.Export(reportsDir, metadataReport);
+        // When no explicit metadata report is chosen, build our PRISM-Replicates report to
+        // include the user's batch annotation column (annotation_<name>).
+        var batchAnnotation = metadataReport is null ? config.Metadata.BatchColumn : null;
+        var reports = driver.Export(reportsDir, metadataReport, batchAnnotation);
 
         Log($"Running PRISM pipeline on the {(reports.InputIsParquet ? "parquet" : "CSV")} report "
             + $"({Path.GetFileName(reports.InputPath)})...");
-
-        var config = new PrismConfig();
-        config.QcReport.Enabled = true;
-        config.QcReport.SavePlots = false;
-        if (!string.IsNullOrWhiteSpace(batchColumn))
-            config.Metadata.BatchColumn = batchColumn;
 
         var inputs = new List<string> { reports.InputPath };
         var result = PrismPipeline.Run(inputs, outputDir, config, reports.ReplicatesCsv, Log);

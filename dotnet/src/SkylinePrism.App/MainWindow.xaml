@@ -48,6 +48,68 @@
         </Grid>
 
         <TabControl Grid.Row="4">
+            <TabItem Header="Settings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="1. Transition &#8594; peptide rollup:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="TransitionRollupCombo" Width="160">
+                                <ComboBoxItem>sum</ComboBoxItem>
+                                <ComboBoxItem>median_polish</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Text="min transitions:" VerticalAlignment="Center" Margin="20,0,6,0" />
+                            <TextBox x:Name="MinTransitionsBox" Width="46" Text="3" />
+                            <CheckBox x:Name="UseMs1Check" Content="include MS1 precursors" VerticalAlignment="Center" Margin="20,0,0,0" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="2. Peptide normalization:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="PeptideNormCombo" Width="160">
+                                <ComboBoxItem>median</ComboBoxItem>
+                                <ComboBoxItem>none</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="4. Protein parsimony:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ParsimonyCheck" Content="group proteins (razor/parsimony)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="5. Peptide &#8594; protein rollup:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ProteinRollupCombo" Width="160">
+                                <ComboBoxItem>median_polish</ComboBoxItem>
+                                <ComboBoxItem>sum</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Text="min peptides:" VerticalAlignment="Center" Margin="20,0,6,0" />
+                            <TextBox x:Name="MinPeptidesBox" Width="46" Text="3" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="6. Protein normalization:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ProteinNormCombo" Width="160">
+                                <ComboBoxItem>median</ComboBoxItem>
+                                <ComboBoxItem>none</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
+                                   Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
             <TabItem Header="Log">
                 <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
                          VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"

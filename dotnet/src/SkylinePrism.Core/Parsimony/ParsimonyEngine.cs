@@ -34,11 +34,44 @@ public static class ParsimonyEngine
     }
 
     /// <summary>Read distinct peptide/protein records from the merged parquet and compute groups.</summary>
-    public static List<ProteinGroup> Run(string mergedParquet, SkylineColumns cols)
+    public static List<ProteinGroup> Run(string mergedParquet, SkylineColumns cols, bool applyParsimony = true)
     {
         var records = ReadRecords(mergedParquet, cols);
         var map = BuildMap(records);
-        return ComputeProteinGroups(map);
+        return applyParsimony ? ComputeProteinGroups(map) : BuildUngroupedGroups(map);
+    }
+
+    /// <summary>
+    /// One group per protein accession (parsimony disabled): every protein keeps ALL of its
+    /// mapped peptides (shared peptides go to each protein), no subsumption/razor.
+    /// </summary>
+    public static List<ProteinGroup> BuildUngroupedGroups(PeptideProteinMap map)
+    {
+        var proteins = map.ProteinToPeptides.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var groups = new List<ProteinGroup>(proteins.Count);
+        for (var i = 0; i < proteins.Count; i++)
+        {
+            var protein = proteins[i];
+            var peptides = map.ProteinToPeptides[protein].OrderBy(x => x, StringComparer.Ordinal).ToList();
+            if (peptides.Count == 0)
+                continue;
+            groups.Add(new ProteinGroup
+            {
+                GroupId = $"PG{i + 1:D4}",
+                LeadingProtein = protein,
+                LeadingName = map.ProteinToName.GetValueOrDefault(protein, protein),
+                LeadingUniProtId = protein,
+                LeadingGeneName = map.ProteinToGene.GetValueOrDefault(protein, ""),
+                LeadingDescription = map.ProteinToDescription.GetValueOrDefault(protein, ""),
+                MemberProteins = new List<string> { protein },
+                SubsumedProteins = new List<string>(),
+                Peptides = new List<string>(peptides),
+                UniquePeptides = new List<string>(peptides),
+                RazorPeptides = new List<string>(),
+                AllMappedPeptides = new List<string>(peptides),
+            });
+        }
+        return groups;
     }
 
     public record Record(string Peptide, string ProteinAccession, string Name, string Gene, string Description);
