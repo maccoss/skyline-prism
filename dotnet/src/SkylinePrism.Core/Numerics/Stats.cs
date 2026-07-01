@@ -108,28 +108,16 @@ public static class Stats
     }
 
     /// <summary>
-    /// numpy.var with the given delta-degrees-of-freedom. Two-pass (compute mean,
-    /// then mean of squared deviations) matching numpy's definition
-    /// sum(|x - mean|^2) / (n - ddof).
+    /// numpy.var with the given delta-degrees-of-freedom. Uses numpy-compatible pairwise
+    /// summation (mean then mean of squared deviations) so ComBat's variance estimates
+    /// match numpy to the last bits even for near-singular features.
     /// </summary>
     public static double Var(ReadOnlySpan<double> values, int ddof = 0)
     {
         var n = values.Length;
         if (n - ddof <= 0)
             return double.NaN;
-
-        double sum = 0.0;
-        foreach (var v in values)
-            sum += v;
-        var mean = sum / n;
-
-        double ss = 0.0;
-        foreach (var v in values)
-        {
-            var d = v - mean;
-            ss += d * d;
-        }
-        return ss / (n - ddof);
+        return NumpyMath.Var(values.ToArray(), ddof);
     }
 
     /// <summary>numpy.nanvar with the given ddof: ignores NaNs.</summary>
@@ -173,15 +161,12 @@ public static class Stats
         return n == 0 ? double.NaN : sum / n;
     }
 
-    /// <summary>Arithmetic mean over all values (numpy.mean).</summary>
+    /// <summary>Arithmetic mean over all values (numpy.mean), pairwise summation.</summary>
     public static double Mean(ReadOnlySpan<double> values)
     {
         if (values.Length == 0)
             return double.NaN;
-        double sum = 0.0;
-        foreach (var v in values)
-            sum += v;
-        return sum / values.Length;
+        return NumpyMath.Mean(values.ToArray());
     }
 
     /// <summary>

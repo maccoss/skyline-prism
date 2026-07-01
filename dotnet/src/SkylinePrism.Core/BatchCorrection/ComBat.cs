@@ -64,12 +64,12 @@ public static class ComBat
         for (var i = 0; i < nBatch; i++)
         {
             var idx = batches[i];
+            var buf = new double[idx.Count];
             for (var f = 0; f < nf; f++)
             {
-                double sum = 0.0;
-                foreach (var s in idx)
-                    sum += d[f, s];
-                bHat[i, f] = sum / idx.Count;
+                for (var k = 0; k < idx.Count; k++)
+                    buf[k] = d[f, idx[k]];
+                bHat[i, f] = NumpyMath.PairwiseSum(buf) / idx.Count;
             }
         }
 
@@ -111,12 +111,12 @@ public static class ComBat
         for (var i = 0; i < nBatch; i++)
         {
             var idx = batches[i];
+            var buf = new double[idx.Count];
             for (var f = 0; f < nf; f++)
             {
-                double sum = 0.0;
-                foreach (var s in idx)
-                    sum += sData[f, s];
-                gammaHat[i, f] = sum / idx.Count;
+                for (var k = 0; k < idx.Count; k++)
+                    buf[k] = sData[f, idx[k]];
+                gammaHat[i, f] = NumpyMath.PairwiseSum(buf) / idx.Count;
             }
         }
 
@@ -240,6 +240,7 @@ public static class ComBat
 
         var gNew = new double[nf];
         var dNew = new double[nf];
+        var sqBuf = new double[n];
         for (var iter = 0; iter < maxIter; iter++)
         {
             for (var f = 0; f < nf; f++)
@@ -247,13 +248,12 @@ public static class ComBat
 
             for (var f = 0; f < nf; f++)
             {
-                double sumSq = 0.0;
-                foreach (var s in batchIdx)
+                for (var k = 0; k < n; k++)
                 {
-                    var r = sData[f, s] - gNew[f];
-                    sumSq += r * r;
+                    var r = sData[f, batchIdx[k]] - gNew[f];
+                    sqBuf[k] = r * r;
                 }
-                dNew[f] = PostVar(sumSq, n, a, b);
+                dNew[f] = PostVar(NumpyMath.PairwiseSum(sqBuf), n, a, b);
             }
 
             var gChange = MaxRelChange(gNew, gOld);
