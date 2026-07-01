@@ -1,15 +1,218 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
+using Microsoft.Win32;
+using ScottPlot;
+using SkylinePrism.Core.Config;
+using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Numerics;
+using SkylinePrism.Core.Pipeline;
+using SkylinePrism.Core.Visualization;
+using SkylinePrism.Skyline;
 
 namespace SkylinePrism.App;
 
 /// <summary>
-/// Placeholder shell. Layer 11 replaces this with the config -> console(progress) ->
-/// interactive ScottPlot views flow, wired to SkylineSession.
+/// The Skyline external-tool window: connects to the launching Skyline instance over
+/// JSON-RPC, drives it to export the PRISM + Replicates reports, runs the PRISM pipeline,
+/// generates the QC report, and shows an interactive PCA of the corrected peptides.
 /// </summary>
 public partial class MainWindow : Window
 {
+    private SkylineSession? _session;
+    private string? _lastReportPath;
+
     public MainWindow()
     {
         InitializeComponent();
+
+        OutputDirBox.Text = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PRISM-output");
+
+        try
+        {
+            _session = SkylineSession.FromArguments(App.LaunchArgs);
+            StatusText.Text = $"Connected to Skyline (pipe: {_session.PipeName}).";
+        }
+        catch (Exception ex)
+        {
+            _session = null;
+            StatusText.Text =
+                "Not connected to a running Skyline instance. Launch this tool from Skyline's Tools menu. "
+                + $"({ex.Message})";
+        }
+    }
+
+    private void OnBrowse(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFolderDialog { Title = "Select output directory" };
+        if (dlg.ShowDialog() == true)
+            OutputDirBox.Text = dlg.FolderName;
+    }
+
+    private async void OnRun(object sender, RoutedEventArgs e)
+    {
+        if (_session is null)
+        {
+            Log("No Skyline connection. Start this tool from within Skyline.");
+            return;
+        }
+
+        RunButton.IsEnabled = false;
+        OpenReportButton.IsEnabled = false;
+        LogBox.Clear();
+
+        var outputDir = OutputDirBox.Text;
+        var session = _session;
+
+        try
+        {
+            await Task.Run(() => RunPipeline(session, outputDir));
+            _lastReportPath = Path.Combine(outputDir, "qc_report.html");
+            OpenReportButton.IsEnabled = File.Exists(_lastReportPath);
+            LoadPcaPlot(outputDir);
+            Log("Done.");
+        }
+        catch (Exception ex)
+        {
+            Log("ERROR: " + ex.Message);
+        }
+        finally
+        {
+            RunButton.IsEnabled = true;
+        }
+    }
+
+    private void RunPipeline(SkylineSession session, string outputDir)
+    {
+        Directory.CreateDirectory(outputDir);
+        var reportsDir = Path.Combine(outputDir, "skyline-reports");
+
+        Log("Exporting reports from Skyline...");
+        var driver = new SkylineReportDriver(session, Log);
+        var reports = driver.Export(reportsDir);
+
+        // Prefer parquet when Skyline produced it, else the invariant CSV.
+        var input = reports.PrismParquet is not null && File.Exists(reports.PrismParquet)
+            ? reports.PrismParquet
+            : reports.PrismCsv;
+        Log($"Running PRISM pipeline on {Path.GetFileName(input)}...");
+
+        var config = new PrismConfig();
+        config.QcReport.Enabled = true;
+        config.QcReport.SavePlots = false;
+
+        var inputs = new List<string> { input };
+        var metadata = reports.ReplicatesCsv is not null && File.Exists(reports.ReplicatesCsv)
+            ? reports.ReplicatesCsv
+            : null;
+        if (metadata is not null)
+            Log($"(Replicates metadata available: {Path.GetFileName(metadata)})");
+
+        var result = PrismPipeline.Run(inputs, outputDir, config);
+        Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
+            + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
+    }
+
+    private void LoadPcaPlot(string outputDir)
+    {
+        try
+        {
+            var correctedPeptides = Path.Combine(outputDir, "corrected_peptides.parquet");
+            if (!File.Exists(correctedPeptides))
+                return;
+
+            var types = ReadSampleTypes(Path.Combine(outputDir, "sample_metadata.csv"));
+            var table = ParquetTable.Load(correctedPeptides);
+            var sampleCols = table.ColumnNames.Where(types.ContainsKey).ToList();
+            if (sampleCols.Count < 3)
+                return;
+
+            // Build [nSamples, nFeatures] LOG2 matrix.
+            var nSamples = sampleCols.Count;
+            var nFeatures = table.RowCount;
+            var byFeature = sampleCols.Select(table.GetDouble).ToList();
+            var samplesByFeatures = new double[nSamples, nFeatures];
+            for (var s = 0; s < nSamples; s++)
+                for (var f = 0; f < nFeatures; f++)
+                {
+                    var v = byFeature[s][f];
+                    samplesByFeatures[s, f] = v.HasValue ? Math.Log2(v.Value) : double.NaN;
+                }
+
+            var scores = Pca.Fit2D(samplesByFeatures);
+            var typeLabels = sampleCols.Select(c => types.GetValueOrDefault(c, "unknown")).ToList();
+
+            var plt = PcaPlot.Plot;
+            plt.Clear();
+            var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
+            for (var i = 0; i < nSamples; i++)
+            {
+                var t = typeLabels[i];
+                if (!groups.TryGetValue(t, out var g))
+                    groups[t] = g = (new List<double>(), new List<double>());
+                g.X.Add(scores[i, 0]);
+                g.Y.Add(scores[i, 1]);
+            }
+            foreach (var (type, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
+                markers.Color = Color.FromHex(PlotRenderer.TypeColors.GetValueOrDefault(type, "#7f7f7f"));
+                markers.MarkerSize = 8;
+                markers.LegendText = type;
+            }
+            plt.ShowLegend();
+            plt.Title("Peptide PCA (corrected)");
+            plt.XLabel("PC1");
+            plt.YLabel("PC2");
+            PcaPlot.Refresh();
+        }
+        catch (Exception ex)
+        {
+            Log("(PCA plot skipped: " + ex.Message + ")");
+        }
+    }
+
+    private void OnOpenReport(object sender, RoutedEventArgs e)
+    {
+        if (_lastReportPath is not null && File.Exists(_lastReportPath))
+            Process.Start(new ProcessStartInfo(_lastReportPath) { UseShellExecute = true });
+    }
+
+    private static Dictionary<string, string> ReadSampleTypes(string metadataCsv)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!File.Exists(metadataCsv))
+            return map;
+        var lines = File.ReadAllLines(metadataCsv);
+        if (lines.Length < 2)
+            return map;
+        var header = lines[0].Split(',');
+        var idIdx = Array.IndexOf(header, "sample_id");
+        var typeIdx = Array.IndexOf(header, "sample_type");
+        if (idIdx < 0 || typeIdx < 0)
+            return map;
+        for (var i = 1; i < lines.Length; i++)
+        {
+            var f = lines[i].Split(',');
+            if (f.Length > Math.Max(idIdx, typeIdx))
+                map[f[idIdx]] = f[typeIdx];
+        }
+        return map;
+    }
+
+    private void Log(string message)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => Log(message));
+            return;
+        }
+        LogBox.AppendText(message + Environment.NewLine);
+        LogBox.ScrollToEnd();
     }
 }

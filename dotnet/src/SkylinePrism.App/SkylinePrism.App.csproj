@@ -12,6 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ScottPlot.WPF" Version="5.0.55" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
     <ProjectReference Include="..\SkylinePrism.Skyline\SkylinePrism.Skyline.csproj" />
   </ItemGroup>

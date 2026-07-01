@@ -7,7 +7,7 @@
          link-compiled, which keeps SkylinePrism.Core cross-platform. -->
     <TargetFramework>net8.0-windows</TargetFramework>
     <RootNamespace>SkylinePrism.Skyline</RootNamespace>
-    <!-- The vendored SkylineTool sources (Layer 10) predate nullable reference types. -->
+    <!-- The vendored SkylineTool sources predate nullable reference types. -->
     <Nullable>disable</Nullable>
   </PropertyGroup>
 
@@ -15,16 +15,20 @@
     <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
   </ItemGroup>
 
-  <!--
-    Layer 10 will vendor the pwiz SkylineTool JSON-RPC sources under
-    dotnet/external/SkylineTool/*.cs and link-compile them here, e.g.:
+  <ItemGroup>
+    <!-- Vendored pwiz Skyline JSON-RPC client sources (Apache-2.0), link-compiled exactly
+         the way pwiz's SkylineMcpServer.csproj / skyline-cadenza do. Originals live in
+         pwiz_tools/Skyline/SkylineTool/ in the ProteoWizard repo. -->
+    <Compile Include="..\..\external\SkylineTool\SkylineJsonToolClient.cs" Link="Rpc\SkylineJsonToolClient.cs" />
+    <Compile Include="..\..\external\SkylineTool\IJsonToolService.cs" Link="Rpc\IJsonToolService.cs" />
+    <Compile Include="..\..\external\SkylineTool\JsonToolConstants.cs" Link="Rpc\JsonToolConstants.cs" />
+    <Compile Include="..\..\external\SkylineTool\JsonToolModels.cs" Link="Rpc\JsonToolModels.cs" />
+  </ItemGroup>
 
-    <ItemGroup>
-      <Compile Include="..\..\external\SkylineTool\SkylineJsonToolClient.cs" Link="Rpc\SkylineJsonToolClient.cs" />
-      <Compile Include="..\..\external\SkylineTool\IJsonToolService.cs"      Link="Rpc\IJsonToolService.cs" />
-      <Compile Include="..\..\external\SkylineTool\JsonToolConstants.cs"      Link="Rpc\JsonToolConstants.cs" />
-      <Compile Include="..\..\external\SkylineTool\JsonToolModels.cs"         Link="Rpc\JsonToolModels.cs" />
-    </ItemGroup>
-  -->
+  <ItemGroup>
+    <!-- The PRISM report definition, staged next to the tool so it can be installed into
+         a Skyline document that does not already have it. -->
+    <None Include="Reports\Skyline-PRISM.skyr" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>
