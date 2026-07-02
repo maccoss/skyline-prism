@@ -307,7 +307,7 @@ td:first-child, th:first-child { text-align: left; }
 
     private static string DetectPeptideColumn(string peptidesRollupParquet)
     {
-        var cols = ParquetTable.Load(peptidesRollupParquet).ColumnNames;
+        var cols = ParquetTable.ReadColumnNames(peptidesRollupParquet); // schema-only
         return cols.FirstOrDefault(c => c != PepMetaN && c != PepMetaRt && !c.Contains("__@__"))
             ?? "Peptide Modified Sequence";
     }

@@ -40,7 +40,9 @@ public sealed class PrismPipeline
         var merge = DuckDbMerge.MergeAndSort(inputs, mergedPath);
         report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
 
-        var cols = SkylineColumns.Detect(ParquetTable.Load(mergedPath).ColumnNames.ToHashSet());
+        // Schema-only read: never materialize the (potentially huge, 200-report) merged table
+        // just to detect column names.
+        var cols = SkylineColumns.Detect(ParquetTable.ReadColumnNames(mergedPath).ToHashSet());
         var samples = MergedParquetReader.GetSortedSamples(mergedPath, cols.Sample);
         report($"  Columns: peptide='{cols.Peptide}', sample='{cols.Sample}', abundance='{cols.Abundance}'.");
         report($"  Samples: {samples.Count}.");

@@ -4,7 +4,10 @@ Tracks which Python `skyline_prism` features are implemented in the C# port (`do
 Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (not planned for now).
 
 ## Data I/O & merge
-- [x] Streaming CSV/parquet merge (DuckDB) — `DuckDbMerge`
+- [x] Streaming CSV/parquet merge (DuckDB), UNION ALL of N reports with `memory_limit` + disk-spill
+      `temp_directory` — handles ~200 reports (tested with 30 as a proxy) — `DuckDbMerge`
+- [x] Schema-only column detection (footer read) on the merged file; distinct-query streaming for
+      samples / batch map / parsimony — no full materialization of the merged table
 - [x] Column auto-detection (`find_column`) — `SkylineColumns`
 - [x] Sample metadata generation + sample-type detection — pipeline + `ReplicateMetadata`
 - [x] Tolerant numeric parsing (`#N/A` → NaN) — `MergedParquetReader`

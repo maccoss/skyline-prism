@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SkylinePrism.Core.IO;
@@ -16,6 +17,39 @@ namespace SkylinePrism.Tests.IO;
 public class MergeParityTests
 {
     private static string MergeDir => Fixtures.Path2("mini", "merge");
+
+    [Fact]
+    public void MergeAndSort_HandlesManyReports_Streaming()
+    {
+        // Proxy for the ~200-PRISM-report command-line case: N distinct report files stream
+        // through one UNION ALL -> COPY, giving N x the single-file row count.
+        var input1 = Path.Combine(MergeDir, "mini_plate1.csv");
+        Assert.True(File.Exists(input1));
+
+        const int n = 30;
+        var dir = Path.Combine(Path.GetTempPath(), "prism_merge_many_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var paths = new List<string>();
+            for (var i = 0; i < n; i++)
+            {
+                var p = Path.Combine(dir, $"report_{i:D3}.csv"); // distinct stems -> distinct batches
+                File.Copy(input1, p);
+                paths.Add(p);
+            }
+
+            var singleRows = DuckDbMerge.MergeAndSort(new[] { input1 }, Path.Combine(dir, "single.parquet")).TotalRows;
+            var result = DuckDbMerge.MergeAndSort(paths, Path.Combine(dir, "many.parquet"));
+
+            Assert.Equal(singleRows * n, result.TotalRows);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
 
     [Fact]
     public void CSharpMerge_MatchesPythonGolden_RowContent()

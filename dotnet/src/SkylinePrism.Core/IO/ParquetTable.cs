@@ -33,6 +33,18 @@ public sealed class ParquetTable
     public static ParquetTable Load(string path)
         => LoadAsync(path).GetAwaiter().GetResult();
 
+    /// <summary>
+    /// Read only the column names from the parquet footer/schema - no row data is materialized.
+    /// Use this for column detection on large files (e.g. the merged report) instead of Load,
+    /// which pulls every column x row into memory.
+    /// </summary>
+    public static IReadOnlyList<string> ReadColumnNames(string path)
+    {
+        using var fs = File.OpenRead(path);
+        using var reader = ParquetReader.CreateAsync(fs).GetAwaiter().GetResult();
+        return reader.Schema.DataFields.Select(f => f.Name).ToList();
+    }
+
     public static async Task<ParquetTable> LoadAsync(string path)
     {
         await using var fs = File.OpenRead(path);
