@@ -272,9 +272,19 @@ public partial class MainWindow : Window
         try
         {
             await Task.Run(() => RunPipeline(session, outputDir, metadataReport, config));
-            _lastReportPath = Path.Combine(outputDir, "qc_report.html");
-            OpenReportButton.IsEnabled = File.Exists(_lastReportPath);
-            LoadQcData(outputDir);
+            // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
+            // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
+            // doing it on the UI thread would freeze the window.
+            Log("Loading QC data for the plots...");
+            var reportPath = Path.Combine(outputDir, "qc_report.html");
+            var reportExists = await Task.Run(() =>
+            {
+                LoadQcMatrices(outputDir);
+                return File.Exists(reportPath);
+            });
+            _lastReportPath = reportPath;
+            OpenReportButton.IsEnabled = reportExists;
+            RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
         }
         catch (Exception ex)
@@ -318,7 +328,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples)> _qcData = new();
     private Dictionary<string, string> _qcTypes = new();
 
-    private void LoadQcData(string outputDir)
+    // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
+    // except Log, which marshals to the dispatcher). RenderQc() is invoked separately on the UI thread.
+    private void LoadQcMatrices(string outputDir)
     {
         try
         {
@@ -333,7 +345,6 @@ public partial class MainWindow : Window
         {
             Log("(QC data load skipped: " + ex.Message + ")");
         }
-        RenderQc();
     }
 
     private void LoadQcMatrix(string key, string path, bool isLinear)
