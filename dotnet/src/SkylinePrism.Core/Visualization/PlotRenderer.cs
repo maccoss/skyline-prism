@@ -275,6 +275,80 @@ public static class PlotRenderer
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
+    /// <summary>
+    /// RT-binned median CV before vs after, for one control group (grouped bars: light = before,
+    /// solid = after). Ports plot_rt_bin_cv_comparison for a single panel.
+    /// </summary>
+    public static byte[] RtBinCv(
+        double[,] raw, double[,] corrected, double[] meanRt, IReadOnlyList<int> controlIdx,
+        string title, string colorHex, int nBins = 8)
+    {
+        var plt = new Plot();
+
+        double rtMin = double.PositiveInfinity, rtMax = double.NegativeInfinity;
+        foreach (var rt in meanRt)
+        {
+            if (double.IsNaN(rt)) continue;
+            if (rt < rtMin) rtMin = rt;
+            if (rt > rtMax) rtMax = rt;
+        }
+
+        if (rtMin < rtMax && controlIdx.Count >= 2)
+        {
+            var step = (rtMax - rtMin) / nBins;
+            var before = Color.FromHex(colorHex).WithAlpha((byte)110);
+            var after = Color.FromHex(colorHex);
+            var bars = new List<ScottPlot.Bar>();
+            for (var i = 0; i < nBins; i++)
+            {
+                var lo = rtMin + i * step;
+                var hi = i == nBins - 1 ? double.PositiveInfinity : rtMin + (i + 1) * step;
+                var cvB = MedianBinCv(raw, meanRt, controlIdx, lo, hi);
+                var cvA = MedianBinCv(corrected, meanRt, controlIdx, lo, hi);
+                bars.Add(new ScottPlot.Bar { Position = i - 0.2, Value = double.IsNaN(cvB) ? 0 : cvB, Size = 0.38, FillColor = before });
+                bars.Add(new ScottPlot.Bar { Position = i + 0.2, Value = double.IsNaN(cvA) ? 0 : cvA, Size = 0.38, FillColor = after });
+            }
+            plt.Add.Bars(bars);
+        }
+
+        plt.Title(title + " (light = before, solid = after)");
+        plt.XLabel("RT bin");
+        plt.YLabel("Median CV (%)");
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    private static double MedianBinCv(
+        double[,] log2Matrix, double[] meanRt, IReadOnlyList<int> cols, double lo, double hi)
+    {
+        var nF = log2Matrix.GetLength(0);
+        var cvs = new List<double>();
+        var buf = new double[cols.Count];
+        for (var f = 0; f < nF; f++)
+        {
+            var rt = meanRt[f];
+            if (double.IsNaN(rt) || rt < lo || rt >= hi)
+                continue;
+            var cnt = 0;
+            for (var k = 0; k < cols.Count; k++)
+            {
+                var v = log2Matrix[f, cols[k]];
+                if (!double.IsNaN(v))
+                    buf[cnt++] = Math.Pow(2, v);
+            }
+            if (cnt < 2)
+                continue;
+            var mean = 0.0;
+            for (var k = 0; k < cnt; k++) mean += buf[k];
+            mean /= cnt;
+            if (mean <= 0) continue;
+            var ss = 0.0;
+            for (var k = 0; k < cnt; k++) { var d = buf[k] - mean; ss += d * d; }
+            var std = Math.Sqrt(ss / (cnt - 1));
+            cvs.Add(std / mean * 100.0);
+        }
+        return cvs.Count == 0 ? double.NaN : Numerics.Stats.NanMedian(cvs.ToArray());
+    }
+
     /// <summary>Box-like distribution of per-sample median LOG2 intensity, grouped by sample type.</summary>
     public static byte[] IntensityDistribution(
         double[,] log2Matrix, IReadOnlyList<string> sampleTypes, string title)

@@ -144,8 +144,9 @@ public static class QcReport
                     () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, "After")),
             }));
 
-        // RT-lowess curve overlay (peptide level only - proteins have no RT).
+        // RT-dependent diagnostics (peptide level only - proteins have no RT).
         if (raw.MeanRt is not null && corrected.MeanRt is not null)
+        {
             sections.Add(new PlotSection($"{cap} RT-Lowess Curves: Before vs After", new List<PlotImage>
             {
                 Img("Before (raw rollup)", $"{level}_rt_lowess_before",
@@ -153,6 +154,20 @@ public static class QcReport
                 Img("After (normalized + corrected)", $"{level}_rt_lowess_after",
                     () => PlotRenderer.RtLowessCurves(corrected.Values, corrected.MeanRt, typeLabels, "After")),
             }));
+
+            if (refIdx.Count >= 2)
+                sections.Add(new PlotSection($"{cap} RT-Binned CV (Reference)", new List<PlotImage>
+                {
+                    Img("", $"{level}_rt_bin_cv_ref", () => PlotRenderer.RtBinCv(
+                        raw.Values, corrected.Values, raw.MeanRt, refIdx, "RT-binned CV (Reference)", "#d62728")),
+                }));
+            if (qcIdx.Count >= 2)
+                sections.Add(new PlotSection($"{cap} RT-Binned CV (QC)", new List<PlotImage>
+                {
+                    Img("", $"{level}_rt_bin_cv_qc", () => PlotRenderer.RtBinCv(
+                        raw.Values, corrected.Values, raw.MeanRt, qcIdx, "RT-binned CV (QC)", "#ff7f0e")),
+                }));
+        }
 
         return sections;
     }

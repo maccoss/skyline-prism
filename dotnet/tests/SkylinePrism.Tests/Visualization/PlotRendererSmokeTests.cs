@@ -43,4 +43,22 @@ public class PlotRendererSmokeTests
         }
         AssertPng(PlotRenderer.RtLowessCurves(m, rt, new[] { "reference", "qc", "experimental" }, "RT curves"));
     }
+
+    [Fact]
+    public void RtBinCv_Renders()
+    {
+        var raw = new double[40, 4];
+        var corr = new double[40, 4];
+        var rt = new double[40];
+        for (var f = 0; f < 40; f++)
+        {
+            rt[f] = f;
+            for (var s = 0; s < 4; s++)
+            {
+                raw[f, s] = 12 + 0.05 * s * (f % 8);
+                corr[f, s] = 12 + 0.01 * s;
+            }
+        }
+        AssertPng(PlotRenderer.RtBinCv(raw, corr, rt, new[] { 0, 1, 2, 3 }, "RT-binned CV", "#d62728"));
+    }
 }
