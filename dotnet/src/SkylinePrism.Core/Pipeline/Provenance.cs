@@ -8,10 +8,11 @@ using SkylinePrism.Core.Config;
 namespace SkylinePrism.Core.Pipeline;
 
 /// <summary>
-/// Reads and writes metadata.json - the provenance record that captures the full PrismConfig plus
+/// Reads and writes parameters.json - the provenance record that captures the full PrismConfig plus
 /// run statistics so a run can be reproduced exactly (CLI --from-provenance, or the tool's "Open
-/// provenance"). The complete config is embedded under "processing_parameters" (snake_case keys
-/// matching the YAML), a superset of the Python schema.
+/// provenance"). Named parameters.json (not metadata.json) to avoid confusion with the scientific
+/// sample/experiment metadata. The complete config is embedded under "processing_parameters"
+/// (snake_case keys matching the YAML), a superset of the Python schema.
 /// </summary>
 public static class Provenance
 {
@@ -47,7 +48,7 @@ public static class Provenance
     }
 
     /// <summary>
-    /// Reconstruct the PrismConfig from a run's metadata.json. Reads the embedded full config; if
+    /// Reconstruct the PrismConfig from a run's parameters.json. Reads the embedded full config; if
     /// the file only carries the Python-subset sections, those still deserialize onto defaults.
     /// </summary>
     public static PrismConfig LoadConfig(string metadataJsonPath)

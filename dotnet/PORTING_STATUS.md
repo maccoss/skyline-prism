@@ -54,7 +54,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 ## Output (Stage 5)
 - [x] parquet (LINEAR), csv/tsv writers
 - [x] `protein_groups.csv`, `sample_metadata.csv`
-- [x] `metadata.json` provenance (embeds the full config) — `Provenance.Write`
+- [x] `parameters.json` provenance (embeds the full config; named to avoid clashing with
+      scientific sample metadata) — `Provenance.Write`
 - [x] residuals output (`peptide_residuals.parquet`, per-transition median-polish residuals)
 - [x] `--from-provenance` re-run (CLI) + "Open provenance" in the tool — `Provenance.LoadConfig`
 
@@ -74,7 +75,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Dynamic annotation column (`annotation_<Name>`) for batch
 - [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist
-- [x] "Open provenance" - load a prior run's metadata.json and propagate settings into the UI
+- [x] "Open provenance" - load a prior run's parameters.json and propagate settings into the UI
 
 ## Cross-language parity fixtures
 - [x] `mini/merge`, `mini/e2e-sum` (sum pipeline)

@@ -113,8 +113,8 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Title = "Open provenance (metadata.json)",
-            Filter = "PRISM provenance (metadata.json)|metadata.json|JSON (*.json)|*.json|All files (*.*)|*.*",
+            Title = "Open provenance (parameters.json)",
+            Filter = "PRISM provenance|parameters.json;metadata.json|JSON (*.json)|*.json|All files (*.*)|*.*",
         };
         if (dlg.ShowDialog() != true)
             return;

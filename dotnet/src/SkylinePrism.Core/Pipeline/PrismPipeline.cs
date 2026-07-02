@@ -204,13 +204,14 @@ public sealed class PrismPipeline
         report("============================================================");
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
         Provenance.Write(
-            Path.Combine(outputDir, "metadata.json"), config, inputs,
+            Path.Combine(outputDir, "parameters.json"), config, inputs,
             new Provenance.Stats(samples.Count, nPeptides, nProteins, groups.Count),
             DateTime.UtcNow.ToString("o"));
         var nRef = resolvedType.Values.Count(t => t == "reference");
         var nQc = resolvedType.Values.Count(t => t == "qc");
         report($"  Sample types: {nRef} reference, {nQc} qc, {resolvedType.Count - nRef - nQc} experimental.");
-        report($"  Wrote corrected_peptides / corrected_proteins ({config.Output.Format}, linear) and sample_metadata.csv.");
+        report($"  Wrote corrected_peptides / corrected_proteins ({config.Output.Format}, linear), "
+            + "sample_metadata.csv, and parameters.json (provenance).");
 
         // Stage 5b: QC report.
         if (config.QcReport.Enabled)

@@ -138,7 +138,7 @@
         <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
             <Button x:Name="OpenProvenanceButton" Content="Open provenance..." Padding="12,4" Margin="0,0,8,0"
                     Click="OnOpenProvenance"
-                    ToolTip="Load settings from a previous run's metadata.json into the Settings tab." />
+                    ToolTip="Load settings from a previous run's parameters.json into the Settings tab." />
             <Button x:Name="OpenReportButton" Content="Open QC Report" Padding="12,4" IsEnabled="False"
                     Click="OnOpenReport" />
         </StackPanel>

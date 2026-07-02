@@ -6,7 +6,7 @@ using Xunit;
 
 namespace SkylinePrism.Tests.Pipeline;
 
-/// <summary>metadata.json provenance round-trips the full config so a run can be reproduced.</summary>
+/// <summary>parameters.json provenance round-trips the full config so a run can be reproduced.</summary>
 public class ProvenanceTests
 {
     [Fact]

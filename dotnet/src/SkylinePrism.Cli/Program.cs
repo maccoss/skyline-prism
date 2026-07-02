@@ -64,7 +64,7 @@ public static class Program
         if (inputs.Count == 0 || outputDir is null)
         {
             Console.Error.WriteLine(
-                "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [--from-provenance <metadata.json>]");
+                "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [--from-provenance <parameters.json>]");
             return 2;
         }
 
