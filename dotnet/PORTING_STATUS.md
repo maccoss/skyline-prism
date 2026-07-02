@@ -100,8 +100,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       (4×DOP) -> N consumers (`processing.n_workers`: 0=all cores, 1=serial, N=cap) -> single flushing
       writer thread. Per-peptide work is pure/thread-safe; library-assist runs parallel too (Python
       couldn't, only due to pickling). Serial == parallel verified bit-identical; RAM stays flat.
-- [ ] Parallelize protein-group rollup (`Parallel.ForEach`, matrix read-only, indexed writes)
-- [ ] `NormalizeAndCorrect` holds several full feature×sample copies at once (reducible ~half in place)
+- [x] Parallel protein-group rollup (`Parallel.For`, DOP=processing.n_workers, order-preserving indexed writes)
+- [x] `NormalizeAndCorrect` peak memory trimmed (reuse dense matrix, free dead intermediates, log2
+      transpose only for the peptide stage)
 
 ## Skyline external tool (Windows)
 - [x] JSON-RPC session + report driver (PRISM parquet + PRISM-Replicates)
