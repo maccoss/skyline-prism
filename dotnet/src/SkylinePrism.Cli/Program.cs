@@ -69,7 +69,7 @@ public static class Program
         }
 
         Console.WriteLine($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
-        var result = PrismPipeline.Run(inputs, outputDir, config);
+        var result = PrismPipeline.Run(inputs, outputDir, config, log: Console.WriteLine);
         Console.WriteLine(
             $"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
             + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");

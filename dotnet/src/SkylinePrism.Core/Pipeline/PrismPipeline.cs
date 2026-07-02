@@ -103,17 +103,30 @@ public sealed class PrismPipeline
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
             report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
 
-        // Stage 2a: sample outlier detection (one-sided low signal, on the peptide matrix).
-        if (config.SampleOutlierDetection.Enabled)
+        // Stage 2a: peptide-matrix density diagnostic + optional sample outlier detection.
         {
             var pepTable = ParquetTable.Load(peptidesRollupPath);
             var m = new double[pepTable.RowCount, samples.Count];
+            long nanCells = 0;
             for (var j = 0; j < samples.Count; j++)
             {
                 var col = pepTable.GetDouble(samples[j]);
                 for (var i = 0; i < pepTable.RowCount; i++)
+                {
                     m[i, j] = col[i] ?? double.NaN;
+                    if (double.IsNaN(m[i, j]))
+                        nanCells++;
+                }
             }
+            // Should be ~0: Stage 2 imputes every missing transition cell before rollup, so the
+            // peptide matrix is expected to be dense. A non-trivial count flags a real data issue.
+            var totalCells = (long)pepTable.RowCount * samples.Count;
+            report($"  Peptide matrix: {nanCells:N0} missing of {totalCells:N0} cells "
+                + $"({(totalCells > 0 ? 100.0 * nanCells / totalCells : 0):0.###}%) "
+                + (nanCells == 0 ? "- fully dense, as expected." : "- unexpected; investigate."));
+
+            if (config.SampleOutlierDetection.Enabled)
+            {
             var odMethod = config.SampleOutlierDetection.Method == "fold_median"
                 ? OutlierDetector.Method.FoldMedian : OutlierDetector.Method.Iqr;
             var od = OutlierDetector.Detect(m, samples, odMethod,
@@ -148,6 +161,7 @@ public sealed class PrismPipeline
             {
                 report($"  Sample outlier detection: {od.Outliers.Count} low-signal sample(s) flagged "
                     + "(report only, kept): " + string.Join(", ", od.Outliers));
+            }
             }
         }
 
