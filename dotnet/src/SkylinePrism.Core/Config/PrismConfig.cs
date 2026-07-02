@@ -46,9 +46,12 @@ public sealed class PrismConfig
         // method: sum | median_polish | topn | consensus | library_assist
         public string Method { get; set; } = "sum";
         public int MinTransitions { get; set; } = 3;
-        public int TopNCount { get; set; } = 3;
-        public string TopNSelection { get; set; } = "intensity"; // intensity | correlation
-        public string TopNWeighting { get; set; } = "sum";       // sum | sqrt
+
+        // Keys + defaults match the Python config (topn_count / topn_selection / topn_weighting):
+        // default selection is correlation, default weighting is sqrt.
+        public int TopnCount { get; set; } = 3;
+        public string TopnSelection { get; set; } = "correlation"; // correlation | intensity
+        public string TopnWeighting { get; set; } = "sqrt";        // sqrt | sum
         public double ConsensusRegularization { get; set; } = 0.1;
         public bool UseMs1 { get; set; }
 

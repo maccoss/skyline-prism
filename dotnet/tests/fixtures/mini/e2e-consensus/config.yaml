@@ -1,0 +1,38 @@
+# Deterministic parity fixture: consensus transition rollup. ComBat disabled so every stage is
+# exact-parity against the Python golden (isolates the consensus rollup).
+sample_annotations:
+  reference_pattern:
+    - "-Pool_"
+  qc_pattern:
+    - "-Carl_"
+
+parsimony:
+  fasta_path: null
+  shared_peptide_handling: "all_groups"
+
+processing:
+  n_workers: 1
+
+transition_rollup:
+  method: "consensus"
+  min_transitions: 1
+
+global_normalization:
+  method: "median"
+
+batch_correction:
+  enabled: false
+
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+protein_normalization:
+  method: "median"
+
+output:
+  format: "parquet"
+  include_residuals: false
+
+qc_report:
+  enabled: false

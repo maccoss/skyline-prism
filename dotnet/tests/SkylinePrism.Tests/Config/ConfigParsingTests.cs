@@ -14,7 +14,8 @@ public class ConfigParsingTests
         var yaml = """
 transition_rollup:
   method: "topn"
-  top_n_count: 7
+  topn_count: 7
+  topn_selection: "intensity"
 protein_rollup:
   method: "maxlfq"
   top_n: 9
@@ -31,7 +32,8 @@ parsimony:
         {
             var cfg = PrismConfig.Load(path);
             Assert.Equal("topn", cfg.TransitionRollup.Method);
-            Assert.Equal(7, cfg.TransitionRollup.TopNCount);
+            Assert.Equal(7, cfg.TransitionRollup.TopnCount);
+            Assert.Equal("intensity", cfg.TransitionRollup.TopnSelection);
             Assert.Equal("maxlfq", cfg.ProteinRollup.Method);
             Assert.Equal(9, cfg.ProteinRollup.TopN);
             Assert.Equal(4, cfg.Processing.NWorkers);

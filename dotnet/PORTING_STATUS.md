@@ -21,7 +21,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `sum` — `SumRollup`
 - [x] `median_polish` (+log2(n) offset) — `MedianPolishRollup`
 - [x] `topn` — `TopNRollup`; selection intensity | correlation (Shape Correlation plumbed through the
-      rollup), weighting sum | sqrt
+      rollup), weighting sum | sqrt. Config keys/defaults aligned to Python: `topn_count`,
+      `topn_selection` (default correlation), `topn_weighting` (default sqrt) — a golden-parity run
+      caught that C# had used `top_n_*` with intensity/sum defaults.
 - [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
 - [x] `consensus` (two-way-median decomposition + inverse-variance transition weighting) — `ConsensusRollup`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
@@ -138,6 +140,11 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [ ] Pattern-based sample-type fallback (`reference_pattern`/`qc_pattern` regex when no metadata file)
 
 ## Cross-language parity fixtures
-- [x] `mini/merge`, `mini/e2e-sum` (sum pipeline)
+- [x] `mini/merge`, `mini/e2e-sum` (sum pipeline; full path incl. ComBat, tolerance-compared)
+- [x] `mini/e2e-medpolish` / `e2e-maxlfq` / `e2e-topn` / `e2e-consensus` — method-isolation fixtures
+      (ComBat off -> every stage exact-parity to 1e-9) covering median_polish, maxLFQ, topN, and
+      consensus against Python goldens (`PipelineMethodParityTests`)
 - [x] Library rollup algorithm unit-tested (median-polish scale, interference removal, m/z match)
-- [ ] `mini/e2e-medpolish`, end-to-end `output-lib-sum` parity gate (needs the Carafe-TSV loader)
+- [ ] Protein-rollup topN config nesting still differs (Python `protein_rollup.topn.n` vs C#
+      `protein_rollup.top_n`); e2e-topn isolates the transition method so this isn't yet gated
+- [ ] End-to-end `output-lib-sum` parity gate (needs the Carafe-TSV loader)

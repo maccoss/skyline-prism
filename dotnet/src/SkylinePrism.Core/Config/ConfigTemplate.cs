@@ -28,9 +28,9 @@ parsimony:
 transition_rollup:
   method: "median_polish"
   min_transitions: 3
-  top_n_count: 3            # for method: topn
-  top_n_selection: "intensity"   # intensity | correlation (correlation needs Shape Correlation)
-  top_n_weighting: "sum"         # sum | sqrt
+  topn_count: 3             # for method: topn
+  topn_selection: "correlation"  # correlation | intensity (correlation needs Shape Correlation)
+  topn_weighting: "sqrt"         # sqrt | sum
   use_ms1: false
   # For method: library_assist (Skyline .blib):
   # library_path: null

@@ -1,0 +1,42 @@
+# Deterministic parity fixture: topN transition rollup (intensity selection, sum weighting).
+# ComBat disabled so every stage is exact-parity against the Python golden. Protein rollup is
+# median_polish here so this fixture isolates the transition topN method.
+sample_annotations:
+  reference_pattern:
+    - "-Pool_"
+  qc_pattern:
+    - "-Carl_"
+
+parsimony:
+  fasta_path: null
+  shared_peptide_handling: "all_groups"
+
+processing:
+  n_workers: 1
+
+transition_rollup:
+  method: "topn"
+  min_transitions: 1
+  topn_count: 3
+  topn_selection: "intensity"
+  topn_weighting: "sum"
+
+global_normalization:
+  method: "median"
+
+batch_correction:
+  enabled: false
+
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+protein_normalization:
+  method: "median"
+
+output:
+  format: "parquet"
+  include_residuals: false
+
+qc_report:
+  enabled: false
