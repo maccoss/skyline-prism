@@ -11,7 +11,15 @@ public sealed class ProteinRollupConfig
 {
     public ProteinRollupMethod Method { get; init; } = ProteinRollupMethod.MedianPolish;
     public int MinPeptides { get; init; } = 3;
-    // shared_peptide_handling: only "all_groups" (AllMappedPeptides) is implemented so far.
+
+    /// <summary>Peptides to average for the topn method.</summary>
+    public int TopN { get; init; } = 3;
+
+    /// <summary>
+    /// Which peptide set feeds each protein: "all_groups" (all mapped peptides, shared go to every
+    /// group), "unique_only" (unique peptides only), or "razor" (parsimony-assigned = unique + razor).
+    /// </summary>
+    public string SharedPeptideHandling { get; init; } = "all_groups";
 }
 
 /// <summary>
@@ -53,7 +61,13 @@ public sealed class ProteinRollup
 
         foreach (var group in groups)
         {
-            var available = group.AllMappedPeptides.Where(pepIndex.ContainsKey).ToList();
+            var source = cfg.SharedPeptideHandling switch
+            {
+                "unique_only" => group.UniquePeptides,
+                "razor" => group.Peptides, // parsimony-assigned = unique + razor
+                _ => group.AllMappedPeptides,
+            };
+            var available = source.Where(pepIndex.ContainsKey).ToList();
             if (available.Count == 0)
             {
                 nSkipped++;
@@ -69,7 +83,7 @@ public sealed class ProteinRollup
                     sub[a, j] = sampleData[j][ri] ?? double.NaN;
             }
 
-            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides);
+            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN);
 
             rows.Add(new ProteinRow
             {

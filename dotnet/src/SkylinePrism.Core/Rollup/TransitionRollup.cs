@@ -46,6 +46,7 @@ public sealed class TransitionRollup
             TransitionRollupMethod.Sum => new SumRollup(),
             TransitionRollupMethod.MedianPolish =>
                 new MedianPolishRollup(addLog2NOffset: true, minTransitions: cfg.MinTransitions),
+            TransitionRollupMethod.TopN => new TopNRollup(cfg.TopNCount, cfg.MinTransitions),
             TransitionRollupMethod.LibraryAssist => null,
             _ => throw new NotSupportedException($"Unsupported method {cfg.Method}"),
         };

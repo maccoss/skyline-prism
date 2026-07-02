@@ -6,6 +6,7 @@ public enum TransitionRollupMethod
     Sum,
     MedianPolish,
     LibraryAssist,
+    TopN,
 }
 
 /// <summary>
@@ -18,6 +19,9 @@ public sealed class TransitionRollupConfig
 
     /// <summary>Peptides with fewer than this many transitions are dropped from output.</summary>
     public int MinTransitions { get; init; } = 3;
+
+    /// <summary>Transitions to keep for the topn method.</summary>
+    public int TopNCount { get; init; } = 3;
 
     /// <summary>When false (default), MS1 "precursor" fragment ions are excluded.</summary>
     public bool UseMs1 { get; init; }

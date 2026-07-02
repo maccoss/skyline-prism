@@ -83,10 +83,12 @@ public sealed class PrismPipeline
             Method = config.TransitionRollup.Method switch
             {
                 "median_polish" => TransitionRollupMethod.MedianPolish,
+                "topn" => TransitionRollupMethod.TopN,
                 "library_assist" or "library-assisted" or "library_assisted" => TransitionRollupMethod.LibraryAssist,
                 _ => TransitionRollupMethod.Sum,
             },
             MinTransitions = config.TransitionRollup.MinTransitions,
+            TopNCount = config.TransitionRollup.TopNCount,
             UseMs1 = config.TransitionRollup.UseMs1,
             LibraryPath = config.TransitionRollup.LibraryPath,
             LibraryMinFragments = config.TransitionRollup.LibraryMinFragments,
@@ -202,9 +204,16 @@ public sealed class PrismPipeline
         var proteinsRawPath = Path.Combine(outputDir, "proteins_raw.parquet");
         var proteinCfg = new ProteinRollupConfig
         {
-            Method = config.ProteinRollup.Method is "sum"
-                ? ProteinRollupMethod.Sum : ProteinRollupMethod.MedianPolish,
+            Method = config.ProteinRollup.Method switch
+            {
+                "sum" => ProteinRollupMethod.Sum,
+                "topn" => ProteinRollupMethod.TopN,
+                "maxlfq" => ProteinRollupMethod.MaxLfq,
+                _ => ProteinRollupMethod.MedianPolish,
+            },
             MinPeptides = config.ProteinRollup.MinPeptides,
+            TopN = config.ProteinRollup.TopN,
+            SharedPeptideHandling = config.Parsimony.SharedPeptideHandling,
         };
         var protResult = ProteinRollup.Run(internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples);
         report($"  Rolled up to {protResult.NProteins:N0} proteins.");

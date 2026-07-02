@@ -42,8 +42,10 @@ public sealed class PrismConfig
 
     public sealed class TransitionRollupSection
     {
+        // method: sum | median_polish | topn | library_assist
         public string Method { get; set; } = "sum";
         public int MinTransitions { get; set; } = 3;
+        public int TopNCount { get; set; } = 3;
         public bool UseMs1 { get; set; }
 
         // Library-assisted rollup (method: library_assist).
@@ -78,8 +80,12 @@ public sealed class PrismConfig
 
     public sealed class ProteinRollupSection
     {
+        // method: median_polish | sum | topn | maxlfq
         public string Method { get; set; } = "median_polish";
         public int MinPeptides { get; set; } = 3;
+
+        /// <summary>Peptides to average for method: topn.</summary>
+        public int TopN { get; set; } = 3;
     }
 
     public sealed class ProteinNormalizationSection

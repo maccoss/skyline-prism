@@ -18,7 +18,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Preprocess: precursor exclusion, impute, log2 — `RollupPreprocess`
 - [x] `sum` — `SumRollup`
 - [x] `median_polish` (+log2(n) offset) — `MedianPolishRollup`
-- [ ] `topn`
+- [x] `topn` (intensity selection + sum weighting) — `TopNRollup`. Correlation-selection / sqrt-weighting
+      variants need the shape-correlation matrix (not yet plumbed).
 - [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
 - [ ] `consensus`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
@@ -45,14 +46,14 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Skyline CSV-based peptide→protein map
 - [x] Parsimony on/off (one group per protein) — `BuildUngroupedGroups`
 - [ ] FASTA-based map (substring + I/L equivalence)
-- [~] `shared_peptide_handling`: `all_groups` done; `unique_only` / `razor` not wired into rollup
+- [x] `shared_peptide_handling`: `all_groups`, `unique_only`, `razor` — selectable in ProteinRollup
 
 ## Peptide → protein rollup (Stage 4)
 - [x] `median_polish` (no offset) — `ProteinMatrixRollup`
 - [x] `sum` (sum_linear); 0→NaN, 1→direct, <min→sum_linear dispatch
-- [ ] `topn`
-- [ ] `maxlfq`
-- [ ] `ibaq`
+- [x] `topn` (top-N peptides by median abundance, then per-sample mean)
+- [x] `maxlfq` (pairwise median log-ratios -> row-mean reconstruction -> re-anchored)
+- [ ] `ibaq` (needs FASTA theoretical peptide counts)
 
 ## Protein normalization (Stage 4b)
 - [x] `median`, `none`
