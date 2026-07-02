@@ -6,8 +6,12 @@ namespace SkylinePrism.Core.Rollup;
 /// <summary>
 /// Per-peptide transition-matrix preprocessing, ported from
 /// chunked_processing.py:_process_single_peptide (lines 180-201). Turns a raw LINEAR
-/// transition x sample matrix (with NaN for missing) into a LOG2 matrix ready for the
-/// rollup strategies.
+/// transition x sample matrix into a LOG2 matrix ready for the rollup strategies.
+///
+/// NOTE: Skyline already integrates every transition at (imputed) peak boundaries, so the export
+/// is normally complete - this is NOT a missing-value imputation step. The "impute" floor below
+/// (name kept for Python parity) only replaces the rare 0 / #N/A cell with a small positive value
+/// so the subsequent log2 is well-defined.
 ///
 /// Steps (order matters for parity):
 ///   1. clip(lower=0): negative measurements -> 0 (NaN preserved).

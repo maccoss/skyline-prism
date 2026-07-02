@@ -118,8 +118,10 @@ public sealed class PrismPipeline
                         nanCells++;
                 }
             }
-            // Should be ~0: Stage 2 imputes every missing transition cell before rollup, so the
-            // peptide matrix is expected to be dense. A non-trivial count flags a real data issue.
+            // Should be ~0: Skyline integrates every transition at (imputed) peak boundaries, so
+            // its export is already complete; PRISM only floors the rare 0 / #N/A to a small value
+            // before rollup. A non-trivial count therefore flags a real data issue (a report
+            // missing transitions, a bad column mapping, etc.), not normal missingness.
             var totalCells = (long)pepTable.RowCount * samples.Count;
             report($"  Peptide matrix: {nanCells:N0} missing of {totalCells:N0} cells "
                 + $"({(totalCells > 0 ? 100.0 * nanCells / totalCells : 0):0.###}%) "
