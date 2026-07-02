@@ -79,7 +79,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
 - [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, RVR overfitting,
       PCA QC-reference distance collapse) — `ValidationStatus`
-- [ ] RT-bin boxplot + 3-stage plot variants (marginal)
+- [x] RT-bin abundance boxplot (before/after)
+- [-] 3-stage plot variants — N/A: our pipeline is 2-stage (raw -> corrected); the Python 3-stage
+      needs a persisted post-normalization/pre-ComBat intermediate we don't keep
 
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging

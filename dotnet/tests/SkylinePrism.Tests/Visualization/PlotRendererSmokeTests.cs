@@ -61,4 +61,18 @@ public class PlotRendererSmokeTests
         }
         AssertPng(PlotRenderer.RtBinCv(raw, corr, rt, new[] { 0, 1, 2, 3 }, "RT-binned CV", "#d62728"));
     }
+
+    [Fact]
+    public void RtBinBoxplot_Renders()
+    {
+        var m = new double[60, 4];
+        var rt = new double[60];
+        for (var f = 0; f < 60; f++)
+        {
+            rt[f] = f;
+            for (var s = 0; s < 4; s++)
+                m[f, s] = 12 + 0.03 * f + 0.1 * s + (f % 7 - 3) * 0.2;
+        }
+        AssertPng(PlotRenderer.RtBinBoxplot(m, rt, "Abundance by RT bin", "#1f77b4"));
+    }
 }

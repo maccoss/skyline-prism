@@ -169,6 +169,14 @@ public static class QcReport
                     Img("", $"{level}_rt_bin_cv_qc", () => PlotRenderer.RtBinCv(
                         raw.Values, corrected.Values, raw.MeanRt, qcIdx, "RT-binned CV (QC)", "#ff7f0e")),
                 }));
+
+            sections.Add(new PlotSection($"{cap} Abundance by RT Bin: Before vs After", new List<PlotImage>
+            {
+                Img("Before (raw rollup)", $"{level}_rt_bin_box_before",
+                    () => PlotRenderer.RtBinBoxplot(raw.Values, raw.MeanRt, "Before", "#1f77b4")),
+                Img("After (normalized + corrected)", $"{level}_rt_bin_box_after",
+                    () => PlotRenderer.RtBinBoxplot(corrected.Values, corrected.MeanRt, "After", "#1f77b4")),
+            }));
         }
 
         return sections;

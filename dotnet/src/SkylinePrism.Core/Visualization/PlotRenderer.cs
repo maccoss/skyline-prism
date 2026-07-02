@@ -317,6 +317,79 @@ public static class PlotRenderer
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
+    /// <summary>
+    /// Abundance (LOG2) distribution per RT bin as Tukey boxplots - ports
+    /// plot_rt_bin_boxplot_comparison for a single panel (all samples pooled per bin).
+    /// </summary>
+    public static byte[] RtBinBoxplot(
+        double[,] featuresBySamples, double[] meanRt, string title, string colorHex, int nBins = 8)
+    {
+        var nF = featuresBySamples.GetLength(0);
+        var nS = featuresBySamples.GetLength(1);
+        var plt = new Plot();
+
+        double rtMin = double.PositiveInfinity, rtMax = double.NegativeInfinity;
+        foreach (var rt in meanRt)
+        {
+            if (double.IsNaN(rt)) continue;
+            if (rt < rtMin) rtMin = rt;
+            if (rt > rtMax) rtMax = rt;
+        }
+
+        if (rtMin < rtMax)
+        {
+            var step = (rtMax - rtMin) / nBins;
+            var fill = Color.FromHex(colorHex).WithAlpha((byte)120);
+            var boxes = new List<ScottPlot.Box>();
+            for (var i = 0; i < nBins; i++)
+            {
+                var lo = rtMin + i * step;
+                var hi = i == nBins - 1 ? double.PositiveInfinity : rtMin + (i + 1) * step;
+                var vals = new List<double>();
+                for (var f = 0; f < nF; f++)
+                {
+                    var rt = meanRt[f];
+                    if (double.IsNaN(rt) || rt < lo || rt >= hi)
+                        continue;
+                    for (var s = 0; s < nS; s++)
+                    {
+                        var v = featuresBySamples[f, s];
+                        if (!double.IsNaN(v))
+                            vals.Add(v);
+                    }
+                }
+                if (vals.Count < 6)
+                    continue;
+
+                var arr = vals.ToArray();
+                var q1 = Numerics.Stats.PercentileLinear(arr, 25);
+                var med = Numerics.Stats.PercentileLinear(arr, 50);
+                var q3 = Numerics.Stats.PercentileLinear(arr, 75);
+                var iqr = q3 - q1;
+                double dataMin = double.PositiveInfinity, dataMax = double.NegativeInfinity;
+                foreach (var v in arr) { if (v < dataMin) dataMin = v; if (v > dataMax) dataMax = v; }
+                boxes.Add(new ScottPlot.Box
+                {
+                    Position = i,
+                    Width = 0.7,
+                    BoxMin = q1,
+                    BoxMiddle = med,
+                    BoxMax = q3,
+                    WhiskerMin = Math.Max(dataMin, q1 - 1.5 * iqr),
+                    WhiskerMax = Math.Min(dataMax, q3 + 1.5 * iqr),
+                    Fill = new ScottPlot.FillStyle { Color = fill },
+                });
+            }
+            if (boxes.Count > 0)
+                plt.Add.Boxes(boxes);
+        }
+
+        plt.Title(title);
+        plt.XLabel("RT bin");
+        plt.YLabel("log2 abundance");
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
     private static double MedianBinCv(
         double[,] log2Matrix, double[] meanRt, IReadOnlyList<int> cols, double lo, double hi)
     {
