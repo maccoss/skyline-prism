@@ -42,18 +42,40 @@ written back in **linear** scale (all internal processing is on log2).
 
 ### CLI
 
-Download the latest `prism` build from the [Releases](https://github.com/maccoss/skyline-prism/releases)
-page, or build from source:
+The `prism` CLI ships as a **self-contained** archive — no .NET install required. Download the one
+for your platform from the [Releases](https://github.com/maccoss/skyline-prism/releases) page and put
+its folder on your `PATH` (the extracted folder holds `prism` plus its runtime, so keep it together).
 
+**Linux / WSL2**
+```bash
+curl -L https://github.com/maccoss/skyline-prism/releases/latest/download/prism-linux-x64.tar.gz | tar xz -C "$HOME/.local"
+echo 'export PATH="$HOME/.local/prism-linux-x64:$PATH"' >> ~/.bashrc && source ~/.bashrc
+prism --version
+```
+QC plots need the system font libraries: `sudo apt install libfontconfig1 libfreetype6`.
+
+**Windows (PowerShell)** — download `prism-win-x64.zip` from Releases, then:
+```powershell
+Expand-Archive prism-win-x64.zip -DestinationPath $env:LOCALAPPDATA\Programs
+# add  %LOCALAPPDATA%\Programs\prism-win-x64  to your PATH (System > Environment Variables)
+prism --version
+```
+
+**macOS** — `prism-osx-arm64.tar.gz` (Apple Silicon) or `prism-osx-x64.tar.gz` (Intel):
+```bash
+curl -L https://github.com/maccoss/skyline-prism/releases/latest/download/prism-osx-arm64.tar.gz | tar xz -C "$HOME/.local"
+echo 'export PATH="$HOME/.local/prism-osx-arm64:$PATH"' >> ~/.zshrc && source ~/.zshrc
+xattr -dr com.apple.quarantine "$HOME/.local/prism-osx-arm64"   # if Gatekeeper blocks the unsigned binary
+prism --version
+```
+
+**Build from source** instead (requires the [.NET 8 SDK](https://dotnet.microsoft.com/download)):
 ```bash
 git clone https://github.com/maccoss/skyline-prism
 cd skyline-prism/dotnet
 dotnet build SkylinePrism.CrossPlatform.slnf -c Release
 # the CLI is src/SkylinePrism.Cli/bin/Release/net8.0/prism(.exe)
 ```
-
-Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download). On headless Linux, install
-`libfontconfig1` and `libfreetype6` for the QC plots (DuckDB ships its own native engine).
 
 ### Skyline external tool (Windows)
 

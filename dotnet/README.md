@@ -55,6 +55,8 @@ Install the zip via Skyline's Tools > Tool Store > Install from file.
 - `.github/workflows/dotnet-ci.yml` — builds + runs the parity suite on ubuntu/macos/windows
   (cross-platform subset) and packages the tool zip on Windows. Scoped to `dotnet/**`.
 - `.github/workflows/dotnet-release.yml` — on a `dotnet-v*` tag, verifies the tool-inf version
-  matches the tag, tests, packages, and publishes a GitHub Release with the zip.
+  matches the tag, tests, and publishes a GitHub Release with the Skyline tool zip
+  (`SkylinePrism.zip`) plus self-contained `prism` CLI archives per platform
+  (`prism-win-x64.zip`, `prism-linux-x64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`).
 
 The Python CI (`ci.yml`, `release.yml`) is unchanged and runs independently.
