@@ -130,8 +130,30 @@
                          VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                          HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
             </TabItem>
-            <TabItem Header="Peptide PCA">
-                <sp:WpfPlot x:Name="PcaPlot" />
+            <TabItem Header="QC Plots">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,6,6,2">
+                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="QcViewCombo" Width="110" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>Corrected</ComboBoxItem>
+                            <ComboBoxItem>Raw</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcLevelCombo" Width="100" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>Peptide</ComboBoxItem>
+                            <ComboBoxItem>Protein</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcPlotCombo" Width="150" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>PCA</ComboBoxItem>
+                            <ComboBoxItem>CV distribution</ComboBoxItem>
+                            <ComboBoxItem>Intensity</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="(toggle View to see before/after normalization + batch correction)"
+                                   VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
+                    </StackPanel>
+                    <sp:WpfPlot x:Name="QcPlot" />
+                </DockPanel>
             </TabItem>
         </TabControl>
 

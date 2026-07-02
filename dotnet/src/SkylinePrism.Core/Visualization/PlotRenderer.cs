@@ -61,6 +61,51 @@ public static class PlotRenderer
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
+    /// <summary>
+    /// Overlaid before/after CV histograms (before in grey, after in colour) with both median
+    /// lines - the comparative-CV plot users expect from the Python report.
+    /// </summary>
+    public static byte[] CvComparison(double[] beforeCvs, double[] afterCvs, string title, string afterColorHex)
+    {
+        var plt = new Plot();
+
+        void AddHist(double[] cvs, Color color, string label)
+        {
+            if (cvs.Length == 0)
+                return;
+            var maxCv = Math.Min(cvs.Max(), 100.0);
+            const int bins = 30;
+            var binWidth = Math.Max(maxCv / bins, 1e-6);
+            var counts = new double[bins];
+            var centers = new double[bins];
+            for (var b = 0; b < bins; b++)
+                centers[b] = (b + 0.5) * binWidth;
+            foreach (var cv in cvs)
+            {
+                var b = (int)Math.Min(cv / binWidth, bins - 1);
+                if (b >= 0)
+                    counts[b]++;
+            }
+            var bars = plt.Add.Bars(centers, counts);
+            bars.Color = color.WithAlpha((byte)140);
+
+            var med = Numerics.Stats.NanMedian(cvs);
+            var line = plt.Add.VerticalLine(med);
+            line.Color = color;
+            line.LineWidth = 2;
+            line.LinePattern = LinePattern.Dashed;
+            line.LegendText = $"{label} median {med:0.0}%";
+        }
+
+        AddHist(beforeCvs, Color.FromHex("#7f7f7f"), "Before");
+        AddHist(afterCvs, Color.FromHex(afterColorHex), "After");
+        plt.ShowLegend();
+        plt.Title(title);
+        plt.XLabel("CV (%)");
+        plt.YLabel("Count");
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
     /// <summary>2-D PCA scatter coloured by sample type.</summary>
     public static byte[] PcaScatter(double[,] scores2d, IReadOnlyList<string> sampleTypes, string title)
     {

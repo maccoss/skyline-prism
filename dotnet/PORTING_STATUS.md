@@ -61,9 +61,11 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 
 ## QC report (Stage 5b)
 - [x] CV metrics (median CV, linear) — `CvMetrics`
-- [~] Self-contained HTML report — structure + CV tables + a subset of plots
-- [x] Plots: CV histogram, PCA, intensity distribution
-- [ ] Plots: boxplot comparison, control correlation, RT-lowess overlay, RT-bin boxplot, RT-bin CV, 3-stage variants (full 15-plot set)
+- [x] Self-contained HTML report mirroring the Python before/after layout (peptide + protein)
+- [x] Before/after plots: intensity distribution, PCA, comparative CV (reference + QC)
+- [x] Interactive QC tabs in the tool (PCA / CV / intensity, peptide+protein) with a raw↔corrected
+      view toggle — `MainWindow` QC Plots tab
+- [ ] Remaining plots: control correlation heatmap, RT-lowess overlay, RT-bin boxplot / RT-bin CV
 
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`

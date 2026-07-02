@@ -55,8 +55,8 @@ public static class QcReport
 
         var typeLabels = sampleCols.Select(s => sampleTypes.GetValueOrDefault(s, "unknown")).ToList();
 
-        var peptidePlots = RenderLevelPlots("peptide", pepCorrected, sampleCols, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
-        var proteinPlots = RenderLevelPlots("protein", protCorrected, sampleCols, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
+        var peptidePlots = RenderLevelSections("peptide", pepRaw, pepCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
+        var proteinPlots = RenderLevelSections("protein", protRaw, protCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
 
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
@@ -68,52 +68,72 @@ public static class QcReport
         return htmlPath;
     }
 
-    private static List<(string Title, byte[] Png)> RenderLevelPlots(
-        string level, Matrix corrected, IReadOnlyList<string> sampleCols, IReadOnlyList<string> typeLabels,
+    private sealed record PlotImage(string Caption, byte[] Png);
+    private sealed record PlotSection(string Title, List<PlotImage> Images);
+
+    /// <summary>
+    /// Render the before/after comparison sections for one level, mirroring the Python report:
+    /// intensity distribution (before vs after), PCA (before vs after), and comparative CV
+    /// distributions for reference and QC samples.
+    /// </summary>
+    private static List<PlotSection> RenderLevelSections(
+        string level, Matrix raw, Matrix corrected, IReadOnlyList<string> typeLabels,
         IReadOnlyList<int> refIdx, IReadOnlyList<int> qcIdx, bool savePlots, string plotsDir)
     {
-        var plots = new List<(string, byte[])>();
+        var cap = char.ToUpperInvariant(level[0]) + level[1..];
+        var sections = new List<PlotSection>();
 
-        void Add(string title, string fileStem, Func<byte[]> render)
+        PlotImage Img(string caption, string fileStem, Func<byte[]> render)
         {
             try
             {
                 var png = render();
-                plots.Add((title, png));
-                if (savePlots)
+                if (savePlots && png.Length > 0)
                     File.WriteAllBytes(Path.Combine(plotsDir, fileStem + ".png"), png);
+                return new PlotImage(caption, png);
             }
             catch (Exception ex)
             {
                 // Rendering can fail on a headless host missing fontconfig; keep the report.
-                plots.Add((title + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>()));
+                return new PlotImage(caption + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>());
             }
         }
 
-        var cap = char.ToUpperInvariant(level[0]) + level[1..];
+        sections.Add(new PlotSection($"{cap} Intensity Distribution: Before vs After", new List<PlotImage>
+        {
+            Img("Before (raw rollup)", $"{level}_intensity_before",
+                () => PlotRenderer.IntensityDistribution(raw.Values, typeLabels, "Before")),
+            Img("After (normalized + corrected)", $"{level}_intensity_after",
+                () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, "After")),
+        }));
+
+        sections.Add(new PlotSection($"{cap} PCA: Before vs After", new List<PlotImage>
+        {
+            Img("Before (raw rollup)", $"{level}_pca_before",
+                () => PlotRenderer.PcaScatter(Pca.Fit2D(Transpose(raw.Values)), typeLabels, "Before")),
+            Img("After (normalized + corrected)", $"{level}_pca_after",
+                () => PlotRenderer.PcaScatter(Pca.Fit2D(Transpose(corrected.Values)), typeLabels, "After")),
+        }));
 
         if (refIdx.Count >= 2)
-        {
-            var cvs = CvMetrics.PerFeatureCvs(corrected.Values, refIdx);
-            var med = Stats.NanMedian(cvs);
-            Add($"{cap} CV (Reference Samples)", $"{level}_cv_reference",
-                () => PlotRenderer.CvHistogram(cvs, $"{cap} CV (Reference)", "#d62728", med));
-        }
+            sections.Add(new PlotSection($"{cap} CV Distribution (Reference): Before vs After", new List<PlotImage>
+            {
+                Img("", $"{level}_cv_reference", () => PlotRenderer.CvComparison(
+                    CvMetrics.PerFeatureCvs(raw.Values, refIdx),
+                    CvMetrics.PerFeatureCvs(corrected.Values, refIdx),
+                    $"{cap} CV (Reference)", "#d62728")),
+            }));
+
         if (qcIdx.Count >= 2)
-        {
-            var cvs = CvMetrics.PerFeatureCvs(corrected.Values, qcIdx);
-            var med = Stats.NanMedian(cvs);
-            Add($"{cap} CV (QC Samples)", $"{level}_cv_qc",
-                () => PlotRenderer.CvHistogram(cvs, $"{cap} CV (QC)", "#ff7f0e", med));
-        }
+            sections.Add(new PlotSection($"{cap} CV Distribution (QC): Before vs After", new List<PlotImage>
+            {
+                Img("", $"{level}_cv_qc", () => PlotRenderer.CvComparison(
+                    CvMetrics.PerFeatureCvs(raw.Values, qcIdx),
+                    CvMetrics.PerFeatureCvs(corrected.Values, qcIdx),
+                    $"{cap} CV (QC)", "#ff7f0e")),
+            }));
 
-        Add($"{cap} PCA Analysis", $"{level}_pca_comparison",
-            () => PlotRenderer.PcaScatter(Pca.Fit2D(Transpose(corrected.Values)), typeLabels, $"{cap} PCA"));
-
-        Add($"{cap} Intensity Distribution", $"{level}_intensity_distribution",
-            () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, $"{cap} Intensity Distribution"));
-
-        return plots;
+        return sections;
     }
 
     private static string BuildHtml(
@@ -121,7 +141,7 @@ public static class QcReport
         int nPeptides, int nProteins,
         CvMetrics.BeforeAfter? pepRef, CvMetrics.BeforeAfter? pepQc,
         CvMetrics.BeforeAfter? protRef, CvMetrics.BeforeAfter? protQc,
-        List<(string Title, byte[] Png)> peptidePlots, List<(string Title, byte[] Png)> proteinPlots)
+        List<PlotSection> peptidePlots, List<PlotSection> proteinPlots)
     {
         var nRef = sampleTypes.Values.Count(v => v == "reference");
         var nQc = sampleTypes.Values.Count(v => v == "qc");
@@ -146,6 +166,9 @@ td:first-child, th:first-child { text-align: left; }
 .section-header { background: linear-gradient(90deg,#1a3c6e,#3a6ea5); color:#fff; padding:8px 14px; border-radius:6px; margin-top:24px; }
 .plot-section { margin: 14px 0; }
 .plot-section img { max-width: 100%; border: 1px solid #dfe6ef; border-radius: 4px; }
+.plot-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.plot-item { flex: 1 1 0; min-width: 320px; text-align: center; }
+.plot-item .cap { color: #555; font-size: 13px; margin-top: 2px; }
 .footer { color: #888; font-size: 12px; margin-top: 32px; }
 </style></head><body><div class="container">
 """);
@@ -162,9 +185,9 @@ td:first-child, th:first-child { text-align: left; }
         sb.Append(CvTable("Protein-Level CV", protRef, protQc));
 
         sb.Append("<div class=\"section-header\">Peptide-Level QC</div>");
-        AppendPlots(sb, peptidePlots);
+        AppendSections(sb, peptidePlots);
         sb.Append("<div class=\"section-header\">Protein-Level QC</div>");
-        AppendPlots(sb, proteinPlots);
+        AppendSections(sb, proteinPlots);
 
         sb.Append($"<p class=\"footer\">Generated by Skyline-PRISM (C#) at {DateTimeStamp()}</p>");
         sb.Append("</div></body></html>");
@@ -190,14 +213,21 @@ td:first-child, th:first-child { text-align: left; }
         return sb.ToString();
     }
 
-    private static void AppendPlots(StringBuilder sb, List<(string Title, byte[] Png)> plots)
+    private static void AppendSections(StringBuilder sb, List<PlotSection> sections)
     {
-        foreach (var (title, png) in plots)
+        foreach (var sec in sections)
         {
-            sb.Append($"<div class=\"plot-section\"><h3>{title}</h3>");
-            if (png.Length > 0)
-                sb.Append($"<img src=\"data:image/png;base64,{Convert.ToBase64String(png)}\" alt=\"{title}\" />");
-            sb.Append("</div>");
+            sb.Append($"<div class=\"plot-section\"><h3>{HtmlEncode(sec.Title)}</h3><div class=\"plot-row\">");
+            foreach (var img in sec.Images)
+            {
+                sb.Append("<div class=\"plot-item\">");
+                if (img.Png.Length > 0)
+                    sb.Append($"<img src=\"data:image/png;base64,{Convert.ToBase64String(img.Png)}\" alt=\"{HtmlEncode(img.Caption)}\" />");
+                if (!string.IsNullOrEmpty(img.Caption))
+                    sb.Append($"<div class=\"cap\">{HtmlEncode(img.Caption)}</div>");
+                sb.Append("</div>");
+            }
+            sb.Append("</div></div>");
         }
     }
 
