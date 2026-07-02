@@ -40,7 +40,8 @@ public sealed class ProteinRollup
         ProteinRollupConfig cfg,
         string peptideCol,
         string outputPath,
-        IReadOnlyList<string>? samples = null)
+        IReadOnlyList<string>? samples = null,
+        IReadOnlyDictionary<string, int>? theoreticalCounts = null)
     {
         var table = ParquetTable.Load(peptideLog2Parquet);
 
@@ -83,7 +84,10 @@ public sealed class ProteinRollup
                     sub[a, j] = sampleData[j][ri] ?? double.NaN;
             }
 
-            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN);
+            var nTheo = -1;
+            if (theoreticalCounts is not null && theoreticalCounts.TryGetValue(group.LeadingProtein, out var c))
+                nTheo = c;
+            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo);
 
             rows.Add(new ProteinRow
             {

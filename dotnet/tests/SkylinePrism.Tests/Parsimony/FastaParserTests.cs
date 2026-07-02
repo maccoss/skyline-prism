@@ -57,6 +57,20 @@ public class FastaParserTests
         finally { File.Delete(path); }
     }
 
+    [Fact]
+    public void DigestProtein_Trypsin_RespectsKpRuleAndLengthBounds()
+    {
+        // Cleave after K@7 and R@14 (neither followed by P); trailing "AAA" is too short.
+        var peptides = FastaParser.DigestProtein("PEPTIDEKSAMPLERAAA", missedCleavages: 0, minLength: 6);
+        Assert.Equal(2, peptides.Count);
+        Assert.Contains("PEPTIDEK", peptides);
+        Assert.Contains("SAMPLER", peptides);
+
+        // KP is NOT a trypsin site, so the peptide spans the K-P.
+        var kp = FastaParser.DigestProtein("PEPKPTIDER", missedCleavages: 0, minLength: 6);
+        Assert.Contains("PEPKPTIDER", kp);
+    }
+
     private static string[] Sorted(System.Collections.Generic.IEnumerable<string> s)
     {
         var a = new System.Collections.Generic.List<string>(s);

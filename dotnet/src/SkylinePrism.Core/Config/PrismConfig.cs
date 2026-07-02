@@ -80,12 +80,22 @@ public sealed class PrismConfig
 
     public sealed class ProteinRollupSection
     {
-        // method: median_polish | sum | topn | maxlfq
+        // method: median_polish | sum | topn | maxlfq | ibaq
         public string Method { get; set; } = "median_polish";
         public int MinPeptides { get; set; } = 3;
 
         /// <summary>Peptides to average for method: topn.</summary>
         public int TopN { get; set; } = 3;
+
+        public IbaqSection Ibaq { get; set; } = new();
+    }
+
+    public sealed class IbaqSection
+    {
+        /// <summary>FASTA for theoretical peptide counts; falls back to parsimony.fasta_path.</summary>
+        public string? FastaPath { get; set; }
+        public string Enzyme { get; set; } = "trypsin";
+        public int MissedCleavages { get; set; }
     }
 
     public sealed class ProteinNormalizationSection

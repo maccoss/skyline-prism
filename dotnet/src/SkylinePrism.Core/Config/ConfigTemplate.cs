@@ -53,11 +53,16 @@ batch_correction:
   protein_level: true
   method: "combat"
 
-# Peptide -> protein rollup: "median_polish", "sum", "topn", or "maxlfq".
+# Peptide -> protein rollup: "median_polish", "sum", "topn", "maxlfq", or "ibaq".
 protein_rollup:
   method: "median_polish"
   min_peptides: 3
   top_n: 3               # for method: topn
+  # For method: ibaq (theoretical peptide counts from an in-silico digest):
+  # ibaq:
+  #   fasta_path: null    # falls back to parsimony.fasta_path
+  #   enzyme: "trypsin"
+  #   missed_cleavages: 0
 
 # Protein normalization: "median" or "none".
 protein_normalization:

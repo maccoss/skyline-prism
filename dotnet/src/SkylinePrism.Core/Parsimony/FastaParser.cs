@@ -93,6 +93,59 @@ public static class FastaParser
         return new ProteinEntry(accession, accession, null, description, sequence, "");
     }
 
+    private static readonly Regex TrypsinSite = new(@"[KR](?!P)", RegexOptions.Compiled);
+    private static readonly Regex TrypsinPSite = new(@"[KR]", RegexOptions.Compiled);
+
+    /// <summary>
+    /// In-silico digest (fasta.py:digest_protein). Trypsin (cleave after K/R unless followed by P)
+    /// and trypsin/p; up to <paramref name="missedCleavages"/> missed cleavages, length-bounded.
+    /// </summary>
+    public static HashSet<string> DigestProtein(
+        string sequence, string enzyme = "trypsin", int missedCleavages = 0, int minLength = 6, int maxLength = 30)
+    {
+        var e = enzyme.ToLowerInvariant();
+        var site = e switch
+        {
+            "trypsin" => TrypsinSite,
+            "trypsin/p" or "trypsin\\p" or "trypsinp" => TrypsinPSite,
+            _ => throw new NotSupportedException($"Enzyme '{enzyme}' not supported (trypsin, trypsin/p)."),
+        };
+
+        var sites = new SortedSet<int> { 0, sequence.Length };
+        foreach (Match m in site.Matches(sequence))
+            sites.Add(m.Index + m.Length); // cleave C-terminal to the match
+        var arr = sites.ToArray();
+
+        var peptides = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < arr.Length - 1; i++)
+            for (var j = i + 1; j < Math.Min(i + 2 + missedCleavages, arr.Length); j++)
+            {
+                var len = arr[j] - arr[i];
+                if (len >= minLength && len <= maxLength)
+                    peptides.Add(sequence.Substring(arr[i], len));
+            }
+        return peptides;
+    }
+
+    /// <summary>
+    /// Theoretical (distinct) peptide count per protein for iBAQ (fasta.py:get_theoretical_peptide_
+    /// counts). If <paramref name="accessions"/> is given, only those proteins are counted.
+    /// </summary>
+    public static Dictionary<string, int> GetTheoreticalPeptideCounts(
+        string fastaPath, ISet<string>? accessions, string enzyme = "trypsin",
+        int missedCleavages = 0, int minLength = 6, int maxLength = 30)
+    {
+        var proteins = Parse(fastaPath);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (acc, entry) in proteins)
+        {
+            if (accessions is not null && !accessions.Contains(acc))
+                continue;
+            counts[acc] = DigestProtein(entry.Sequence, enzyme, missedCleavages, minLength, maxLength).Count;
+        }
+        return counts;
+    }
+
     public static string StripModifications(string s)
     {
         var r = Brackets.Replace(s, "");

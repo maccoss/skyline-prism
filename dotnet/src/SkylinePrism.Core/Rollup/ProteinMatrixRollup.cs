@@ -10,6 +10,7 @@ public enum ProteinRollupMethod
     Sum,
     TopN,
     MaxLfq,
+    Ibaq,
 }
 
 /// <summary>
@@ -22,7 +23,7 @@ public enum ProteinRollupMethod
 public static class ProteinMatrixRollup
 {
     public static double[] Aggregate(
-        double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN = 3)
+        double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN = 3, int nTheoretical = -1)
     {
         var nPep = log2Matrix.GetLength(0);
         var nCols = log2Matrix.GetLength(1);
@@ -54,8 +55,32 @@ public static class ProteinMatrixRollup
             ProteinRollupMethod.Sum => new SumRollup().Aggregate(log2Matrix),
             ProteinRollupMethod.TopN => TopN(log2Matrix, topN),
             ProteinRollupMethod.MaxLfq => MaxLfq(log2Matrix),
+            ProteinRollupMethod.Ibaq => Ibaq(log2Matrix, nTheoretical > 0 ? nTheoretical : nPep),
             _ => throw new NotSupportedException($"Unsupported protein method {method}"),
         };
+    }
+
+    /// <summary>
+    /// iBAQ (rollup.py:rollup_ibaq): log2(sum of LINEAR peptide intensities / n_theoretical_peptides).
+    /// n_theoretical falls back to the observed peptide count when no FASTA is available.
+    /// </summary>
+    private static double[] Ibaq(double[,] m, int nTheoretical)
+    {
+        var nPep = m.GetLength(0);
+        var nCols = m.GetLength(1);
+        var result = new double[nCols];
+        for (var j = 0; j < nCols; j++)
+        {
+            double sum = 0;
+            for (var p = 0; p < nPep; p++)
+            {
+                var v = m[p, j];
+                if (!double.IsNaN(v))
+                    sum += Math.Pow(2, v);
+            }
+            result[j] = nTheoretical > 0 && sum > 0 ? Math.Log2(sum / nTheoretical) : double.NaN;
+        }
+        return result;
     }
 
     /// <summary>

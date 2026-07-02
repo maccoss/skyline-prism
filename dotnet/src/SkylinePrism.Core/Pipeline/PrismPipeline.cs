@@ -211,13 +211,35 @@ public sealed class PrismPipeline
                 "sum" => ProteinRollupMethod.Sum,
                 "topn" => ProteinRollupMethod.TopN,
                 "maxlfq" => ProteinRollupMethod.MaxLfq,
+                "ibaq" => ProteinRollupMethod.Ibaq,
                 _ => ProteinRollupMethod.MedianPolish,
             },
             MinPeptides = config.ProteinRollup.MinPeptides,
             TopN = config.ProteinRollup.TopN,
             SharedPeptideHandling = config.Parsimony.SharedPeptideHandling,
         };
-        var protResult = ProteinRollup.Run(internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples);
+
+        // iBAQ needs a theoretical peptide count per leading protein (from an in-silico FASTA digest).
+        IReadOnlyDictionary<string, int>? theoreticalCounts = null;
+        if (proteinCfg.Method == ProteinRollupMethod.Ibaq)
+        {
+            var ibaqFasta = config.ProteinRollup.Ibaq.FastaPath ?? config.Parsimony.FastaPath;
+            if (string.IsNullOrWhiteSpace(ibaqFasta))
+            {
+                report("  iBAQ: no FASTA (protein_rollup.ibaq.fasta_path / parsimony.fasta_path) - "
+                    + "falling back to observed peptide counts.");
+            }
+            else
+            {
+                var leading = new HashSet<string>(groups.Select(g => g.LeadingProtein), StringComparer.Ordinal);
+                theoreticalCounts = FastaParser.GetTheoreticalPeptideCounts(
+                    ibaqFasta, leading, config.ProteinRollup.Ibaq.Enzyme, config.ProteinRollup.Ibaq.MissedCleavages);
+                report($"  iBAQ: theoretical peptide counts for {theoreticalCounts.Count:N0} proteins "
+                    + $"(enzyme={config.ProteinRollup.Ibaq.Enzyme}, missed_cleavages={config.ProteinRollup.Ibaq.MissedCleavages}).");
+            }
+        }
+        var protResult = ProteinRollup.Run(
+            internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples, theoreticalCounts);
         report($"  Rolled up to {protResult.NProteins:N0} proteins.");
         report($"Stage 4b: Protein normalization ({config.ProteinNormalization.Method})"
             + (proteinCombat ? " + 4c: ComBat" : "") + "...");

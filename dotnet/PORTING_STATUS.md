@@ -53,8 +53,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `sum` (sum_linear); 0→NaN, 1→direct, <min→sum_linear dispatch
 - [x] `topn` (top-N peptides by median abundance, then per-sample mean)
 - [x] `maxlfq` (pairwise median log-ratios -> row-mean reconstruction -> re-anchored)
-- [ ] `ibaq` (FASTA parsing now available via `FastaParser`; still needs in-silico digestion for
-      theoretical peptide counts + the rollup wiring)
+- [x] `ibaq` — in-silico trypsin digest (`FastaParser.GetTheoreticalPeptideCounts`) -> log2(sum
+      linear peptide intensity / n_theoretical); falls back to observed count without a FASTA
 
 ## Protein normalization (Stage 4b)
 - [x] `median`, `none`
