@@ -1,0 +1,51 @@
+{
+  "pipeline_version": "26.3.3",
+  "processing_date": "2026-07-01T04:17:31.447088+00:00",
+  "source_files": [
+    "D:\\GitHub-Repo\\maccoss\\skyline-prism\\dotnet\\tests\\fixtures\\mini\\merge\\mini_plate1.csv",
+    "D:\\GitHub-Repo\\maccoss\\skyline-prism\\dotnet\\tests\\fixtures\\mini\\merge\\mini_plate2.csv"
+  ],
+  "metadata_files": [],
+  "metadata_source": "auto_generated",
+  "processing_parameters": {
+    "transition_rollup": {
+      "method": "sum",
+      "min_transitions": 1,
+      "use_ms1": false
+    },
+    "protein_rollup": {
+      "method": "median_polish",
+      "shared_peptide_handling": "all_groups",
+      "min_peptides": 2
+    },
+    "batch_correction": {
+      "enabled": true,
+      "method": "combat",
+      "reference_anchored": false,
+      "reference_type": "reference",
+      "batch_source": "source documents"
+    }
+  },
+  "method_log": [
+    "Merged and sorted 2 reports (4,000 rows)",
+    "Generated sample metadata: dotnet\\tests\\fixtures\\mini\\e2e-sum\\output\\sample_metadata.csv",
+    "Transition rollup (sum): 5 peptides, 166 samples",
+    "Peptide median normalization: max shift = 6.05x",
+    "Peptide ComBat: 2 batches corrected",
+    "Protein rollup (median_polish): 3 proteins from 3 groups",
+    "Protein median normalization: max shift = 3.27x",
+    "Protein ComBat: 2 batches corrected"
+  ],
+  "output_files": {
+    "peptides": "dotnet\\tests\\fixtures\\mini\\e2e-sum\\output\\corrected_peptides.parquet",
+    "proteins": "dotnet\\tests\\fixtures\\mini\\e2e-sum\\output\\corrected_proteins.parquet",
+    "protein_groups": "dotnet\\tests\\fixtures\\mini\\e2e-sum\\output\\protein_groups.csv"
+  },
+  "statistics": {
+    "n_samples": 166,
+    "n_peptides": 5,
+    "n_transitions": 42,
+    "n_proteins": 3,
+    "n_protein_groups": 3
+  }
+}

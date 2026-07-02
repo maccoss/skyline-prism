@@ -1,0 +1,4 @@
+# Cross-language parity fixtures must be byte-stable across platforms so the C# tests read the same
+# goldens on Windows, Linux, and macOS. Parquet is binary; the CSV fixtures stay LF (as generated).
+dotnet/tests/fixtures/**/*.parquet binary
+dotnet/tests/fixtures/**/*.csv text eol=lf
