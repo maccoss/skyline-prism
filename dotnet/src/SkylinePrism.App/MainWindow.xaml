@@ -25,7 +25,7 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Output directory:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <TextBox Grid.Column="1" x:Name="OutputDirBox" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" x:Name="OutputDirBox" VerticalAlignment="Center" TextChanged="OnOutputDirChanged" />
             <Button Grid.Column="2" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowse" />
             <Button Grid.Column="3" x:Name="RunButton" Content="Run PRISM" Margin="8,0,0,0" Padding="14,4"
                     FontWeight="Bold" Click="OnRun" />
@@ -130,7 +130,7 @@
                          VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                          HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
             </TabItem>
-            <TabItem Header="QC Plots">
+            <TabItem Header="QC Plots" x:Name="QcTab">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,6,6,2">
                         <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />

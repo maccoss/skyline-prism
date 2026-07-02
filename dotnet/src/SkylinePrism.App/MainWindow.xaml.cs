@@ -26,13 +26,16 @@ public partial class MainWindow : Window
 {
     private SkylineSession? _session;
     private string? _lastReportPath;
+    private bool _isRunning;
 
     public MainWindow()
     {
         InitializeComponent();
 
-        OutputDirBox.Text = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PRISM-output");
+        // No default output directory: the user must choose one, so we never default into
+        // OneDrive-synced Documents (where the freshly-written parquet can be locked mid-run and
+        // freeze the tool). Run stays disabled until an output directory is set.
+        RunButton.IsEnabled = false;
 
         try
         {
@@ -255,6 +258,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _isRunning = true;
         RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
@@ -287,6 +291,7 @@ public partial class MainWindow : Window
             OpenReportButton.IsEnabled = reportExists;
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
+            MainTabs.SelectedItem = QcTab; // land on the plots when the run finishes
         }
         catch (Exception ex)
         {
@@ -299,8 +304,16 @@ public partial class MainWindow : Window
         }
         finally
         {
-            RunButton.IsEnabled = true;
+            _isRunning = false;
+            RunButton.IsEnabled = !string.IsNullOrWhiteSpace(OutputDirBox.Text);
         }
+    }
+
+    // Enable Run only once an output directory is set (and no run is in progress).
+    private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (RunButton is not null)
+            RunButton.IsEnabled = !_isRunning && !string.IsNullOrWhiteSpace(OutputDirBox.Text);
     }
 
     private void RunPipeline(SkylineSession session, string outputDir, string? metadataReport, PrismConfig config)
