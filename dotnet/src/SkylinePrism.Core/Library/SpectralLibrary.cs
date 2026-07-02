@@ -59,7 +59,9 @@ public sealed class SpectralLibrary
             throw new FileNotFoundException("BLIB file not found", path);
 
         var lib = new SpectralLibrary();
-        using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+        // Pooling=False so the library file handle is released as soon as we finish reading, rather
+        // than lingering in the connection pool and locking the user's .blib.
+        using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText =
