@@ -92,6 +92,66 @@ public class TransitionRollupParityTests
         }
     }
 
+    [Fact]
+    public void SerialAndParallel_ProduceIdenticalRollup()
+    {
+        // The bounded-parallel path must give bit-identical per-peptide results to the serial path
+        // (per-peptide work is deterministic; only row order differs, and we key by peptide).
+        var merged = Path.Combine(E2eDir, "merged_data.parquet");
+        var cols = SkylineColumns.Detect(GetMergedColumns(merged).ToHashSet());
+
+        string RunWith(int workers)
+        {
+            var cfg = new TransitionRollupConfig
+            {
+                Method = TransitionRollupMethod.MedianPolish, // exercise the polish + residual-free path
+                MinTransitions = 1,
+                UseMs1 = false,
+                MaxDegreeOfParallelism = workers,
+            };
+            var outPath = Path.Combine(
+                Path.GetTempPath(), "prism_dop_" + Guid.NewGuid().ToString("N"), "p.parquet");
+            TransitionRollup.Run(merged, cols, cfg, outPath);
+            return outPath;
+        }
+
+        var serialPath = RunWith(1);
+        var parallelPath = RunWith(8);
+        try
+        {
+            var serial = ParquetTable.Load(serialPath);
+            var parallel = ParquetTable.Load(parallelPath);
+            Assert.Equal(serial.RowCount, parallel.RowCount);
+
+            var pep = cols.Peptide;
+            var sByPep = IndexByKey(serial, pep);
+            var pByPep = IndexByKey(parallel, pep);
+            Assert.Equal(sByPep.Keys.OrderBy(x => x), pByPep.Keys.OrderBy(x => x));
+
+            var sampleCols = serial.ColumnNames
+                .Where(c => c != pep && c != "n_transitions" && c != "mean_rt").ToList();
+            var sS = sampleCols.ToDictionary(c => c, serial.GetDouble);
+            var pS = sampleCols.ToDictionary(c => c, parallel.GetDouble);
+            foreach (var peptide in sByPep.Keys)
+            {
+                var si = sByPep[peptide];
+                var pi = pByPep[peptide];
+                foreach (var col in sampleCols)
+                    Assert.True(Nullable.Equals(sS[col][si], pS[col][pi]),
+                        $"serial/parallel mismatch at {peptide}/{col}");
+            }
+        }
+        finally
+        {
+            foreach (var p in new[] { serialPath, parallelPath })
+            {
+                var dir = Path.GetDirectoryName(p);
+                if (dir is not null && Directory.Exists(dir))
+                    Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
     private static void AssertClose(double? expected, double? actual, string peptide, string col)
     {
         Assert.True(expected.HasValue == actual.HasValue,

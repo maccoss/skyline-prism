@@ -23,6 +23,7 @@ public sealed class PrismConfig
     public QcReportSection QcReport { get; set; } = new();
     public SampleOutlierDetectionSection SampleOutlierDetection { get; set; } = new();
     public MetadataSection Metadata { get; set; } = new();
+    public ProcessingSection Processing { get; set; } = new();
 
     public static PrismConfig Load(string path)
     {
@@ -124,6 +125,15 @@ public sealed class PrismConfig
 
         /// <summary>Explicit Sample Type column name; null = auto-detect (usually "Sample Type").</summary>
         public string? SampleTypeColumn { get; set; }
+    }
+
+    public sealed class ProcessingSection
+    {
+        /// <summary>Rollup worker threads: 0 = all logical cores, 1 = serial, N = cap at N.</summary>
+        public int NWorkers { get; set; }
+
+        /// <summary>Peptides buffered per streamed parquet row group (flush granularity).</summary>
+        public int PeptideBatchSize { get; set; } = 2000;
     }
 
     public sealed class SampleOutlierDetectionSection

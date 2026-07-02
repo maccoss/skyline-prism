@@ -88,14 +88,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 
 ## Concurrency & memory
 - [x] Streaming merge + streaming peptide-block reader (single DuckDB producer)
-- [~] Rollup is SINGLE-THREADED; Python uses a spawn `ProcessPoolExecutor` (config `processing.n_workers`,
-      `peptide_batch_size`) over batches of peptides
-- [ ] **Streaming parquet writer** — `TransitionRollup` accumulates ALL peptide rows (and the residual
-      sink accumulates one `double[nSamples]` per peptide×transition) in memory before one write; Python
-      flushes to an open ParquetWriter every batch. Biggest OOM risk; prerequisite for parallel writes.
-- [ ] **Bounded-concurrency rollup** — per-peptide work is pure/thread-safe (verified); a single-producer /
-      capped `BlockingCollection` / N-consumer / single-flushing-writer pattern would use all cores with
-      flat RAM. Library-assist can be parallel in C# (Python only single-threaded it due to pickling).
+- [x] **Streaming parquet writer** (`StreamingWideWriter`, multi-row-group + periodic flush) — the
+      transition rollup + residuals now stream to disk instead of accumulating all rows in memory
+- [x] **Bounded-parallel transition rollup** — single DuckDB producer -> capped `BlockingCollection`
+      (4×DOP) -> N consumers (`processing.n_workers`: 0=all cores, 1=serial, N=cap) -> single flushing
+      writer thread. Per-peptide work is pure/thread-safe; library-assist runs parallel too (Python
+      couldn't, only due to pickling). Serial == parallel verified bit-identical; RAM stays flat.
+- [ ] Parallelize protein-group rollup (`Parallel.ForEach`, matrix read-only, indexed writes)
 - [ ] `NormalizeAndCorrect` holds several full feature×sample copies at once (reducible ~half in place)
 
 ## Skyline external tool (Windows)
@@ -104,9 +103,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist
 - [x] "Open provenance" - load a prior run's parameters.json and propagate settings into the UI
-- [ ] Results explorer (Python GUI viewer.py): protein/peptide tree browser with per-feature abundance
-      boxplots grouped by sample type + group-by arbitrary metadata column. The C# tool stops at the
-      aggregate QC report + PCA; this is the main day-to-day "inspect my results" surface it lacks.
+- [-] Results explorer (protein/peptide tree + per-feature boxplots) — DEFERRED by decision; a
+      .NET-native results view may be designed later, not a Python-parity goal
 - [ ] PCA color-by / group-by arbitrary metadata column (Python offers sample_type / batch / any category)
 
 ## Validation status & warnings (Python validation.py)

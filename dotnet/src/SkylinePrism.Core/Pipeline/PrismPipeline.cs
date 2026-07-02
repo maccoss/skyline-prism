@@ -95,9 +95,16 @@ public sealed class PrismPipeline
             ResidualsPath = config.Output.IncludeResiduals
                 ? Path.Combine(outputDir, "peptide_residuals.parquet")
                 : null,
+            MaxDegreeOfParallelism = config.Processing.NWorkers,
+            FlushRows = config.Processing.PeptideBatchSize,
         };
         if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
             report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
+        var dop = config.Processing.NWorkers <= 0
+            ? Environment.ProcessorCount
+            : Math.Min(config.Processing.NWorkers, Environment.ProcessorCount);
+        report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
+            + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
         var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)

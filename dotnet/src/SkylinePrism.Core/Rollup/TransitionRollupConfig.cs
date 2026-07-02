@@ -29,6 +29,12 @@ public sealed class TransitionRollupConfig
     /// <summary>When set (median_polish only), write per-transition residuals to this parquet.</summary>
     public string? ResidualsPath { get; init; }
 
+    /// <summary>Worker threads for per-peptide rollup: 0 = all cores, 1 = serial, N = cap at N.</summary>
+    public int MaxDegreeOfParallelism { get; init; }
+
+    /// <summary>Peptides buffered per streamed parquet row group (flush granularity).</summary>
+    public int FlushRows { get; init; } = 2000;
+
     // --- Library-assisted rollup (method == LibraryAssist) ---
 
     /// <summary>Path to the spectral library (.blib) used for library-assisted rollup.</summary>
