@@ -63,7 +63,7 @@ public class ParsimonyFastaMapTests
         {
             var detected = new[] { "PEPTIDEAK", "OTHERPEPTIDER", "SHAREDPEPTIDER", "ELVLSK" };
             var m1 = FastaParser.BuildMap(path, detected);
-            var m2 = FastaParser.BuildMap(path, detected.Reverse().ToArray());
+            var m2 = FastaParser.BuildMap(path, Enumerable.Reverse(detected).ToArray());
             foreach (var pep in detected)
                 Assert.Equal(
                     m1.PeptideToProteins[pep].OrderBy(x => x, StringComparer.Ordinal),
