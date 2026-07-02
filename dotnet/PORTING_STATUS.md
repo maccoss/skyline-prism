@@ -45,7 +45,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`
 - [x] Skyline CSV-based peptide→protein map
 - [x] Parsimony on/off (one group per protein) — `BuildUngroupedGroups`
-- [ ] FASTA-based map (substring + I/L equivalence)
+- [x] FASTA-based map (substring + I/L equivalence) — `FastaParser`; set `parsimony.fasta_path`
 - [x] `shared_peptide_handling`: `all_groups`, `unique_only`, `razor` — selectable in ProteinRollup
 
 ## Peptide → protein rollup (Stage 4)
@@ -53,7 +53,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `sum` (sum_linear); 0→NaN, 1→direct, <min→sum_linear dispatch
 - [x] `topn` (top-N peptides by median abundance, then per-sample mean)
 - [x] `maxlfq` (pairwise median log-ratios -> row-mean reconstruction -> re-anchored)
-- [ ] `ibaq` (needs FASTA theoretical peptide counts)
+- [ ] `ibaq` (FASTA parsing now available via `FastaParser`; still needs in-silico digestion for
+      theoretical peptide counts + the rollup wiring)
 
 ## Protein normalization (Stage 4b)
 - [x] `median`, `none`

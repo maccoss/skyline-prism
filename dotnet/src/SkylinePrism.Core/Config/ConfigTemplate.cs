@@ -21,13 +21,14 @@ sample_annotations:
 # Protein parsimony. Set fasta_path for FASTA-based mapping; null uses the Skyline
 # Protein Accession column.
 parsimony:
-  fasta_path: null
-  shared_peptide_handling: "all_groups"
+  fasta_path: null                     # set to a .fasta for substring-based parsimony mapping
+  shared_peptide_handling: "all_groups"  # all_groups | unique_only | razor
 
-# Transition -> peptide rollup: "sum", "median_polish", or "library_assist".
+# Transition -> peptide rollup: "sum", "median_polish", "topn", or "library_assist".
 transition_rollup:
   method: "median_polish"
   min_transitions: 3
+  top_n_count: 3         # for method: topn
   use_ms1: false
   # For method: library_assist (Skyline .blib):
   # library_path: null
@@ -52,10 +53,11 @@ batch_correction:
   protein_level: true
   method: "combat"
 
-# Peptide -> protein rollup: "median_polish" or "sum".
+# Peptide -> protein rollup: "median_polish", "sum", "topn", or "maxlfq".
 protein_rollup:
   method: "median_polish"
   min_peptides: 3
+  top_n: 3               # for method: topn
 
 # Protein normalization: "median" or "none".
 protein_normalization:
