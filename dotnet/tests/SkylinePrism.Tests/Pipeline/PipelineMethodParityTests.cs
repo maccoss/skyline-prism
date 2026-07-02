@@ -31,6 +31,7 @@ public class PipelineMethodParityTests
     [InlineData("e2e-medpolish")]
     [InlineData("e2e-maxlfq")]
     [InlineData("e2e-topn")]
+    [InlineData("e2e-prot-topn")]
     [InlineData("e2e-consensus")]
     public void Method_ReproducesGoldenExactly(string fixture)
     {

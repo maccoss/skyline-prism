@@ -276,7 +276,7 @@ public sealed class PrismPipeline
                 _ => ProteinRollupMethod.MedianPolish,
             },
             MinPeptides = config.ProteinRollup.MinPeptides,
-            TopN = config.ProteinRollup.TopN,
+            TopN = config.ProteinRollup.Topn.N,
             SharedPeptideHandling = config.Parsimony.SharedPeptideHandling,
         };
 

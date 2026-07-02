@@ -61,7 +61,9 @@ batch_correction:
 protein_rollup:
   method: "median_polish"
   min_peptides: 3
-  top_n: 3               # for method: topn
+  topn:                  # for method: topn
+    n: 3
+    selection: "median_abundance"  # median_abundance | frequency
   # For method: ibaq (theoretical peptide counts from an in-silico digest):
   # ibaq:
   #   fasta_path: null    # falls back to parsimony.fasta_path

@@ -91,10 +91,17 @@ public sealed class PrismConfig
         public string Method { get; set; } = "median_polish";
         public int MinPeptides { get; set; } = 3;
 
-        /// <summary>Peptides to average for method: topn.</summary>
-        public int TopN { get; set; } = 3;
+        /// <summary>Nested topN parameters (matches Python protein_rollup.topn.{n,selection}).</summary>
+        public ProteinTopnSection Topn { get; set; } = new();
 
         public IbaqSection Ibaq { get; set; } = new();
+    }
+
+    public sealed class ProteinTopnSection
+    {
+        /// <summary>Peptides to average for method: topn.</summary>
+        public int N { get; set; } = 3;
+        public string Selection { get; set; } = "median_abundance";
     }
 
     public sealed class IbaqSection

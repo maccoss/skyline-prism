@@ -18,7 +18,8 @@ transition_rollup:
   topn_selection: "intensity"
 protein_rollup:
   method: "maxlfq"
-  top_n: 9
+  topn:
+    n: 9
 processing:
   n_workers: 4
   peptide_batch_size: 500
@@ -35,7 +36,7 @@ parsimony:
             Assert.Equal(7, cfg.TransitionRollup.TopnCount);
             Assert.Equal("intensity", cfg.TransitionRollup.TopnSelection);
             Assert.Equal("maxlfq", cfg.ProteinRollup.Method);
-            Assert.Equal(9, cfg.ProteinRollup.TopN);
+            Assert.Equal(9, cfg.ProteinRollup.Topn.N);
             Assert.Equal(4, cfg.Processing.NWorkers);
             Assert.Equal(500, cfg.Processing.PeptideBatchSize);
             Assert.Equal("db.fasta", cfg.Parsimony.FastaPath);
