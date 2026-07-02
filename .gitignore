@@ -108,3 +108,9 @@ bug-fix/
 !dotnet/tests/fixtures/**/output/
 !dotnet/tests/fixtures/**/*.parquet
 !dotnet/tests/fixtures/**/*.csv
+
+# Exception: dotnet/build/ is the Skyline-tool packaging script (source), not build output; keep
+# package.proj. The staging/ directory beside it IS publish output and stays ignored.
+!dotnet/build/
+!dotnet/build/package.proj
+dotnet/build/staging/

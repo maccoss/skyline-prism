@@ -1,0 +1,32 @@
+<Project DefaultTargets="Pack">
+
+  <PropertyGroup>
+    <AppProject>$(MSBuildThisFileDirectory)..\src\SkylinePrism.App\SkylinePrism.App.csproj</AppProject>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishDir>$(MSBuildThisFileDirectory)staging\</PublishDir>
+    <ZipDir>$(MSBuildThisFileDirectory)..\publish\</ZipDir>
+    <ZipPath>$(ZipDir)SkylinePrism.zip</ZipPath>
+  </PropertyGroup>
+
+  <!--
+    Publish the WPF App framework-dependent (the user installs the .NET 8 Desktop
+    Runtime separately, keeping the zip small) and zip the output plus the tool-inf
+    manifest into SkylinePrism.zip - a drop-in Skyline external tool. Mirrors the
+    PackageToolZip pattern from pwiz's SkylineAiConnector.csproj / skyline-cadenza.
+
+    Usage:
+      dotnet msbuild dotnet/build/package.proj
+      dotnet msbuild dotnet/build/package.proj /p:Configuration=Debug
+  -->
+
+  <Target Name="Pack">
+    <RemoveDir Directories="$(PublishDir)" />
+    <MakeDir Directories="$(PublishDir);$(ZipDir)" />
+    <Exec Command="dotnet publish &quot;$(AppProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained false /p:UseAppHost=true /p:PublishDir=&quot;$(PublishDir)&quot;" />
+    <Delete Files="$(ZipPath)" Condition="Exists('$(ZipPath)')" />
+    <ZipDirectory SourceDirectory="$(PublishDir)" DestinationFile="$(ZipPath)" />
+    <Message Importance="high" Text="Packaged $(ZipPath)" />
+  </Target>
+
+</Project>
