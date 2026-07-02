@@ -144,15 +144,22 @@
                             <ComboBoxItem>Protein</ComboBoxItem>
                         </ComboBox>
                         <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="QcPlotCombo" Width="150" SelectionChanged="OnQcChanged">
+                        <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
                             <ComboBoxItem>PCA</ComboBoxItem>
                             <ComboBoxItem>CV distribution</ComboBoxItem>
                             <ComboBoxItem>Intensity</ComboBoxItem>
+                            <ComboBoxItem>Control correlation</ComboBoxItem>
+                            <ComboBoxItem>RT-lowess</ComboBoxItem>
+                            <ComboBoxItem>RT-binned CV</ComboBoxItem>
+                            <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
                         </ComboBox>
-                        <TextBlock Text="(toggle View to see before/after normalization + batch correction)"
+                        <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
                                    VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
                     </StackPanel>
-                    <sp:WpfPlot x:Name="QcPlot" />
+                    <Grid>
+                        <sp:WpfPlot x:Name="QcPlot" />
+                        <Image x:Name="QcImage" Visibility="Collapsed" Stretch="Uniform" Margin="4" />
+                    </Grid>
                 </DockPanel>
             </TabItem>
         </TabControl>

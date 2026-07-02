@@ -365,7 +365,7 @@ public partial class MainWindow : Window
     }
 
     // Cached QC matrices ([features, samples], LOG2) keyed by "view|level" (view in raw/corrected).
-    private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples)> _qcData = new();
+    private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples, double[]? MeanRt)> _qcData = new();
     private Dictionary<string, string> _qcTypes = new();
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
@@ -406,10 +406,22 @@ public partial class MainWindow : Window
                 m[i, j] = !v.HasValue ? double.NaN : (isLinear ? Math.Log2(v.Value) : v.Value);
             }
         }
-        _qcData[key] = (m, sampleCols);
+        double[]? meanRt = null;
+        if (table.HasColumn("mean_rt"))
+        {
+            var rt = table.GetDouble("mean_rt");
+            meanRt = new double[n];
+            for (var i = 0; i < n; i++)
+                meanRt[i] = rt[i] ?? double.NaN;
+        }
+        _qcData[key] = (m, sampleCols, meanRt);
     }
 
     private void OnQcChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => RenderQc();
+
+    // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
+    // static images by the same PlotRenderer.
+    private static readonly HashSet<string> InteractivePlots = new() { "PCA", "CV distribution", "Intensity" };
 
     private void RenderQc()
     {
@@ -418,6 +430,16 @@ public partial class MainWindow : Window
         var view = ComboText(QcViewCombo, "Corrected").ToLowerInvariant();
         var level = ComboText(QcLevelCombo, "Peptide").ToLowerInvariant();
         var kind = ComboText(QcPlotCombo, "PCA");
+        if (InteractivePlots.Contains(kind))
+            RenderInteractiveQc(kind, view, level);
+        else
+            RenderStaticQc(kind, view, level);
+    }
+
+    private void RenderInteractiveQc(string kind, string view, string level)
+    {
+        QcImage.Visibility = Visibility.Collapsed;
+        QcPlot.Visibility = Visibility.Visible;
         var plt = QcPlot.Plot;
         plt.Clear();
         if (!_qcData.TryGetValue($"{view}|{level}", out var d) || d.Samples.Count < 2)
@@ -440,9 +462,94 @@ public partial class MainWindow : Window
         {
             plt.Title("render failed: " + ex.Message);
         }
-        // The Plot is reused across view/level/type switches, so fit the axes to the current data
-        // (min-to-max) rather than keeping the previous plot's limits.
+        // The Plot is reused across view/level/type switches, so fit the axes to the current data.
         plt.Axes.AutoScale();
+        QcPlot.Refresh();
+    }
+
+    // Control-correlation heatmap + RT plots: the same plots qc_report.html generates, rendered as a
+    // static image (they don't need zoom/pan). Reuses PlotRenderer so they match the report exactly.
+    private void RenderStaticQc(string kind, string view, string level)
+    {
+        try
+        {
+            if (!_qcData.TryGetValue($"{view}|{level}", out var d))
+            {
+                ShowStaticMessage($"No {view} {level} data yet - run PRISM first.");
+                return;
+            }
+            var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
+            var refIdx = IndicesOf(types, "reference");
+            var qcIdx = IndicesOf(types, "qc");
+            var controlIdx = refIdx.Concat(qcIdx).Distinct().OrderBy(x => x).ToList();
+            var cap = view == "raw" ? "Raw" : "Corrected";
+
+            byte[]? png = null;
+            switch (kind)
+            {
+                case "Control correlation":
+                    if (controlIdx.Count < 2) { ShowStaticMessage("Control correlation needs >= 2 reference/QC samples."); return; }
+                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, controlIdx, $"Control-sample correlation ({cap})");
+                    break;
+                case "RT-lowess":
+                    if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
+                    png = PlotRenderer.RtLowessCurves(d.FeaturesBySamples, d.MeanRt, types, $"RT-lowess of log2 abundance ({cap})");
+                    break;
+                case "RT-bin boxplot":
+                    if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
+                    png = PlotRenderer.RtBinBoxplot(d.FeaturesBySamples, d.MeanRt, $"Abundance by RT bin ({cap})", "#1f77b4");
+                    break;
+                case "RT-binned CV":
+                    // A before/after comparison, so it always uses both raw and corrected (ignores View).
+                    if (!_qcData.TryGetValue($"raw|{level}", out var rawD) ||
+                        !_qcData.TryGetValue($"corrected|{level}", out var corrD) || rawD.MeanRt is null)
+                    {
+                        ShowStaticMessage("RT-binned CV is peptide-level and needs both raw and corrected data.");
+                        return;
+                    }
+                    var idx = qcIdx.Count >= 2 ? qcIdx : refIdx;
+                    if (idx.Count < 2) { ShowStaticMessage("RT-binned CV needs >= 2 reference or QC samples."); return; }
+                    var label = qcIdx.Count >= 2 ? "QC" : "Reference";
+                    var color = qcIdx.Count >= 2 ? "#ff7f0e" : "#d62728";
+                    png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, idx,
+                        $"RT-binned CV ({label}, before vs after)", color);
+                    break;
+            }
+            if (png is not null)
+                ShowStaticImage(png);
+            else
+                ShowStaticMessage("(no plot)");
+        }
+        catch (Exception ex)
+        {
+            ShowStaticMessage("render failed: " + ex.Message);
+        }
+    }
+
+    private void ShowStaticImage(byte[] png)
+    {
+        var bmp = new System.Windows.Media.Imaging.BitmapImage();
+        using (var ms = new MemoryStream(png))
+        {
+            bmp.BeginInit();
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bmp.StreamSource = ms;
+            bmp.EndInit();
+        }
+        bmp.Freeze();
+        QcImage.Source = bmp;
+        QcPlot.Visibility = Visibility.Collapsed;
+        QcImage.Visibility = Visibility.Visible;
+    }
+
+    // The image control can't show text, so reuse the ScottPlot control to display a message.
+    private void ShowStaticMessage(string msg)
+    {
+        QcImage.Visibility = Visibility.Collapsed;
+        QcPlot.Visibility = Visibility.Visible;
+        var plt = QcPlot.Plot;
+        plt.Clear();
+        plt.Title(msg);
         QcPlot.Refresh();
     }
 
