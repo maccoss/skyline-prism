@@ -35,7 +35,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 
 ## Batch correction (Stage 2c / 4c)
 - [x] Standard ComBat (empirical Bayes), per-level peptide/protein toggles — `ComBat`
-- [ ] Reference-anchored ComBat (Pino 2020)
+- [ ] Reference-anchored ComBat (Pino 2020, production feature via `reference_anchored`) — different
+      (grand-mean) result today for users who ran it
+- [ ] ComBat auto-evaluate + revert-on-QC-failure — NOTE: only in Python's LEGACY `normalize_pipeline`,
+      not its production CLI path; valuable safety feature but lower priority
 
 ## Protein parsimony (Stage 3)
 - [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`
@@ -71,9 +74,29 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [ ] Remaining plots: control correlation heatmap, RT-lowess overlay, RT-bin boxplot / RT-bin CV
 
 ## CLI
-- [x] `run`, `merge`, `qc`, `config-template`
-- [ ] `compare` (rollup comparison report)
-- [ ] Byte-exact `config-template` YAML (currently a functional template)
+- [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging
+- [~] `run` flag gaps: **`-m/--metadata` not wired** (engine supports `metadataPath` but CmdRun never
+      passes it — high-impact small fix), `--reference-pattern` / `--qc-pattern`, `--force-reprocess`
+- [~] `qc` flag gaps: `-o` report-name, `--no-save-plots`, `--no-embed`; `merge`: `-m`, `--no-partition`
+- [ ] `config-template --minimal`; `-v` means version in C# but verbose in Python (collision)
+- [ ] `compare` (rollup/CV comparison report) — not ported
+- [ ] Timestamped `prism_run_<ts>.log` written to the output dir (CLI logs to console only)
+- [ ] Source-fingerprint cache + `--force-reprocess` (C# always re-merges)
+- [ ] Unknown-config-key warnings (C# silently ignores unknown keys)
+- [ ] config-template omits `data` (column map), `batch_estimation`, `processing`, and rollup/norm
+      sub-parameter blocks; `protein_rollup.min_peptides` default differs (Python 2 vs C# 3)
+
+## Concurrency & memory
+- [x] Streaming merge + streaming peptide-block reader (single DuckDB producer)
+- [~] Rollup is SINGLE-THREADED; Python uses a spawn `ProcessPoolExecutor` (config `processing.n_workers`,
+      `peptide_batch_size`) over batches of peptides
+- [ ] **Streaming parquet writer** — `TransitionRollup` accumulates ALL peptide rows (and the residual
+      sink accumulates one `double[nSamples]` per peptide×transition) in memory before one write; Python
+      flushes to an open ParquetWriter every batch. Biggest OOM risk; prerequisite for parallel writes.
+- [ ] **Bounded-concurrency rollup** — per-peptide work is pure/thread-safe (verified); a single-producer /
+      capped `BlockingCollection` / N-consumer / single-flushing-writer pattern would use all cores with
+      flat RAM. Library-assist can be parallel in C# (Python only single-threaded it due to pickling).
+- [ ] `NormalizeAndCorrect` holds several full feature×sample copies at once (reducible ~half in place)
 
 ## Skyline external tool (Windows)
 - [x] JSON-RPC session + report driver (PRISM parquet + PRISM-Replicates)
@@ -81,6 +104,16 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist
 - [x] "Open provenance" - load a prior run's parameters.json and propagate settings into the UI
+- [ ] Results explorer (Python GUI viewer.py): protein/peptide tree browser with per-feature abundance
+      boxplots grouped by sample type + group-by arbitrary metadata column. The C# tool stops at the
+      aggregate QC report + PCA; this is the main day-to-day "inspect my results" surface it lacks.
+- [ ] PCA color-by / group-by arbitrary metadata column (Python offers sample_type / batch / any category)
+
+## Validation status & warnings (Python validation.py)
+- [ ] Pass/fail verdict + warnings (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
+      collapse) rendered as a status banner; C# report has metrics/plots but no verdict layer
+- [ ] "Batch source" line (which of Source Document / metadata / acquisition-time supplied batch labels)
+- [ ] Pattern-based sample-type fallback (`reference_pattern`/`qc_pattern` regex when no metadata file)
 
 ## Cross-language parity fixtures
 - [x] `mini/merge`, `mini/e2e-sum` (sum pipeline)
