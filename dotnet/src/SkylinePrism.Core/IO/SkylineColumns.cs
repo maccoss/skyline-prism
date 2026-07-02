@@ -19,6 +19,7 @@ public sealed class SkylineColumns
     public required string RetentionTime { get; init; }
     public string? ShapeCorrelation { get; init; }
     public string? ProductMz { get; init; }
+    public string? AcquiredTime { get; init; }
     public string? Protein { get; init; }
     public string? ProteinName { get; init; }
     public string? ProteinGene { get; init; }
@@ -78,6 +79,7 @@ public sealed class SkylineColumns
             RetentionTime = Require("Retention Time", "Retention Time"),
             ShapeCorrelation = FindColumn(available, "Shape Correlation"),
             ProductMz = FindColumn(available, "Product Mz"),
+            AcquiredTime = FindColumn(available, "Acquired Time"),
             Protein = FindColumn(available, "Protein Accession"),
             ProteinName = FindColumn(available, "Protein"),
             ProteinGene = FindColumn(available, "Protein Gene"),

@@ -63,6 +63,31 @@ public sealed class PrismPipeline
                 ?? ClassifySampleType(s, rep, config);
         }
 
+        // If neither metadata nor Source Document distinguishes batches (all one label), fall back
+        // to estimating batches from acquisition-time gaps (ports cli.py:estimate_batches_from_parquet).
+        var estMethod = (config.BatchEstimation.Method ?? "auto").ToLowerInvariant();
+        if (resolvedBatch.Values.Distinct().Count() <= 1
+            && estMethod is not ("none" or "source")
+            && cols.AcquiredTime is not null)
+        {
+            var est = BatchEstimator.Estimate(
+                mergedPath, cols.Sample, cols.AcquiredTime, estMethod,
+                config.BatchEstimation.NBatches, config.BatchEstimation.GapIqrMultiplier);
+            var nEst = est.Values.Distinct().Count();
+            if (nEst > 1)
+            {
+                foreach (var s in samples)
+                {
+                    var rep = SampleIdToReplicate(s);
+                    var hasMeta = metadata?.BatchByReplicate.ContainsKey(rep) == true;
+                    if (!hasMeta && est.TryGetValue(s, out var b))
+                        resolvedBatch[s] = b;
+                }
+                report($"  Batch estimation: {nEst} batches from acquisition-time gaps "
+                    + $"(method={estMethod}).");
+            }
+        }
+
         var batchLabels = samples.Select(s => resolvedBatch[s]).ToList();
         var batches = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
         var multiBatch = batches.Count >= 2;

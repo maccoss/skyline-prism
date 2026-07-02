@@ -24,6 +24,7 @@ public sealed class PrismConfig
     public SampleOutlierDetectionSection SampleOutlierDetection { get; set; } = new();
     public MetadataSection Metadata { get; set; } = new();
     public ProcessingSection Processing { get; set; } = new();
+    public BatchEstimationSection BatchEstimation { get; set; } = new();
 
     public static PrismConfig Load(string path)
     {
@@ -141,6 +142,14 @@ public sealed class PrismConfig
 
         /// <summary>Explicit Sample Type column name; null = auto-detect (usually "Sample Type").</summary>
         public string? SampleTypeColumn { get; set; }
+    }
+
+    public sealed class BatchEstimationSection
+    {
+        /// <summary>auto | gap | fixed | source | none. Used only when no explicit batch is available.</summary>
+        public string Method { get; set; } = "auto";
+        public int? NBatches { get; set; }
+        public double GapIqrMultiplier { get; set; } = 1.5;
     }
 
     public sealed class ProcessingSection

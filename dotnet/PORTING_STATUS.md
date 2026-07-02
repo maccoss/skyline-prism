@@ -12,7 +12,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Sample metadata generation + sample-type detection — pipeline + `ReplicateMetadata`
 - [x] Tolerant numeric parsing (`#N/A` → NaN) — `MergedParquetReader`
 - [ ] Source-fingerprint caching (skip re-merge when inputs unchanged)
-- [ ] Batch estimation from acquisition-time gaps (batch comes from Source Document / metadata only)
+- [x] Batch estimation from acquisition-time gaps (`BatchEstimator`, IQR-based; auto/gap/fixed) —
+      used only when neither metadata nor Source Document distinguishes batches
 
 ## Transition → peptide rollup (Stage 2)
 - [x] Preprocess: precursor exclusion, impute, log2 — `RollupPreprocess`

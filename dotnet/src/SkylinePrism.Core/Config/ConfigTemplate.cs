@@ -73,6 +73,12 @@ processing:
   n_workers: 0
   peptide_batch_size: 2000
 
+# Batch estimation fallback, used only when no metadata / Source Document batch distinguishes
+# samples. method: auto (gap detection) | gap | fixed | source | none.
+batch_estimation:
+  method: "auto"
+  gap_iqr_multiplier: 1.5
+
 # Output.
 output:
   format: "parquet"
