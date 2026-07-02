@@ -124,7 +124,11 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       transpose only for the peptide stage)
 
 ## Skyline external tool (Windows)
-- [x] JSON-RPC session + report driver (PRISM parquet + PRISM-Replicates)
+- [x] JSON-RPC session + report driver (PRISM parquet + PRISM-Replicates). Driver now depends on an
+      `ISkylineExecutor`/`ISkylineClient` seam (SkylineSession wraps the concrete JSON-RPC client),
+      so `SkylineReportDriverTests` cover the parquet-first/CSV-fallback decision, metadata
+      report-name resolution, report-list dedup, .blib discovery, and the dynamic report install
+      against a fake - no live Skyline needed.
 - [x] Dynamic annotation column (`annotation_<Name>`) for batch
 - [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist

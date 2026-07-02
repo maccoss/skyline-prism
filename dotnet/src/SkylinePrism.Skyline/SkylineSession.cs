@@ -16,7 +16,7 @@ namespace SkylinePrism.Skyline;
 /// does NOT hold a pipe open - it remembers how to connect and opens a fresh pipe inside
 /// each <see cref="Execute"/> call. Ported from skyline-cadenza's SkylineSession.
 /// </summary>
-public sealed class SkylineSession
+public sealed class SkylineSession : ISkylineExecutor
 {
     public string PipeName { get; }
     public int? SkylineProcessId { get; }
@@ -55,22 +55,32 @@ public sealed class SkylineSession
     }
 
     /// <summary>Open a fresh pipe, hand the client to <paramref name="action"/>, and dispose.</summary>
-    public T Execute<T>(Func<SkylineJsonToolClient, T> action)
+    public T Execute<T>(Func<ISkylineClient, T> action)
     {
         using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
         pipe.Connect((int)ConnectTimeout.TotalMilliseconds);
         pipe.ReadMode = PipeTransmissionMode.Message;
-        var client = new SkylineJsonToolClient(pipe);
-        return action(client);
+        return action(new JsonClientAdapter(new SkylineJsonToolClient(pipe)));
     }
 
-    public void Execute(Action<SkylineJsonToolClient> action)
+    public void Execute(Action<ISkylineClient> action)
     {
         using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
         pipe.Connect((int)ConnectTimeout.TotalMilliseconds);
         pipe.ReadMode = PipeTransmissionMode.Message;
-        var client = new SkylineJsonToolClient(pipe);
-        action(client);
+        action(new JsonClientAdapter(new SkylineJsonToolClient(pipe)));
+    }
+
+    /// <summary>Forwards <see cref="ISkylineClient"/> calls to the concrete JSON-RPC client.</summary>
+    private sealed class JsonClientAdapter : ISkylineClient
+    {
+        private readonly SkylineJsonToolClient _c;
+        public JsonClientAdapter(SkylineJsonToolClient c) => _c = c;
+        public string GetDocumentPath() => _c.GetDocumentPath();
+        public string GetVersion() => _c.GetVersion();
+        public void ExportReport(string reportName, string filePath, string culture) => _c.ExportReport(reportName, filePath, culture);
+        public string[] GetSettingsListNames(string listType, string? groupName) => _c.GetSettingsListNames(listType, groupName);
+        public void RunCommandSilent(string[] args) => _c.RunCommandSilent(args);
     }
 
     public static List<ConnectionInfo> DiscoverAll()

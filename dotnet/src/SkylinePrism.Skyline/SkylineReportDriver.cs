@@ -16,10 +16,10 @@ namespace SkylinePrism.Skyline;
 /// </summary>
 public sealed class SkylineReportDriver
 {
-    private readonly SkylineSession _session;
+    private readonly ISkylineExecutor _session;
     private readonly Action<string> _log;
 
-    public SkylineReportDriver(SkylineSession session, Action<string>? log = null)
+    public SkylineReportDriver(ISkylineExecutor session, Action<string>? log = null)
     {
         _session = session;
         _log = log ?? (_ => { });
