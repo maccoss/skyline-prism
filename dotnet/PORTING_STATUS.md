@@ -55,7 +55,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       group-ID order is arbitrary. Same fix applied to Python `parsimony.py` to keep them in step.
 - [x] Skyline CSV-based peptide→protein map
 - [x] Parsimony on/off (one group per protein) — `BuildUngroupedGroups`
-- [x] FASTA-based map (substring + I/L equivalence) — `FastaParser`; set `parsimony.fasta_path`
+- [x] FASTA-based map (substring + I/L equivalence) — `FastaParser`; set `parsimony.fasta_path`.
+      Osprey reads pre-assigned protein_ids from the library (osprey-io library/diann.rs `split_list`),
+      the same model as the Skyline Protein-Accession path; the FASTA option re-derives the same
+      substring+I/L edges. Verified by `ParsimonyFastaMapTests`.
+- Osprey parity is asserted in BOTH languages: `ParsimonyOspreyTests` (C#) and
+  `tests/test_parsimony_osprey.py` (Python) run the same identical-set/subset/all-mode/razor/
+  determinism cases, keeping Python <-> C# <-> Osprey in lockstep.
 - [x] `shared_peptide_handling`: `all_groups`, `unique_only`, `razor` — selectable in ProteinRollup
 
 ## Peptide → protein rollup (Stage 4)
