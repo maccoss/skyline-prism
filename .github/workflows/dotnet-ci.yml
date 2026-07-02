@@ -5,10 +5,10 @@ name: dotnet-ci
 on:
   push:
     branches: [main, develop, csharp-port]
-    paths: ['dotnet/**', '.github/workflows/dotnet-ci.yml']
+    paths: ['dotnet/**', 'global.json', '.github/workflows/dotnet-ci.yml']
   pull_request:
     branches: [main]
-    paths: ['dotnet/**', '.github/workflows/dotnet-ci.yml']
+    paths: ['dotnet/**', 'global.json', '.github/workflows/dotnet-ci.yml']
 
 defaults:
   run:
