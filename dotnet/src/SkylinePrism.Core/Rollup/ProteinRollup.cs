@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Parsimony;
 
@@ -41,7 +43,8 @@ public sealed class ProteinRollup
         string peptideCol,
         string outputPath,
         IReadOnlyList<string>? samples = null,
-        IReadOnlyDictionary<string, int>? theoreticalCounts = null)
+        IReadOnlyDictionary<string, int>? theoreticalCounts = null,
+        int maxDegreeOfParallelism = 0)
     {
         var table = ParquetTable.Load(peptideLog2Parquet);
 
@@ -57,11 +60,18 @@ public sealed class ProteinRollup
 
         var sampleData = sampleCols.Select(table.GetDouble).ToList();
 
-        var rows = new List<ProteinRow>();
+        // Per-group rollup is pure (reads the shared peptide matrix read-only, allocates its own
+        // submatrix), so groups run in parallel; results are written into a preallocated array by
+        // group index to preserve order without locking.
+        var results = new ProteinRow?[groups.Count];
         var nSkipped = 0;
+        var dop = maxDegreeOfParallelism <= 0
+            ? Math.Max(1, Environment.ProcessorCount)
+            : Math.Min(maxDegreeOfParallelism, Math.Max(1, Environment.ProcessorCount));
 
-        foreach (var group in groups)
+        Parallel.For(0, groups.Count, new ParallelOptions { MaxDegreeOfParallelism = dop }, gi =>
         {
+            var group = groups[gi];
             var source = cfg.SharedPeptideHandling switch
             {
                 "unique_only" => group.UniquePeptides,
@@ -71,8 +81,8 @@ public sealed class ProteinRollup
             var available = source.Where(pepIndex.ContainsKey).ToList();
             if (available.Count == 0)
             {
-                nSkipped++;
-                continue;
+                Interlocked.Increment(ref nSkipped);
+                return;
             }
 
             // Submatrix [nAvailable, nSamples] in group peptide order.
@@ -89,16 +99,17 @@ public sealed class ProteinRollup
                 nTheo = c;
             var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo);
 
-            rows.Add(new ProteinRow
+            results[gi] = new ProteinRow
             {
                 Group = group,
                 NPeptides = available.Count,
                 NUniquePeptides = group.UniquePeptides.Count,
                 LowConfidence = available.Count < cfg.MinPeptides,
                 Values = vals,
-            });
-        }
+            };
+        });
 
+        var rows = results.Where(r => r is not null).Select(r => r!).ToList();
         WriteOutput(outputPath, sampleCols, rows);
         return new Result(rows.Count, nSkipped, sampleCols);
     }

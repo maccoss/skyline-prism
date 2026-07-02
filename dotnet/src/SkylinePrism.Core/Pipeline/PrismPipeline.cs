@@ -281,7 +281,8 @@ public sealed class PrismPipeline
             }
         }
         var protResult = ProteinRollup.Run(
-            internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples, theoreticalCounts);
+            internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples, theoreticalCounts,
+            maxDegreeOfParallelism: config.Processing.NWorkers);
         report($"  Rolled up to {protResult.NProteins:N0} proteins.");
         report($"Stage 4b: Protein normalization ({config.ProteinNormalization.Method})"
             + (proteinCombat ? " + 4c: ComBat" : "") + "...");
@@ -369,31 +370,43 @@ public sealed class PrismPipeline
                 keep.Add(i);
         }
 
+        // Reuse matrixAll when nothing was dropped (the dense case) instead of copying it.
         var n = keep.Count;
-        var matrix = new double[n, samples.Count];
-        for (var r = 0; r < n; r++)
-            for (var j = 0; j < samples.Count; j++)
-                matrix[r, j] = matrixAll[keep[r], j];
-
-        double[,] normalized;
-        if (normMethod is "rt_lowess" && rtColumn is not null && table.HasColumn(rtColumn))
+        double[,] matrix;
+        if (n == nAll)
         {
-            var rtAll = table.GetDouble(rtColumn);
-            var rtKept = new double[n];
-            for (var r = 0; r < n; r++)
-                rtKept[r] = rtAll[keep[r]] ?? double.NaN;
-            normalized = Normalizer.RtLowessNormalize(matrix, rtKept);
+            matrix = matrixAll;
         }
         else
         {
-            normalized = normMethod switch
+            matrix = new double[n, samples.Count];
+            for (var r = 0; r < n; r++)
+                for (var j = 0; j < samples.Count; j++)
+                    matrix[r, j] = matrixAll[keep[r], j];
+        }
+        matrixAll = null!; // free the [nAll] copy (or clear the alias) - dead from here
+
+        double[]? rtKept = null;
+        if (normMethod is "rt_lowess" && rtColumn is not null && table.HasColumn(rtColumn))
+        {
+            var rtAll = table.GetDouble(rtColumn);
+            rtKept = new double[n];
+            for (var r = 0; r < n; r++)
+                rtKept[r] = rtAll[keep[r]] ?? double.NaN;
+        }
+
+        var normalized = rtKept is not null
+            ? Normalizer.RtLowessNormalize(matrix, rtKept)
+            : normMethod switch
             {
                 "quantile" => Normalizer.QuantileNormalize(matrix),
                 "vsn" => Normalizer.VsnNormalize(matrix),
                 "none" => matrix,
                 _ => Normalizer.MedianNormalize(matrix),
             };
-        }
+        if (!ReferenceEquals(normalized, matrix))
+            matrix = null!; // dead once a distinct normalized matrix exists
+
         double[,] corrected;
         if (!combatEnabled)
             corrected = normalized;
@@ -401,6 +414,8 @@ public sealed class PrismPipeline
             corrected = ReferenceAnchoredComBat.Run(normalized, batchLabels, referenceMask);
         else
             corrected = ComBat.Run(normalized, batchLabels);
+        if (!ReferenceEquals(corrected, normalized))
+            normalized = null!; // dead after correction
 
         // Meta columns (filtered to kept rows).
         var metaCols = new List<ParquetWideWriter.MetaColumn>();
@@ -427,16 +442,19 @@ public sealed class PrismPipeline
             }
         }
 
-        var sampleCols = new double[samples.Count][];
-        for (var j = 0; j < samples.Count; j++)
-        {
-            sampleCols[j] = new double[n];
-            for (var r = 0; r < n; r++)
-                sampleCols[j][r] = corrected[r, j];
-        }
-
+        // LOG2 "internal" output only when requested (peptide stage). Scoped so the transpose is
+        // freed before the linear transpose is allocated (peak = corrected + one column set).
         if (internalLog2Path is not null)
-            ParquetWideWriter.Write(internalLog2Path, metaCols, samples, sampleCols, n);
+        {
+            var log2Cols = new double[samples.Count][];
+            for (var j = 0; j < samples.Count; j++)
+            {
+                log2Cols[j] = new double[n];
+                for (var r = 0; r < n; r++)
+                    log2Cols[j][r] = corrected[r, j];
+            }
+            ParquetWideWriter.Write(internalLog2Path, metaCols, samples, log2Cols, n);
+        }
 
         // Corrected output is LINEAR (2^log2).
         var linearCols = new double[samples.Count][];
