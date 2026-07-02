@@ -440,6 +440,9 @@ public partial class MainWindow : Window
         {
             plt.Title("render failed: " + ex.Message);
         }
+        // The Plot is reused across view/level/type switches, so fit the axes to the current data
+        // (min-to-max) rather than keeping the previous plot's limits.
+        plt.Axes.AutoScale();
         QcPlot.Refresh();
     }
 
