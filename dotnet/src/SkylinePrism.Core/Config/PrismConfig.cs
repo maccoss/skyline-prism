@@ -43,10 +43,11 @@ public sealed class PrismConfig
 
     public sealed class TransitionRollupSection
     {
-        // method: sum | median_polish | topn | library_assist
+        // method: sum | median_polish | topn | consensus | library_assist
         public string Method { get; set; } = "sum";
         public int MinTransitions { get; set; } = 3;
         public int TopNCount { get; set; } = 3;
+        public double ConsensusRegularization { get; set; } = 0.1;
         public bool UseMs1 { get; set; }
 
         // Library-assisted rollup (method: library_assist).

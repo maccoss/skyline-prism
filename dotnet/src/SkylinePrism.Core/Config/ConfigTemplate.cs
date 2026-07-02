@@ -24,7 +24,7 @@ parsimony:
   fasta_path: null                     # set to a .fasta for substring-based parsimony mapping
   shared_peptide_handling: "all_groups"  # all_groups | unique_only | razor
 
-# Transition -> peptide rollup: "sum", "median_polish", "topn", or "library_assist".
+# Transition -> peptide rollup: "sum", "median_polish", "topn", "consensus", or "library_assist".
 transition_rollup:
   method: "median_polish"
   min_transitions: 3

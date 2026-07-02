@@ -109,11 +109,13 @@ public sealed class PrismPipeline
             {
                 "median_polish" => TransitionRollupMethod.MedianPolish,
                 "topn" => TransitionRollupMethod.TopN,
+                "consensus" => TransitionRollupMethod.Consensus,
                 "library_assist" or "library-assisted" or "library_assisted" => TransitionRollupMethod.LibraryAssist,
                 _ => TransitionRollupMethod.Sum,
             },
             MinTransitions = config.TransitionRollup.MinTransitions,
             TopNCount = config.TransitionRollup.TopNCount,
+            ConsensusRegularization = config.TransitionRollup.ConsensusRegularization,
             UseMs1 = config.TransitionRollup.UseMs1,
             LibraryPath = config.TransitionRollup.LibraryPath,
             LibraryMinFragments = config.TransitionRollup.LibraryMinFragments,

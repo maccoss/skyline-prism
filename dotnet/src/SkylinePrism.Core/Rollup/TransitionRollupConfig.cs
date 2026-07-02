@@ -7,6 +7,7 @@ public enum TransitionRollupMethod
     MedianPolish,
     LibraryAssist,
     TopN,
+    Consensus,
 }
 
 /// <summary>
@@ -22,6 +23,9 @@ public sealed class TransitionRollupConfig
 
     /// <summary>Transitions to keep for the topn method.</summary>
     public int TopNCount { get; init; } = 3;
+
+    /// <summary>Regularization constant for the consensus method.</summary>
+    public double ConsensusRegularization { get; init; } = 0.1;
 
     /// <summary>When false (default), MS1 "precursor" fragment ions are excluded.</summary>
     public bool UseMs1 { get; init; }

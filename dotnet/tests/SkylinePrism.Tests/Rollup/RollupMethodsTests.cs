@@ -48,6 +48,30 @@ public class RollupMethodsTests
     }
 
     [Fact]
+    public void Consensus_AgreeingTransitions_MatchSum()
+    {
+        // When all transitions share the same pattern, inverse-variance weights are equal, so
+        // consensus == the sum-method result.
+        var m = new double[,] { { 10, 11 }, { 10, 11 }, { 10, 11 } };
+        var consensus = new ConsensusRollup(minTransitions: 1).Aggregate(m);
+        var sum = new SumRollup().Aggregate(m);
+        Assert.Equal(sum[0], consensus[0], 9);
+        Assert.Equal(sum[1], consensus[1], 9);
+    }
+
+    [Fact]
+    public void Consensus_DownweightsDeviantTransition()
+    {
+        // t2 is wildly high in sample 1 only -> consensus down-weights it, so its sample-1 value is
+        // far below the plain sum (which the outlier dominates).
+        var m = new double[,] { { 10, 11 }, { 10, 11 }, { 10, 20 } };
+        var consensus = new ConsensusRollup(minTransitions: 1).Aggregate(m);
+        var sum = new SumRollup().Aggregate(m);
+        Assert.True(consensus[1] < sum[1] - 1.0, $"consensus {consensus[1]} should be well below sum {sum[1]}");
+        Assert.Equal(sum[0], consensus[0], 6); // sample 0 unaffected (all agree there)
+    }
+
+    [Fact]
     public void TransitionTopN_SumsTopIntensityTransitions()
     {
         // Mean linear intensities: t0=1, t1=4, t2=2. Top-2 => t1,t2; sum linear = 6 -> log2(6).

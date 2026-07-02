@@ -22,7 +22,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `topn` (intensity selection + sum weighting) — `TopNRollup`. Correlation-selection / sqrt-weighting
       variants need the shape-correlation matrix (not yet plumbed).
 - [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
-- [ ] `consensus`
+- [x] `consensus` (two-way-median decomposition + inverse-variance transition weighting) — `ConsensusRollup`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
       (median-polish with library prior, interference removal, per-charge sum); library picker in
       the tool. Carafe-TSV library loader not yet ported (BLIB only).
