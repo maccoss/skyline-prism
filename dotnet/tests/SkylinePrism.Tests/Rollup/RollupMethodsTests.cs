@@ -54,6 +54,16 @@ public class RollupMethodsTests
     }
 
     [Fact]
+    public void TopN_SqrtWeighting_WeightsBySqrtMeanIntensity()
+    {
+        // 2 transitions, 1 sample: linear 8 and 32. sqrt weights sqrt(8), sqrt(32) normalized to
+        // sum 2 give 0.6667 / 1.3333; weighted sum = 0.6667*8 + 1.3333*32 = 48 -> log2(48).
+        var log2 = new double[,] { { 3 }, { 5 } };
+        var abund = TopNRollup.Compute(log2, null, n: 2, minTransitions: 1, selection: "intensity", weighting: "sqrt");
+        Assert.Equal(Math.Log2(48.0), abund[0], 9);
+    }
+
+    [Fact]
     public void Ibaq_DividesSummedIntensityByTheoreticalCount()
     {
         // 2 peptides at log2=3 -> linear 8 each, sum 16; iBAQ = log2(16 / 10).
