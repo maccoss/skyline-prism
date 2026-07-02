@@ -32,9 +32,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // No default output directory: the user must choose one, so we never default into
-        // OneDrive-synced Documents (where the freshly-written parquet can be locked mid-run and
-        // freeze the tool). Run stays disabled until an output directory is set.
+        // Run stays disabled until an output directory is set. When connected to a saved document,
+        // SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the box stays
+        // empty so the user must choose (no more defaulting into OneDrive-synced Documents).
         RunButton.IsEnabled = false;
 
         try
@@ -69,8 +69,34 @@ public partial class MainWindow : Window
 
         if (_session is not null)
         {
+            _ = SetDefaultOutputDirAsync();
             _ = LoadReportsAsync();
             _ = LoadLibrariesAsync();
+        }
+    }
+
+    // Suggest "<document folder>/PRISM-Output" as the output directory. The document path comes from
+    // Skyline over RPC, so fetch it off the UI thread. Leaves the box empty (Run stays disabled) for
+    // an unsaved document or if the user has already typed a directory.
+    private async Task SetDefaultOutputDirAsync()
+    {
+        if (_session is null)
+            return;
+        try
+        {
+            var session = _session;
+            var docPath = await Task.Run(() =>
+            {
+                try { return session.Execute(c => c.GetDocumentPath()); }
+                catch { return null; }
+            });
+            var dir = string.IsNullOrWhiteSpace(docPath) ? null : Path.GetDirectoryName(docPath);
+            if (!string.IsNullOrEmpty(dir) && string.IsNullOrWhiteSpace(OutputDirBox.Text))
+                OutputDirBox.Text = Path.Combine(dir, "PRISM-Output");
+        }
+        catch (Exception ex)
+        {
+            Log("(could not derive a default output directory: " + ex.Message + ")");
         }
     }
 
