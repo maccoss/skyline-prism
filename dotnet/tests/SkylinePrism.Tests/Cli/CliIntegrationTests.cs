@@ -170,4 +170,17 @@ public class CliIntegrationTests
         Assert.Equal(0, code);
         Assert.Contains("Usage", output);
     }
+
+    [Theory]
+    [InlineData("run")]
+    [InlineData("merge")]
+    [InlineData("qc")]
+    [InlineData("compare")]
+    [InlineData("config-template")]
+    public void CommandHelp_ReturnsZeroWithCommandUsage(string cmd)
+    {
+        var (code, output) = Invoke(cmd, "--help");
+        Assert.Equal(0, code);
+        Assert.Contains($"Usage: prism {cmd}", output);
+    }
 }

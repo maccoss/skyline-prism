@@ -16,20 +16,27 @@ public static class Program
 {
     public static int Main(string[] args)
     {
-        if (args.Length == 0)
+        if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
             return PrintUsage();
+        if (args[0] is "--version" or "-v" or "version")
+            return PrintVersion();
+
+        var rest = args[1..];
+        if (Array.Exists(rest, a => a is "--help" or "-h"))
+        {
+            Console.WriteLine(CommandHelp(args[0]));
+            return 0;
+        }
 
         try
         {
             return args[0] switch
             {
-                "run" => CmdRun(args[1..]),
-                "merge" => CmdMerge(args[1..]),
-                "qc" => CmdQc(args[1..]),
-                "compare" => CmdCompare(args[1..]),
-                "config-template" => CmdConfigTemplate(args[1..]),
-                "--version" or "-v" or "version" => PrintVersion(),
-                "--help" or "-h" or "help" => PrintUsage(),
+                "run" => CmdRun(rest),
+                "merge" => CmdMerge(rest),
+                "qc" => CmdQc(rest),
+                "compare" => CmdCompare(rest),
+                "config-template" => CmdConfigTemplate(rest),
                 _ => Unknown(args[0]),
             };
         }
@@ -167,32 +174,151 @@ public static class Program
     private static int PrintVersion()
     {
         var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
-        Console.WriteLine($"prism (Skyline-PRISM C#) {version}");
+        Console.WriteLine($"prism {version}");
         return 0;
     }
 
     private static int PrintUsage()
     {
-        Console.WriteLine("Skyline-PRISM CLI");
-        Console.WriteLine();
-        Console.WriteLine("Usage: prism <command> [options]");
-        Console.WriteLine();
-        Console.WriteLine("Commands:");
-        Console.WriteLine("  run -i <in...> -o <dir> [-c config] [-m metadata...] [--from-provenance p.json] [--force-reprocess]");
-        Console.WriteLine("                                           Run the full PRISM pipeline");
-        Console.WriteLine("  merge <input...> -o <out.parquet>        Merge Skyline reports");
-        Console.WriteLine("  qc -d <output-dir> [-c config]           (Re)generate the QC report");
-        Console.WriteLine("  compare -1 <run1> -2 <run2> [-o rpt.html] [-s qc] [-n 20]  Compare two runs' CVs");
-        Console.WriteLine("  config-template [-o file] [--minimal]    Emit a configuration template");
-        Console.WriteLine("  version                                  Print the version");
+        Console.WriteLine(UsageText);
         return 0;
     }
 
     private static int Unknown(string command)
     {
-        Console.Error.WriteLine($"Unknown command '{command}'. Run 'prism help'.");
+        Console.Error.WriteLine($"error: unrecognized command '{command}'");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine(UsageText);
         return 2;
     }
+
+    private static string CommandHelp(string command) => command switch
+    {
+        "run" => RunHelp,
+        "merge" => MergeHelp,
+        "qc" => QcHelp,
+        "compare" => CompareHelp,
+        "config-template" => ConfigTemplateHelp,
+        _ => UsageText,
+    };
+
+    private const string UsageText = """
+        Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+
+        Retention-time-aware normalization of transition-level LC-MS proteomics data
+        exported from Skyline, with robust protein quantification (Tukey median polish)
+        and ComBat batch correction.
+
+        EXAMPLES:
+            # Run the full pipeline
+            prism run -i report.csv -o output/ -c config.yaml
+
+            # Merge several Skyline reports into one parquet
+            prism merge plate1.csv plate2.csv -o data.parquet
+
+            # Emit an annotated configuration template
+            prism config-template -o config.yaml
+
+        Usage: prism <command> [options]
+
+        Commands:
+            run                Run the full PRISM pipeline (rollup, normalize, batch-correct, QC)
+            merge              Merge Skyline transition reports into one parquet
+            qc                 (Re)generate the QC report from an existing output directory
+            compare            Compare control-sample CVs between two runs
+            config-template    Emit an annotated configuration template
+            version            Print the version
+
+        Run 'prism <command> --help' for the options of a specific command.
+        """;
+
+    private const string RunHelp = """
+        prism run - Run the full PRISM pipeline
+
+        Rolls transitions up to peptides, normalizes, applies ComBat batch correction,
+        performs protein parsimony and rollup, and writes the corrected peptide/protein
+        matrices (linear) plus a QC report. Reads transition-level Skyline reports.
+
+        Usage: prism run -i <input...> -o <output-dir> [options]
+
+        Options:
+            -i, --input <FILE...>         Skyline transition report(s), CSV/TSV/parquet; repeatable
+            -o, --output-dir <DIR>        Output directory
+            -c, --config <FILE>           YAML configuration (see 'prism config-template')
+            -m, --metadata <FILE...>      Replicate metadata / Replicates report(s), merged; repeatable
+                --from-provenance <FILE>  Re-run with the settings from a prior parameters.json
+                --force-reprocess         Ignore the merge cache and re-read the inputs
+            -h, --help                    Show this help
+
+        EXAMPLES:
+            prism run -i report.csv -o out/ -c config.yaml
+            prism run -i plate1.csv plate2.csv -o out/ -m replicates.csv
+            prism run -i new.csv -o out2/ --from-provenance out/parameters.json
+        """;
+
+    private const string MergeHelp = """
+        prism merge - Merge Skyline transition reports into one parquet
+
+        Streams and concatenates several Skyline transition reports (CSV/TSV/parquet)
+        into a single sorted parquet - the same merge step 'prism run' performs.
+
+        Usage: prism merge <input...> -o <output.parquet>
+
+        Options:
+            -o, --output <FILE>    Merged parquet path
+            -h, --help             Show this help
+
+        EXAMPLES:
+            prism merge plate1.csv plate2.csv -o merged.parquet
+        """;
+
+    private const string QcHelp = """
+        prism qc - (Re)generate the QC report
+
+        Rebuilds qc_report.html (and the plot PNGs) from the parquet outputs already in
+        an output directory, without re-running the pipeline.
+
+        Usage: prism qc -d <output-dir> [options]
+
+        Options:
+            -d, --dir <DIR>       Output directory from a prior 'prism run'
+            -c, --config <FILE>   YAML configuration (optional; QC settings only)
+            -h, --help            Show this help
+        """;
+
+    private const string CompareHelp = """
+        prism compare - Compare control-sample CVs between two runs
+
+        Compares corrected_peptides from two run directories: reports the median
+        control-sample CV per run and the peptides that improved or worsened most.
+
+        Usage: prism compare -1 <run1-dir> -2 <run2-dir> [options]
+
+        Options:
+            -1, --run1 <DIR>          First run's output directory
+            -2, --run2 <DIR>          Second run's output directory
+            -o, --output <FILE>       Comparison report HTML (default: rollup_comparison.html)
+            -s, --sample-type <TYPE>  Samples to compare: reference | qc | all (default: qc)
+            -n, --top-n <N>           Peptides to list per direction (default: 20)
+            -h, --help                Show this help
+
+        EXAMPLES:
+            prism compare -1 run_a/ -2 run_b/ -o compare.html -s qc
+        """;
+
+    private const string ConfigTemplateHelp = """
+        prism config-template - Emit an annotated configuration template
+
+        Writes a commented YAML configuration listing every option and its default.
+        Use --minimal for just the common knobs.
+
+        Usage: prism config-template [-o <file>] [--minimal]
+
+        Options:
+            -o, --output <FILE>   Write to a file (default: stdout)
+                --minimal         Emit only the common options
+            -h, --help            Show this help
+        """;
 
     // Minimal option parser: -flag value (repeatable for multiValue flags); leftover tokens
     // are positional.
