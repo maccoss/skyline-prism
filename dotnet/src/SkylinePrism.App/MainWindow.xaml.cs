@@ -258,6 +258,7 @@ public partial class MainWindow : Window
         RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
+        MainTabs.SelectedItem = LogTab; // show progress as it runs
 
         var outputDir = OutputDirBox.Text;
         var batchColumn = BatchColumnBox.Text?.Trim();

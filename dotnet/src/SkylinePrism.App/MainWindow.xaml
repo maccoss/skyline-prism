@@ -47,7 +47,7 @@
                        Text="Pick the report carrying replicate annotations (default = our PRISM-Replicates), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
 
-        <TabControl Grid.Row="4">
+        <TabControl Grid.Row="4" x:Name="MainTabs">
             <TabItem Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14">
@@ -125,7 +125,7 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-            <TabItem Header="Log">
+            <TabItem Header="Log" x:Name="LogTab">
                 <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
                          VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                          HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
