@@ -76,4 +76,29 @@ qc_report:
   enabled: true
 
 """;
+
+    /// <summary>A trimmed template with just the common knobs (prism config-template --minimal).</summary>
+    public static string Minimal() => """
+# PRISM Configuration (minimal)
+# Usage: prism run -i data.csv -o output/ -c this_config.yaml
+
+transition_rollup:
+  method: "median_polish"   # sum | median_polish | library_assist
+
+global_normalization:
+  method: "rt_lowess"       # rt_lowess | median | quantile | vsn | none
+
+batch_correction:
+  enabled: true             # skipped when < 2 batches
+
+protein_rollup:
+  method: "median_polish"   # median_polish | sum
+
+processing:
+  n_workers: 0              # 0 = all cores, 1 = serial
+
+qc_report:
+  enabled: true
+
+""";
 }

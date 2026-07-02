@@ -41,20 +41,22 @@ public static class Program
 
     private static int CmdRun(string[] args)
     {
-        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-i", "--input" });
+        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-i", "--input", "-m", "--metadata" });
         var inputs = new List<string>(opts.GetList("-i", "--input"));
+        var metadataFiles = opts.GetList("-m", "--metadata");
         var outputDir = opts.GetSingle("-o", "--output-dir");
         var configPath = opts.GetSingleOrNull("-c", "--config");
         var provenancePath = opts.GetSingleOrNull("--from-provenance");
 
         PrismConfig config;
+        var provenanceLoaded = false;
         if (provenancePath is not null)
         {
             config = Provenance.LoadConfig(provenancePath);
             if (inputs.Count == 0)
                 foreach (var s in Provenance.SourceFiles(provenancePath))
                     inputs.Add(s);
-            Console.WriteLine($"PRISM: loaded settings from provenance {provenancePath}");
+            provenanceLoaded = true;
         }
         else
         {
@@ -64,15 +66,35 @@ public static class Program
         if (inputs.Count == 0 || outputDir is null)
         {
             Console.Error.WriteLine(
-                "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [--from-provenance <parameters.json>]");
+                "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [-m <metadata...>] "
+                + "[--from-provenance <parameters.json>]");
             return 2;
         }
 
-        Console.WriteLine($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
-        var result = PrismPipeline.Run(inputs, outputDir, config, log: Console.WriteLine);
-        Console.WriteLine(
-            $"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
+        Directory.CreateDirectory(outputDir);
+
+        // Timestamped run log in the output dir (mirrors the Python CLI), tee'd with the console.
+        var logPath = Path.Combine(outputDir, $"prism_run_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+        using var logFile = new StreamWriter(logPath, append: false) { AutoFlush = true };
+        void Log(string m)
+        {
+            Console.WriteLine(m);
+            logFile.WriteLine(m);
+        }
+
+        if (provenanceLoaded)
+            Log($"PRISM: loaded settings from provenance {provenancePath}");
+
+        var metadataPath = metadataFiles.Count > 0 ? metadataFiles[0] : null;
+        if (metadataFiles.Count > 1)
+            Log($"Note: {metadataFiles.Count} metadata files given; using the first ('{metadataPath}'). "
+                + "Multi-file metadata merge is not yet supported.");
+
+        Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
+        var result = PrismPipeline.Run(inputs, outputDir, config, metadataPath, Log);
+        Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
             + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+        Console.WriteLine($"Run log: {logPath}");
         return 0;
     }
 
@@ -111,7 +133,8 @@ public static class Program
     {
         var opts = ParseOptions(args, multiValue: new HashSet<string>());
         var outPath = opts.GetSingleOrNull("-o", "--output");
-        var yaml = ConfigTemplate.Default();
+        var minimal = opts.GetSingleOrNull("--minimal") is not null;
+        var yaml = minimal ? ConfigTemplate.Minimal() : ConfigTemplate.Default();
         if (outPath is not null)
         {
             File.WriteAllText(outPath, yaml);
@@ -138,9 +161,11 @@ public static class Program
         Console.WriteLine("Usage: prism <command> [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  run -i <input...> -o <dir> [-c config]   Run the full PRISM pipeline");
+        Console.WriteLine("  run -i <in...> -o <dir> [-c config] [-m metadata...] [--from-provenance p.json]");
+        Console.WriteLine("                                           Run the full PRISM pipeline");
         Console.WriteLine("  merge <input...> -o <out.parquet>        Merge Skyline reports");
-        Console.WriteLine("  config-template [-o file]                Emit a configuration template");
+        Console.WriteLine("  qc -d <output-dir> [-c config]           (Re)generate the QC report");
+        Console.WriteLine("  config-template [-o file] [--minimal]    Emit a configuration template");
         Console.WriteLine("  version                                  Print the version");
         return 0;
     }
