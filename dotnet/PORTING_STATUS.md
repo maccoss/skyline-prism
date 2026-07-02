@@ -76,7 +76,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Before/after plots: intensity distribution, PCA, comparative CV (reference + QC)
 - [x] Interactive QC tabs in the tool (PCA / CV / intensity, peptide+protein) with a raw↔corrected
       view toggle — `MainWindow` QC Plots tab
-- [ ] Remaining plots: control correlation heatmap, RT-lowess overlay, RT-bin boxplot / RT-bin CV
+- [x] Control-correlation heatmap (before/after) + RT-lowess curve overlay (before/after)
+- [ ] RT-bin boxplot / RT-bin CV; pass/fail validation status + warnings layer
 
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging

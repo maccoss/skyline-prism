@@ -133,6 +133,27 @@ public static class QcReport
                     $"{cap} CV (QC)", "#ff7f0e")),
             }));
 
+        // Control-sample (reference + QC) correlation heatmap, before vs after.
+        var controlIdx = refIdx.Concat(qcIdx).Distinct().OrderBy(x => x).ToList();
+        if (controlIdx.Count >= 2)
+            sections.Add(new PlotSection($"{cap} Control-Sample Correlation: Before vs After", new List<PlotImage>
+            {
+                Img("Before (raw rollup)", $"{level}_control_corr_before",
+                    () => PlotRenderer.CorrelationHeatmap(raw.Values, controlIdx, "Before")),
+                Img("After (normalized + corrected)", $"{level}_control_corr_after",
+                    () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, "After")),
+            }));
+
+        // RT-lowess curve overlay (peptide level only - proteins have no RT).
+        if (raw.MeanRt is not null && corrected.MeanRt is not null)
+            sections.Add(new PlotSection($"{cap} RT-Lowess Curves: Before vs After", new List<PlotImage>
+            {
+                Img("Before (raw rollup)", $"{level}_rt_lowess_before",
+                    () => PlotRenderer.RtLowessCurves(raw.Values, raw.MeanRt, typeLabels, "Before")),
+                Img("After (normalized + corrected)", $"{level}_rt_lowess_after",
+                    () => PlotRenderer.RtLowessCurves(corrected.Values, corrected.MeanRt, typeLabels, "After")),
+            }));
+
         return sections;
     }
 
@@ -233,7 +254,7 @@ td:first-child, th:first-child { text-align: left; }
 
     // -- helpers --
 
-    private sealed record Matrix(double[,] Values, List<string> SampleCols, int RowCount);
+    private sealed record Matrix(double[,] Values, List<string> SampleCols, int RowCount, double[]? MeanRt);
 
     private static Matrix LoadMatrix(string path, IReadOnlyList<string> metaCols)
     {
@@ -248,7 +269,16 @@ td:first-child, th:first-child { text-align: left; }
             for (var i = 0; i < n; i++)
                 m[i, j] = col[i] ?? double.NaN;
         }
-        return new Matrix(m, sampleCols, n);
+
+        double[]? meanRt = null;
+        if (table.HasColumn(PepMetaRt))
+        {
+            var rt = table.GetDouble(PepMetaRt);
+            meanRt = new double[n];
+            for (var i = 0; i < n; i++)
+                meanRt[i] = rt[i] ?? double.NaN;
+        }
+        return new Matrix(m, sampleCols, n, meanRt);
     }
 
     private static Matrix Log2(Matrix linear)
@@ -259,7 +289,7 @@ td:first-child, th:first-child { text-align: left; }
         for (var i = 0; i < n; i++)
             for (var j = 0; j < c; j++)
                 m[i, j] = Math.Log2(linear.Values[i, j]);
-        return new Matrix(m, linear.SampleCols, n);
+        return new Matrix(m, linear.SampleCols, n, linear.MeanRt);
     }
 
     private static double[,] Transpose(double[,] a)

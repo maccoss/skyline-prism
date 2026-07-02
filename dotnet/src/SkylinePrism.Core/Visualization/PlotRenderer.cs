@@ -134,6 +134,147 @@ public static class PlotRenderer
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
+    /// <summary>
+    /// Correlation heatmap among the given (control) sample columns - the "did batch correction
+    /// tighten the controls" diagnostic (Pearson over features present in both samples).
+    /// </summary>
+    public static byte[] CorrelationHeatmap(double[,] featuresBySamples, IReadOnlyList<int> cols, string title)
+    {
+        var n = cols.Count;
+        var corr = new double[n, n];
+        for (var a = 0; a < n; a++)
+            for (var b = 0; b < n; b++)
+                corr[a, b] = a == b ? 1.0 : Pearson(featuresBySamples, cols[a], cols[b]);
+
+        var plt = new Plot();
+        var hm = plt.Add.Heatmap(corr);
+        hm.Colormap = new ScottPlot.Colormaps.Turbo();
+        plt.Add.ColorBar(hm);
+        plt.Title(title);
+        plt.XLabel("Control sample");
+        plt.YLabel("Control sample");
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    private static double Pearson(double[,] m, int ca, int cb)
+    {
+        var nF = m.GetLength(0);
+        double sa = 0, sb = 0;
+        var cnt = 0;
+        for (var f = 0; f < nF; f++)
+        {
+            var va = m[f, ca];
+            var vb = m[f, cb];
+            if (double.IsNaN(va) || double.IsNaN(vb))
+                continue;
+            sa += va;
+            sb += vb;
+            cnt++;
+        }
+        if (cnt < 2)
+            return double.NaN;
+        var ma = sa / cnt;
+        var mb = sb / cnt;
+        double num = 0, da = 0, db = 0;
+        for (var f = 0; f < nF; f++)
+        {
+            var va = m[f, ca];
+            var vb = m[f, cb];
+            if (double.IsNaN(va) || double.IsNaN(vb))
+                continue;
+            var xa = va - ma;
+            var xb = vb - mb;
+            num += xa * xb;
+            da += xa * xa;
+            db += xb * xb;
+        }
+        var den = Math.Sqrt(da * db);
+        return den > 0 ? num / den : double.NaN;
+    }
+
+    /// <summary>
+    /// Per-sample LOWESS curves of LOG2 abundance vs mean RT, coloured by sample type - the
+    /// diagnostic for RT-lowess normalization (before curves spread; after curves collapse).
+    /// </summary>
+    public static byte[] RtLowessCurves(
+        double[,] featuresBySamples, double[] meanRt, IReadOnlyList<string> types, string title)
+    {
+        var nF = featuresBySamples.GetLength(0);
+        var nS = featuresBySamples.GetLength(1);
+        var plt = new Plot();
+
+        double rtMin = double.PositiveInfinity, rtMax = double.NegativeInfinity;
+        foreach (var rt in meanRt)
+        {
+            if (double.IsNaN(rt)) continue;
+            if (rt < rtMin) rtMin = rt;
+            if (rt > rtMax) rtMax = rt;
+        }
+        if (rtMin < rtMax)
+        {
+            const int g = 80;
+            var grid = new double[g];
+            var step = (rtMax - rtMin) / (g - 1);
+            for (var k = 0; k < g; k++)
+                grid[k] = rtMin + k * step;
+
+            var seenType = new HashSet<string>();
+            for (var s = 0; s < nS; s++)
+            {
+                var xs = new List<double>(nF);
+                var ys = new List<double>(nF);
+                for (var f = 0; f < nF; f++)
+                {
+                    var v = featuresBySamples[f, s];
+                    var rt = meanRt[f];
+                    if (!double.IsNaN(v) && !double.IsNaN(rt))
+                    {
+                        xs.Add(rt);
+                        ys.Add(v);
+                    }
+                }
+                if (xs.Count < 20)
+                    continue;
+
+                var order = Numerics.Stats.ArgSort(xs.ToArray());
+                var xSorted = new double[order.Length];
+                var ySorted = new double[order.Length];
+                for (var k = 0; k < order.Length; k++)
+                {
+                    xSorted[k] = xs[order[k]];
+                    ySorted[k] = ys[order[k]];
+                }
+                var yfit = Numerics.Lowess.Fit(xSorted, ySorted, 0.3);
+
+                var gx = new List<double>(g);
+                var gy = new List<double>(g);
+                for (var k = 0; k < g; k++)
+                {
+                    if (grid[k] < xSorted[0] || grid[k] > xSorted[^1])
+                        continue;
+                    gx.Add(grid[k]);
+                    gy.Add(Numerics.Stats.Interp(grid[k], xSorted, yfit));
+                }
+                if (gx.Count < 2)
+                    continue;
+
+                var type = types[s];
+                var sc = plt.Add.Scatter(gx.ToArray(), gy.ToArray());
+                sc.MarkerSize = 0;
+                sc.LineWidth = 1;
+                sc.Color = Color.FromHex(TypeColors.GetValueOrDefault(type, "#7f7f7f")).WithAlpha((byte)110);
+                if (seenType.Add(type))
+                    sc.LegendText = type;
+            }
+            plt.ShowLegend();
+        }
+
+        plt.Title(title);
+        plt.XLabel("Retention time");
+        plt.YLabel("log2 abundance");
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
     /// <summary>Box-like distribution of per-sample median LOG2 intensity, grouped by sample type.</summary>
     public static byte[] IntensityDistribution(
         double[,] log2Matrix, IReadOnlyList<string> sampleTypes, string title)
