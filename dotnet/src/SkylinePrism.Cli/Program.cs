@@ -26,6 +26,7 @@ public static class Program
                 "run" => CmdRun(args[1..]),
                 "merge" => CmdMerge(args[1..]),
                 "qc" => CmdQc(args[1..]),
+                "compare" => CmdCompare(args[1..]),
                 "config-template" => CmdConfigTemplate(args[1..]),
                 "--version" or "-v" or "version" => PrintVersion(),
                 "--help" or "-h" or "help" => PrintUsage(),
@@ -126,6 +127,25 @@ public static class Program
         return 0;
     }
 
+    private static int CmdCompare(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>());
+        var run1 = opts.GetSingleOrNull("-1", "--run1");
+        var run2 = opts.GetSingleOrNull("-2", "--run2");
+        var output = opts.GetSingleOrNull("-o", "--output") ?? "rollup_comparison.html";
+        var sampleType = (opts.GetSingleOrNull("-s", "--sample-type") ?? "qc").ToLowerInvariant();
+        var topN = int.TryParse(opts.GetSingleOrNull("-n", "--top-n"), out var t) && t > 0 ? t : 20;
+        if (run1 is null || run2 is null)
+        {
+            Console.Error.WriteLine("Usage: prism compare -1 <run1-dir> -2 <run2-dir> [-o report.html] "
+                + "[-s reference|qc|all] [-n topN]");
+            return 2;
+        }
+        var path = RollupComparison.Generate(run1, run2, output, sampleType, topN);
+        Console.WriteLine($"Comparison report written to: {path}");
+        return 0;
+    }
+
     private static int CmdConfigTemplate(string[] args)
     {
         var opts = ParseOptions(args, multiValue: new HashSet<string>());
@@ -162,6 +182,7 @@ public static class Program
         Console.WriteLine("                                           Run the full PRISM pipeline");
         Console.WriteLine("  merge <input...> -o <out.parquet>        Merge Skyline reports");
         Console.WriteLine("  qc -d <output-dir> [-c config]           (Re)generate the QC report");
+        Console.WriteLine("  compare -1 <run1> -2 <run2> [-o rpt.html] [-s qc] [-n 20]  Compare two runs' CVs");
         Console.WriteLine("  config-template [-o file] [--minimal]    Emit a configuration template");
         Console.WriteLine("  version                                  Print the version");
         return 0;

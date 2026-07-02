@@ -89,7 +89,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `run` flags: `-m/--metadata` (multi-file, merged), `--force-reprocess`; still `--reference-pattern`/`--qc-pattern`
 - [~] `qc` flag gaps: `-o` report-name, `--no-save-plots`, `--no-embed`; `merge`: `-m`, `--no-partition`
 - [ ] `config-template --minimal`; `-v` means version in C# but verbose in Python (collision)
-- [ ] `compare` (rollup/CV comparison report) — not ported
+- [x] `compare` (control-CV comparison of two runs + ranked per-peptide CV differences) —
+      `RollupComparison`. (The Python's per-peptide library-fit visualization is not ported.)
 - [ ] Timestamped `prism_run_<ts>.log` written to the output dir (CLI logs to console only)
 - [ ] Source-fingerprint cache + `--force-reprocess` (C# always re-merges)
 - [ ] Unknown-config-key warnings (C# silently ignores unknown keys)
