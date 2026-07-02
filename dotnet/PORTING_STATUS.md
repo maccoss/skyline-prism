@@ -37,8 +37,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 
 ## Batch correction (Stage 2c / 4c)
 - [x] Standard ComBat (empirical Bayes), per-level peptide/protein toggles — `ComBat`
-- [ ] Reference-anchored ComBat (Pino 2020, production feature via `reference_anchored`) — different
-      (grand-mean) result today for users who ran it
+- [x] Reference-anchored ComBat (`ReferenceAnchoredComBat`, `batch_correction.reference_anchored`) —
+      estimates batch effects from ALL peptides in the reference samples across batches (not
+      single-point calibration), EB-shrunk; applied to all samples. Falls back to standard ComBat
+      when a batch has no references / none present.
 - [ ] ComBat auto-evaluate + revert-on-QC-failure — NOTE: only in Python's LEGACY `normalize_pipeline`,
       not its production CLI path; valuable safety feature but lower priority
 

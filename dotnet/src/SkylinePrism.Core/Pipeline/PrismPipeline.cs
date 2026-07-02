@@ -203,6 +203,20 @@ public sealed class PrismPipeline
 
         // Stage 2b/2c: peptide normalization + ComBat -> peptides_log2_internal (LOG2) +
         // corrected_peptides (LINEAR).
+        // Reference-sample mask (for reference-anchored ComBat), aligned to the current samples.
+        var refType = config.BatchCorrection.ReferenceType ?? "reference";
+        var referenceAnchored = config.BatchCorrection.ReferenceAnchored;
+        var refMask = samples
+            .Select(s => string.Equals(resolvedType[s], refType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (referenceAnchored && (peptideCombat || proteinCombat))
+        {
+            var nRefSamples = refMask.Count(x => x);
+            report(nRefSamples > 0
+                ? $"  ComBat: reference-anchored using {nRefSamples} '{refType}' sample(s)."
+                : $"  ComBat: reference-anchored requested but no '{refType}' samples found; using standard ComBat.");
+        }
+
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
@@ -211,7 +225,8 @@ public sealed class PrismPipeline
             peptidesRollupPath,
             new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
             samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
-            internalPath, correctedPepPath, rtColumn: "mean_rt");
+            internalPath, correctedPepPath,
+            referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt");
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
@@ -280,7 +295,8 @@ public sealed class PrismPipeline
         };
         var nProteins = NormalizeAndCorrect(
             proteinsRawPath, proteinMeta, samples, batchLabels, proteinCombat,
-            config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath);
+            config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath,
+            referenceAnchored: referenceAnchored, referenceMask: refMask);
 
         report("============================================================");
         report("Stage 5: Output generation");
@@ -324,6 +340,8 @@ public sealed class PrismPipeline
         string normMethod,
         string? internalLog2Path,
         string correctedLinearPath,
+        bool referenceAnchored = false,
+        IReadOnlyList<bool>? referenceMask = null,
         string? rtColumn = null)
     {
         var table = ParquetTable.Load(wideParquet);
@@ -374,7 +392,13 @@ public sealed class PrismPipeline
                 _ => Normalizer.MedianNormalize(matrix),
             };
         }
-        var corrected = combatEnabled ? ComBat.Run(normalized, batchLabels) : normalized;
+        double[,] corrected;
+        if (!combatEnabled)
+            corrected = normalized;
+        else if (referenceAnchored && referenceMask is not null && referenceMask.Any(m => m))
+            corrected = ReferenceAnchoredComBat.Run(normalized, batchLabels, referenceMask);
+        else
+            corrected = ComBat.Run(normalized, batchLabels);
 
         // Meta columns (filtered to kept rows).
         var metaCols = new List<ParquetWideWriter.MetaColumn>();

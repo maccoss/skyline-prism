@@ -227,7 +227,7 @@ public static class ComBat
         return result;
     }
 
-    private static void ItSol(
+    internal static void ItSol(
         double[,] sData, List<int> batchIdx, int i,
         double[,] gammaHat, double[,] deltaHat, double gBar, double t2, double a, double b,
         double[,] gammaStar, double[,] deltaStar, int nf,
@@ -272,7 +272,7 @@ public static class ComBat
         }
     }
 
-    private static void IntEprior(int i, double[,] gammaHat, double[,] deltaHat,
+    internal static void IntEprior(int i, double[,] gammaHat, double[,] deltaHat,
         double[,] gammaStar, double[,] deltaStar, int nf, bool meanOnly)
     {
         var gHat = Row(gammaHat, i, nf);
@@ -290,7 +290,7 @@ public static class ComBat
         }
     }
 
-    private static double PostMean(double gHat, double gBar, int n, double dStar, double t2)
+    internal static double PostMean(double gHat, double gBar, int n, double dStar, double t2)
         => (t2 * n * gHat + dStar * gBar) / (t2 * n + dStar);
 
     private static double PostVar(double sumSq, int n, double a, double b)
