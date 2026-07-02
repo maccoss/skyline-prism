@@ -47,6 +47,33 @@ jobs:
       - name: Test
         run: dotnet test SkylinePrism.CrossPlatform.slnf --no-build --configuration Debug --logger "console;verbosity=normal"
 
+  # Coverage gate for the Core + CLI layer. Runs on Linux only (coverage is platform-independent)
+  # and fails the build if line OR branch coverage falls below the floor - a regression guard, not a
+  # tight target. Current: ~87% line, ~74% branch; ratchet the floor up as coverage improves.
+  coverage:
+    name: Coverage gate (Core + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install SkiaSharp native deps (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1 libfreetype6
+
+      - name: Test with coverage threshold
+        run: >
+          dotnet test tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj
+          --configuration Debug
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:ThresholdType=line%2cbranch
+          /p:Threshold=70
+          /p:ThresholdStat=total
+
   # The Windows Skyline external tool (WPF + named-pipe RPC) builds only on Windows;
   # this leg also produces the distributable tool zip.
   windows-pack:
