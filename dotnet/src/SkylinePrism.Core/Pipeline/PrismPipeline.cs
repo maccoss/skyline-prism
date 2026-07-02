@@ -28,7 +28,8 @@ public sealed class PrismPipeline
 
     public static Result Run(
         IReadOnlyList<string> inputs, string outputDir, PrismConfig config,
-        string? metadataPath = null, Action<string>? log = null)
+        IReadOnlyList<string>? metadataPaths = null, Action<string>? log = null,
+        bool forceReprocess = false)
     {
         Directory.CreateDirectory(outputDir);
         var report = log ?? (_ => { });
@@ -37,8 +38,24 @@ public sealed class PrismPipeline
         report("Stage 1: Merge / prepare input");
         report("============================================================");
         var mergedPath = Path.Combine(outputDir, "merged_data.parquet");
-        var merge = DuckDbMerge.MergeAndSort(inputs, mergedPath);
-        report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
+        var cachePath = mergedPath + ".cache.json";
+        var fingerprint = SourceFingerprint.Compute(inputs);
+
+        DuckDbMerge.MergeResult merge;
+        var cached = forceReprocess ? null : SourceFingerprint.TryRead(cachePath);
+        if (cached is not null && cached.Fingerprint == fingerprint && File.Exists(mergedPath))
+        {
+            merge = new DuckDbMerge.MergeResult(mergedPath, cached.SortColumn, cached.TotalRows);
+            report($"  Reusing cached merge ({merge.TotalRows:N0} rows; inputs unchanged - "
+                + "pass --force-reprocess to rebuild).");
+        }
+        else
+        {
+            merge = DuckDbMerge.MergeAndSort(inputs, mergedPath);
+            SourceFingerprint.Write(cachePath,
+                new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
+            report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
+        }
 
         // Schema-only read: never materialize the (potentially huge, 200-report) merged table
         // just to detect column names.
@@ -51,7 +68,7 @@ public sealed class PrismPipeline
         // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
         var sourceBatchMap = GetBatchMap(mergedPath, cols);
         var metadata = ReplicateMetadata.TryLoad(
-            metadataPath, report, config.Metadata.SampleTypeColumn, config.Metadata.BatchColumn);
+            metadataPaths, report, config.Metadata.SampleTypeColumn, config.Metadata.BatchColumn);
         var resolvedBatch = new Dictionary<string, string>(StringComparer.Ordinal);
         var resolvedType = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var s in samples)

@@ -29,6 +29,32 @@ public sealed class ReplicateMetadata
     /// (standard built-in), and the batch/type columns may be named explicitly via
     /// <paramref name="batchColumn"/> / <paramref name="sampleTypeColumn"/> (case-insensitive).
     /// </summary>
+    /// <summary>Load and merge several metadata files (later files win on a duplicate replicate).</summary>
+    public static ReplicateMetadata? TryLoad(
+        IReadOnlyList<string>? paths, Action<string>? log = null,
+        string? sampleTypeColumn = null, string? batchColumn = null)
+    {
+        if (paths is null || paths.Count == 0)
+            return null;
+        ReplicateMetadata? merged = null;
+        foreach (var p in paths)
+        {
+            var md = TryLoad(p, log, sampleTypeColumn, batchColumn);
+            if (md is null)
+                continue;
+            if (merged is null)
+            {
+                merged = md;
+                continue;
+            }
+            foreach (var kv in md.TypeByReplicate)
+                merged.TypeByReplicate[kv.Key] = kv.Value;
+            foreach (var kv in md.BatchByReplicate)
+                merged.BatchByReplicate[kv.Key] = kv.Value;
+        }
+        return merged;
+    }
+
     public static ReplicateMetadata? TryLoad(
         string? path, Action<string>? log = null,
         string? sampleTypeColumn = null, string? batchColumn = null)

@@ -47,6 +47,7 @@ public static class Program
         var outputDir = opts.GetSingle("-o", "--output-dir");
         var configPath = opts.GetSingleOrNull("-c", "--config");
         var provenancePath = opts.GetSingleOrNull("--from-provenance");
+        var forceReprocess = opts.GetSingleOrNull("--force-reprocess") is not null;
 
         PrismConfig config;
         var provenanceLoaded = false;
@@ -85,13 +86,9 @@ public static class Program
         if (provenanceLoaded)
             Log($"PRISM: loaded settings from provenance {provenancePath}");
 
-        var metadataPath = metadataFiles.Count > 0 ? metadataFiles[0] : null;
-        if (metadataFiles.Count > 1)
-            Log($"Note: {metadataFiles.Count} metadata files given; using the first ('{metadataPath}'). "
-                + "Multi-file metadata merge is not yet supported.");
-
         Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
-        var result = PrismPipeline.Run(inputs, outputDir, config, metadataPath, Log);
+        var result = PrismPipeline.Run(
+            inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
         Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
             + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
         Console.WriteLine($"Run log: {logPath}");
@@ -161,7 +158,7 @@ public static class Program
         Console.WriteLine("Usage: prism <command> [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  run -i <in...> -o <dir> [-c config] [-m metadata...] [--from-provenance p.json]");
+        Console.WriteLine("  run -i <in...> -o <dir> [-c config] [-m metadata...] [--from-provenance p.json] [--force-reprocess]");
         Console.WriteLine("                                           Run the full PRISM pipeline");
         Console.WriteLine("  merge <input...> -o <out.parquet>        Merge Skyline reports");
         Console.WriteLine("  qc -d <output-dir> [-c config]           (Re)generate the QC report");

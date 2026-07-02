@@ -308,7 +308,8 @@ public partial class MainWindow : Window
             + $"({Path.GetFileName(reports.InputPath)})...");
 
         var inputs = new List<string> { reports.InputPath };
-        var result = PrismPipeline.Run(inputs, outputDir, config, reports.ReplicatesCsv, Log);
+        var metadataPaths = reports.ReplicatesCsv is null ? null : new[] { reports.ReplicatesCsv };
+        var result = PrismPipeline.Run(inputs, outputDir, config, metadataPaths, Log);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
     }

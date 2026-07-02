@@ -11,7 +11,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Column auto-detection (`find_column`) — `SkylineColumns`
 - [x] Sample metadata generation + sample-type detection — pipeline + `ReplicateMetadata`
 - [x] Tolerant numeric parsing (`#N/A` → NaN) — `MergedParquetReader`
-- [ ] Source-fingerprint caching (skip re-merge when inputs unchanged)
+- [x] Source-fingerprint caching (`SourceFingerprint`; reuse merged_data.parquet when inputs
+      unchanged, `--force-reprocess` to rebuild)
 - [x] Batch estimation from acquisition-time gaps (`BatchEstimator`, IQR-based; auto/gap/fixed) —
       used only when neither metadata nor Source Document distinguishes batches
 
@@ -85,8 +86,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging
-- [~] `run` flag gaps: **`-m/--metadata` not wired** (engine supports `metadataPath` but CmdRun never
-      passes it — high-impact small fix), `--reference-pattern` / `--qc-pattern`, `--force-reprocess`
+- [x] `run` flags: `-m/--metadata` (multi-file, merged), `--force-reprocess`; still `--reference-pattern`/`--qc-pattern`
 - [~] `qc` flag gaps: `-o` report-name, `--no-save-plots`, `--no-embed`; `merge`: `-m`, `--no-partition`
 - [ ] `config-template --minimal`; `-v` means version in C# but verbose in Python (collision)
 - [ ] `compare` (rollup/CV comparison report) — not ported
