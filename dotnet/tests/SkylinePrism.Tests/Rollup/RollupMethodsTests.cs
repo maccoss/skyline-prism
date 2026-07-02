@@ -38,6 +38,22 @@ public class RollupMethodsTests
     }
 
     [Fact]
+    public void TopN_CorrelationVsIntensitySelection_PickDifferentTransitions()
+    {
+        // t0,t1: low intensity (2^3) but high shape corr; t2,t3: high intensity (2^5) but low corr.
+        var log2 = new double[,] { { 3, 3 }, { 3, 3 }, { 5, 5 }, { 5, 5 } };
+        var shape = new double[,] { { 0.99, 0.99 }, { 0.99, 0.99 }, { 0.1, 0.1 }, { 0.1, 0.1 } };
+
+        // Correlation selection -> t0,t1 -> sum 8+8=16 -> log2 16 = 4.
+        var byCorr = TopNRollup.Compute(log2, shape, n: 2, minTransitions: 1, selection: "correlation", weighting: "sum");
+        Assert.Equal(4.0, byCorr[0], 9);
+
+        // Intensity selection -> t2,t3 -> sum 32+32=64 -> log2 64 = 6.
+        var byInt = TopNRollup.Compute(log2, null, n: 2, minTransitions: 1, selection: "intensity", weighting: "sum");
+        Assert.Equal(6.0, byInt[0], 9);
+    }
+
+    [Fact]
     public void Ibaq_DividesSummedIntensityByTheoreticalCount()
     {
         // 2 peptides at log2=3 -> linear 8 each, sum 16; iBAQ = log2(16 / 10).

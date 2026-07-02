@@ -47,6 +47,8 @@ public sealed class PrismConfig
         public string Method { get; set; } = "sum";
         public int MinTransitions { get; set; } = 3;
         public int TopNCount { get; set; } = 3;
+        public string TopNSelection { get; set; } = "intensity"; // intensity | correlation
+        public string TopNWeighting { get; set; } = "sum";       // sum | sqrt
         public double ConsensusRegularization { get; set; } = 0.1;
         public bool UseMs1 { get; set; }
 

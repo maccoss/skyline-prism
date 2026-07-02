@@ -46,7 +46,8 @@ public sealed class TransitionRollup
             TransitionRollupMethod.Sum => new SumRollup(),
             TransitionRollupMethod.MedianPolish =>
                 new MedianPolishRollup(addLog2NOffset: true, minTransitions: cfg.MinTransitions),
-            TransitionRollupMethod.TopN => new TopNRollup(cfg.TopNCount, cfg.MinTransitions),
+            TransitionRollupMethod.TopN =>
+                new TopNRollup(cfg.TopNCount, cfg.MinTransitions, cfg.TopNSelection, cfg.TopNWeighting),
             TransitionRollupMethod.Consensus => new ConsensusRollup(cfg.MinTransitions, cfg.ConsensusRegularization),
             TransitionRollupMethod.LibraryAssist => null,
             _ => throw new NotSupportedException($"Unsupported method {cfg.Method}"),
@@ -63,6 +64,8 @@ public sealed class TransitionRollup
 
         var captureResiduals = !isLibrary && cfg.Method == TransitionRollupMethod.MedianPolish
             && !string.IsNullOrEmpty(cfg.ResidualsPath);
+        var topNCorr = cfg.Method == TransitionRollupMethod.TopN
+            && cfg.TopNSelection == "correlation" && cols.ShapeCorrelation is not null;
 
         var pepMeta = new (string, Type)[]
         {
@@ -82,11 +85,14 @@ public sealed class TransitionRollup
 
             PeptideResult? Process(PeptideBlock block) => isLibrary
                 ? ProcessPeptideLibrary(block, cfg, samples.Count, sampleIndex, library!)
-                : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!, captureResiduals);
+                : topNCorr
+                    ? ProcessPeptideTopNCorr(block, cfg, samples.Count, sampleIndex)
+                    : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!, captureResiduals);
 
             if (dop <= 1)
             {
-                foreach (var block in MergedParquetReader.StreamPeptideBlocks(mergedParquet, cols, includeProductMz: isLibrary))
+                foreach (var block in MergedParquetReader.StreamPeptideBlocks(
+                    mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
                 {
                     var r = Process(block);
                     if (r is null)
@@ -97,7 +103,7 @@ public sealed class TransitionRollup
             }
             else
             {
-                RunParallel(mergedParquet, cols, isLibrary, dop, Process, sink, ref nFiltered);
+                RunParallel(mergedParquet, cols, isLibrary, topNCorr, dop, Process, sink, ref nFiltered);
             }
 
             sink.FlushAll();
@@ -111,7 +117,7 @@ public sealed class TransitionRollup
     }
 
     private static void RunParallel(
-        string mergedParquet, SkylineColumns cols, bool isLibrary, int dop,
+        string mergedParquet, SkylineColumns cols, bool isLibrary, bool topNCorr, int dop,
         Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink, ref int nFiltered)
     {
         // Single producer -> bounded queue -> N consumers -> single writer (this thread). The
@@ -125,7 +131,8 @@ public sealed class TransitionRollup
         {
             try
             {
-                foreach (var b in MergedParquetReader.StreamPeptideBlocks(mergedParquet, cols, includeProductMz: isLibrary))
+                foreach (var b in MergedParquetReader.StreamPeptideBlocks(
+                    mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
                     inputQ.Add(b);
             }
             catch (Exception ex) { Interlocked.CompareExchange(ref error, ex, null); }
@@ -249,6 +256,70 @@ public sealed class TransitionRollup
 
         var v = method.Aggregate(pre.Log2Matrix);
         return new PeptideResult(block.Peptide, nt, meanRt, v, null);
+    }
+
+    /// <summary>
+    /// Top-N rollup with CORRELATION selection: builds the transition x sample shape-correlation
+    /// matrix (first-non-null, missing = 0) alongside the imputed intensity matrix and selects the
+    /// top-N transitions by median shape correlation.
+    /// </summary>
+    private static PeptideResult? ProcessPeptideTopNCorr(
+        PeptideBlock block, TransitionRollupConfig cfg, int nSamples, IReadOnlyDictionary<string, int> sampleIndex)
+    {
+        var tidIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var rowIdxs = new List<int>(block.RowCount);
+        for (var i = 0; i < block.RowCount; i++)
+        {
+            if (cfg.ExcludePrecursor && block.Ion[i].StartsWith("precursor", StringComparison.Ordinal))
+                continue;
+            rowIdxs.Add(i);
+            var tid = TransitionId(block, i);
+            if (!tidIndex.ContainsKey(tid))
+                tidIndex[tid] = tidIndex.Count;
+        }
+
+        var nt = tidIndex.Count;
+        if (nt < cfg.MinTransitions)
+            return null;
+
+        var matrix = new double[nt, nSamples];
+        var shape = new double[nt, nSamples]; // default 0 = low correlation
+        var filled = new bool[nt, nSamples];
+        var shapeFilled = new bool[nt, nSamples];
+        for (var a = 0; a < nt; a++)
+            for (var b = 0; b < nSamples; b++)
+                matrix[a, b] = double.NaN;
+
+        var rtBuf = new List<double>(rowIdxs.Count);
+        foreach (var i in rowIdxs)
+        {
+            var ti = tidIndex[TransitionId(block, i)];
+            if (sampleIndex.TryGetValue(block.Sample[i], out var si))
+            {
+                var area = block.Area[i];
+                if (!filled[ti, si] && !double.IsNaN(area))
+                {
+                    matrix[ti, si] = area;
+                    filled[ti, si] = true;
+                }
+                if (i < block.ShapeCorrelation.Count)
+                {
+                    var sc = block.ShapeCorrelation[i];
+                    if (!shapeFilled[ti, si] && !double.IsNaN(sc))
+                    {
+                        shape[ti, si] = sc;
+                        shapeFilled[ti, si] = true;
+                    }
+                }
+            }
+            rtBuf.Add(block.RetentionTime[i]);
+        }
+
+        var meanRt = Stats.NanMean(rtBuf.ToArray());
+        var pre = RollupPreprocess.ImputeAndLog2(matrix, cfg.LogTransform);
+        var vals = TopNRollup.Compute(
+            pre.Log2Matrix, shape, cfg.TopNCount, cfg.MinTransitions, "correlation", cfg.TopNWeighting);
+        return new PeptideResult(block.Peptide, nt, meanRt, vals, null);
     }
 
     /// <summary>

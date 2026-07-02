@@ -35,9 +35,18 @@ public static class MergedParquetReader
     /// peptide value are grouped into one block.
     /// </summary>
     public static IEnumerable<PeptideBlock> StreamPeptideBlocks(
-        string parquetPath, SkylineColumns cols, bool includeProductMz = false)
+        string parquetPath, SkylineColumns cols, bool includeProductMz = false, bool includeShapeCorr = false)
     {
         var withMz = includeProductMz && cols.ProductMz is not null;
+        var withShape = includeShapeCorr && cols.ShapeCorrelation is not null;
+        var extra = "";
+        if (withMz)
+            extra += $", \"{cols.ProductMz}\" AS mz";
+        if (withShape)
+            extra += $", \"{cols.ShapeCorrelation}\" AS shape";
+        var mzIdx = withMz ? 7 : -1;
+        var shapeIdx = withShape ? (withMz ? 8 : 7) : -1;
+
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -50,7 +59,7 @@ public static class MergedParquetReader
             $"\"{cols.Sample}\" AS samp, " +
             $"\"{cols.Abundance}\" AS area, " +
             $"\"{cols.RetentionTime}\" AS rt" +
-            (withMz ? $", \"{cols.ProductMz}\" AS mz " : " ") +
+            extra + " " +
             $"FROM read_parquet('{Esc(parquetPath)}') " +
             $"ORDER BY \"{cols.Peptide}\"";
         using var reader = cmd.ExecuteReader();
@@ -73,7 +82,9 @@ public static class MergedParquetReader
             current.Area.Add(ToDouble(reader.GetValue(5)));
             current.RetentionTime.Add(ToDouble(reader.GetValue(6)));
             if (withMz)
-                current.ProductMz.Add(ToDouble(reader.GetValue(7)));
+                current.ProductMz.Add(ToDouble(reader.GetValue(mzIdx)));
+            if (withShape)
+                current.ShapeCorrelation.Add(ToDouble(reader.GetValue(shapeIdx)));
         }
         if (current is not null)
             yield return current;

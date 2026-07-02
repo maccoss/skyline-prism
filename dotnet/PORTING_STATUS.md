@@ -20,8 +20,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Preprocess: precursor exclusion, impute, log2 — `RollupPreprocess`
 - [x] `sum` — `SumRollup`
 - [x] `median_polish` (+log2(n) offset) — `MedianPolishRollup`
-- [x] `topn` (intensity selection + sum weighting) — `TopNRollup`. Correlation-selection / sqrt-weighting
-      variants need the shape-correlation matrix (not yet plumbed).
+- [x] `topn` — `TopNRollup`; selection intensity | correlation (Shape Correlation plumbed through the
+      rollup), weighting sum | sqrt
 - [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
 - [x] `consensus` (two-way-median decomposition + inverse-variance transition weighting) — `ConsensusRollup`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`

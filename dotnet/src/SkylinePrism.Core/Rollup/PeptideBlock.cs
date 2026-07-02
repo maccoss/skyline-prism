@@ -20,5 +20,8 @@ public sealed class PeptideBlock
     /// <summary>Product (fragment) m/z per row; populated only for library-assisted rollup.</summary>
     public List<double> ProductMz { get; } = new();
 
+    /// <summary>Shape correlation per row; populated only for topN correlation selection.</summary>
+    public List<double> ShapeCorrelation { get; } = new();
+
     public int RowCount => Ion.Count;
 }

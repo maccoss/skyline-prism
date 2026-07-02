@@ -132,6 +132,8 @@ public sealed class PrismPipeline
             },
             MinTransitions = config.TransitionRollup.MinTransitions,
             TopNCount = config.TransitionRollup.TopNCount,
+            TopNSelection = config.TransitionRollup.TopNSelection,
+            TopNWeighting = config.TransitionRollup.TopNWeighting,
             ConsensusRegularization = config.TransitionRollup.ConsensusRegularization,
             UseMs1 = config.TransitionRollup.UseMs1,
             LibraryPath = config.TransitionRollup.LibraryPath,

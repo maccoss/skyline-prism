@@ -24,6 +24,12 @@ public sealed class TransitionRollupConfig
     /// <summary>Transitions to keep for the topn method.</summary>
     public int TopNCount { get; init; } = 3;
 
+    /// <summary>topn transition selection: "intensity" or "correlation" (needs Shape Correlation).</summary>
+    public string TopNSelection { get; init; } = "intensity";
+
+    /// <summary>topn transition weighting: "sum" or "sqrt".</summary>
+    public string TopNWeighting { get; init; } = "sum";
+
     /// <summary>Regularization constant for the consensus method.</summary>
     public double ConsensusRegularization { get; init; } = 0.1;
 
