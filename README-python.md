@@ -1,0 +1,961 @@
+# Skyline-PRISM (Python package)
+
+> [!NOTE]
+> This is the documentation for the original **Python** `skyline-prism` package. The project now
+> also ships a C# (.NET 8) implementation — a cross-platform `prism` CLI and a Windows Skyline
+> external tool — which reproduces this pipeline's numeric results. For that, see the
+> [main README](README.md). This Python package remains the reference implementation and is
+> documented below.
+
+[![PyPI version](https://img.shields.io/pypi/v/skyline-prism.svg)](https://pypi.org/project/skyline-prism/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+**PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for retention time-aware normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using a number of different methods.
+
+## Key Features
+
+- **Robust quantification with Tukey median polish**: Can be used for both transition→peptide and peptide→protein rollups - automatically handles outliers without pre-identification
+- **ComBat batch correction (standard or reference-anchored)**: Full empirical Bayes implementation. Standard grand-mean ComBat by default; opt-in reference-anchored ComBat performs per-analyte single-point reference calibration (Pino et al. 2020) stabilized with empirical-Bayes shrinkage, estimating each batch's technical effect from inter-experiment reference samples only. Reference and QC sample CVs are reported before/after correction.
+- **Dual-control validation**: Uses intra-experiment QC samples to validate that corrections work without overfitting
+- **Sample outlier detection**: Automatic detection of samples with abnormally low signal (failed injections, degradation) with optional exclusion
+- **Flexible protein inference**: Multiple strategies for handling shared peptides (all_groups, unique_only, razor)
+- **Two-arm normalization pipeline**: Separate paths for peptide-level and protein-level output, with batch correction applied at the appropriate level
+- **Local RT and Global peptide normalization**: Normalizes to the median loess fit of the signal abundance across RT. Evaluated using QC and reference samples.
+
+## Installation
+
+```bash
+pip install skyline-prism
+```
+
+Or for development:
+
+```bash
+git clone https://github.com/maccoss/skyline-prism
+cd skyline-prism
+pip install -e ".[dev,viz]"
+```
+
+## Input File Formats
+
+PRISM accepts Skyline reports in three formats:
+
+| Format  | Extensions     | Notes                                    |
+| ------- | -------------- | ---------------------------------------- |
+| Parquet | `.parquet`     | Fastest I/O, smaller files (recommended) |
+| CSV     | `.csv`         | Standard Skyline export format           |
+| TSV     | `.tsv`, `.txt` | Tab-separated variant                    |
+
+Skyline 24.1+ can export reports directly to parquet via **File > Export > Report** (select parquet format). Parquet is 2-10x faster to read and 5-10x smaller than CSV equivalents.
+
+**Multiple input files** can be provided in a single run (from different batches or plates):
+
+```bash
+# Multiple parquet reports (one per plate/batch)
+prism run -i plate1.parquet plate2.parquet plate3.parquet -o output/ -c config.yaml
+
+# Mixed formats from different instruments/labs
+prism run -i site1.csv site2.parquet site3.tsv -o output/ -c config.yaml
+```
+
+Column names are automatically matched regardless of whether spaces are present (`Fragment Ion` vs `FragmentIon`), underscored (`Fragment_Ion`), or space-free (invariant export format). This handles all Skyline export variants.
+
+## Quick Start
+
+### Run the full pipeline
+
+```bash
+# Single parquet report (recommended format)
+prism run -i skyline_report.parquet -o output_dir/ -c config.yaml -m sample_metadata.csv
+
+# Single CSV report
+prism run -i skyline_report.csv -o output_dir/ -c config.yaml -m sample_metadata.csv
+
+# Multiple reports (merged and batch-corrected together)
+prism run -i plate1.parquet plate2.parquet plate3.parquet -o output/ -c config.yaml -m metadata.csv
+
+# Multiple metadata files are automatically merged
+prism run -i data.parquet -o output/ -c config.yaml -m batch1_meta.csv batch2_meta.csv
+```
+
+This produces:
+
+- `corrected_peptides.parquet` - Peptide-level quantities (normalized, batch-corrected)
+- `corrected_proteins.parquet` - Protein-level quantities (normalized, batch-corrected)
+- `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
+- `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
+- `protein_groups.csv` - Protein group definitions
+- `peptide_residuals.parquet` - Median polish residuals (for outlier analysis)
+- `metadata.json` - Processing metadata and provenance
+- `prism_run_YYYYMMDD_HHMMSS.log` - Detailed log file with all processing steps and timings
+- `qc_report.html` - HTML QC report with embedded diagnostic plots
+- `qc_plots/` - Directory with QC plots (if `save_plots: true`)
+
+**Scale:** Output files contain **linear-scale** abundances (raw peak area units). The pipeline operates on log2 scale internally but back-transforms to linear before writing output.
+
+**Key output columns** in protein/peptide parquet files:
+
+- `abundance` - Linear-scale abundance (normalized, batch-corrected)
+- `abundance_raw` - Original linear-scale abundance from Skyline
+- `uncertainty` - Propagated uncertainty (log2 scale, for downstream analysis)
+- `cv_peptides` - CV across peptides (protein-level quality metric)
+- `n_peptides` - Number of peptides used in rollup
+- `qc_flag` - QC warnings (e.g., `low_peptide_count(n)`, `single_peptide_in_sample`)
+
+### Protein Metadata (parsimony “leading_” semantics)
+
+Protein groups are formed by parsimony. Each group has a canonical representative (“leading protein”) used to label group-level metadata. The following metadata columns appear in `corrected_proteins.parquet`:
+
+- `protein_group`: Protein group ID (PG####)
+- `leading_protein`: Representative accession for the leading protein
+- `leading_name`: Representative protein name (from Skyline `Protein`)
+- `leading_uniprot_id`: UniProt accession for the leading protein (from Skyline `Protein Accession`)
+- `leading_gene_name`: Gene symbol for the leading protein (from Skyline `Protein Gene`)
+- `leading_description`: Full protein description for the leading protein (from Skyline `Protein`)
+
+The `leading_` prefix clarifies that these fields describe the group's canonical representative, avoiding ambiguity with member/subsumed proteins. Member/subsumed lists are available in `protein_groups.csv`.
+
+See [SPECIFICATION.md](SPECIFICATION.md) for complete column definitions.
+
+### Reproducibility: Re-run from provenance
+
+The `metadata.json` output contains the complete processing configuration, enabling reproducible re-runs:
+
+```bash
+# Re-run with exact same parameters on new data
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json
+
+# Override specific settings while keeping others from provenance
+prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json -c overrides.yaml
+```
+
+### Regenerate QC reports
+
+To regenerate QC reports from an existing PRISM output directory (useful after visualization updates):
+
+```bash
+prism qc -d output_dir/
+```
+
+This reads the processed parquet files and regenerates the QC report without re-running the full pipeline.
+
+### Generate a configuration template
+
+Generate an annotated configuration file template:
+
+```bash
+# Full template with all options documented
+prism config-template -o config.yaml
+
+# Minimal template with only common options
+prism config-template --minimal -o config.yaml
+```
+
+### Merge multiple Skyline reports
+
+The `prism merge` command merges multiple reports into a single sorted parquet file without running the full pipeline. Accepts CSV, TSV, and parquet inputs in any combination:
+
+```bash
+# Merge CSV reports
+prism merge report1.csv report2.csv -o unified_data.parquet -m sample_metadata.csv
+
+# Merge parquet reports (faster)
+prism merge plate1.parquet plate2.parquet plate3.parquet -o unified_data.parquet
+
+# Mixed formats
+prism merge site1.csv site2.parquet -o unified_data.parquet -m metadata.csv
+```
+
+Note: `prism run` also accepts multiple input files directly and performs the merge internally, so `prism merge` is mainly useful when you want the merged parquet for downstream use outside PRISM.
+
+### Compare rollup methods
+
+Compare peptide CVs between two PRISM runs using different rollup methods. This is useful for evaluating whether library-assisted rollup is helping to reduce interference for specific peptides.
+
+**Workflow:**
+
+1. Run PRISM twice with different rollup methods:
+
+```bash
+# Run 1: Sum method (baseline)
+prism run -i data.parquet -o output_sum/ -c config_sum.yaml
+
+# Run 2: Library-assist method
+prism run -i data.parquet -o output_lib/ -c config_lib.yaml
+```
+
+1. Compare the results:
+
+```bash
+prism compare -1 output_sum/ -2 output_lib/ -o comparison_report.html
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-1, --run1` | First output directory (baseline, e.g., sum method) | Required |
+| `-2, --run2` | Second output directory (comparison, e.g., library_assist) | Required |
+| `-o, --output` | Output HTML report path | `comparison_report.html` |
+| `-s, --sample-type` | Sample type to analyze (`reference`, `qc`, or `all`) | `reference` |
+| `-n, --top-n` | Number of top peptides to show in detail | `100` |
+| `-r, --ranking` | How to rank peptides: `most_improved`, `most_worsened`, `highest_cv`, `largest_difference` | `most_improved` |
+| `--save-plots` | Save individual PNG plot files | False |
+
+**Example with all options:**
+
+```bash
+prism compare \
+    -1 output_sum/ \
+    -2 output_lib/ \
+    -o comparison.html \
+    --sample-type reference \
+    --top-n 50 \
+    --ranking most_improved \
+    --save-plots
+```
+
+**Required files in each output directory:**
+
+- `corrected_peptides.parquet` - Used for CV calculations
+- `merged_data.parquet` - Required in run2 for library fitting visualization
+- `metadata.json` - Method names and sample metadata
+
+**Comparison report contents:**
+
+- Summary statistics comparing CV distributions between methods
+- Top N peptides ranked by CV improvement
+- For each peptide: detailed library fitting visualization showing:
+  - Raw transition intensities
+  - Library-scaled predictions
+  - Outlier detection and removal steps
+  - R² values for each sample
+  - Final abundance comparison
+
+This helps identify peptides where library-assisted rollup successfully removes interfered transitions and improves quantification precision.
+
+### QC report contents
+
+The QC report includes:
+
+- **Intensity distribution plots**: Before/after normalization comparison
+- **PCA analysis**: Visualize batch effects and sample clustering across processing stages
+- **Control sample correlation**: Heatmaps showing reproducibility of reference and QC samples
+- **CV distributions**: Technical variation in control samples before/after normalization
+- **RT correction QC**: If RT-dependent normalization is enabled, shows residuals for reference (fitted) and QC (held-out validation) samples
+
+All plots are saved as PNGs in `output_dir/qc_plots/` and embedded in the HTML report.
+
+## Processing Pipeline
+
+The pipeline follows a two-arm design with batch correction applied at the reporting level:
+
+```text
+Stage 1: Merge reports (CSV/TSV/parquet, streaming)
+        │
+        ▼
+Stage 2: Transition → Peptide rollup (Tukey median polish)
+        │
+        ▼
+Stage 2b: Peptide Global Normalization (median or VSN)
+        │  [Optional: RT-aware correction - disabled by default]
+        ▼
+Stage 2c: Peptide ComBat Batch Correction
+        │
+        ├─────────────────────────────────┐
+        │                                 │
+        ▼                                 ▼
+Stage 3: Protein Parsimony      PEPTIDE OUTPUT ARM
+        │                       (corrected_peptides.parquet)
+        ▼
+Stage 4: Peptide → Protein Rollup (median polish)
+        │
+        ▼
+Stage 4b: Protein Global Normalization (median)
+        │
+        ▼
+Stage 4c: Protein ComBat Batch Correction
+        │
+        ▼
+Stage 5: Output Generation
+        │
+        ▼
+    PROTEIN OUTPUT ARM
+(corrected_proteins.parquet)
+        │
+        ▼
+Stage 5b: QC Report Generation (HTML + plots)
+```
+
+**Key Implementation Notes:**
+
+- **Streaming CSV merge** handles large datasets (~47GB tested) without loading into memory
+- **Merge-and-sort in single pass** using DuckDB for efficient multi-file processing
+- **Vectorized library-assisted rollup** using median polish (~10x speedup on large datasets)
+- **Pre-sorted optimization** skips redundant sorting when data is already sorted
+- **Both peptide and protein outputs** receive independent batch correction
+- **Automatic log files** saved to output directory with timestamp for reproducibility
+- **RT correction disabled by default** - search engine calibration may not generalize between samples
+- **Protein parsimony** applied before protein rollup to avoid double-counting shared peptides
+
+## Experimental Design Requirements
+
+For optimal results, include these controls in each batch:
+
+| Control Type               | Description                               | Replicates/Batch |
+| -------------------------- | ----------------------------------------- | ---------------- |
+| Inter-experiment reference | Commercial pool (e.g., Golden West CSF)   | 1-8              |
+| Intra-experiment QC        | Pooled experimental samples               | 1-8              |
+
+**Note:** In 96-well plate formats, controls are typically placed once per row (8 replicates per batch). Smaller experiments may have as few as 1 replicate per batch.
+
+Plus internal QCs in all samples:
+
+- **Protein QC**: Yeast enolase (16 ng/μg sample)
+- **Peptide QC**: PRTC (30-150 fmol/injection)
+
+## Configuration
+
+Generate a configuration template with all options documented:
+
+```bash
+prism config-template -o config.yaml           # Full template with all options
+prism config-template --minimal -o config.yaml  # Minimal template
+```
+
+Key settings:
+
+```yaml
+# Sample type detection patterns (for automatic sample type assignment)
+sample_annotations:
+  reference_pattern:  # Inter-experiment reference (e.g., commercial pools)
+    - "-Pool_"
+    - "-Pool"
+  qc_pattern:       # Intra-experiment QC (e.g., pooled experimental samples)
+    - "-Carl_"
+    - "-Carl"
+  # Everything else is treated as experimental
+
+# Transition to peptide rollup (if using transition-level data)
+transition_rollup:
+  enabled: true
+  method: "adaptive"  # adaptive (recommended), median_polish, or sum
+  min_transitions: 3
+  learn_adaptive_weights: true  # Learn optimal weights from reference samples (default when method=adaptive)
+
+# Sample outlier detection (one-sided, low signal only)
+sample_outlier_detection:
+  enabled: true
+  action: "report"  # "report" to log only, "exclude" to remove from analysis
+  method: "iqr"     # IQR-based on LINEAR scale (not log)
+  iqr_multiplier: 1.5
+
+# Global normalization (applied after peptide rollup)
+global_normalization:
+  method: "median"  # median (recommended) or vsn
+
+# RT correction (optional, applied together with global normalization)
+rt_correction:
+  enabled: false  # DISABLED BY DEFAULT - search engine RT calibration may not generalize
+  method: "spline"
+  spline_df: 5
+  per_batch: true
+
+# Batch correction (applied at both peptide and protein levels)
+batch_correction:
+  enabled: true
+  method: "combat"  # Full empirical Bayes implementation
+  reference_anchored: false  # true = single-point reference calibration + EB shrinkage
+  reference_type: "reference"  # sample_type used as the inter-batch calibrant
+
+# Protein parsimony (applied before protein rollup)
+parsimony:
+  enabled: true
+  fasta_path: "/path/to/database.fasta"  # FASTA used in search
+  shared_peptide_handling: "all_groups"  # recommended
+
+# Protein rollup (peptide → protein aggregation)
+protein_rollup:
+  method: "sum"  # default; alternatives: median_polish, topn, ibaq, maxlfq
+  min_peptides: 3  # Minimum peptides for method application (below uses sum)
+
+# QC report generation
+qc_report:
+  enabled: true
+  save_plots: true    # Save individual PNG files
+  embed_plots: true   # Embed plots in HTML report
+```
+
+## Automatic Batch Estimation
+
+If batch information is not provided in the metadata file, PRISM can automatically estimate batch assignments from acquisition times. Three estimation methods are available:
+
+- **`auto`** (default): Try gap detection first, fall back to fixed if no gaps found
+- **`fixed`**: Divide samples evenly into N batches by acquisition time order
+- **`gap`**: Only use gap detection (skip batch correction if no gaps found)
+
+```yaml
+batch_estimation:
+  method: "auto"           # "auto", "fixed", or "gap"
+  n_batches: null          # Number of batches for "fixed" mode (or auto fallback)
+  gap_iqr_multiplier: 1.5  # For gap detection: lower = more sensitive
+```
+
+**Example** (divide into 5 artificial batches for drift correction):
+```yaml
+batch_estimation:
+  method: "fixed"
+  n_batches: 5
+```
+
+To enable time-based batch estimation, include `Result File > Acquired Time` in your Skyline report. See [SPECIFICATION.md](SPECIFICATION.md#batch-estimation) for details.
+
+## Sample Outlier Detection
+
+PRISM automatically detects samples with abnormally low signal intensity, which may indicate:
+
+- Failed injections
+- Sample degradation
+- Instrument issues
+- Empty wells
+
+**Key features:**
+
+- **One-sided detection**: Only flags samples with too *little* signal (not high outliers)
+- **Linear scale statistics**: Detection uses linear scale (not log2) to avoid scale compression
+- **Two detection methods**:
+  - `iqr`: Flag samples below Q1 - 1.5×IQR (default)
+  - `fold_median`: Flag samples with median < X% of overall median
+- **Configurable action**: Report only or exclude from analysis
+
+```yaml
+sample_outlier_detection:
+  enabled: true
+  action: "report"     # "report" or "exclude"
+  method: "iqr"        # "iqr" or "fold_median"
+  iqr_multiplier: 1.5  # Samples below Q1 - 1.5*IQR flagged
+```
+
+Example log output:
+
+```text
+Sample outlier detection (IQR method, linear scale):
+  Q1=1234567, Q3=2345678, IQR=1111111
+  Lower bound: 567890 (Q1 - 1.5*IQR)
+  Overall median: 1789012
+  OUTLIER: Sample_042 - median=24 (0.0% of overall median)
+```
+
+## Tukey Median Polish (Default Rollup Method)
+
+Both transition→peptide and peptide→protein rollups use Tukey median polish by default. This robust method:
+
+- **Automatically handles outliers**: Interfered transitions or problematic peptides are downweighted through the median operation
+- **No pre-filtering required**: Unlike quality-weighted methods, doesn't require explicit quality metrics
+- **Produces interpretable effects**: Separates row effects from column effects (sample abundance)
+- **Handles missing values naturally**: Works with incomplete matrices
+
+**What the row effects represent:**
+
+| Rollup Stage         | Row Effects Represent                                                        | Column Effects Represent     |
+| -------------------- | ---------------------------------------------------------------------------- | ---------------------------- |
+| Transition → Peptide | Transition interference (co-eluting analytes affecting specific transitions) | Peptide abundance per sample |
+| Peptide → Protein    | Peptide ionization efficiency (some peptides ionize better than others)      | Protein abundance per sample |
+
+### Alternative Rollup Methods
+
+While median polish is recommended, these alternative methods are available:
+
+**Transition → Peptide Rollup** (when using transition-level data):
+
+| Method             | Description                     | Use Case                                                           |
+| ------------------ | ------------------------------- | ------------------------------------------------------------------ |
+| `sum`              | Simple sum of intensities       | Default, fast, straightforward                                     |
+| `consensus`        | Inverse-variance weighted sum   | Down-weights transitions that deviate from the cross-sample pattern |
+| `median_polish`    | Tukey median polish             | Robust to outliers, produces residuals for QC                      |
+| `adaptive`         | Learned weighted average        | When quality metrics (intensity, m/z, ShapeCorrelation) are available |
+| `topn`             | Top N by correlation/intensity  | When a subset of transitions are known to be reliable              |
+| `library_assist`   | Spectral library-based rollup   | When you have a high-quality spectral library and want to detect/exclude interfered transitions |
+
+**Peptide → Protein Rollup**:
+
+| Method          | Description                                  | Use Case                                                   |
+| --------------- | -------------------------------------------- | ---------------------------------------------------------- |
+| `median_polish` | Tukey median polish (default)                | General use, robust to outliers                            |
+| `topn`          | Mean of top N most intense peptides          | Simple, when top peptides are reliable                     |
+| `ibaq`          | iBAQ (intensity / theoretical peptide count) | Absolute quantification across proteins                    |
+| `maxlfq`        | Maximum LFQ (MaxQuant-style)                 | When peptide ratios are more reliable than absolute values |
+| `sum`           | Simple sum of intensities                    | Fast but sensitive to outliers                             |
+
+**`min_peptides` Threshold:**
+
+The `min_peptides` setting controls the minimum number of peptides required for full-confidence method application:
+
+```yaml
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 3  # Default: 3
+```
+
+| Peptide Count | Method Used | `low_confidence` flag |
+|---------------|-------------|----------------------|
+| 1 | Direct peptide value | `True` |
+| < min_peptides | Sum (linear space) | `True` |
+| >= min_peptides | Configured method | `False` |
+
+Proteins below the threshold are still quantified using sum in linear space (consistent with median_polish output scale) and flagged with `low_confidence=True`.
+
+### iBAQ (Intensity-Based Absolute Quantification)
+
+iBAQ normalizes protein abundances by the number of theoretical peptides, enabling comparison of absolute abundance across proteins:
+
+```yaml
+protein_rollup:
+  method: "ibaq"
+  ibaq:
+    fasta_path: "/path/to/database.fasta"  # Required for iBAQ
+    enzyme: "trypsin"                       # Must match search settings
+    missed_cleavages: 0                     # Typically 0 for counting
+```
+
+```python
+from skyline_prism.fasta import get_theoretical_peptide_counts
+
+# Calculate theoretical peptide counts for iBAQ
+counts = get_theoretical_peptide_counts(
+    "/path/to/database.fasta",
+    enzyme="trypsin",
+    missed_cleavages=0,
+)
+```
+
+### Adaptive Rollup with Learned Weights
+
+For transition→peptide rollup, the `adaptive` method learns optimal weighting parameters from reference samples to minimize CV:
+
+```yaml
+transition_rollup:
+  method: "adaptive"
+  learn_adaptive_weights: true
+  adaptive_rollup:
+    beta_mz: 0.0                  # Starting value (optimized automatically)
+    beta_shape_corr_outlier: 0.0  # Starting value (optimized automatically)
+    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation
+    min_improvement_pct: 0.1      # Required improvement over sum to use adaptive weights
+```
+
+**The weight formula:**
+
+```text
+w_t = exp(beta_mz * normalized_mz + beta_shape_outlier * outlier_frac)
+```
+
+Where:
+
+- `normalized_mz`: m/z normalized to [0,1] range
+- `outlier_frac`: Fraction of samples where shape correlation < threshold (indicates interference)
+
+**Key insight:** When all betas are 0, all weights equal 1 (simple sum baseline). The optimizer only uses learned weights if they improve CV.
+
+**What gets optimized:**
+
+- `beta_mz`: Higher m/z fragments may have better signal (positive = favor high m/z)
+- `beta_shape_corr_outlier`: Transitions with frequent interference (low shape correlation) should be down-weighted (negative = penalize)
+
+**The peptide abundance calculation:**
+
+```text
+Peptide_abundance = log2(Σ weight_t × intensity_t)
+```
+
+The transition intensities are the VALUES being summed. The learned weights adjust how much each transition contributes based on its quality metrics (m/z and interference level).
+
+**Learning process:**
+
+1. Parameters are optimized on reference samples by minimizing median CV
+2. Results are validated on QC samples (held-out) to prevent overfitting
+3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
+
+### Consensus Rollup with Cross-Sample Weighting
+
+The `consensus` method uses cross-sample consistency to weight transitions. It assumes that all transitions from a peptide should show the same fold-change pattern across samples - transitions that deviate from this consensus are down-weighted.
+
+```yaml
+transition_rollup:
+  method: "consensus"
+  min_transitions: 3
+```
+
+**Algorithm:**
+
+1. Model: `log2(T_ij) = α_i (transition offset) + β_j (sample abundance) + ε_ij`
+2. Estimate initial β using row-centered medians (robust to outliers)
+3. Calculate residuals: `ε_ij = T_ij - α_i - β_j`
+4. Weight transitions: `w_i = 1 / (variance(ε_i) + regularization)`
+5. Return weighted sum in linear space
+
+**Key insight:** Transitions with high cross-sample residual variance are likely interfered. This method requires no external data (no spectral library or shape correlation) - it learns weights purely from the data itself.
+
+**When to use:** Best for DDA data or when quality metrics like shape correlation are not available.
+
+### Library-Assisted Rollup with Spectral Library
+
+For transition->peptide rollup, the `library_assist` method uses a spectral library to detect and exclude interfered transitions. This is particularly effective when co-eluting peptides contribute signal to specific fragments.
+
+```yaml
+transition_rollup:
+  method: "library_assist"
+  library_assist:
+    library_path: "/path/to/library.blib"  # or .tsv (Carafe format)
+    fitting_method: "median_polish"  # RECOMMENDED (or "least_squares")
+    mz_tolerance: 0.02               # m/z tolerance for matching (Da)
+    min_matched_fragments: 3         # Minimum fragments for valid fit
+    outlier_threshold: 1.0           # 1.0 = obs > 2x predicted is outlier
+```
+
+**Two fitting methods available:**
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| `median_polish` | Uses MEDIAN to estimate scale; robust to 1-2 outliers automatically | **Recommended for most data** |
+| `least_squares` | Classic OLS fitting; more sensitive to outliers | Very clean data |
+
+**Algorithm (median_polish, default):**
+
+1. Match observed transitions to library fragments by m/z
+2. Model: `log(observed) = log(library) + scale_factor + noise`
+3. Estimate scale via MEDIAN of log-ratios (robust to up to 50% outliers)
+4. Flag transitions with HIGH positive residuals as interfered (signal > expected)
+5. Remove worst outlier and refit until convergence
+6. Final abundance = exp(scale_factor) * sum(ALL library intensities)
+
+**Key insight:** Only high residuals indicate interference - because interference can only **add** signal, never remove it. Low or negative residuals are valid (low abundance or noise).
+
+**Supported library formats:**
+
+- **BLIB (Skyline):** SQLite-based format with zlib-compressed peak arrays
+- **Carafe TSV (DIA-NN):** Tab-separated format with fragment annotations
+
+**Performance:** The implementation uses vectorized least squares (BLAS matrix operations) to process all samples in parallel, providing ~10x speedup on large datasets.
+
+**Note:** For very large cohorts (hundreds to thousands of samples), consider [directLFQ](https://github.com/MannLabs/directlfq) which uses a different "intensity trace" algorithm with linear runtime scaling. Our `maxlfq` implementation uses the original pairwise ratio approach which scales quadratically with sample count.
+
+## ComBat Batch Correction
+
+PRISM includes a full implementation of the ComBat algorithm (Johnson et al. 2007) for empirical Bayes batch correction:
+
+```python
+from skyline_prism import combat, combat_from_long, combat_reference_anchored
+
+# For wide-format data (features × samples)
+corrected = combat(data, batch, covar_mod=covariates)
+
+# For long-format data (as used in PRISM pipeline)
+corrected_df = combat_from_long(
+    data, 
+    feature_col='peptide_modified',
+    sample_col='replicate_name',
+    batch_col='batch',
+    abundance_col='abundance'
+)
+
+# Reference-anchored: estimate each batch's technical effect from the
+# inter-batch reference samples only (single-point calibration + EB shrinkage)
+reference_mask = [t == 'reference' for t in sample_types]
+corrected = combat_reference_anchored(data, batch, reference_mask)
+```
+
+### Standard vs reference-anchored ComBat
+
+- **Standard ComBat** (`reference_anchored: false`, default): aligns every batch to the across-batch grand mean. Estimates batch effects from all samples in each batch, assuming comparable biological composition per batch.
+- **Reference-anchored ComBat** (`reference_anchored: true`): estimates each batch's additive offset (and, where ≥2 reference replicates are available, multiplicative scale) from the inter-experiment **reference samples only** — identical material run in every batch — and applies the correction to all samples. Because the reference is identical material, the per-batch difference is purely technical, so no biology is removed. ComBat's empirical-Bayes shrinkage stabilizes the per-analyte calibration so an analyte poorly measured in the reference borrows strength from the batch-wide consensus. This is per-analyte single-point external reference calibration (Pino et al. 2020) with EB stabilization. Output is calibrated **absolute** abundance, not a ratio to the reference. Batches without reference samples fall back to standard grand-mean ComBat with a warning.
+
+**Key features:**
+
+- Parametric and non-parametric prior options
+- Reference batch support (adjust other batches to match a reference batch)
+- Reference-anchored mode (calibrate every batch on inter-batch reference samples)
+- Mean-only correction option (for unequal batch sizes)
+- Reference and QC sample CVs reported before/after correction
+
+## Residual Analysis for Proteoform Discovery
+
+Median polish produces residuals that capture deviations from the additive model. Following [Plubell et al. 2022](https://doi.org/10.1021/acs.jproteome.1c00894), peptides with large residuals should **not** be automatically discarded - they may indicate biologically interesting variation:
+
+- **Proteoform differences**: Different forms of the same protein (splice variants, truncations)
+- **Post-translational modifications**: PTMs affecting specific peptides
+- **Protein processing**: Cleavage products (e.g., amyloid-beta from APP)
+- **Technical outliers**: Interference or poor peak picking
+
+**Accessing residuals:**
+
+```python
+from skyline_prism import rollup_to_proteins, extract_peptide_residuals
+
+# Protein rollup returns median polish results and topn results
+protein_df, polish_results, topn_results = rollup_to_proteins(data, protein_groups)
+
+# Extract residuals in long format for output
+peptide_residuals = extract_peptide_residuals(polish_results)
+
+# Columns include:
+# - protein_group_id, peptide, replicate_name
+# - residual: raw residual for each peptide/sample
+# - residual_mad: robust measure of peptide's overall deviation
+# - residual_max_abs: maximum deviation across samples
+
+# Find peptides that consistently deviate
+outliers = peptide_residuals.groupby(['protein_group_id', 'peptide']).agg({
+    'residual_mad': 'first'
+}).reset_index()
+outliers = outliers[outliers['residual_mad'] > 0.5]  # Threshold of your choice
+```
+
+**Core Rollup API:**
+
+For advanced use cases, the `rollup_protein_matrix` function provides direct access to the core protein rollup logic:
+
+```python
+from skyline_prism import rollup_protein_matrix
+import pandas as pd
+
+# Create a peptide x sample matrix (log2 scale)
+matrix = pd.DataFrame({
+    'Sample1': [12.5, 14.2, 13.1],
+    'Sample2': [12.8, 14.5, 13.4],
+}, index=['PeptideA', 'PeptideB', 'PeptideC'])
+
+# Roll up to protein-level abundance
+result = rollup_protein_matrix(
+    matrix,
+    method='median_polish',
+    min_peptides=3,
+)
+
+# Result contains:
+# - result.abundances: pd.Series of sample abundances (log2)
+# - result.residuals: dict of peptide -> sample -> residual
+# - result.polish_result: MedianPolishResult (for median_polish method)
+# - result.topn_result: TopNResult (for topn method)
+```
+
+For transition-level residuals:
+
+
+```python
+from skyline_prism import rollup_transitions_to_peptides, extract_transition_residuals
+
+# Use median_polish method for transition rollup
+result = rollup_transitions_to_peptides(data, method='median_polish')
+
+# Extract transition residuals
+transition_residuals = extract_transition_residuals(result)
+```
+
+## Shared Peptide Handling
+
+Three strategies available:
+
+- **`all_groups`** (default, recommended): Apply shared peptides to ALL protein groups. Acknowledges proteoform complexity; avoids assumptions based on FASTA annotations.
+
+- **`unique_only`**: Only use peptides unique to a single protein group. Most conservative.
+
+- **`razor`**: Assign shared peptides to group with most peptides (MaxQuant-style).
+
+## Python API
+
+```python
+from skyline_prism import (
+    # Data I/O
+    load_skyline_report,
+    merge_skyline_reports,
+    load_sample_metadata,
+    
+    # Normalization
+    normalize_pipeline,
+    rt_correction_from_reference,
+    
+    # Rollup
+    tukey_median_polish,
+    rollup_protein_matrix,  # Core protein rollup function
+    rollup_to_proteins,
+    rollup_transitions_to_peptides,
+    
+    # Batch correction
+    combat,
+    combat_from_long,
+    combat_with_reference_samples,
+    
+    # Protein inference
+    compute_protein_groups,
+    
+    # Validation
+    validate_correction,
+    generate_qc_report,
+    
+    # Visualization
+    plot_intensity_distribution,
+    plot_normalization_comparison,
+    plot_pca,
+    plot_comparative_pca,
+    plot_control_correlation_heatmap,
+    plot_cv_distribution,
+    plot_comparative_cv,
+    plot_sample_correlation_matrix,
+)
+```
+
+## Data Visualization
+
+PRISM provides visualization functions for QC assessment and normalization evaluation. Install visualization dependencies with:
+
+```bash
+pip install skyline-prism[viz]
+```
+
+### Intensity Distribution
+
+Compare sample intensity distributions before/after normalization:
+
+```python
+from skyline_prism import plot_intensity_distribution, plot_normalization_comparison
+
+# Box plot of intensity distributions
+plot_intensity_distribution(
+    data,
+    sample_types={"Sample_1": "reference", "Sample_2": "qc", ...},
+    title="Intensity Distribution"
+)
+
+# Side-by-side comparison of normalization effect
+plot_normalization_comparison(
+    data_before=raw_data,
+    data_after=normalized_data,
+    title="Normalization Effect"
+)
+```
+
+### PCA Analysis
+
+Visualize batch effects and normalization impact with PCA:
+
+```python
+from skyline_prism import plot_pca, plot_comparative_pca
+
+# Single PCA plot with sample grouping
+fig, pca_df = plot_pca(
+    data,
+    sample_groups={"Sample_1": "Batch_A", "Sample_2": "Batch_B", ...}
+)
+
+# Comparative PCA: Original → Normalized → Batch Corrected
+plot_comparative_pca(
+    data_original=raw_data,
+    data_normalized=normalized_data,
+    data_batch_corrected=corrected_data,  # Optional
+    sample_groups=sample_batches,
+    figsize=(18, 6)
+)
+```
+
+### Control Sample Correlation
+
+Assess reproducibility using correlation heatmaps for control samples:
+
+```python
+from skyline_prism import plot_control_correlation_heatmap, plot_sample_correlation_matrix
+
+# Correlation heatmap for reference and QC samples only
+fig, corr_matrix = plot_control_correlation_heatmap(
+    data,
+    sample_type_col="sample_type",
+    control_types=["reference", "qc"],
+    method="pearson"
+)
+
+# Full sample correlation matrix
+fig, corr_matrix = plot_sample_correlation_matrix(
+    data,
+    sample_types=sample_type_dict
+)
+```
+
+### CV Distribution
+
+Evaluate precision using CV distributions for control samples:
+
+```python
+from skyline_prism import plot_cv_distribution, plot_comparative_cv
+
+# CV distribution histogram for controls
+fig, cv_data = plot_cv_distribution(
+    data,
+    sample_type_col="sample_type",
+    control_types=["reference", "qc"],
+    cv_threshold=20.0
+)
+
+# Compare CV before/after normalization
+plot_comparative_cv(
+    data_before=raw_data,
+    data_after=normalized_data,
+    sample_type_col="sample_type",
+    control_type="reference"
+)
+```
+
+### RT Correction Quality Assessment
+
+Visualize RT-dependent correction effectiveness. This is critical for validating that corrections learned from reference samples generalize to held-out QC samples:
+
+```python
+from skyline_prism import plot_rt_correction_comparison, plot_rt_correction_per_sample
+
+# 2×2 comparison showing reference (fitted) vs QC (held-out validation)
+# before and after RT correction
+fig, axes = plot_rt_correction_comparison(
+    data_before=data_before_correction,
+    data_after=data_after_correction,
+    sample_type_col="sample_type",
+    reference_mean=reference_mean_df,  # Mean abundance per peptide from reference
+    figsize=(14, 10)
+)
+
+# Per-sample before/after comparison
+fig, axes = plot_rt_correction_per_sample(
+    data_before=data_before_correction,
+    data_after=data_after_correction,
+    sample_type_col="sample_type",
+    reference_mean=reference_mean_df,
+    samples_per_type=3,  # Number of samples to show per type
+    figsize=(16, 12)
+)
+```
+
+The RT correction plots help assess:
+
+- Whether the spline model captures RT-dependent variation in reference samples
+- Whether corrections generalize to QC samples (held-out validation)
+- Whether any samples have unusually large residuals after correction
+
+All visualization functions support:
+
+- `show_plot=False` to return the figure object for further customization
+- `save_path="/path/to/figure.png"` to save directly to file
+
+## Citation
+
+If you use Skyline-PRISM, please cite:
+
+Tsantilas KA et al. "A framework for quality control in quantitative proteomics."
+J Proteome Res. 2024. DOI: 10.1021/acs.jproteome.4c00363
+
+## Related Projects
+
+- [Skyline](https://skyline.ms) - Targeted mass spectrometry environment
+- [Panorama](https://panoramaweb.org) - Repository for Skyline documents
+
+## License
+
+MIT License - see LICENSE file.
