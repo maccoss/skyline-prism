@@ -77,7 +77,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Interactive QC tabs in the tool (PCA / CV / intensity, peptide+protein) with a raw↔corrected
       view toggle — `MainWindow` QC Plots tab
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
-- [ ] RT-bin boxplot + 3-stage variants (marginal); pass/fail validation status + warnings layer
+- [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, RVR overfitting,
+      PCA QC-reference distance collapse) — `ValidationStatus`
+- [ ] RT-bin boxplot + 3-stage plot variants (marginal)
 
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging
