@@ -46,7 +46,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       not its production CLI path; valuable safety feature but lower priority
 
 ## Protein parsimony (Stage 3)
-- [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`
+- [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`.
+      Order-independent (groups depend only on the peptide/protein sets, not input row order;
+      proven by `ParsimonyOspreyTests.Grouping_IsOrderIndependent`). Grouping matches
+      maccoss/osprey (identical-set merge + subset elimination -> same maximal groups); the
+      default `all_groups` path needs no razor. Razor tiebreak aligned to Osprey (unique count,
+      then largest peptide set, then lowest accession) — deterministic even where Osprey's
+      group-ID order is arbitrary. Same fix applied to Python `parsimony.py` to keep them in step.
 - [x] Skyline CSV-based peptide→protein map
 - [x] Parsimony on/off (one group per protein) — `BuildUngroupedGroups`
 - [x] FASTA-based map (substring + I/L equivalence) — `FastaParser`; set `parsimony.fasta_path`

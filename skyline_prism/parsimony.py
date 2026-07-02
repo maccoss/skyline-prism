@@ -534,10 +534,16 @@ def compute_protein_groups(
         if not candidates:
             break
 
-        # Highest unique count wins; ties broken by lowest canonical string.
+        # Highest unique count wins. Ties -> largest total peptide set (Osprey gives the largest
+        # set the lowest group ID and tiebreaks on lowest ID), then lowest canonical string so the
+        # choice stays deterministic where Osprey's group-ID order is arbitrary (equal-size sets).
         best_can = min(
             candidates,
-            key=lambda c: (-len(canonical_to_unique_peps[c]), c),
+            key=lambda c: (
+                -len(canonical_to_unique_peps[c]),
+                -len(protein_to_peptides[canonical_to_members[c][0]]),
+                c,
+            ),
         )
 
         can_peps = protein_to_peptides[canonical_to_members[best_can][0]]

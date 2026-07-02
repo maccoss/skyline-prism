@@ -264,9 +264,12 @@ public static class ParsimonyEngine
             if (candidates.Count == 0)
                 break;
 
-            // Highest unique count wins; ties -> lowest canonical string.
+            // Highest unique count wins. Ties -> largest total peptide set (Osprey assigns the
+            // lowest group ID to the largest set and tiebreaks on lowest ID), then lowest canonical
+            // string so the choice stays deterministic where Osprey's group-ID order is arbitrary.
             var bestCan = candidates
                 .OrderByDescending(c => canonicalToUniquePeps.TryGetValue(c, out var s) ? s.Count : 0)
+                .ThenByDescending(c => protToPep[canonicalToMembers[c][0]].Count)
                 .ThenBy(c => c, StringComparer.Ordinal)
                 .First();
 
