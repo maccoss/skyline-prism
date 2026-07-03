@@ -55,8 +55,11 @@ public static class QcReport
 
         var typeLabels = sampleCols.Select(s => sampleTypes.GetValueOrDefault(s, "unknown")).ToList();
 
-        var peptidePlots = RenderLevelSections("peptide", pepRaw, pepCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
-        var proteinPlots = RenderLevelSections("protein", protRaw, protCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir);
+        // RT diagnostic plots are only meaningful when RT-lowess normalization actually ran (matches
+        // Python, which gates them on rt_lowess_result being present).
+        var rtLowessRan = string.Equals(config.GlobalNormalization.Method, "rt_lowess", StringComparison.OrdinalIgnoreCase);
+        var peptidePlots = RenderLevelSections("peptide", pepRaw, pepCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
+        var proteinPlots = RenderLevelSections("protein", protRaw, protCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
 
         var validation = ValidationStatus.Compute(pepRaw.Values, pepCorrected.Values, refIdx, qcIdx);
 
@@ -80,7 +83,7 @@ public static class QcReport
     /// </summary>
     private static List<PlotSection> RenderLevelSections(
         string level, Matrix raw, Matrix corrected, IReadOnlyList<string> typeLabels,
-        IReadOnlyList<int> refIdx, IReadOnlyList<int> qcIdx, bool savePlots, string plotsDir)
+        IReadOnlyList<int> refIdx, IReadOnlyList<int> qcIdx, bool savePlots, string plotsDir, bool rtLowessRan)
     {
         var cap = char.ToUpperInvariant(level[0]) + level[1..];
         var sections = new List<PlotSection>();
@@ -147,7 +150,7 @@ public static class QcReport
             }));
 
         // RT-dependent diagnostics (peptide level only - proteins have no RT).
-        if (raw.MeanRt is not null && corrected.MeanRt is not null)
+        if (rtLowessRan && raw.MeanRt is not null && corrected.MeanRt is not null)
         {
             sections.Add(new PlotSection($"{cap} RT-Lowess Curves: Before vs After", new List<PlotImage>
             {

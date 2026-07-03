@@ -53,7 +53,7 @@ public class ReplicateMetadataTests
             var md = ReplicateMetadata.TryLoad(path);
             Assert.NotNull(md);
             Assert.Equal("reference", md!.TypeByReplicate["S1"]);
-            Assert.Equal("experimental", md.TypeByReplicate["S2"]); // Blank -> experimental
+            Assert.Equal("blank", md.TypeByReplicate["S2"]); // Blank -> blank (excluded from groupings)
             Assert.False(md.HasBatches);
         }
         finally
@@ -67,6 +67,9 @@ public class ReplicateMetadataTests
     [InlineData("Quality Control", "qc")]
     [InlineData("Unknown", "experimental")]
     [InlineData("", "experimental")]
+    [InlineData("Solvent", "blank")]
+    [InlineData("Blank", "blank")]
+    [InlineData("Double Blank", "blank")]
     public void MapSampleType_MatchesPython(string skyline, string expected)
         => Assert.Equal(expected, ReplicateMetadata.MapSampleType(skyline));
 }

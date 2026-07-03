@@ -34,7 +34,8 @@ public static class Lowess
             return yfit;
         }
 
-        var r = Math.Max(2, Math.Min(n, (int)Math.Ceiling(frac * n)));
+        // Neighbourhood size = statsmodels' int(frac*n + 1e-10) (truncation), not ceil.
+        var r = Math.Max(2, Math.Min(n, (int)(frac * n + 1e-10)));
         var robust = new double[n];
         for (var i = 0; i < n; i++)
             robust[i] = 1.0;

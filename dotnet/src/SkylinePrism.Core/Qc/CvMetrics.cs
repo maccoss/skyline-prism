@@ -19,30 +19,25 @@ public static class CvMetrics
     {
         var nFeatures = log2Matrix.GetLength(0);
         var cvs = new List<double>(nFeatures);
-        var linear = new double[sampleIndices.Count];
+        var linear = new List<double>(sampleIndices.Count);
 
         for (var f = 0; f < nFeatures; f++)
         {
-            var anyNaN = false;
+            // CV over the feature's NON-NaN samples (pandas std/mean skipna), not all-or-nothing:
+            // features with some missing values are common and must still count.
+            linear.Clear();
             for (var k = 0; k < sampleIndices.Count; k++)
             {
                 var v = log2Matrix[f, sampleIndices[k]];
-                if (double.IsNaN(v))
-                {
-                    anyNaN = true;
-                    break;
-                }
-                linear[k] = Math.Pow(2.0, v);
+                if (!double.IsNaN(v))
+                    linear.Add(Math.Pow(2.0, v));
             }
-            if (anyNaN)
-            {
-                // pandas std/mean over a row with NaN would skip them; features with NaN are
-                // rare here (imputed upstream). Skip to keep the median well-defined.
+            if (linear.Count < 2)
                 continue;
-            }
 
-            var mean = Stats.Mean(linear);
-            var std = Math.Sqrt(Stats.Var(linear, ddof: 1));
+            var arr = linear.ToArray();
+            var mean = Stats.Mean(arr);
+            var std = Math.Sqrt(Stats.Var(arr, ddof: 1));
             cvs.Add(std / mean * 100.0);
         }
 
@@ -54,20 +49,22 @@ public static class CvMetrics
     {
         var nFeatures = log2Matrix.GetLength(0);
         var cvs = new List<double>(nFeatures);
-        var linear = new double[sampleIndices.Count];
+        var linear = new List<double>(sampleIndices.Count);
         for (var f = 0; f < nFeatures; f++)
         {
-            var anyNaN = false;
+            // CV over the feature's non-NaN samples (pandas skipna); needs >= 2 present.
+            linear.Clear();
             for (var k = 0; k < sampleIndices.Count; k++)
             {
                 var v = log2Matrix[f, sampleIndices[k]];
-                if (double.IsNaN(v)) { anyNaN = true; break; }
-                linear[k] = Math.Pow(2.0, v);
+                if (!double.IsNaN(v))
+                    linear.Add(Math.Pow(2.0, v));
             }
-            if (anyNaN)
+            if (linear.Count < 2)
                 continue;
-            var mean = Stats.Mean(linear);
-            var std = Math.Sqrt(Stats.Var(linear, ddof: 1));
+            var arr = linear.ToArray();
+            var mean = Stats.Mean(arr);
+            var std = Math.Sqrt(Stats.Var(arr, ddof: 1));
             cvs.Add(std / mean * 100.0);
         }
         return cvs.ToArray();

@@ -340,7 +340,10 @@ public sealed class PrismPipeline
             DateTime.UtcNow.ToString("o"));
         var nRef = resolvedType.Values.Count(t => t == "reference");
         var nQc = resolvedType.Values.Count(t => t == "qc");
-        report($"  Sample types: {nRef} reference, {nQc} qc, {resolvedType.Count - nRef - nQc} experimental.");
+        var nExp = resolvedType.Values.Count(t => t == "experimental");
+        var nBlank = resolvedType.Count - nRef - nQc - nExp;
+        report($"  Sample types: {nRef} reference, {nQc} qc, {nExp} experimental"
+            + (nBlank > 0 ? $", {nBlank} blank/solvent (excluded from groupings)" : "") + ".");
         report($"  Wrote corrected_peptides / corrected_proteins ({config.Output.Format}, linear), "
             + "sample_metadata.csv, and parameters.json (provenance).");
 

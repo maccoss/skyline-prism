@@ -128,7 +128,13 @@ public sealed class ReplicateMetadata
         if (t.Equals("Quality Control", StringComparison.OrdinalIgnoreCase)
             || t.Equals("QC", StringComparison.OrdinalIgnoreCase))
             return "qc";
-        return "experimental"; // Unknown, Blank, Solvent, Double Blank, etc.
+        // Solvent / Blank / Double Blank are analytical blanks, excluded from ref/qc/experimental
+        // groupings (matches Python's SKYLINE_SAMPLE_TYPE_MAP). Only Unknown/unannotated is experimental.
+        if (t.Equals("Solvent", StringComparison.OrdinalIgnoreCase)
+            || t.Equals("Blank", StringComparison.OrdinalIgnoreCase)
+            || t.Equals("Double Blank", StringComparison.OrdinalIgnoreCase))
+            return "blank";
+        return "experimental"; // Unknown and any unannotated/custom value
     }
 
     private static int FindColumn(string[] header, string[] candidates)
