@@ -795,19 +795,18 @@ public partial class MainWindow : Window
                 case "Control correlation":
                     if (groupCols.Count < 2) { ShowStaticMessage($"Correlation needs >= 2 samples in '{groupLabel}'."); return; }
                     var corrTypes = groupCols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
-                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, $"Sample correlation ({cap}, {groupLabel})", corrTypes);
+                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, "", corrTypes);
                     break;
                 case "RT-lowess":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
                     if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
                     png = PlotRenderer.RtLowessCurves(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
-                        groupCols.Select(i => types[i]).ToList(), $"RT-lowess of log2 abundance ({cap}, {groupLabel})");
+                        groupCols.Select(i => types[i]).ToList(), "");
                     break;
                 case "RT-bin boxplot":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
                     if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
-                    png = PlotRenderer.RtBinBoxplot(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
-                        $"Abundance by RT bin ({cap}, {groupLabel})", "#1f77b4");
+                    png = PlotRenderer.RtBinBoxplot(Subset(d.FeaturesBySamples, groupCols), d.MeanRt, "", "#1f77b4");
                     break;
                 case "RT-binned CV":
                     // before vs after (View ignored), peptide only, over the selected Group's samples.
@@ -819,8 +818,7 @@ public partial class MainWindow : Window
                     }
                     var cvCols = GroupColumns(rawD.Samples);
                     if (cvCols.Count < 2) { ShowStaticMessage($"RT-binned CV needs >= 2 samples in '{groupLabel}'."); return; }
-                    png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, cvCols,
-                        $"RT-binned CV ({groupLabel}, before vs after)", "#1f77b4");
+                    png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, cvCols, "", "#1f77b4");
                     break;
             }
             if (png is not null)
@@ -892,7 +890,7 @@ public partial class MainWindow : Window
             markers.LegendText = label;
         }
         plt.ShowLegend();
-        plt.Title($"{Cap(level)} PCA ({view}, {group})");
+        // No title in the tool - the View/Level/Group/Plot selectors above already describe the plot.
         plt.XLabel("PC1");
         plt.YLabel("PC2");
     }
@@ -916,7 +914,7 @@ public partial class MainWindow : Window
                 PlotRenderer.TypeColors.GetValueOrDefault(types.Count > 0 ? types[0] : "", "#1f77b4"), Cap(group));
         }
         plt.ShowLegend(Alignment.UpperRight); // upper-right so it doesn't overlap the histogram bars
-        plt.Title($"{Cap(level)} CV distribution ({view}, {group})");
+        // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
     }
@@ -953,7 +951,7 @@ public partial class MainWindow : Window
     {
         // Per-sample KDE density curves (the Python "Intensity Distribution" plot), same renderer as the report.
         PlotRenderer.DrawIntensityDensity(plt, featuresBySamples);
-        plt.Title($"{Cap(level)} intensity distribution ({view}, {group})");
+        // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("Log2 Abundance");
         plt.YLabel("Density");
     }

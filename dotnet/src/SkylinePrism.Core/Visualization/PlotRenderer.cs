@@ -234,7 +234,9 @@ public static class PlotRenderer
 
         plt.Title(title);
         StyleQcPlot(plt);
+        // Rotate the x labels and right-align them (matplotlib ha="right") so each sits under its column.
         plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
+        plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -661,7 +663,7 @@ public static class PlotRenderer
             var density = Numerics.Kde.Estimate(perSample[s], grid);
             var line = plt.Add.Scatter(grid, density);
             line.MarkerSize = 0;
-            line.LineWidth = 1.5f; // thin: many samples are overlaid
+            line.LineWidth = 3.0f; // thick, like the RT-lowess curves
             line.Color = SampleColor(s).WithAlpha((byte)130);
         }
     }
