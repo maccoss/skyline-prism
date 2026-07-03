@@ -148,13 +148,12 @@
                             <ComboBoxItem>Peptide</ComboBoxItem>
                             <ComboBoxItem>Protein</ComboBoxItem>
                         </ComboBox>
-                        <TextBlock Text="Group:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="QcGroupCombo" Width="120" SelectionChanged="OnQcChanged">
-                            <ComboBoxItem>All</ComboBoxItem>
-                            <ComboBoxItem>Reference</ComboBoxItem>
-                            <ComboBoxItem>QC</ComboBoxItem>
-                            <ComboBoxItem>Experimental</ComboBoxItem>
-                        </ComboBox>
+                        <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
+                                  ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
+                        <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
+                        <ComboBox x:Name="QcGroupCombo" Width="150" SelectionChanged="OnQcChanged"
+                                  ToolTip="Value in that column to show (All keeps every sample)." />
                         <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
                         <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
                             <ComboBoxItem>PCA</ComboBoxItem>

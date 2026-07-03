@@ -65,8 +65,8 @@ public partial class MainWindow : Window
         ProteinNormCombo.SelectedIndex = 0;
         QcViewCombo.SelectedIndex = 0;
         QcLevelCombo.SelectedIndex = 0;
-        QcGroupCombo.SelectedIndex = 0;
         QcPlotCombo.SelectedIndex = 0;
+        // QcGroupByCombo / QcGroupCombo are populated from the Replicates report after a run.
 
         if (_session is not null)
         {
@@ -405,6 +405,7 @@ public partial class MainWindow : Window
             });
             _lastReportPath = reportPath;
             OpenReportButton.IsEnabled = reportExists;
+            PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             MainTabs.SelectedItem = QcTab; // land on the plots when the run finishes
@@ -458,6 +459,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples, double[]? MeanRt)> _qcData = new();
     private Dictionary<string, string> _qcTypes = new();
     private string? _qcOutputDir;
+    // Replicate annotations from the exported Replicates report: replicate -> (column -> value).
+    private readonly Dictionary<string, Dictionary<string, string>> _replicateAnn = new(StringComparer.Ordinal);
+    private List<string> _groupColumns = new();
+    private bool _suppressQcRender;
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
     // except Log, which marshals to the dispatcher). RenderQc() is invoked separately on the UI thread.
@@ -472,6 +477,7 @@ public partial class MainWindow : Window
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
+            LoadReplicatesReport(Path.Combine(outputDir, "skyline-reports", "Metadata.csv"));
         }
         catch (Exception ex)
         {
@@ -509,7 +515,143 @@ public partial class MainWindow : Window
         _qcData[key] = (m, sampleCols, meanRt);
     }
 
-    private void OnQcChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => RenderQc();
+    // Parse the exported Replicates report (dynamic annotation columns) into replicate -> column -> value.
+    private void LoadReplicatesReport(string path)
+    {
+        _replicateAnn.Clear();
+        _groupColumns = new List<string>();
+        if (!File.Exists(path))
+            return;
+        var lines = File.ReadAllLines(path);
+        if (lines.Length < 2)
+            return;
+        var header = SplitCsvLine(lines[0]);
+        var repIdx = -1;
+        foreach (var cand in new[] { "Replicate", "Replicate Name", "ReplicateName", "ReplicateLocator" })
+        {
+            repIdx = Array.FindIndex(header, h => h.Trim().Equals(cand, StringComparison.OrdinalIgnoreCase));
+            if (repIdx >= 0)
+                break;
+        }
+        if (repIdx < 0)
+            return;
+
+        var cols = new List<(string Name, int Idx)>();
+        for (var i = 0; i < header.Length; i++)
+            if (i != repIdx && !string.IsNullOrWhiteSpace(header[i]))
+                cols.Add((header[i].Trim(), i));
+        _groupColumns = cols.Select(c => c.Name).ToList();
+
+        for (var r = 1; r < lines.Length; r++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[r]))
+                continue;
+            var f = SplitCsvLine(lines[r]);
+            if (f.Length <= repIdx)
+                continue;
+            var rep = f[repIdx].Trim();
+            if (rep.Length == 0)
+                continue;
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, idx) in cols)
+                map[name] = idx < f.Length ? f[idx].Trim() : "";
+            _replicateAnn[rep] = map;
+        }
+    }
+
+    // Sample IDs are "<replicate>__@__<batch>"; the Replicates report is keyed by replicate.
+    private static string ReplicateOf(string sampleId)
+    {
+        const string sep = "__@__";
+        var i = sampleId.IndexOf(sep, StringComparison.Ordinal);
+        return i >= 0 ? sampleId[..i] : sampleId;
+    }
+
+    private string SampleAnnotation(string sampleId, string column)
+    {
+        if (_replicateAnn.TryGetValue(ReplicateOf(sampleId), out var m) && m.TryGetValue(column, out var v))
+            return v;
+        // Fallback for the synthetic Sample Type column when no Replicates report is available.
+        if (column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase))
+            return _qcTypes.GetValueOrDefault(sampleId, "");
+        return "";
+    }
+
+    private static string[] SplitCsvLine(string line)
+    {
+        var fields = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        var inQuotes = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
+                    else inQuotes = false;
+                }
+                else sb.Append(c);
+            }
+            else if (c == '"') inQuotes = true;
+            else if (c == ',') { fields.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(c);
+        }
+        fields.Add(sb.ToString());
+        return fields.ToArray();
+    }
+
+    // Fill the Group-by column combo from the Replicates report (default Sample Type) and its values.
+    private void PopulateGroupCombos()
+    {
+        _suppressQcRender = true;
+        var columns = _groupColumns.Count > 0 ? _groupColumns : new List<string> { "Sample Type" };
+        QcGroupByCombo.Items.Clear();
+        foreach (var c in columns)
+            QcGroupByCombo.Items.Add(c);
+        var def = columns.FindIndex(c => c.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase));
+        QcGroupByCombo.SelectedIndex = def >= 0 ? def : 0;
+        PopulateValueCombo();
+        _suppressQcRender = false;
+    }
+
+    private void PopulateValueCombo()
+    {
+        var column = ComboText(QcGroupByCombo, "");
+        QcGroupCombo.Items.Clear();
+        QcGroupCombo.Items.Add("All");
+        if (!string.IsNullOrEmpty(column) && _qcData.Count > 0)
+        {
+            var samples = _qcData.Values.First().Samples;
+            var values = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var s in samples)
+            {
+                var v = SampleAnnotation(s, column);
+                if (!string.IsNullOrEmpty(v))
+                    values.Add(v);
+            }
+            foreach (var v in values)
+                QcGroupCombo.Items.Add(v);
+        }
+        QcGroupCombo.SelectedIndex = 0; // All
+    }
+
+    private void OnGroupByChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_suppressQcRender)
+            return;
+        _suppressQcRender = true;
+        PopulateValueCombo();
+        _suppressQcRender = false;
+        RenderQc();
+    }
+
+    private void OnQcChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!_suppressQcRender)
+            RenderQc();
+    }
 
     // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
     // static images by the same PlotRenderer.
@@ -542,23 +684,26 @@ public partial class MainWindow : Window
         }
         var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
 
-        // Optional sample-group filter (Reference / QC / Experimental; "All" keeps every sample).
-        var group = ComboText(QcGroupCombo, "All");
+        // Optional group filter driven by a Replicates-report column (e.g. "Sample Type" = "Standard").
+        var column = ComboText(QcGroupByCombo, "Sample Type");
+        var value = ComboText(QcGroupCombo, "All");
         var matrix = d.FeaturesBySamples;
-        if (!string.Equals(group, "All", StringComparison.OrdinalIgnoreCase))
+        var groupLabel = "all";
+        if (!string.Equals(value, "All", StringComparison.OrdinalIgnoreCase))
         {
-            var gtype = group.ToLowerInvariant(); // combo values map 1:1 to sample types
-            var cols = Enumerable.Range(0, types.Count).Where(i => types[i] == gtype).ToList();
+            var cols = Enumerable.Range(0, d.Samples.Count)
+                .Where(i => string.Equals(SampleAnnotation(d.Samples[i], column), value, StringComparison.OrdinalIgnoreCase))
+                .ToList();
             if (cols.Count < 2)
             {
-                plt.Title($"Fewer than 2 {group} samples in this analysis.");
+                plt.Title($"Fewer than 2 samples with {column} = {value}.");
                 QcPlot.Refresh();
                 return;
             }
             matrix = SelectColumns(d.FeaturesBySamples, cols);
             types = cols.Select(i => types[i]).ToList();
+            groupLabel = value;
         }
-        var groupLabel = group.ToLowerInvariant();
 
         try
         {
