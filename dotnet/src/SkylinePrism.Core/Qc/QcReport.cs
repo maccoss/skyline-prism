@@ -104,13 +104,20 @@ public static class QcReport
             }
         }
 
-        sections.Add(new PlotSection($"{cap} Intensity Distribution: Before vs After", new List<PlotImage>
-        {
-            Img("Before (raw rollup)", $"{level}_intensity_before",
-                () => PlotRenderer.IntensityDistribution(raw.Values, typeLabels, "Before")),
-            Img("After (normalized + corrected)", $"{level}_intensity_after",
-                () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, "After")),
-        }));
+        // Per-sample intensity density curves; the title reports how much normalization tightened the
+        // spread of per-sample medians (the Python "Median range: X -> Y (Z% reduction)" super-title).
+        var beforeMedRange = MedianRange(raw.Values);
+        var afterMedRange = MedianRange(corrected.Values);
+        var medReduction = beforeMedRange > 0 ? (1.0 - afterMedRange / beforeMedRange) * 100.0 : 0.0;
+        sections.Add(new PlotSection(
+            $"{cap} Intensity Distribution: median range {beforeMedRange:0.00} -> {afterMedRange:0.00} ({medReduction:0.0}% reduction)",
+            new List<PlotImage>
+            {
+                Img("Before normalization", $"{level}_intensity_before",
+                    () => PlotRenderer.IntensityDistribution(raw.Values, typeLabels, "Before Normalization")),
+                Img("After normalization", $"{level}_intensity_after",
+                    () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, "After Normalization")),
+            }));
 
         sections.Add(new PlotSection($"{cap} PCA: Before vs After", new List<PlotImage>
         {
@@ -140,13 +147,14 @@ public static class QcReport
 
         // Control-sample (reference + QC) correlation heatmap, before vs after.
         var controlIdx = refIdx.Concat(qcIdx).Distinct().OrderBy(x => x).ToList();
+        var controlTypes = controlIdx.Select(i => typeLabels[i]).ToList();
         if (controlIdx.Count >= 2)
             sections.Add(new PlotSection($"{cap} Control-Sample Correlation: Before vs After", new List<PlotImage>
             {
                 Img("Before (raw rollup)", $"{level}_control_corr_before",
-                    () => PlotRenderer.CorrelationHeatmap(raw.Values, controlIdx, "Before")),
+                    () => PlotRenderer.CorrelationHeatmap(raw.Values, controlIdx, $"{cap} Control Sample Correlation (Before Correction)", controlTypes)),
                 Img("After (normalized + corrected)", $"{level}_control_corr_after",
-                    () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, "After")),
+                    () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, $"{cap} Control Sample Correlation (After Correction)", controlTypes)),
             }));
 
         // RT-dependent diagnostics (peptide level only - proteins have no RT).
@@ -375,6 +383,31 @@ td:first-child, th:first-child { text-align: left; }
             for (var j = 0; j < c; j++)
                 t[j, i] = a[i, j];
         return t;
+    }
+
+    /// <summary>Spread (max - min) of the per-sample median LOG2 abundance; 0 when no data.</summary>
+    private static double MedianRange(double[,] log2Matrix)
+    {
+        var nF = log2Matrix.GetLength(0);
+        var nS = log2Matrix.GetLength(1);
+        var buf = new double[nF];
+        double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+        for (var s = 0; s < nS; s++)
+        {
+            var n = 0;
+            for (var f = 0; f < nF; f++)
+            {
+                var v = log2Matrix[f, s];
+                if (!double.IsNaN(v))
+                    buf[n++] = v;
+            }
+            if (n == 0)
+                continue;
+            var med = Numerics.Stats.NanMedian(buf.AsSpan(0, n));
+            if (med < lo) lo = med;
+            if (med > hi) hi = med;
+        }
+        return hi >= lo ? hi - lo : 0.0;
     }
 
     private static List<int> IndicesOfType(

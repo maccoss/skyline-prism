@@ -26,14 +26,14 @@ public static class PlotRenderer
         ["unknown"] = "#7f7f7f",
     };
 
-    // ColorBrewer RdYlBu reversed (low -> high: blue -> yellow -> red) = matplotlib "RdYlBu_r",
-    // the colormap the Python control-correlation heatmap uses.
-    private static readonly Color[] RdYlBuReversed =
+    // ColorBrewer RdBu reversed (low -> high: blue -> white -> red) = matplotlib "RdBu_r": a diverging
+    // map with white in the middle, as the Python control-correlation heatmap uses.
+    private static readonly Color[] RdBuReversed =
     {
-        Color.FromHex("#313695"), Color.FromHex("#4575b4"), Color.FromHex("#74add1"),
-        Color.FromHex("#abd9e9"), Color.FromHex("#e0f3f8"), Color.FromHex("#ffffbf"),
-        Color.FromHex("#fee090"), Color.FromHex("#fdae61"), Color.FromHex("#f46d43"),
-        Color.FromHex("#d73027"), Color.FromHex("#a50026"),
+        Color.FromHex("#053061"), Color.FromHex("#2166ac"), Color.FromHex("#4393c3"),
+        Color.FromHex("#92c5de"), Color.FromHex("#d1e5f0"), Color.FromHex("#f7f7f7"),
+        Color.FromHex("#fddbc7"), Color.FromHex("#f4a582"), Color.FromHex("#d6604d"),
+        Color.FromHex("#b2182b"), Color.FromHex("#67001f"),
     };
 
     // Bold, large axis/legend styling shared by every QC plot (static PNGs and the interactive tool):
@@ -172,7 +172,8 @@ public static class PlotRenderer
     /// Correlation heatmap among the given (control) sample columns - the "did batch correction
     /// tighten the controls" diagnostic (Pearson over features present in both samples).
     /// </summary>
-    public static byte[] CorrelationHeatmap(double[,] featuresBySamples, IReadOnlyList<int> cols, string title)
+    public static byte[] CorrelationHeatmap(
+        double[,] featuresBySamples, IReadOnlyList<int> cols, string title, IReadOnlyList<string>? colTypes = null)
     {
         var n = cols.Count;
         var corr = new double[n, n];
@@ -180,24 +181,158 @@ public static class PlotRenderer
             for (var b = 0; b < n; b++)
                 corr[a, b] = a == b ? 1.0 : Pearson(featuresBySamples, cols[a], cols[b]);
 
+        // Reorder by average-linkage hierarchical clustering of (1 - corr), like the Python report
+        // (scipy linkage(method="average") + leaves_list) - no dendrogram, just a similarity ordering.
+        var order = n >= 3 ? AverageLinkageOrder(corr) : Enumerable.Range(0, n).ToArray();
+        var rc = new double[n, n];
+        for (var i = 0; i < n; i++)
+            for (var j = 0; j < n; j++)
+                rc[i, j] = corr[order[i], order[j]];
+        var labels = TypeLabels(order, colTypes);
+
+        // Colour range: 1.0 = best (red), the min off-diagonal correlation = worst (blue).
+        var vmin = 1.0;
+        for (var i = 0; i < n; i++)
+            for (var j = 0; j < n; j++)
+                if (i != j && !double.IsNaN(rc[i, j]) && rc[i, j] < vmin)
+                    vmin = rc[i, j];
+        vmin = Math.Max(-1.0, vmin);
+
+        // ScottPlot draws array row 0 at the TOP (matplotlib/Python orientation), so pass rc directly:
+        // the 1.0 diagonal runs top-left -> bottom-right. Cell rc[i,j] centre is (j+0.5, n-0.5-i).
         var plt = new Plot();
-        var hm = plt.Add.Heatmap(corr);
-        // Match the Python report (seaborn RdYlBu_r, vmax=1): a diverging blue->yellow->red map anchored
-        // so correlation = 1 is deep red, rather than ScottPlot's rainbow Turbo stretched across a
-        // narrow ~0.9-1.0 control range.
-        hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdYlBuReversed);
-        var minCorr = 1.0;
-        for (var a = 0; a < n; a++)
-            for (var b = 0; b < n; b++)
-                if (!double.IsNaN(corr[a, b]) && corr[a, b] < minCorr)
-                    minCorr = corr[a, b];
-        hm.ManualRange = new ScottPlot.Range(Math.Max(-1.0, minCorr), 1.0);
+        var hm = plt.Add.Heatmap(rc);
+        hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdBuReversed);
+        hm.ManualRange = new ScottPlot.Range(vmin, 1.0);
+        hm.Position = new ScottPlot.CoordinateRect(0, n, 0, n);
         plt.Add.ColorBar(hm);
+
+        // Cell value annotations (skip when too many samples to stay readable, like seaborn annot<=15).
+        if (n <= 15)
+            for (var i = 0; i < n; i++)
+                for (var j = 0; j < n; j++)
+                {
+                    if (double.IsNaN(rc[i, j]))
+                        continue;
+                    var t = plt.Add.Text(rc[i, j].ToString("0.00"), j + 0.5, (n - 1 - i) + 0.5);
+                    t.LabelAlignment = Alignment.MiddleCenter;
+                    t.LabelFontSize = 13;
+                    // white text on the dark (low/high) ends, dark text near the white middle.
+                    var mid = (vmin + 1.0) / 2.0;
+                    t.LabelFontColor = Math.Abs(rc[i, j] - mid) > (1.0 - vmin) * 0.28 ? Colors.White : Colors.Black;
+                }
+
+        // Ref_001 / QC_001 / ... tick labels at cell centres.
+        var pos = new double[n];
+        for (var i = 0; i < n; i++)
+            pos[i] = i + 0.5;
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, labels.ToArray());
+        var yLabels = new string[n];
+        for (var i = 0; i < n; i++)
+            yLabels[i] = labels[n - 1 - i]; // y is flipped
+        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, yLabels);
+
         plt.Title(title);
-        plt.XLabel("Control sample");
-        plt.YLabel("Control sample");
         StyleQcPlot(plt);
+        plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    // Short per-sample labels grouped by type: Ref_001, QC_001, Exp_001 (falls back to S_001).
+    private static List<string> TypeLabels(int[] order, IReadOnlyList<string>? colTypes)
+    {
+        var counters = new Dictionary<string, int>();
+        var labels = new List<string>(order.Length);
+        foreach (var idx in order)
+        {
+            var type = colTypes is not null && idx < colTypes.Count ? colTypes[idx] : "";
+            var prefix = type switch
+            {
+                "reference" => "Ref",
+                "qc" => "QC",
+                "experimental" => "Exp",
+                "blank" => "Blank",
+                _ => "S",
+            };
+            counters.TryGetValue(prefix, out var c);
+            counters[prefix] = c + 1;
+            labels.Add($"{prefix}_{c + 1:000}");
+        }
+        return labels;
+    }
+
+    // Leaf order from average-linkage (UPGMA) agglomerative clustering of the distance matrix 1 - corr.
+    private static int[] AverageLinkageOrder(double[,] corr)
+    {
+        var n = corr.GetLength(0);
+        var dist = new double[n, n];
+        for (var i = 0; i < n; i++)
+            for (var j = 0; j < n; j++)
+            {
+                var c = corr[i, j];
+                dist[i, j] = i == j ? 0.0 : (double.IsNaN(c) ? 1.0 : 1.0 - c);
+            }
+
+        var active = new List<int>();          // active cluster ids
+        var members = new Dictionary<int, List<int>>();
+        var size = new Dictionary<int, int>();
+        var children = new Dictionary<int, (int, int)>();
+        for (var i = 0; i < n; i++)
+        {
+            active.Add(i);
+            members[i] = new List<int> { i };
+            size[i] = 1;
+        }
+        var d = new Dictionary<(int, int), double>();
+        for (var i = 0; i < n; i++)
+            for (var j = i + 1; j < n; j++)
+                d[(i, j)] = dist[i, j];
+        double Get(int a, int b) => a < b ? d[(a, b)] : d[(b, a)];
+
+        var next = n;
+        while (active.Count > 1)
+        {
+            // closest pair
+            int bi = active[0], bj = active[1];
+            var best = double.MaxValue;
+            for (var x = 0; x < active.Count; x++)
+                for (var y = x + 1; y < active.Count; y++)
+                {
+                    var dd = Get(active[x], active[y]);
+                    if (dd < best) { best = dd; bi = active[x]; bj = active[y]; }
+                }
+
+            var id = next++;
+            var si = size[bi];
+            var sj = size[bj];
+            children[id] = (bi, bj);
+            members[id] = new List<int>(members[bi]);
+            members[id].AddRange(members[bj]);
+            size[id] = si + sj;
+            // UPGMA update: d(new,k) = (si*d(bi,k) + sj*d(bj,k)) / (si+sj)
+            foreach (var k in active)
+            {
+                if (k == bi || k == bj) continue;
+                var nd = (si * Get(bi, k) + sj * Get(bj, k)) / (si + sj);
+                var key = id < k ? (id, k) : (k, id);
+                d[key] = nd;
+            }
+            active.Remove(bi);
+            active.Remove(bj);
+            active.Add(id);
+        }
+
+        // leaf order = in-order traversal of the merge tree
+        var result = new List<int>(n);
+        void Walk(int node)
+        {
+            if (node < n) { result.Add(node); return; }
+            var (l, r) = children[node];
+            Walk(l);
+            Walk(r);
+        }
+        Walk(active[0]);
+        return result.ToArray();
     }
 
     private static double Pearson(double[,] m, int ca, int cb)
@@ -473,40 +608,73 @@ public static class PlotRenderer
         return cvs.Count == 0 ? double.NaN : Numerics.Stats.NanMedian(cvs.ToArray());
     }
 
-    /// <summary>Box-like distribution of per-sample median LOG2 intensity, grouped by sample type.</summary>
+    // matplotlib tab20 - one colour per sample, cycled, matching the Python density plot.
+    private static readonly string[] Tab20 =
+    {
+        "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896",
+        "#9467bd", "#c5b0d5", "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7",
+        "#bcbd22", "#dbdb8d", "#17becf", "#9edae5",
+    };
+
+    /// <summary>Cycled per-sample colour for overlaid density curves.</summary>
+    public static Color SampleColor(int index) => Color.FromHex(Tab20[((index % Tab20.Length) + Tab20.Length) % Tab20.Length]);
+
+    /// <summary>
+    /// Overlay one Gaussian-KDE density curve per sample of the (features x samples) LOG2 matrix onto
+    /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG and
+    /// the interactive tool. Each sample gets a distinct cycled colour; no legend (there can be many).
+    /// </summary>
+    public static void DrawIntensityDensity(Plot plt, double[,] log2Matrix)
+    {
+        var nF = log2Matrix.GetLength(0);
+        var nS = log2Matrix.GetLength(1);
+        var perSample = new List<double>[nS];
+        double gmin = double.PositiveInfinity, gmax = double.NegativeInfinity;
+        for (var s = 0; s < nS; s++)
+        {
+            var vals = new List<double>(nF);
+            for (var f = 0; f < nF; f++)
+            {
+                var v = log2Matrix[f, s];
+                if (!double.IsNaN(v) && !double.IsInfinity(v))
+                {
+                    vals.Add(v);
+                    if (v < gmin) gmin = v;
+                    if (v > gmax) gmax = v;
+                }
+            }
+            perSample[s] = vals;
+        }
+        if (gmin >= gmax)
+            return;
+
+        const int gN = 256;
+        var grid = new double[gN];
+        var step = (gmax - gmin) / (gN - 1);
+        for (var i = 0; i < gN; i++)
+            grid[i] = gmin + i * step;
+
+        for (var s = 0; s < nS; s++)
+        {
+            if (perSample[s].Count < 2)
+                continue;
+            var density = Numerics.Kde.Estimate(perSample[s], grid);
+            var line = plt.Add.Scatter(grid, density);
+            line.MarkerSize = 0;
+            line.LineWidth = 1.5f; // thin: many samples are overlaid
+            line.Color = SampleColor(s).WithAlpha((byte)130);
+        }
+    }
+
+    /// <summary>Per-sample LOG2 intensity density curves (the Python "Intensity Distribution" plot).</summary>
     public static byte[] IntensityDistribution(
         double[,] log2Matrix, IReadOnlyList<string> sampleTypes, string title)
     {
-        var nFeatures = log2Matrix.GetLength(0);
-        var nSamples = log2Matrix.GetLength(1);
-
         var plt = new Plot();
-        var xs = new List<double>();
-        var ys = new List<double>();
-        var colors = new List<Color>();
-        var buf = new double[nFeatures];
-        for (var j = 0; j < nSamples; j++)
-        {
-            var n = 0;
-            for (var f = 0; f < nFeatures; f++)
-            {
-                var v = log2Matrix[f, j];
-                if (!double.IsNaN(v))
-                    buf[n++] = v;
-            }
-            if (n == 0)
-                continue;
-            var med = Numerics.Stats.NanMedian(buf.AsSpan(0, n));
-            xs.Add(j);
-            ys.Add(med);
-            colors.Add(Color.FromHex(TypeColors.GetValueOrDefault(sampleTypes[j], "#7f7f7f")));
-        }
-
-        var markers = plt.Add.Markers(xs.ToArray(), ys.ToArray());
-        markers.MarkerSize = 9;
+        DrawIntensityDensity(plt, log2Matrix);
         plt.Title(title);
-        plt.XLabel("Sample index");
-        plt.YLabel("Median log2 intensity");
+        plt.XLabel("Log2 Abundance");
+        plt.YLabel("Density");
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }

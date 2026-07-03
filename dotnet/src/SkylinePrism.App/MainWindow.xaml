@@ -158,7 +158,7 @@
                         <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
                             <ComboBoxItem>PCA</ComboBoxItem>
                             <ComboBoxItem>CV distribution</ComboBoxItem>
-                            <ComboBoxItem>Intensity</ComboBoxItem>
+                            <ComboBoxItem>Intensity distribution</ComboBoxItem>
                             <ComboBoxItem>Control correlation</ComboBoxItem>
                             <ComboBoxItem>RT-lowess</ComboBoxItem>
                             <ComboBoxItem>RT-binned CV</ComboBoxItem>

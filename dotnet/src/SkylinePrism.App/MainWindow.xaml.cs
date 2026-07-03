@@ -658,7 +658,7 @@ public partial class MainWindow : Window
 
     // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
     // static images by the same PlotRenderer.
-    private static readonly HashSet<string> InteractivePlots = new() { "PCA", "CV distribution", "Intensity" };
+    private static readonly HashSet<string> InteractivePlots = new() { "PCA", "CV distribution", "Intensity distribution" };
 
     private void RenderQc()
     {
@@ -702,36 +702,38 @@ public partial class MainWindow : Window
             QcPlot.Refresh();
             return;
         }
-        var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
-
         // Optional group filter driven by a Replicates-report column (e.g. "Sample Type" = "Standard").
         var column = ComboText(QcGroupByCombo, "Sample Type");
         var value = ComboText(QcGroupCombo, "All");
-        var matrix = d.FeaturesBySamples;
+        var cols = Enumerable.Range(0, d.Samples.Count).ToList();
         var groupLabel = "all";
         if (!string.Equals(value, "All", StringComparison.OrdinalIgnoreCase))
         {
-            var cols = Enumerable.Range(0, d.Samples.Count)
-                .Where(i => string.Equals(SampleAnnotation(d.Samples[i], column), value, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            cols = cols.Where(i => string.Equals(SampleAnnotation(d.Samples[i], column), value, StringComparison.OrdinalIgnoreCase)).ToList();
             if (cols.Count < 2)
             {
                 plt.Title($"Fewer than 2 samples with {column} = {value}.");
                 QcPlot.Refresh();
                 return;
             }
-            matrix = SelectColumns(d.FeaturesBySamples, cols);
-            types = cols.Select(i => types[i]).ToList();
             groupLabel = value;
         }
+        var matrix = cols.Count == d.Samples.Count ? d.FeaturesBySamples : SelectColumns(d.FeaturesBySamples, cols);
+        var types = cols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
+        // PCA colours each point by its Group-by column value, so the groups show as distinct colours.
+        var colorLabels = cols.Select(i =>
+        {
+            var v = SampleAnnotation(d.Samples[i], column);
+            return string.IsNullOrEmpty(v) ? "(none)" : v;
+        }).ToList();
 
         try
         {
             switch (kind)
             {
                 case "CV distribution": DrawCv(plt, matrix, types, level, view, groupLabel); break;
-                case "Intensity": DrawIntensity(plt, matrix, types, level, view, groupLabel); break;
-                default: DrawPca(plt, matrix, types, level, view, groupLabel); break;
+                case "Intensity distribution": DrawIntensity(plt, matrix, types, level, view, groupLabel); break;
+                default: DrawPca(plt, matrix, colorLabels, level, view, groupLabel); break;
             }
         }
         catch (Exception ex)
@@ -792,7 +794,8 @@ public partial class MainWindow : Window
             {
                 case "Control correlation":
                     if (groupCols.Count < 2) { ShowStaticMessage($"Correlation needs >= 2 samples in '{groupLabel}'."); return; }
-                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, $"Sample correlation ({cap}, {groupLabel})");
+                    var corrTypes = groupCols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
+                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, $"Sample correlation ({cap}, {groupLabel})", corrTypes);
                     break;
                 case "RT-lowess":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
@@ -876,12 +879,17 @@ public partial class MainWindow : Window
             g.X.Add(scores[i, 0]);
             g.Y.Add(scores[i, 1]);
         }
-        foreach (var (type, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        var colorIndex = 0;
+        foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
-            markers.Color = Color.FromHex(PlotRenderer.TypeColors.GetValueOrDefault(type, "#7f7f7f"));
+            // Known sample types keep their fixed palette colour; any other Group-by value (e.g. a
+            // Condition annotation) gets a distinct cycled colour so the groups are visually separable.
+            markers.Color = PlotRenderer.TypeColors.TryGetValue(label, out var hex)
+                ? Color.FromHex(hex)
+                : PlotRenderer.SampleColor(colorIndex++);
             markers.MarkerSize = 11;
-            markers.LegendText = type;
+            markers.LegendText = label;
         }
         plt.ShowLegend();
         plt.Title($"{Cap(level)} PCA ({view}, {group})");
@@ -943,30 +951,11 @@ public partial class MainWindow : Window
 
     private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
     {
-        var nF = featuresBySamples.GetLength(0);
-        var nS = featuresBySamples.GetLength(1);
-        var xs = new List<double>();
-        var ys = new List<double>();
-        var buf = new double[nF];
-        for (var s = 0; s < nS; s++)
-        {
-            var n = 0;
-            for (var f = 0; f < nF; f++)
-            {
-                var v = featuresBySamples[f, s];
-                if (!double.IsNaN(v))
-                    buf[n++] = v;
-            }
-            if (n == 0)
-                continue;
-            xs.Add(s);
-            ys.Add(Stats.NanMedian(buf.AsSpan(0, n)));
-        }
-        var markers = plt.Add.Markers(xs.ToArray(), ys.ToArray());
-        markers.MarkerSize = 9;
-        plt.Title($"{Cap(level)} median log2 intensity ({view}, {group})");
-        plt.XLabel("Sample index");
-        plt.YLabel("Median log2 intensity");
+        // Per-sample KDE density curves (the Python "Intensity Distribution" plot), same renderer as the report.
+        PlotRenderer.DrawIntensityDensity(plt, featuresBySamples);
+        plt.Title($"{Cap(level)} intensity distribution ({view}, {group})");
+        plt.XLabel("Log2 Abundance");
+        plt.YLabel("Density");
     }
 
     private static List<int> IndicesOf(List<string> types, string type)
