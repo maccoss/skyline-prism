@@ -241,7 +241,10 @@ public partial class MainWindow : Window
     }
 
     private static string ComboText(System.Windows.Controls.ComboBox cb, string fallback)
+        // SelectedItem is current during SelectionChanged; cb.Text lags a tick for string-item combos
+        // (which would populate the value list for the previously selected Group-by column), so prefer it.
         => (cb.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content?.ToString()
+           ?? (cb.SelectedItem as string)
            ?? (string.IsNullOrWhiteSpace(cb.Text) ? fallback : cb.Text);
 
     private static int ParseInt(string? s, int fallback)
@@ -899,7 +902,7 @@ public partial class MainWindow : Window
             AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, Enumerable.Range(0, types.Count).ToList()),
                 PlotRenderer.TypeColors.GetValueOrDefault(types.Count > 0 ? types[0] : "", "#1f77b4"), Cap(group));
         }
-        plt.ShowLegend();
+        plt.ShowLegend(Alignment.UpperRight); // upper-right so it doesn't overlap the histogram bars
         plt.Title($"{Cap(level)} CV distribution ({view}, {group})");
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
