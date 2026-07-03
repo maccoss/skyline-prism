@@ -101,7 +101,9 @@ public static class Normalizer
                 ySorted[k] = ys[order[k]];
             }
 
-            var yfit = Lowess.Fit(xSorted, ySorted, frac);
+            // delta = 1% of the RT range (statsmodels' speedup, matching the Python pipeline): fit
+            // anchor points and interpolate between them instead of fitting every peptide.
+            var yfit = Lowess.Fit(xSorted, ySorted, frac, delta: (rtMax - rtMin) * 0.01);
             var curve = new double[nGridPoints];
             for (var g = 0; g < nGridPoints; g++)
                 curve[g] = InterpOrNaN(rtGrid[g], xSorted, yfit); // NaN outside the sample's RT range

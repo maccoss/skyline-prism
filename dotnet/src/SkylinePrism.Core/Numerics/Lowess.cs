@@ -5,19 +5,24 @@ namespace SkylinePrism.Core.Numerics;
 /// <summary>
 /// LOWESS (locally weighted scatterplot smoothing), a hand-port of Cleveland's algorithm as
 /// used by statsmodels.nonparametric.lowess. Local linear regression with tricube distance
-/// weights over the frac*n nearest neighbours, plus bisquare robustifying iterations. This is
-/// a FUNCTIONAL-parity primitive (RT-lowess normalization), not an exact-parity target: the
-/// delta speedup is omitted (every point is fit), so the smoothed curve matches statsmodels
-/// closely but not bit-for-bit.
+/// weights over the frac*n nearest neighbours, plus bisquare robustifying iterations.
+///
+/// Supports the statsmodels <c>delta</c> speedup: local regressions are computed only at anchor
+/// points spaced &gt; delta apart on x, and the points between two anchors are filled by linear
+/// interpolation. statsmodels/PRISM use delta = 0.01 * range(x), which turns the cost from
+/// O(n * frac*n * iters) into roughly O((range/delta) * frac*n * iters) - orders of magnitude faster
+/// on tens of thousands of points, with a visually identical curve. delta = 0 fits every point.
 /// </summary>
 public static class Lowess
 {
     /// <summary>
     /// Smooth y against x (x MUST be sorted ascending), returning the fitted value at each x.
-    /// <paramref name="frac"/> is the neighbourhood fraction; <paramref name="iterations"/> is
-    /// the number of robustifying reweightings (statsmodels default 3).
+    /// <paramref name="frac"/> is the neighbourhood fraction; <paramref name="iterations"/> is the
+    /// number of robustifying reweightings (statsmodels default 3); <paramref name="delta"/> is the
+    /// x-distance within which points are linearly interpolated instead of individually fit
+    /// (0 = fit every point; statsmodels/PRISM use 0.01 * range(x)).
     /// </summary>
-    public static double[] Fit(double[] x, double[] y, double frac, int iterations = 3)
+    public static double[] Fit(double[] x, double[] y, double frac, int iterations = 3, double delta = 0.0)
     {
         var n = x.Length;
         var yfit = new double[n];
@@ -38,7 +43,8 @@ public static class Lowess
         for (var iter = 0; iter <= iterations; iter++)
         {
             int left = 0, right = r - 1;
-            for (var i = 0; i < n; i++)
+            int i = 0, last = -1;
+            while (i < n)
             {
                 // Slide the window so [left, right] holds the r nearest points to x[i].
                 while (right < n - 1 && (x[i] - x[left]) > (x[right + 1] - x[i]))
@@ -88,26 +94,64 @@ public static class Lowess
                     var a = (swy - b * swx) / sw;
                     yfit[i] = a + b * x[i];
                 }
+
+                // Fill points skipped since the previous anchor by linear interpolation (delta speedup).
+                if (last < i - 1)
+                {
+                    var span = x[i] - x[last];
+                    if (span > 0)
+                        for (var j = last + 1; j < i; j++)
+                        {
+                            var alpha = (x[j] - x[last]) / span;
+                            yfit[j] = alpha * yfit[i] + (1.0 - alpha) * yfit[last];
+                        }
+                    else
+                        for (var j = last + 1; j < i; j++)
+                            yfit[j] = yfit[i];
+                }
+                last = i;
+
+                // Advance to the next anchor: the last point within delta of x[last] (duplicates copy
+                // the anchor's fit). delta <= 0 falls through to fitting every point (i = last + 1).
+                if (delta > 0)
+                {
+                    var cut = x[last] + delta;
+                    var ni = last + 1;
+                    while (ni < n && x[ni] <= cut)
+                    {
+                        if (x[ni] == x[last])
+                        {
+                            yfit[ni] = yfit[last];
+                            last = ni;
+                        }
+                        ni++;
+                    }
+                    i = Math.Max(last + 1, ni - 1);
+                }
+                else
+                {
+                    i = last + 1;
+                }
             }
 
             if (iter < iterations)
             {
-                for (var i = 0; i < n; i++)
-                    absResid[i] = Math.Abs(y[i] - yfit[i]);
+                for (var k = 0; k < n; k++)
+                    absResid[k] = Math.Abs(y[k] - yfit[k]);
                 var s = Stats.NanMedian(absResid);
                 if (s <= 0)
                     break; // essentially exact fit; no further reweighting
-                for (var i = 0; i < n; i++)
+                for (var k = 0; k < n; k++)
                 {
-                    var e = absResid[i] / (6.0 * s);
+                    var e = absResid[k] / (6.0 * s);
                     if (e >= 1.0)
                     {
-                        robust[i] = 0.0;
+                        robust[k] = 0.0;
                     }
                     else
                     {
                         var t = 1.0 - e * e; // bisquare
-                        robust[i] = t * t;
+                        robust[k] = t * t;
                     }
                 }
             }

@@ -18,32 +18,6 @@ public static class PlotRenderer
     private const int Width = 700;
     private const int Height = 500;
 
-    // Max points fed to the RT-LOWESS fit; beyond this the sorted points are strided down (the fitted
-    // curve is only sampled at 80 grid points, so a few thousand input points is more than enough).
-    private const int LowessFitCap = 3000;
-
-    // Stride a sorted (x, y) series down to at most <paramref name="cap"/> points, keeping the first
-    // and last so the fitted range still spans the full RT window. Returns the input unchanged if small.
-    private static (double[] X, double[] Y) SubsampleSorted(double[] x, double[] y, int cap)
-    {
-        if (x.Length <= cap)
-            return (x, y);
-        var stride = (x.Length + cap - 1) / cap;
-        var xs = new List<double>(cap + 1);
-        var ys = new List<double>(cap + 1);
-        for (var i = 0; i < x.Length; i += stride)
-        {
-            xs.Add(x[i]);
-            ys.Add(y[i]);
-        }
-        if (xs[^1] != x[^1]) // ensure the last point is present
-        {
-            xs.Add(x[^1]);
-            ys.Add(y[^1]);
-        }
-        return (xs.ToArray(), ys.ToArray());
-    }
-
     public static readonly IReadOnlyDictionary<string, string> TypeColors = new Dictionary<string, string>
     {
         ["experimental"] = "#1f77b4",
@@ -271,20 +245,19 @@ public static class PlotRenderer
                     ySorted[k] = ys[order[k]];
                 }
 
-                // LOWESS is ~O(n * frac*n * iters); over tens of thousands of peptides it dominates the
-                // whole QC report. The curve only needs to be smooth at the 80-point grid, so cap the
-                // fit input by striding the (already RT-sorted) points - visually identical, far faster.
-                var (xFit, yFit) = SubsampleSorted(xSorted, ySorted, LowessFitCap);
-                var yfit = Numerics.Lowess.Fit(xFit, yFit, 0.3);
+                // Fit with delta = 1% of the RT range (statsmodels' speedup, same as the normalization):
+                // over tens of thousands of peptides an un-delta'd LOWESS is O(n * frac*n * iters) and
+                // dominated the whole QC report; delta fits anchors and interpolates between them.
+                var yfit = Numerics.Lowess.Fit(xSorted, ySorted, 0.3, delta: (rtMax - rtMin) * 0.01);
 
                 var gx = new List<double>(g);
                 var gy = new List<double>(g);
                 for (var k = 0; k < g; k++)
                 {
-                    if (grid[k] < xFit[0] || grid[k] > xFit[^1])
+                    if (grid[k] < xSorted[0] || grid[k] > xSorted[^1])
                         continue;
                     gx.Add(grid[k]);
-                    gy.Add(Numerics.Stats.Interp(grid[k], xFit, yfit));
+                    gy.Add(Numerics.Stats.Interp(grid[k], xSorted, yfit));
                 }
                 if (gx.Count < 2)
                     continue;
