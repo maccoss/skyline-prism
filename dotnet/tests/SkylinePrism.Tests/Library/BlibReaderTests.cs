@@ -124,8 +124,8 @@ public class BlibReaderTests
 
             // Uncompressed blob decodes (spectrum B).
             Assert.NotNull(lib.GetSpectrum("PEPTIDEIK", 2));
-            // I/L fallback: stored has I, query with L normalizes to it.
-            Assert.NotNull(lib.GetSpectrum("PEPTIDELK", 2));
+            // I and L are kept distinct (no I/L collapse): stored is PEPTIDEIK, so the L variant misses.
+            Assert.Null(lib.GetSpectrum("PEPTIDELK", 2));
             // Modification-stripped fallback: query the unmodified form of the modified stored seq.
             Assert.NotNull(lib.GetSpectrum("PEPTIDECK", 2));
             // Genuine miss.

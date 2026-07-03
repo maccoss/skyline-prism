@@ -22,8 +22,9 @@ public sealed class FragmentSpectrum
 
 /// <summary>
 /// Loads a Skyline BLIB (SQLite) spectral library and looks up spectra by modified sequence +
-/// charge, mirroring spectral_library.BLIBLoader + SpectralLibraryRollup.get_spectrum: exact,
-/// I/L-normalized, and modification-stripped key fallbacks.
+/// charge: exact match, then a modification-notation-insensitive fallback (Skyline unimod vs BLIB
+/// mass-delta). I and L are kept distinct - they give different predicted spectra/RTs and each
+/// detected peptide has its own exact predicted spectrum in the library, so I/L is never collapsed.
 /// </summary>
 public sealed class SpectralLibrary
 {
@@ -102,22 +103,19 @@ public sealed class SpectralLibrary
         return lib;
     }
 
-    /// <summary>Look up a spectrum with exact / I-L / stripped fallbacks (get_spectrum).</summary>
+    /// <summary>
+    /// Look up a spectrum by EXACT modified sequence + charge, then by a modification-notation-insensitive
+    /// key (Skyline unimod vs BLIB mass-delta). I and L are kept distinct on purpose: they yield slightly
+    /// different predicted spectra and RTs, and each detected peptide has its own exact predicted spectrum
+    /// in the library (it was detected against it) - so we never collapse I/L to force a match.
+    /// </summary>
     public FragmentSpectrum? GetSpectrum(string modifiedSequence, int charge)
     {
         if (_byKey.TryGetValue(MakePeptideKey(modifiedSequence, charge), out var s))
             return s;
 
-        var normKey = MakePeptideKey(NormalizeForMatching(modifiedSequence), charge);
-        if (_byKey.TryGetValue(normKey, out s))
-            return s;
-
         var strippedKey = MakeStrippedKey(modifiedSequence, charge);
         if (_strippedLookup.TryGetValue(strippedKey, out var origKey))
-            return _byKey[origKey];
-
-        var strippedNorm = strippedKey.Replace("L", "I");
-        if (_strippedLookup.TryGetValue(strippedNorm, out origKey))
             return _byKey[origKey];
 
         return null;

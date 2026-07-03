@@ -1,3 +1,4 @@
+using System;
 using SkylinePrism.Core.BatchCorrection;
 using Xunit;
 
@@ -33,5 +34,21 @@ public class ComBatUnitTests
         for (var i = 0; i < 3; i++)
             for (var j = 0; j < 6; j++)
                 Assert.Equal(expected[i, j], actual[i, j], 9);
+    }
+
+    [Fact]
+    public void Combat_SingleSampleBatch_Aborts()
+    {
+        // Batch "2" has a single sample: ComBat cannot estimate its effect, so it must abort
+        // (matching Python's _check_inputs) rather than silently degrade to a mean-only correction.
+        var data = new double[,]
+        {
+            { 10.0, 11.0, 10.5, 12.0 },
+            { 5.0, 5.5, 6.0, 7.0 },
+        };
+        var batch = new[] { "1", "1", "1", "2" };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ComBat.Run(data, batch));
+        Assert.Contains("single sample", ex.Message);
     }
 }

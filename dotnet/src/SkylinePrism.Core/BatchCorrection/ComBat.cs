@@ -55,8 +55,14 @@ public static class ComBat
         for (var s = 0; s < nSamples; s++)
             batches[batchOf[batchLabels[s]]].Add(s);
 
-        if (batches.Any(b => b.Count == 1))
-            meanOnly = true;
+        // A batch with a single sample has no within-batch spread to estimate its effect; abort like
+        // Python's _check_inputs rather than silently degrading to a mean-only correction.
+        var singletonBatches = uniqueBatches.Where((_, i) => batches[i].Count == 1).ToList();
+        if (singletonBatches.Count > 0)
+            throw new InvalidOperationException(
+                "ComBat cannot correct batch(es) with a single sample (each batch needs >= 2 samples to "
+                + "estimate its effect): " + string.Join(", ", singletonBatches)
+                + ". Relabel/merge the batch, drop the sample, or turn off batch correction.");
 
         // --- _calculate_mean_var ---
         // One-hot design: XtX = diag(batch sizes); B_hat[i,f] = batch-i mean of feature f.
