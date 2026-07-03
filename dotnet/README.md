@@ -43,12 +43,28 @@ prism config-template -o config.yaml                         # emit a config tem
 
 ## Package the Skyline external tool
 
-```bash
-dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
-# -> dotnet/publish/SkylinePrism.zip  (SkylinePrism.exe + tool-inf/ + runtime DLLs)
+Use the ship gate, which tests -> packages -> launch-verifies (always test before shipping):
+
+```powershell
+pwsh dotnet/build/package-and-verify.ps1
+# runs the full suite, builds dotnet/publish/SkylinePrism.zip, then extracts and launches the exe
 ```
 
-Install the zip via Skyline's Tools > Tool Store > Install from file.
+Or the individual steps:
+
+```bash
+dotnet msbuild dotnet/build/package.proj /p:Configuration=Release   # -> dotnet/publish/SkylinePrism.zip
+pwsh dotnet/build/verify-tool.ps1                                   # smoke-launch the packaged zip
+```
+
+`verify-tool.ps1` extracts the zip to a clean directory and runs `SkylinePrism.exe`; the WPF
+MainWindow (hence ScottPlot/SkiaSharp) loads at startup, so a missing/broken dependency shows up as an
+assembly/XAML load error in `%LOCALAPPDATA%\SkylinePrism\prism-tool.log`. A failed Skyline connection
+from the dummy arg is expected and ignored - only dependency/XAML load failures fail the check.
+
+Install the zip via Skyline's Tools > Tool Store > Install from file. When reinstalling over a running
+copy, **close the tool first** - Skyline can leave a partial extraction (locked files) that drops
+`deps.json` and DLLs, which then fails to load; reinstalling with the tool closed fixes it.
 
 ## CI
 
