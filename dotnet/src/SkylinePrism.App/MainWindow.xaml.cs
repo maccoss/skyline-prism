@@ -65,6 +65,7 @@ public partial class MainWindow : Window
         ProteinNormCombo.SelectedIndex = 0;
         QcViewCombo.SelectedIndex = 0;
         QcLevelCombo.SelectedIndex = 0;
+        QcGroupCombo.SelectedIndex = 0;
         QcPlotCombo.SelectedIndex = 0;
 
         if (_session is not null)
@@ -456,6 +457,7 @@ public partial class MainWindow : Window
     // Cached QC matrices ([features, samples], LOG2) keyed by "view|level" (view in raw/corrected).
     private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples, double[]? MeanRt)> _qcData = new();
     private Dictionary<string, string> _qcTypes = new();
+    private string? _qcOutputDir;
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
     // except Log, which marshals to the dispatcher). RenderQc() is invoked separately on the UI thread.
@@ -463,6 +465,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            _qcOutputDir = outputDir;
             _qcTypes = ReadSampleTypes(Path.Combine(outputDir, "sample_metadata.csv"));
             _qcData.Clear();
             LoadQcMatrix("raw|peptide", Path.Combine(outputDir, "peptides_rollup.parquet"), isLinear: false);
@@ -538,13 +541,32 @@ public partial class MainWindow : Window
             return;
         }
         var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
+
+        // Optional sample-group filter (Reference / QC / Experimental; "All" keeps every sample).
+        var group = ComboText(QcGroupCombo, "All");
+        var matrix = d.FeaturesBySamples;
+        if (!string.Equals(group, "All", StringComparison.OrdinalIgnoreCase))
+        {
+            var gtype = group.ToLowerInvariant(); // combo values map 1:1 to sample types
+            var cols = Enumerable.Range(0, types.Count).Where(i => types[i] == gtype).ToList();
+            if (cols.Count < 2)
+            {
+                plt.Title($"Fewer than 2 {group} samples in this analysis.");
+                QcPlot.Refresh();
+                return;
+            }
+            matrix = SelectColumns(d.FeaturesBySamples, cols);
+            types = cols.Select(i => types[i]).ToList();
+        }
+        var groupLabel = group.ToLowerInvariant();
+
         try
         {
             switch (kind)
             {
-                case "CV distribution": DrawCv(plt, d.FeaturesBySamples, types, level, view); break;
-                case "Intensity": DrawIntensity(plt, d.FeaturesBySamples, types, level, view); break;
-                default: DrawPca(plt, d.FeaturesBySamples, types, level, view); break;
+                case "CV distribution": DrawCv(plt, matrix, types, level, view, groupLabel); break;
+                case "Intensity": DrawIntensity(plt, matrix, types, level, view, groupLabel); break;
+                default: DrawPca(plt, matrix, types, level, view, groupLabel); break;
             }
         }
         catch (Exception ex)
@@ -556,10 +578,51 @@ public partial class MainWindow : Window
         QcPlot.Refresh();
     }
 
+    private static double[,] SelectColumns(double[,] m, IReadOnlyList<int> cols)
+    {
+        var nF = m.GetLength(0);
+        var sub = new double[nF, cols.Count];
+        for (var j = 0; j < cols.Count; j++)
+            for (var f = 0; f < nF; f++)
+                sub[f, j] = m[f, cols[j]];
+        return sub;
+    }
+
     // Control-correlation heatmap + RT plots: the same plots qc_report.html generates, rendered as a
     // static image (they don't need zoom/pan). Reuses PlotRenderer so they match the report exactly.
+    // Maps an interactive selection to the PNG stem the QC report writes under qc_plots/.
+    private byte[]? LoadReportPng(string kind, string view, string level)
+    {
+        if (string.IsNullOrEmpty(_qcOutputDir))
+            return null;
+        var ba = view == "raw" ? "before" : "after";
+        string? stem = kind switch
+        {
+            "Control correlation" => $"{level}_control_corr_{ba}",
+            "RT-lowess" => $"{level}_rt_lowess_{ba}",
+            "RT-bin boxplot" => $"{level}_rt_bin_box_{ba}",
+            // RT-binned CV is a single before/after plot; the report writes _qc or _ref depending on controls.
+            "RT-binned CV" => File.Exists(Path.Combine(_qcOutputDir, "qc_plots", $"{level}_rt_bin_cv_qc.png"))
+                ? $"{level}_rt_bin_cv_qc"
+                : $"{level}_rt_bin_cv_ref",
+            _ => null,
+        };
+        if (stem is null)
+            return null;
+        var path = Path.Combine(_qcOutputDir, "qc_plots", stem + ".png");
+        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
     private void RenderStaticQc(string kind, string view, string level)
     {
+        // Prefer the PNG the QC report already rendered (instant) instead of recomputing (RT-lowess in
+        // particular re-fits a curve per sample). Fall back to on-the-fly rendering only if it's missing.
+        var reportPng = LoadReportPng(kind, view, level);
+        if (reportPng is not null)
+        {
+            ShowStaticImage(reportPng);
+            return;
+        }
         try
         {
             if (!_qcData.TryGetValue($"{view}|{level}", out var d))
@@ -642,7 +705,7 @@ public partial class MainWindow : Window
         QcPlot.Refresh();
     }
 
-    private static void DrawPca(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view)
+    private static void DrawPca(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
     {
         var nF = featuresBySamples.GetLength(0);
         var nS = featuresBySamples.GetLength(1);
@@ -668,31 +731,31 @@ public partial class MainWindow : Window
             markers.LegendText = type;
         }
         plt.ShowLegend();
-        plt.Title($"{Cap(level)} PCA ({view})");
+        plt.Title($"{Cap(level)} PCA ({view}, {group})");
         plt.XLabel("PC1");
         plt.YLabel("PC2");
     }
 
-    private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view)
+    private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
     {
-        var refIdx = IndicesOf(types, "reference");
-        var qcIdx = IndicesOf(types, "qc");
-        var drew = false;
-        if (refIdx.Count >= 2)
+        if (group == "all")
         {
-            AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, refIdx), "#d62728", "Reference");
-            drew = true;
+            // Overlay one histogram per sample type present (>= 2 samples of that type).
+            foreach (var t in types.Distinct().OrderBy(x => x, StringComparer.Ordinal))
+            {
+                var idx = IndicesOf(types, t);
+                if (idx.Count >= 2)
+                    AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, idx),
+                        PlotRenderer.TypeColors.GetValueOrDefault(t, "#1f77b4"), Cap(t));
+            }
         }
-        if (qcIdx.Count >= 2)
+        else
         {
-            AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, qcIdx), "#ff7f0e", "QC");
-            drew = true;
-        }
-        if (!drew)
             AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, Enumerable.Range(0, types.Count).ToList()),
-                "#1f77b4", "All samples");
+                PlotRenderer.TypeColors.GetValueOrDefault(types.Count > 0 ? types[0] : "", "#1f77b4"), Cap(group));
+        }
         plt.ShowLegend();
-        plt.Title($"{Cap(level)} CV distribution ({view})");
+        plt.Title($"{Cap(level)} CV distribution ({view}, {group})");
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
     }
@@ -725,7 +788,7 @@ public partial class MainWindow : Window
         line.LegendText = $"{label} median {med:0.0}%";
     }
 
-    private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view)
+    private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
     {
         var nF = featuresBySamples.GetLength(0);
         var nS = featuresBySamples.GetLength(1);
@@ -748,7 +811,7 @@ public partial class MainWindow : Window
         }
         var markers = plt.Add.Markers(xs.ToArray(), ys.ToArray());
         markers.MarkerSize = 5;
-        plt.Title($"{Cap(level)} median log2 intensity ({view})");
+        plt.Title($"{Cap(level)} median log2 intensity ({view}, {group})");
         plt.XLabel("Sample index");
         plt.YLabel("Median log2 intensity");
     }
