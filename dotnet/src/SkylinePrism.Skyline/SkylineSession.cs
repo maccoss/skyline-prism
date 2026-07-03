@@ -82,24 +82,32 @@ public sealed class SkylineSession : ISkylineExecutor
         public string[] GetSettingsListNames(string listType, string? groupName) => _c.GetSettingsListNames(listType, groupName);
         public void RunCommandSilent(string[] args) => _c.RunCommandSilent(args);
 
-        public ReportRows? GetReportRows(string reportName)
+        public string[] GetReplicateColumns()
         {
-            // count=0 returns the shape (TotalRows); then pull every row. columns=null => the view's own columns.
-            var shape = _c.GetReportRows(reportName, 0, 0, null, Array.Empty<ReportFilter>(), false, "invariant");
+            // The built-in "Replicates" view is not a named report; enumerate the Replicate entity's
+            // columns (built-ins + user-defined document annotations) from its doc topic instead.
+            var detail = _c.GetReportDocTopic("Replicate", "document_grid");
+            return detail?.Columns?.Select(col => col.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray()
+                   ?? Array.Empty<string>();
+        }
+
+        public ReportRows? GetReplicateReport(IReadOnlyList<string> selectColumns)
+        {
+            var def = new ReportDefinition
+            {
+                Select = selectColumns.ToArray(),
+                PivotReplicate = false, // one row per replicate
+                DataSource = "document_grid",
+            };
+            // count=0 returns the shape (TotalRows); then pull every row.
+            var shape = _c.GetReportFromDefinitionRows(def, 0, 0, false, "invariant");
             var total = shape?.TotalRows ?? 0;
             var res = total > 0
-                ? _c.GetReportRows(reportName, 0, total, null, Array.Empty<ReportFilter>(), false, "invariant")
+                ? _c.GetReportFromDefinitionRows(def, 0, total, false, "invariant")
                 : shape;
             if (res?.Columns is null || res.Rows is null)
                 return null;
             return new ReportRows(res.Columns.Select(c => c.Name).ToArray(), res.Rows);
-        }
-
-        public string[] ListDocumentGridViews()
-        {
-            var topics = _c.GetReportDocTopics("document_grid");
-            return topics?.Select(t => t.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray()
-                   ?? Array.Empty<string>();
         }
     }
 

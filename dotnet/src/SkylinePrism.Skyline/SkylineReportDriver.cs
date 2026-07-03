@@ -123,32 +123,59 @@ public sealed class SkylineReportDriver
         }
     }
 
+    // The built-in Replicate-entity columns. Any Replicate column NOT in this set is a user-defined
+    // document annotation (e.g. Condition, Subject) and is always carried into the metadata.
+    private static readonly HashSet<string> ReplicateBuiltinColumns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Replicate", "ReplicateName", "FileName", "FilePath", "SampleName", "ModifiedTime", "AcquiredTime",
+        "ExplicitGlobalStandardArea", "TicArea", "IonMobilityUnits", "ResultFileLocator", "SampleId",
+        "InstrumentSerialNumber", "MedianPeakArea", "NormalizationDivisor", "SampleType",
+        "AnalyteConcentration", "SampleDilutionFactor", "BatchName", "ReplicateLocator",
+    };
+
+    // Built-in metadata columns worth carrying (skipping file/instrument/computed noise).
+    private static readonly string[] ReplicateCuratedColumns =
+        { "ReplicateName", "SampleType", "BatchName", "AnalyteConcentration", "SampleDilutionFactor", "SampleId" };
+
     /// <summary>
-    /// Read Skyline's built-in "Replicates" document-grid view over the RPC (all Document Annotation
-    /// columns) and write it to <paramref name="csvPath"/>. Returns the path on success, or null to
-    /// fall back to a saved report.
+    /// Read the Replicate document-grid data over the RPC and write it to <paramref name="csvPath"/>.
+    /// The built-in "Replicates" view is not a named report, so we enumerate the Replicate entity's
+    /// columns and run a report definition selecting the curated built-ins plus every user-defined
+    /// annotation. Returns the path on success, or null to fall back to a saved report.
     /// </summary>
     private string? TryWriteMetadataFromGrid(string csvPath)
     {
         try
         {
-            // The Replicates view name can vary by build; discover it, else use the literal name.
-            var views = _session.Execute(c => c.ListDocumentGridViews());
-            var viewName = views?.FirstOrDefault(v => v.Equals("Replicates", StringComparison.OrdinalIgnoreCase))
-                           ?? "Replicates";
-            var rows = _session.Execute(c => c.GetReportRows(viewName));
+            var columns = _session.Execute(c => c.GetReplicateColumns());
+            if (columns is null || columns.Length == 0)
+            {
+                _log("Replicate columns unavailable; using a saved report for metadata instead.");
+                return null;
+            }
+
+            var present = new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase);
+            var annotations = columns.Where(c => !ReplicateBuiltinColumns.Contains(c)).ToList();
+            var select = ReplicateCuratedColumns.Where(present.Contains)
+                .Concat(annotations)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var rows = _session.Execute(c => c.GetReplicateReport(select));
             if (rows is null || rows.Columns.Count == 0)
             {
-                _log($"Replicates grid '{viewName}' returned no data; using a saved report instead.");
+                _log("Replicate report returned no data; using a saved report for metadata instead.");
                 return null;
             }
             WriteCsv(csvPath, rows.Columns, rows.Rows);
-            _log($"Read the '{viewName}' data grid ({rows.Rows.Count} replicates x {rows.Columns.Count} columns): {csvPath}");
+            _log($"Read the Replicates grid ({rows.Rows.Count} replicates, {rows.Columns.Count} columns"
+                 + (annotations.Count > 0 ? "; annotations: " + string.Join(", ", annotations) : "; no annotations")
+                 + $"): {csvPath}");
             return csvPath;
         }
         catch (Exception ex)
         {
-            _log($"Could not read the Replicates data grid ({ex.Message}); using a saved report instead.");
+            _log($"Could not read the Replicates grid ({ex.Message}); using a saved report for metadata instead.");
             return null;
         }
     }

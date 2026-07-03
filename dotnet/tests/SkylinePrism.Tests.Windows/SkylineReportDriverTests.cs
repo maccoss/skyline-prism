@@ -40,18 +40,18 @@ public class SkylineReportDriverTests
 
         public void RunCommandSilent(string[] args) => Commands.Add(args);
 
-        // Replicates-grid read: null by default (so the driver falls back to a saved report).
-        public string[] GridViews = Array.Empty<string>();
-        public ReportRows? GridRows;
-        public readonly List<string> GridRowsRequested = new();
+        // Replicate-grid read: no report by default (so the driver falls back to a saved report).
+        public string[] ReplicateColumns = Array.Empty<string>();
+        public ReportRows? ReplicateReport;
+        public IReadOnlyList<string>? RequestedSelect;
 
-        public ReportRows? GetReportRows(string reportName)
+        public string[] GetReplicateColumns() => ReplicateColumns;
+
+        public ReportRows? GetReplicateReport(IReadOnlyList<string> selectColumns)
         {
-            GridRowsRequested.Add(reportName);
-            return GridRows;
+            RequestedSelect = selectColumns;
+            return ReplicateReport;
         }
-
-        public string[] ListDocumentGridViews() => GridViews;
     }
 
     private sealed class FakeExecutor : ISkylineExecutor
@@ -147,9 +147,10 @@ public class SkylineReportDriverTests
         var client = new FakeClient
         {
             OnExport = (_, p) => File.WriteAllText(p, "x"),
-            GridViews = new[] { "Replicates", "Precursors" },
-            GridRows = new ReportRows(
-                new[] { "Replicate", "Sample Type", "Condition" },
+            // Built-ins + two user-defined annotations (Condition, Subject); FilePath is built-in noise.
+            ReplicateColumns = new[] { "Replicate", "ReplicateName", "FilePath", "SampleType", "BatchName", "Condition", "Subject" },
+            ReplicateReport = new ReportRows(
+                new[] { "ReplicateName", "SampleType", "Condition" },
                 new List<string[]>
                 {
                     new[] { "R1", "Standard", "A, treated" }, // comma forces CSV quoting
@@ -160,12 +161,17 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work);
 
-        // The built-in grid is read; no saved report is exported for the metadata.
-        Assert.Contains("Replicates", client.GridRowsRequested);
-        Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith("Metadata.csv"));
+        // The select carries curated built-ins + annotations, but not file/instrument noise.
+        Assert.NotNull(client.RequestedSelect);
+        Assert.Contains("SampleType", client.RequestedSelect!);
+        Assert.Contains("Condition", client.RequestedSelect!);
+        Assert.Contains("Subject", client.RequestedSelect!);
+        Assert.DoesNotContain("FilePath", client.RequestedSelect!);
 
+        // Metadata.csv is written from the grid, not exported from a saved report.
+        Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith("Metadata.csv"));
         var csv = File.ReadAllText(Path.Combine(work, "Metadata.csv"));
-        Assert.StartsWith("Replicate,Sample Type,Condition", csv);
+        Assert.StartsWith("ReplicateName,SampleType,Condition", csv);
         Assert.Contains("R1,Standard,\"A, treated\"", csv);
         Assert.Contains("R2,Quality Control,B", csv);
     }

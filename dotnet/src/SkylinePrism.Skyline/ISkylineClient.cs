@@ -20,11 +20,11 @@ public interface ISkylineClient
     string[] GetSettingsListNames(string listType, string? groupName);
     void RunCommandSilent(string[] args);
 
-    /// <summary>Read a report/document-grid view's content inline (all columns); null if unavailable.</summary>
-    ReportRows? GetReportRows(string reportName);
+    /// <summary>Column names of the Replicate entity (built-ins + user-defined document annotations).</summary>
+    string[] GetReplicateColumns();
 
-    /// <summary>Names of the document-grid views (used to locate the built-in "Replicates" view).</summary>
-    string[] ListDocumentGridViews();
+    /// <summary>Read a per-replicate report (one row per replicate) for the given columns; null if unavailable.</summary>
+    ReportRows? GetReplicateReport(IReadOnlyList<string> selectColumns);
 }
 
 /// <summary>
