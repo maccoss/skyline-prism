@@ -26,6 +26,37 @@ public static class PlotRenderer
         ["unknown"] = "#7f7f7f",
     };
 
+    // ColorBrewer RdYlBu reversed (low -> high: blue -> yellow -> red) = matplotlib "RdYlBu_r",
+    // the colormap the Python control-correlation heatmap uses.
+    private static readonly Color[] RdYlBuReversed =
+    {
+        Color.FromHex("#313695"), Color.FromHex("#4575b4"), Color.FromHex("#74add1"),
+        Color.FromHex("#abd9e9"), Color.FromHex("#e0f3f8"), Color.FromHex("#ffffbf"),
+        Color.FromHex("#fee090"), Color.FromHex("#fdae61"), Color.FromHex("#f46d43"),
+        Color.FromHex("#d73027"), Color.FromHex("#a50026"),
+    };
+
+    // Bold, large axis/legend styling shared by every QC plot (static PNGs and the interactive tool):
+    // big titles/labels, thick left+bottom axes only (top+right hidden). Line thickness is per-plot.
+    public static void StyleQcPlot(Plot plt)
+    {
+        plt.Axes.Title.Label.FontSize = 22;
+        plt.Axes.Title.Label.Bold = true;
+        plt.Axes.Left.Label.FontSize = 18;
+        plt.Axes.Bottom.Label.FontSize = 18;
+        plt.Axes.Left.TickLabelStyle.FontSize = 14;
+        plt.Axes.Bottom.TickLabelStyle.FontSize = 14;
+        plt.Legend.FontSize = 16;
+
+        // Only the left + bottom axes, thick; hide the top + right frame lines.
+        plt.Axes.Left.FrameLineStyle.Width = 3;
+        plt.Axes.Bottom.FrameLineStyle.Width = 3;
+        plt.Axes.Right.FrameLineStyle.Width = 0;
+        plt.Axes.Top.FrameLineStyle.Width = 0;
+        plt.Axes.Left.MajorTickStyle.Width = 2;
+        plt.Axes.Bottom.MajorTickStyle.Width = 2;
+    }
+
     /// <summary>Histogram of per-feature CVs with a median line, for one sample-type group.</summary>
     public static byte[] CvHistogram(double[] cvs, string title, string colorHex, double medianCv)
     {
@@ -50,14 +81,15 @@ public static class PlotRenderer
 
             var med = plt.Add.VerticalLine(medianCv);
             med.Color = Colors.Black;
-            med.LineWidth = 2;
+            med.LineWidth = 4;
             med.LinePattern = LinePattern.Dashed;
             med.LegendText = $"median {medianCv:0.0}%";
-            plt.ShowLegend();
+            plt.ShowLegend(Alignment.UpperRight);
         }
         plt.Title(title);
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -92,17 +124,18 @@ public static class PlotRenderer
             var med = Numerics.Stats.NanMedian(cvs);
             var line = plt.Add.VerticalLine(med);
             line.Color = color;
-            line.LineWidth = 2;
+            line.LineWidth = 4;
             line.LinePattern = LinePattern.Dashed;
             line.LegendText = $"{label} median {med:0.0}%";
         }
 
         AddHist(beforeCvs, Color.FromHex("#7f7f7f"), "Before");
         AddHist(afterCvs, Color.FromHex(afterColorHex), "After");
-        plt.ShowLegend();
+        plt.ShowLegend(Alignment.UpperRight);
         plt.Title(title);
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -124,13 +157,14 @@ public static class PlotRenderer
         {
             var markers = plt.Add.Markers(lists.X.ToArray(), lists.Y.ToArray());
             markers.Color = Color.FromHex(TypeColors.GetValueOrDefault(type, "#7f7f7f"));
-            markers.MarkerSize = 7;
+            markers.MarkerSize = 11;
             markers.LegendText = type;
         }
         plt.ShowLegend();
         plt.Title(title);
         plt.XLabel("PC1");
         plt.YLabel("PC2");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -148,11 +182,21 @@ public static class PlotRenderer
 
         var plt = new Plot();
         var hm = plt.Add.Heatmap(corr);
-        hm.Colormap = new ScottPlot.Colormaps.Turbo();
+        // Match the Python report (seaborn RdYlBu_r, vmax=1): a diverging blue->yellow->red map anchored
+        // so correlation = 1 is deep red, rather than ScottPlot's rainbow Turbo stretched across a
+        // narrow ~0.9-1.0 control range.
+        hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdYlBuReversed);
+        var minCorr = 1.0;
+        for (var a = 0; a < n; a++)
+            for (var b = 0; b < n; b++)
+                if (!double.IsNaN(corr[a, b]) && corr[a, b] < minCorr)
+                    minCorr = corr[a, b];
+        hm.ManualRange = new ScottPlot.Range(Math.Max(-1.0, minCorr), 1.0);
         plt.Add.ColorBar(hm);
         plt.Title(title);
         plt.XLabel("Control sample");
         plt.YLabel("Control sample");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -265,7 +309,7 @@ public static class PlotRenderer
                 var type = types[s];
                 var sc = plt.Add.Scatter(gx.ToArray(), gy.ToArray());
                 sc.MarkerSize = 0;
-                sc.LineWidth = 1;
+                sc.LineWidth = 3;
                 sc.Color = Color.FromHex(TypeColors.GetValueOrDefault(type, "#7f7f7f")).WithAlpha((byte)110);
                 if (seenType.Add(type))
                     sc.LegendText = type;
@@ -276,6 +320,7 @@ public static class PlotRenderer
         plt.Title(title);
         plt.XLabel("Retention time");
         plt.YLabel("log2 abundance");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -318,6 +363,7 @@ public static class PlotRenderer
         plt.Title(title + " (light = before, solid = after)");
         plt.XLabel("RT bin");
         plt.YLabel("Median CV (%)");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -391,6 +437,7 @@ public static class PlotRenderer
         plt.Title(title);
         plt.XLabel("RT bin");
         plt.YLabel("log2 abundance");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
@@ -456,10 +503,11 @@ public static class PlotRenderer
         }
 
         var markers = plt.Add.Markers(xs.ToArray(), ys.ToArray());
-        markers.MarkerSize = 4;
+        markers.MarkerSize = 9;
         plt.Title(title);
         plt.XLabel("Sample index");
         plt.YLabel("Median log2 intensity");
+        StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 }

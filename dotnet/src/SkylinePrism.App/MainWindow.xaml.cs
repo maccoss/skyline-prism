@@ -664,13 +664,30 @@ public partial class MainWindow : Window
     {
         if (QcViewCombo is null || _qcData.Count == 0)
             return;
+        var kind = ComboText(QcPlotCombo, "PCA");
+        UpdateQcControls(kind); // may force Level=Peptide and grey out Level/View for RT plots
         var view = ComboText(QcViewCombo, "Corrected").ToLowerInvariant();
         var level = ComboText(QcLevelCombo, "Peptide").ToLowerInvariant();
-        var kind = ComboText(QcPlotCombo, "PCA");
         if (InteractivePlots.Contains(kind))
             RenderInteractiveQc(kind, view, level);
         else
             RenderStaticQc(kind, view, level);
+    }
+
+    // RT plots are peptide-only (proteins have no RT); RT-binned CV is inherently a before-vs-after plot.
+    // Force Level to Peptide and grey out the selectors that don't apply so they can't be mis-set.
+    private void UpdateQcControls(string kind)
+    {
+        var isRt = kind is "RT-lowess" or "RT-binned CV" or "RT-bin boxplot";
+        var beforeAfter = kind == "RT-binned CV";
+        if (isRt && QcLevelCombo.SelectedIndex != 0)
+        {
+            _suppressQcRender = true;
+            QcLevelCombo.SelectedIndex = 0; // Peptide
+            _suppressQcRender = false;
+        }
+        QcLevelCombo.IsEnabled = !isRt;       // RT plots: peptide only
+        QcViewCombo.IsEnabled = !beforeAfter; // RT-binned CV shows before AND after
     }
 
     private void RenderInteractiveQc(string kind, string view, string level)
@@ -722,6 +739,7 @@ public partial class MainWindow : Window
             plt.Title("render failed: " + ex.Message);
         }
         // The Plot is reused across view/level/type switches, so fit the axes to the current data.
+        PlotRenderer.StyleQcPlot(plt); // big fonts, thick left+bottom axes (matches the static plots)
         plt.Axes.AutoScale();
         QcPlot.Refresh();
     }
@@ -739,38 +757,22 @@ public partial class MainWindow : Window
     // Control-correlation heatmap + RT plots: the same plots qc_report.html generates, rendered as a
     // static image (they don't need zoom/pan). Reuses PlotRenderer so they match the report exactly.
     // Maps an interactive selection to the PNG stem the QC report writes under qc_plots/.
-    private byte[]? LoadReportPng(string kind, string view, string level)
+    // Column indices (into the given sample list) selected by the Group-by column + value; "All" = every sample.
+    private List<int> GroupColumns(IReadOnlyList<string> samples)
     {
-        if (string.IsNullOrEmpty(_qcOutputDir))
-            return null;
-        var ba = view == "raw" ? "before" : "after";
-        string? stem = kind switch
-        {
-            "Control correlation" => $"{level}_control_corr_{ba}",
-            "RT-lowess" => $"{level}_rt_lowess_{ba}",
-            "RT-bin boxplot" => $"{level}_rt_bin_box_{ba}",
-            // RT-binned CV is a single before/after plot; the report writes _qc or _ref depending on controls.
-            "RT-binned CV" => File.Exists(Path.Combine(_qcOutputDir, "qc_plots", $"{level}_rt_bin_cv_qc.png"))
-                ? $"{level}_rt_bin_cv_qc"
-                : $"{level}_rt_bin_cv_ref",
-            _ => null,
-        };
-        if (stem is null)
-            return null;
-        var path = Path.Combine(_qcOutputDir, "qc_plots", stem + ".png");
-        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+        var value = ComboText(QcGroupCombo, "All");
+        if (string.Equals(value, "All", StringComparison.OrdinalIgnoreCase))
+            return Enumerable.Range(0, samples.Count).ToList();
+        var column = ComboText(QcGroupByCombo, "Sample Type");
+        return Enumerable.Range(0, samples.Count)
+            .Where(i => string.Equals(SampleAnnotation(samples[i], column), value, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
+    // Control-correlation heatmap + RT plots, computed on the fly for the selected Group. delta-LOWESS
+    // made recompute fast enough to do this per selection, which fixed report PNGs could not respect.
     private void RenderStaticQc(string kind, string view, string level)
     {
-        // Prefer the PNG the QC report already rendered (instant) instead of recomputing (RT-lowess in
-        // particular re-fits a curve per sample). Fall back to on-the-fly rendering only if it's missing.
-        var reportPng = LoadReportPng(kind, view, level);
-        if (reportPng is not null)
-        {
-            ShowStaticImage(reportPng);
-            return;
-        }
         try
         {
             if (!_qcData.TryGetValue($"{view}|{level}", out var d))
@@ -778,41 +780,44 @@ public partial class MainWindow : Window
                 ShowStaticMessage($"No {view} {level} data yet - run PRISM first.");
                 return;
             }
+            var groupCols = GroupColumns(d.Samples);
+            var value = ComboText(QcGroupCombo, "All");
+            var groupLabel = string.Equals(value, "All", StringComparison.OrdinalIgnoreCase) ? "all samples" : value;
             var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
-            var refIdx = IndicesOf(types, "reference");
-            var qcIdx = IndicesOf(types, "qc");
-            var controlIdx = refIdx.Concat(qcIdx).Distinct().OrderBy(x => x).ToList();
             var cap = view == "raw" ? "Raw" : "Corrected";
+            double[,] Subset(double[,] m, List<int> c) => c.Count == d.Samples.Count ? m : SelectColumns(m, c);
 
             byte[]? png = null;
             switch (kind)
             {
                 case "Control correlation":
-                    if (controlIdx.Count < 2) { ShowStaticMessage("Control correlation needs >= 2 reference/QC samples."); return; }
-                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, controlIdx, $"Control-sample correlation ({cap})");
+                    if (groupCols.Count < 2) { ShowStaticMessage($"Correlation needs >= 2 samples in '{groupLabel}'."); return; }
+                    png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, $"Sample correlation ({cap}, {groupLabel})");
                     break;
                 case "RT-lowess":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
-                    png = PlotRenderer.RtLowessCurves(d.FeaturesBySamples, d.MeanRt, types, $"RT-lowess of log2 abundance ({cap})");
+                    if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
+                    png = PlotRenderer.RtLowessCurves(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
+                        groupCols.Select(i => types[i]).ToList(), $"RT-lowess of log2 abundance ({cap}, {groupLabel})");
                     break;
                 case "RT-bin boxplot":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
-                    png = PlotRenderer.RtBinBoxplot(d.FeaturesBySamples, d.MeanRt, $"Abundance by RT bin ({cap})", "#1f77b4");
+                    if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
+                    png = PlotRenderer.RtBinBoxplot(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
+                        $"Abundance by RT bin ({cap}, {groupLabel})", "#1f77b4");
                     break;
                 case "RT-binned CV":
-                    // A before/after comparison, so it always uses both raw and corrected (ignores View).
-                    if (!_qcData.TryGetValue($"raw|{level}", out var rawD) ||
-                        !_qcData.TryGetValue($"corrected|{level}", out var corrD) || rawD.MeanRt is null)
+                    // before vs after (View ignored), peptide only, over the selected Group's samples.
+                    if (!_qcData.TryGetValue("raw|peptide", out var rawD) ||
+                        !_qcData.TryGetValue("corrected|peptide", out var corrD) || rawD.MeanRt is null)
                     {
-                        ShowStaticMessage("RT-binned CV is peptide-level and needs both raw and corrected data.");
+                        ShowStaticMessage("RT-binned CV needs both raw and corrected peptide data.");
                         return;
                     }
-                    var idx = qcIdx.Count >= 2 ? qcIdx : refIdx;
-                    if (idx.Count < 2) { ShowStaticMessage("RT-binned CV needs >= 2 reference or QC samples."); return; }
-                    var label = qcIdx.Count >= 2 ? "QC" : "Reference";
-                    var color = qcIdx.Count >= 2 ? "#ff7f0e" : "#d62728";
-                    png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, idx,
-                        $"RT-binned CV ({label}, before vs after)", color);
+                    var cvCols = GroupColumns(rawD.Samples);
+                    if (cvCols.Count < 2) { ShowStaticMessage($"RT-binned CV needs >= 2 samples in '{groupLabel}'."); return; }
+                    png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, cvCols,
+                        $"RT-binned CV ({groupLabel}, before vs after)", "#1f77b4");
                     break;
             }
             if (png is not null)
@@ -875,7 +880,7 @@ public partial class MainWindow : Window
         {
             var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
             markers.Color = Color.FromHex(PlotRenderer.TypeColors.GetValueOrDefault(type, "#7f7f7f"));
-            markers.MarkerSize = 8;
+            markers.MarkerSize = 11;
             markers.LegendText = type;
         }
         plt.ShowLegend();
@@ -931,7 +936,7 @@ public partial class MainWindow : Window
         var med = Stats.NanMedian(cvs);
         var line = plt.Add.VerticalLine(med);
         line.Color = Color.FromHex(colorHex);
-        line.LineWidth = 2;
+        line.LineWidth = 4;
         line.LinePattern = LinePattern.Dashed;
         line.LegendText = $"{label} median {med:0.0}%";
     }
@@ -958,7 +963,7 @@ public partial class MainWindow : Window
             ys.Add(Stats.NanMedian(buf.AsSpan(0, n)));
         }
         var markers = plt.Add.Markers(xs.ToArray(), ys.ToArray());
-        markers.MarkerSize = 5;
+        markers.MarkerSize = 9;
         plt.Title($"{Cap(level)} median log2 intensity ({view}, {group})");
         plt.XLabel("Sample index");
         plt.YLabel("Median log2 intensity");

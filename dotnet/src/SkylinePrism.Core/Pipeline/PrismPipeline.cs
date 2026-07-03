@@ -230,6 +230,14 @@ public sealed class PrismPipeline
         var refMask = samples
             .Select(s => string.Equals(resolvedType[s], refType, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        // Control-sample column indices for the before/after median-CV report (computed on linear scale).
+        var refIdx = Enumerable.Range(0, samples.Count)
+            .Where(j => string.Equals(resolvedType[samples[j]], "reference", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var qcIdx = Enumerable.Range(0, samples.Count)
+            .Where(j => string.Equals(resolvedType[samples[j]], "qc", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         if (referenceAnchored && (peptideCombat || proteinCombat))
         {
             var nRefSamples = refMask.Count(x => x);
@@ -247,6 +255,7 @@ public sealed class PrismPipeline
             new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
             samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
             internalPath, correctedPepPath,
+            report, refIdx, qcIdx,
             referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt");
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
@@ -318,6 +327,7 @@ public sealed class PrismPipeline
         var nProteins = NormalizeAndCorrect(
             proteinsRawPath, proteinMeta, samples, batchLabels, proteinCombat,
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath,
+            report: report, refIdx: refIdx, qcIdx: qcIdx,
             referenceAnchored: referenceAnchored, referenceMask: refMask);
 
         report("============================================================");
@@ -362,6 +372,9 @@ public sealed class PrismPipeline
         string normMethod,
         string? internalLog2Path,
         string correctedLinearPath,
+        Action<string> report,
+        IReadOnlyList<int> refIdx,
+        IReadOnlyList<int> qcIdx,
         bool referenceAnchored = false,
         IReadOnlyList<bool>? referenceMask = null,
         string? rtColumn = null)
@@ -405,6 +418,10 @@ public sealed class PrismPipeline
         }
         matrixAll = null!; // free the [nAll] copy (or clear the alias) - dead from here
 
+        // Control-sample median CV (linear scale) BEFORE normalization/correction (matrix is freed below).
+        var beforeRefCv = refIdx.Count >= 2 ? CvMetrics.MedianCv(matrix, refIdx) : double.NaN;
+        var beforeQcCv = qcIdx.Count >= 2 ? CvMetrics.MedianCv(matrix, qcIdx) : double.NaN;
+
         double[]? rtKept = null;
         if (normMethod is "rt_lowess" && rtColumn is not null && table.HasColumn(rtColumn))
         {
@@ -435,6 +452,13 @@ public sealed class PrismPipeline
             corrected = ComBat.Run(normalized, batchLabels);
         if (!ReferenceEquals(corrected, normalized))
             normalized = null!; // dead after correction
+
+        // Median control-sample CV before vs after normalization + batch correction (linear scale).
+        // Only a type with >= 2 samples is meaningful; skip the other (or both if no controls).
+        if (refIdx.Count >= 2)
+            report($"  Reference CV (median): {beforeRefCv:F1}% -> {CvMetrics.MedianCv(corrected, refIdx):F1}% (before -> after)");
+        if (qcIdx.Count >= 2)
+            report($"  QC CV (median): {beforeQcCv:F1}% -> {CvMetrics.MedianCv(corrected, qcIdx):F1}% (before -> after)");
 
         // Meta columns (filtered to kept rows).
         var metaCols = new List<ParquetWideWriter.MetaColumn>();
