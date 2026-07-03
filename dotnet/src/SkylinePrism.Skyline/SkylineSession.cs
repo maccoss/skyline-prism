@@ -81,6 +81,26 @@ public sealed class SkylineSession : ISkylineExecutor
         public void ExportReport(string reportName, string filePath, string culture) => _c.ExportReport(reportName, filePath, culture);
         public string[] GetSettingsListNames(string listType, string? groupName) => _c.GetSettingsListNames(listType, groupName);
         public void RunCommandSilent(string[] args) => _c.RunCommandSilent(args);
+
+        public ReportRows? GetReportRows(string reportName)
+        {
+            // count=0 returns the shape (TotalRows); then pull every row. columns=null => the view's own columns.
+            var shape = _c.GetReportRows(reportName, 0, 0, null, Array.Empty<ReportFilter>(), false, "invariant");
+            var total = shape?.TotalRows ?? 0;
+            var res = total > 0
+                ? _c.GetReportRows(reportName, 0, total, null, Array.Empty<ReportFilter>(), false, "invariant")
+                : shape;
+            if (res?.Columns is null || res.Rows is null)
+                return null;
+            return new ReportRows(res.Columns.Select(c => c.Name).ToArray(), res.Rows);
+        }
+
+        public string[] ListDocumentGridViews()
+        {
+            var topics = _c.GetReportDocTopics("document_grid");
+            return topics?.Select(t => t.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray()
+                   ?? Array.Empty<string>();
+        }
     }
 
     public static List<ConnectionInfo> DiscoverAll()

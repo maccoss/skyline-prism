@@ -74,13 +74,24 @@ public sealed class SkylineReportDriver
     }
 
     /// <summary>
-    /// Export the replicate-annotation metadata report. The user names it (its columns are
-    /// annotation-dependent and Skyline's built-in "Replicates" view is not in the exportable
-    /// saved-report list); if unspecified, we try a saved "Replicates" report and otherwise
-    /// skip (the pipeline auto-generates metadata from replicate names).
+    /// Produce the replicate-metadata CSV. By default we read Skyline's built-in "Replicates" data
+    /// grid directly over the RPC (<see cref="TryWriteMetadataFromGrid"/>), which captures every
+    /// Document Annotation column dynamically, the way the grid displays them. If the caller names a
+    /// specific saved report, or the grid read fails, we fall back to exporting a saved report.
     /// </summary>
     private string? ExportMetadataReport(string workDir, string? requestedName)
     {
+        var csv = Path.Combine(workDir, "Metadata.csv");
+
+        // Default: read the Replicates document grid and generate Metadata.csv from it.
+        if (string.IsNullOrWhiteSpace(requestedName))
+        {
+            var fromGrid = TryWriteMetadataFromGrid(csv);
+            if (fromGrid is not null)
+                return fromGrid;
+            // fall through to the saved-report export below
+        }
+
         var available = GetAvailableReportNames();
         if (available.Count > 0)
             _log("Available Skyline reports: " + string.Join(", ", available));
@@ -93,14 +104,12 @@ public sealed class SkylineReportDriver
         }
         else
         {
-            // Default to our own installed PRISM-Replicates report (Skyline's built-in
-            // Replicates view is not exportable via the saved-report API).
+            // Fallback to our installed PRISM-Replicates report if the grid read didn't work.
             reportName = available.FirstOrDefault(
                              n => string.Equals(n, "PRISM-Replicates", StringComparison.OrdinalIgnoreCase))
                          ?? "PRISM-Replicates";
         }
 
-        var csv = Path.Combine(workDir, "Metadata.csv");
         try
         {
             _session.Execute(c => c.ExportReport(reportName, csv, "invariant"));
@@ -112,6 +121,53 @@ public sealed class SkylineReportDriver
             _log($"Metadata report '{reportName}' export skipped: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Read Skyline's built-in "Replicates" document-grid view over the RPC (all Document Annotation
+    /// columns) and write it to <paramref name="csvPath"/>. Returns the path on success, or null to
+    /// fall back to a saved report.
+    /// </summary>
+    private string? TryWriteMetadataFromGrid(string csvPath)
+    {
+        try
+        {
+            // The Replicates view name can vary by build; discover it, else use the literal name.
+            var views = _session.Execute(c => c.ListDocumentGridViews());
+            var viewName = views?.FirstOrDefault(v => v.Equals("Replicates", StringComparison.OrdinalIgnoreCase))
+                           ?? "Replicates";
+            var rows = _session.Execute(c => c.GetReportRows(viewName));
+            if (rows is null || rows.Columns.Count == 0)
+            {
+                _log($"Replicates grid '{viewName}' returned no data; using a saved report instead.");
+                return null;
+            }
+            WriteCsv(csvPath, rows.Columns, rows.Rows);
+            _log($"Read the '{viewName}' data grid ({rows.Rows.Count} replicates x {rows.Columns.Count} columns): {csvPath}");
+            return csvPath;
+        }
+        catch (Exception ex)
+        {
+            _log($"Could not read the Replicates data grid ({ex.Message}); using a saved report instead.");
+            return null;
+        }
+    }
+
+    private static void WriteCsv(string path, IReadOnlyList<string> columns, IReadOnlyList<string[]> rows)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(string.Join(",", columns.Select(CsvEscape))).Append('\n');
+        foreach (var row in rows)
+            sb.Append(string.Join(",", row.Select(CsvEscape))).Append('\n');
+        File.WriteAllText(path, sb.ToString());
+    }
+
+    private static string CsvEscape(string? s)
+    {
+        s ??= "";
+        return s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0
+            ? "\"" + s.Replace("\"", "\"\"") + "\""
+            : s;
     }
 
     /// <summary>The saved report names available in the document (for a metadata-report picker).</summary>

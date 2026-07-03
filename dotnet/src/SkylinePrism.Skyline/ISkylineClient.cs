@@ -1,8 +1,12 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 
 namespace SkylinePrism.Skyline;
+
+/// <summary>Inline rows read from a Skyline report/document-grid view (column headers + string cells).</summary>
+public sealed record ReportRows(IReadOnlyList<string> Columns, IReadOnlyList<string[]> Rows);
 
 /// <summary>
 /// The subset of Skyline's JSON-RPC client that <see cref="SkylineReportDriver"/> needs. Extracting
@@ -15,6 +19,12 @@ public interface ISkylineClient
     void ExportReport(string reportName, string filePath, string culture);
     string[] GetSettingsListNames(string listType, string? groupName);
     void RunCommandSilent(string[] args);
+
+    /// <summary>Read a report/document-grid view's content inline (all columns); null if unavailable.</summary>
+    ReportRows? GetReportRows(string reportName);
+
+    /// <summary>Names of the document-grid views (used to locate the built-in "Replicates" view).</summary>
+    string[] ListDocumentGridViews();
 }
 
 /// <summary>

@@ -39,6 +39,19 @@ public class SkylineReportDriverTests
             => ReportsByGroup.TryGetValue(groupName ?? "", out var l) ? l.ToArray() : Array.Empty<string>();
 
         public void RunCommandSilent(string[] args) => Commands.Add(args);
+
+        // Replicates-grid read: null by default (so the driver falls back to a saved report).
+        public string[] GridViews = Array.Empty<string>();
+        public ReportRows? GridRows;
+        public readonly List<string> GridRowsRequested = new();
+
+        public ReportRows? GetReportRows(string reportName)
+        {
+            GridRowsRequested.Add(reportName);
+            return GridRows;
+        }
+
+        public string[] ListDocumentGridViews() => GridViews;
     }
 
     private sealed class FakeExecutor : ISkylineExecutor
@@ -126,6 +139,35 @@ public class SkylineReportDriverTests
         new SkylineReportDriver(new FakeExecutor(client)).Export(work);
 
         Assert.Contains(client.Exports, e => e.Report == "PRISM-Replicates" && e.Path.EndsWith("Metadata.csv"));
+    }
+
+    [Fact]
+    public void ExportMetadata_ReadsReplicatesGrid_WhenAvailable()
+    {
+        var client = new FakeClient
+        {
+            OnExport = (_, p) => File.WriteAllText(p, "x"),
+            GridViews = new[] { "Replicates", "Precursors" },
+            GridRows = new ReportRows(
+                new[] { "Replicate", "Sample Type", "Condition" },
+                new List<string[]>
+                {
+                    new[] { "R1", "Standard", "A, treated" }, // comma forces CSV quoting
+                    new[] { "R2", "Quality Control", "B" },
+                }),
+        };
+        var work = TempDir();
+
+        new SkylineReportDriver(new FakeExecutor(client)).Export(work);
+
+        // The built-in grid is read; no saved report is exported for the metadata.
+        Assert.Contains("Replicates", client.GridRowsRequested);
+        Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith("Metadata.csv"));
+
+        var csv = File.ReadAllText(Path.Combine(work, "Metadata.csv"));
+        Assert.StartsWith("Replicate,Sample Type,Condition", csv);
+        Assert.Contains("R1,Standard,\"A, treated\"", csv);
+        Assert.Contains("R2,Quality Control,B", csv);
     }
 
     [Fact]
