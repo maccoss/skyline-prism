@@ -276,6 +276,95 @@ public partial class MainWindow : Window
             OutputDirBox.Text = dlg.FolderName;
     }
 
+    // Show the prism CLI command + config YAML that reproduces the current GUI settings, in a window
+    // with buttons to copy the command or the config to the clipboard.
+    private void OnShowCommandLine(object sender, RoutedEventArgs e)
+    {
+        var config = BuildConfigFromUi();
+        var batchColumn = BatchColumnBox.Text?.Trim();
+        if (!string.IsNullOrWhiteSpace(batchColumn))
+            config.Metadata.BatchColumn = batchColumn;
+
+        var outputDir = string.IsNullOrWhiteSpace(OutputDirBox.Text) ? "<output-dir>" : OutputDirBox.Text.Trim();
+        var report = Path.Combine(outputDir, "skyline-reports", "PRISM.parquet");
+        var metadata = Path.Combine(outputDir, "skyline-reports", "Metadata.csv");
+        var configPath = Path.Combine(outputDir, "prism-config.yaml");
+        var yaml = SerializeConfig(config);
+
+        var command = $"prism run -i \"{report}\" -o \"{outputDir}\" -c \"{configPath}\" -m \"{metadata}\"";
+        var body =
+            "Command-line equivalent of the current GUI settings.\r\n\r\n" +
+            "The tool exports the Skyline report into <output>\\skyline-reports\\ and runs the pipeline. To\r\n" +
+            "reproduce it with the prism CLI: save the config below as prism-config.yaml, then run:\r\n\r\n" +
+            command + "\r\n\r\n" +
+            "# ---------- prism-config.yaml ----------\r\n" + yaml;
+
+        ShowCopyableTextWindow("PRISM command line", body, command, yaml);
+    }
+
+    private static string SerializeConfig(PrismConfig config) =>
+        new YamlDotNet.Serialization.SerializerBuilder()
+            .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
+            .Build()
+            .Serialize(config);
+
+    private void ShowCopyableTextWindow(string title, string body, string command, string yaml)
+    {
+        var box = new System.Windows.Controls.TextBox
+        {
+            Text = body,
+            IsReadOnly = true,
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.NoWrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+
+        var copyCmd = new System.Windows.Controls.Button { Content = "Copy command", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
+        var copyYaml = new System.Windows.Controls.Button { Content = "Copy config (YAML)", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
+        var close = new System.Windows.Controls.Button { Content = "Close", Padding = new Thickness(12, 4, 12, 4) };
+        copyCmd.Click += (_, _) => TrySetClipboard(command);
+        copyYaml.Click += (_, _) => TrySetClipboard(yaml);
+
+        var buttons = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+        };
+        buttons.Children.Add(copyCmd);
+        buttons.Children.Add(copyYaml);
+        buttons.Children.Add(close);
+
+        var grid = new System.Windows.Controls.Grid { Margin = new Thickness(12) };
+        grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
+        System.Windows.Controls.Grid.SetRow(box, 0);
+        System.Windows.Controls.Grid.SetRow(buttons, 1);
+        grid.Children.Add(box);
+        grid.Children.Add(buttons);
+
+        var win = new Window
+        {
+            Title = title,
+            Width = 860,
+            Height = 580,
+            Content = grid,
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        close.Click += (_, _) => win.Close();
+        win.ShowDialog();
+    }
+
+    private static void TrySetClipboard(string text)
+    {
+        try { System.Windows.Clipboard.SetText(text); }
+        catch { /* the clipboard may be briefly locked by another app; ignore */ }
+    }
+
     private async void OnRun(object sender, RoutedEventArgs e)
     {
         if (_session is null)

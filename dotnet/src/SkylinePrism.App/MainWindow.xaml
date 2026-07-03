@@ -9,6 +9,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -22,13 +23,10 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Output directory:" VerticalAlignment="Center" Margin="0,0,8,0" />
             <TextBox Grid.Column="1" x:Name="OutputDirBox" VerticalAlignment="Center" TextChanged="OnOutputDirChanged" />
             <Button Grid.Column="2" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowse" />
-            <Button Grid.Column="3" x:Name="RunButton" Content="Run PRISM" Margin="8,0,0,0" Padding="14,4"
-                    FontWeight="Bold" Click="OnRun" />
         </Grid>
 
         <Grid Grid.Row="3" Margin="0,0,0,10">
@@ -47,7 +45,14 @@
                        Text="Pick the report carrying replicate annotations (default = our PRISM-Replicates), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
 
-        <TabControl Grid.Row="4" x:Name="MainTabs">
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button x:Name="OpenProvenanceButton" Content="Open provenance..." Padding="12,4" Margin="0,0,8,0"
+                    Click="OnOpenProvenance"
+                    ToolTip="Load settings from a previous run's parameters.json into the Settings tab." />
+            <Button x:Name="RunButton" Content="Run PRISM" Padding="22,4" FontWeight="Bold" Click="OnRun" />
+        </StackPanel>
+
+        <TabControl Grid.Row="5" x:Name="MainTabs">
             <TabItem Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14">
@@ -164,10 +169,10 @@
             </TabItem>
         </TabControl>
 
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button x:Name="OpenProvenanceButton" Content="Open provenance..." Padding="12,4" Margin="0,0,8,0"
-                    Click="OnOpenProvenance"
-                    ToolTip="Load settings from a previous run's parameters.json into the Settings tab." />
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="ShowCommandButton" Content="Show Command Line" Padding="12,4" Margin="0,0,8,0"
+                    Click="OnShowCommandLine"
+                    ToolTip="Show the prism CLI command + config YAML that reproduces the current GUI settings." />
             <Button x:Name="OpenReportButton" Content="Open QC Report" Padding="12,4" IsEnabled="False"
                     Click="OnOpenReport" />
         </StackPanel>

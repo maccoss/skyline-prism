@@ -8,6 +8,33 @@ namespace SkylinePrism.Tests.Config;
 /// <summary>Guards that the YAML keys for the newer options bind (UnderscoredNamingConvention).</summary>
 public class ConfigParsingTests
 {
+    // The tool's "Show Command Line" serializes the UI config to YAML; prism run -c must read it back
+    // to the same settings. Guards that serialize -> parse round-trips.
+    [Fact]
+    public void SerializedConfig_RoundTripsThroughParse()
+    {
+        var config = new PrismConfig();
+        config.TransitionRollup.Method = "topn";
+        config.TransitionRollup.TopnCount = 5;
+        config.GlobalNormalization.Method = "quantile";
+        config.ProteinRollup.Method = "maxlfq";
+        config.ProteinRollup.Topn.N = 7;
+        config.BatchCorrection.PeptideLevel = false;
+
+        var yaml = new YamlDotNet.Serialization.SerializerBuilder()
+            .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
+            .Build()
+            .Serialize(config);
+        var back = PrismConfig.Parse(yaml);
+
+        Assert.Equal("topn", back.TransitionRollup.Method);
+        Assert.Equal(5, back.TransitionRollup.TopnCount);
+        Assert.Equal("quantile", back.GlobalNormalization.Method);
+        Assert.Equal("maxlfq", back.ProteinRollup.Method);
+        Assert.Equal(7, back.ProteinRollup.Topn.N);
+        Assert.False(back.BatchCorrection.PeptideLevel);
+    }
+
     [Fact]
     public void NewOptionKeys_Bind()
     {
