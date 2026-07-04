@@ -6,6 +6,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 ## Data I/O & merge
 - [x] Streaming CSV/parquet merge (DuckDB), UNION ALL of N reports with `memory_limit` + disk-spill
       `temp_directory` — handles ~200 reports (tested with 30 as a proxy) — `DuckDbMerge`
+- [x] Merge memory: budget = 75% of RAM + all cores + `temp_directory` spill. A fixed 8 GB `memory_limit`
+      OOM'd on a real 69M-row report because the per-thread parallel-read buffers (one thread per core)
+      exceeded it in seconds, before sorting - not the sort working set. Sized to hold the parallel read
+      with host headroom; spills for anything beyond. (Caught by the SEA-AD real-world run.)
 - [x] Schema-only column detection (footer read) on the merged file; distinct-query streaming for
       samples / batch map / parsimony — no full materialization of the merged table
 - [x] Column auto-detection (`find_column`) — `SkylineColumns`
@@ -174,6 +178,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       (`median_abundance` default | `frequency` — swaps the primary sort key), previously parsed-but-ignored.
       median_abundance path verified exact by e2e-prot-topn.
 - [x] Library rollup algorithm unit-tested (median-polish scale, interference removal, m/z match)
+- [x] Real-world validation (SEA-AD-MTG-Pilot: 82 samples / 89,983 peptides / 7,700 proteins; sum /
+      rt_lowess / median_polish, ComBat off): `peptides_rollup` BIT-EXACT vs Python (max 3.5e-15);
+      `corrected_peptides` essentially exact (median rel ~0 - rt_lowess matches statsmodels);
+      `corrected_proteins` 0.03% median / 0.13% max on the 7,696 shared proteins. The only structural
+      diff (6 proteins, all `n_unique=0` in high-homology families: myosins/histone/POTE/Na-channels) is a
+      stale-output skew - the Python output (2026-05-25) predates the 2026-07-02 parsimony Osprey-alignment
+      applied to both languages, so current Python would match.
 - [~] End-to-end `output-lib-sum` parity gate — the Carafe-TSV loader now exists; the golden fixture
       still needs to be wired as a `PipelineMethodParityTests` case
 

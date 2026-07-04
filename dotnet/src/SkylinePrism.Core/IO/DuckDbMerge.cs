@@ -51,10 +51,22 @@ public static class DuckDbMerge
         string outputPath,
         string? sortColumn = null,
         IReadOnlyList<string>? batchNames = null,
-        int sortBufferMb = 8192)
+        int sortBufferMb = 0)
     {
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
+
+        // Use the machine: budget = 75% of RAM so all worker threads' read/decompress buffers fit, with
+        // ~25% headroom for the .NET host + OS (DuckDB runs in-process), and temp_directory spill for any
+        // sort working set beyond the budget - so we get full throughput without OOM. The original bug was
+        // a fixed 8 GB limit that was smaller than the upfront per-thread read buffers when DuckDB ran one
+        // thread per core, so it OOM'd in seconds before sorting - not too little memory for the data, just
+        // too little to hold the parallel read. 0 = auto.
+        if (sortBufferMb <= 0)
+        {
+            var availableMb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024L * 1024L);
+            sortBufferMb = (int)Math.Max(2048, availableMb * 3 / 4);
+        }
 
         batchNames ??= reportPaths.Select(p => Path.GetFileNameWithoutExtension(p)).ToList();
         if (batchNames.Count != reportPaths.Count)
@@ -102,9 +114,12 @@ public static class DuckDbMerge
 
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
+        // Use all cores; the 75%-of-RAM budget above is sized so all threads' read buffers fit, and the
+        // sort spills to temp_directory beyond it.
         Exec(conn, $"SET memory_limit='{sortBufferMb}MB'");
         Exec(conn, $"SET temp_directory='{SqlEscape(tempDir)}'");
         Exec(conn, "SET preserve_insertion_order=false");
+        Exec(conn, $"SET threads={Environment.ProcessorCount}");
 
         // Stage A: union -> unsorted intermediate (snappy).
         Exec(conn, $@"
