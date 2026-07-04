@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using SkylinePrism.Core.IO;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -13,6 +14,7 @@ namespace SkylinePrism.Core.Config;
 /// </summary>
 public sealed class PrismConfig
 {
+    public DataSection Data { get; set; } = new();
     public TransitionRollupSection TransitionRollup { get; set; } = new();
     public GlobalNormalizationSection GlobalNormalization { get; set; } = new();
     public BatchCorrectionSection BatchCorrection { get; set; } = new();
@@ -150,6 +152,9 @@ public sealed class PrismConfig
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
+            ["data"] = Leaves("abundance_column", "rt_column", "peptide_column", "protein_column",
+                "protein_name_column", "sample_column", "transition_column", "precursor_column",
+                "fragment_column", "batch_column", "sample_type_column"),
             ["transition_rollup"] = tr,
             ["global_normalization"] = gn,
             ["batch_correction"] = Leaves("enabled", "peptide_level", "protein_level", "method",
@@ -165,6 +170,38 @@ public sealed class PrismConfig
             ["processing"] = Leaves("n_workers", "peptide_batch_size"),
             ["batch_estimation"] = Leaves("method", "n_batches", "gap_iqr_multiplier"),
         };
+    }
+
+    /// <summary>
+    /// Explicit input-column-name overrides (Python's <c>data</c> section). Any set value wins over
+    /// auto-detection when it resolves against the input columns (matched ignoring case / spaces /
+    /// underscores, so English "Peptide Modified Sequence" and invariant "PeptideModifiedSequence" both
+    /// work). Leave null to auto-detect. batch_column / sample_type_column here are also honored (they
+    /// fall back to the metadata section).
+    /// </summary>
+    public sealed class DataSection
+    {
+        public string? AbundanceColumn { get; set; }
+        public string? RtColumn { get; set; }
+        public string? PeptideColumn { get; set; }
+        public string? ProteinColumn { get; set; }
+        public string? ProteinNameColumn { get; set; }
+        public string? SampleColumn { get; set; }
+        public string? TransitionColumn { get; set; }
+        public string? PrecursorColumn { get; set; }
+        public string? FragmentColumn { get; set; }
+        public string? BatchColumn { get; set; }
+        public string? SampleTypeColumn { get; set; }
+
+        public ColumnOverrides ToOverrides() => new(
+            Peptide: PeptideColumn,
+            Protein: ProteinColumn,
+            ProteinName: ProteinNameColumn,
+            Abundance: AbundanceColumn,
+            RetentionTime: RtColumn,
+            Sample: SampleColumn,
+            Transition: TransitionColumn,
+            Batch: BatchColumn);
     }
 
     public sealed class TransitionRollupSection

@@ -59,7 +59,8 @@ public sealed class PrismPipeline
 
         // Schema-only read: never materialize the (potentially huge, 200-report) merged table
         // just to detect column names.
-        var cols = SkylineColumns.Detect(ParquetTable.ReadColumnNames(mergedPath).ToHashSet());
+        var cols = SkylineColumns.Detect(
+            ParquetTable.ReadColumnNames(mergedPath).ToHashSet(), config.Data.ToOverrides());
         var samples = MergedParquetReader.GetSortedSamples(mergedPath, cols.Sample);
         report($"  Columns: peptide='{cols.Peptide}', sample='{cols.Sample}', abundance='{cols.Abundance}'.");
         report($"  Samples: {samples.Count}.");
@@ -68,7 +69,9 @@ public sealed class PrismPipeline
         // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
         var sourceBatchMap = GetBatchMap(mergedPath, cols);
         var metadata = ReplicateMetadata.TryLoad(
-            metadataPaths, report, config.Metadata.SampleTypeColumn, config.Metadata.BatchColumn);
+            metadataPaths, report,
+            config.Data.SampleTypeColumn ?? config.Metadata.SampleTypeColumn,
+            config.Data.BatchColumn ?? config.Metadata.BatchColumn);
         var resolvedBatch = new Dictionary<string, string>(StringComparer.Ordinal);
         var resolvedType = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var s in samples)

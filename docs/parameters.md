@@ -149,17 +149,25 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 
 ---
 
-## `metadata` / `data` — column names
+## `data` / `metadata` — column names
 
-C# reads the batch and sample-type column names under **`metadata:`**; Python reads them (plus other
-column-name overrides) under **`data:`**. This is a path difference — a Python `data:` block is not read
-by C# (and warns).
+C# supports Python's **`data:`** column-mapping section: any value set here wins over auto-detection.
+Column matching is robust to **case, spaces, and underscores**, so one config works for both the
+invariant/parquet export (`PeptideModifiedSequenceUnimodIds`) and the English/CSV export
+(`Peptide Modified Sequence`). `batch_column` / `sample_type_column` are accepted under **both** `data:`
+(Python's location) and `metadata:` (C#'s), with `data:` taking precedence.
 
-| C# key | Python key | Default | Description | Availability |
-|--------|-----------|---------|-------------|--------------|
-| `metadata.batch_column` | `data.batch_column` | `null` (auto-detect) | Column carrying the batch/plate label | Both (different path) |
-| `metadata.sample_type_column` | `data.sample_type_column` | `null` (auto-detect) | Sample Type column | Both (different path) |
-| — | `data.abundance_column`, `rt_column`, `peptide_column`, `protein_column`, `protein_name_column`, `sample_column`, `transition_column`, `precursor_column`, `fragment_column` | — | Override each input column name | **Python only** — C# auto-detects columns (`SkylineColumns`) and cannot override them |
+| Key | Default | Description | Availability |
+|-----|---------|-------------|--------------|
+| `data.peptide_column` | auto | Peptide modified-sequence column | **Both** |
+| `data.protein_column` / `data.protein_name_column` | auto | Protein accession / name columns | **Both** |
+| `data.abundance_column` | auto (`Area`) | Peak-area column | **Both** |
+| `data.rt_column` | auto (`Retention Time`) | Retention-time column | **Both** |
+| `data.sample_column` | auto (`Replicate Name`) | Replicate/sample column | **Both** |
+| `data.transition_column` | auto (`Fragment Ion`) | Transition/fragment column | **Both** |
+| `data.batch_column` / `data.sample_type_column` | auto | Also accepted under `metadata:` (data wins) | **Both** |
+| `data.precursor_column` / `data.fragment_column` | — | Parsed for compatibility; C# auto-detects precursor/product charge | **Both** (parsed; auto-detected) |
+| `metadata.batch_column` / `metadata.sample_type_column` | auto | C# location for the above two | **C# also** |
 
 ---
 

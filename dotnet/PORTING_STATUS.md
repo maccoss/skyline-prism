@@ -195,6 +195,12 @@ schema sync).
 - [x] `output.include_residuals` template default corrected to `true` (matched the code default)
 - [x] `batch_correction.auto_revert` (opt-in, C#-only safety net) — revert ComBat if it worsens the
       control CV by >10%; Python has this only in its legacy `normalize_pipeline`
+- [x] `data.*` column-name overrides (peptide / protein / protein_name / abundance / rt / sample /
+      transition + batch / sample_type) — honored by `SkylineColumns.Detect`, winning over auto-detect;
+      an override resolves if present else falls back to auto (like Python's `data.peptide_column`).
+      Matching is robust to invariant (no-space) vs English (spaced) vs underscore + case, so one config
+      works for `.parquet` and `.csv/.tsv` exports. batch/sample_type also accepted under `metadata.*`.
+      (`ColumnDetectionTests`; verified on the real SEA-AD invariant + phospho parquets.)
 - removed dead `qc_report.embed_plots` (parsed, never read)
 
 **Deliberate non-ports (documented; surfaced at runtime):**
@@ -203,8 +209,6 @@ schema sync).
 - [-] `library_assist.fitting_method: least_squares` — only median_polish ported; `least_squares` aborts
 - [-] `batch_correction.method` non-combat — ComBat is the only algorithm; other values abort
 - [-] `global_normalization.vsn_params.optimize_params` — VSN runs unoptimized (Python default = false)
-- [-] `data.*` column-name overrides — C# auto-detects columns (`SkylineColumns`); no override. (C# reads
-      the batch / sample-type column names under `metadata.*`, not `data.*`.)
 - [-] `qc_report.plots.*` per-plot toggles, `qc_report.filename`, `embed_plots` link-mode — C# emits a
       fixed, always-base64-embedded plot set
 - [-] `protein_rollup.median_polish.{max_iterations,convergence_tolerance}` — `TukeyMedianPolish`

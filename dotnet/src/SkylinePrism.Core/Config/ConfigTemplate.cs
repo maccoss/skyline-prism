@@ -11,6 +11,20 @@ public static class ConfigTemplate
 # =====================================
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
 
+# Input column mapping. Auto-detection handles both the invariant/parquet export
+# (PeptideModifiedSequenceUnimodIds) and the English/CSV export (Peptide Modified Sequence) - leave
+# these commented unless a column needs to be forced. A set value wins over auto-detect.
+# data:
+#   peptide_column: "Peptide Modified Sequence"
+#   protein_column: "Protein Accession"
+#   protein_name_column: "Protein"
+#   abundance_column: "Area"
+#   rt_column: "Retention Time"
+#   sample_column: "Replicate Name"
+#   transition_column: "Fragment Ion"
+#   batch_column: null
+#   sample_type_column: null
+
 # Sample type comes from the Skyline Replicates "Sample Type" column first (Standard -> reference,
 # Quality Control -> qc). These substring patterns (matched against the replicate/sample name) are a
 # FALLBACK, used only for replicates that have no Sample Type annotation.

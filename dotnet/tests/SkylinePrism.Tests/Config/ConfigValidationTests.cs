@@ -29,8 +29,9 @@ public class ConfigValidationTests
               method: median_polish
               min_peptides: 3
               min_peptdes: 2                  # typo
-            data:                             # whole section not in C#
+            data:                             # section supported; a bad key inside is still caught
               abundance_column: Area
+              bogus_column: x                 # typo
             """;
 
         var unknown = PrismConfig.FindUnknownKeys(yaml);
@@ -39,7 +40,9 @@ public class ConfigValidationTests
         Assert.Contains("transition_rollup.adaptive_rollup", unknown);
         Assert.Contains("global_normalization.vsn_params", unknown);
         Assert.Contains("protein_rollup.min_peptdes", unknown);
-        Assert.Contains("data", unknown);
+        Assert.Contains("data.bogus_column", unknown);
+        Assert.DoesNotContain("data", unknown);              // the section is recognized now
+        Assert.DoesNotContain("data.abundance_column", unknown);
     }
 
     [Fact]
