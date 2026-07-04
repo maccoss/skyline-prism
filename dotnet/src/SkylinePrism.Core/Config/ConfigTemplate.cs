@@ -48,11 +48,13 @@ global_normalization:
     frac: 0.3             # LOWESS local-regression window fraction
     n_grid_points: 100    # RT grid points the curve is evaluated on before interpolation
 
-# Low-signal sample outlier detection. action: "report" or "exclude".
+# Low-signal sample outlier detection (one-sided, on linear scale).
 sample_outlier_detection:
   enabled: true
-  action: "report"
-  method: "iqr"          # or "fold_median"
+  action: "report"        # report | exclude
+  method: "iqr"           # iqr | fold_median
+  # iqr_multiplier: 1.5    # method: iqr - flag samples below Q1 - k*IQR
+  # fold_threshold: 0.1    # method: fold_median - flag samples below k*median
 
 # ComBat batch correction (skipped automatically when < 2 batches).
 batch_correction:
@@ -87,11 +89,17 @@ processing:
   n_workers: 0
   peptide_batch_size: 2000
 
+# Metadata columns in the Replicates/metadata report. null = auto-detect.
+metadata:
+  batch_column: null         # column carrying the batch/plate label
+  sample_type_column: null   # Sample Type column (reference / qc / experimental)
+
 # Batch estimation fallback, used only when no metadata / Source Document batch distinguishes
 # samples. method: auto (gap detection) | gap | fixed | source | none.
 batch_estimation:
   method: "auto"
-  gap_iqr_multiplier: 1.5
+  gap_iqr_multiplier: 1.5    # auto/gap: split when an acquisition-time gap exceeds k*IQR
+  # n_batches: 3             # method: fixed - split into exactly N equal batches
 
 # Output.
 output:

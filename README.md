@@ -138,6 +138,9 @@ protein_rollup:       # median_polish (default) | sum | topn | maxlfq | ibaq
 qc_report:            # HTML report + plots
 ```
 
+See **[docs/parameters.md](docs/parameters.md)** for the full parameter reference — every key, its
+default, and whether it is available in the Python package, the C# port, or both.
+
 A run records its full configuration to `parameters.json`; `prism run --from-provenance
 out/parameters.json` reproduces an earlier run's settings.
 
@@ -165,7 +168,7 @@ dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
 
 - **[dotnet/README.md](dotnet/README.md)** — building, testing, project layout, and CI for the C# code.
 - **[SPECIFICATION.md](SPECIFICATION.md)** — the authoritative algorithm/format specification.
-- **[docs/](docs/)** — methods and output-file references.
+- **[docs/](docs/)** — [parameters](docs/parameters.md), [methods](docs/methods.md), and [output files](docs/output_files.md).
 - **[README-python.md](README-python.md)** — the original Python `skyline-prism` package.
 
 ## License
