@@ -193,8 +193,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       match (0 missing of 6.67M cells = Python's 225,975 matched); `peptides_rollup` BIT-EXACT (max 7.1e-15
       over 6.67M values), `corrected_peptides` essentially exact, `corrected_proteins` 0.017% median /
       0.064% max on the 10,913 shared proteins. Output sample columns carry the `__@__<source>` suffix,
-      matching Python. The only structural diff is 10,914 vs 10,913 proteins (+1) - the same stale-output
-      parsimony version-skew as SEA-AD (Python output predates the 2026-07-02 Osprey alignment). This run
+      matching Python. The only structural diff is +1 group (P20671 / H2A1D histone, `n_unique=0` - all
+      peptides shared; nothing Python-only) - confirmed the stale-output parsimony version-skew: it's the
+      SAME zero-unique-peptide high-homology family that differed in SEA-AD, and the Python output predates
+      the 2026-07-02 Osprey tiebreak alignment, so current Python would match. This run
       surfaced + fixed: the merge memory OOM, the Sample-ID output-column suffix, and TWO parsimony hot
       spots (subsumable O(proteins^2) and the razor's O(canonical x iterations) rescan) - parsimony now
       ~1 min (dominated by the parallel FASTA BuildMap), whole pipeline ~2 min on cached merge.
