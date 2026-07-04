@@ -51,7 +51,7 @@ public sealed class PrismPipeline
         }
         else
         {
-            merge = DuckDbMerge.MergeAndSort(inputs, mergedPath);
+            merge = DuckDbMerge.MergeAndSort(inputs, mergedPath, replicateColumn: config.Data.SampleColumn);
             SourceFingerprint.Write(cachePath,
                 new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
             report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");

@@ -89,8 +89,12 @@ public sealed class SkylineColumns
             ?? FindColumn(available, "Peptide Modified Sequence Unimod Ids", "Peptide Modified Sequence", "Peptide")
             ?? "Peptide Modified Sequence";
 
-        var sample = Ov(o.Sample)
-            ?? FindColumn(available, "Sample ID")
+        // "Sample ID" is the merge-synthesized, batch-disambiguated column ("<replicate>__@__<batch>")
+        // and must win downstream so identical replicate names across batches stay distinct. The
+        // data.sample_column override names the INPUT replicate column for the merge (see DuckDbMerge),
+        // NOT the output sample column - so it only applies when no synthesized Sample ID is present.
+        var sample = FindColumn(available, "Sample ID")
+            ?? Ov(o.Sample)
             ?? FindColumn(available, "Replicate Name", "Replicate_Name")
             ?? "Replicate Name";
 

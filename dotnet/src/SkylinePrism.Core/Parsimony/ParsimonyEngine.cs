@@ -175,16 +175,31 @@ public static class ParsimonyEngine
         foreach (var a in proteins)
         {
             var pepsA = protToPep[a];
-            foreach (var b in proteins)
+            if (pepsA.Count == 0)
+                continue;
+            // A proper superset of a must contain ALL of a's peptides, so it appears in pepToProt for
+            // every peptide of a - in particular for a's rarest peptide. Scanning only those candidates
+            // (not every protein) makes this near-linear instead of O(proteins^2), with the identical
+            // result: the lexicographically smallest proper superset (the old ordered scan + break-on-first).
+            string pivot = null!;
+            var fewest = int.MaxValue;
+            foreach (var pep in pepsA)
+            {
+                var c = pepToProt[pep].Count;
+                if (c < fewest) { fewest = c; pivot = pep; }
+            }
+            string? smallest = null;
+            foreach (var b in pepToProt[pivot])
             {
                 if (a == b)
                     continue;
-                if (pepsA.IsProperSubsetOf(protToPep[b]))
-                {
-                    subsumedBy[a] = b;
-                    break;
-                }
+                var pepsB = protToPep[b];
+                if (pepsB.Count > pepsA.Count && pepsA.IsProperSubsetOf(pepsB)
+                    && (smallest is null || string.CompareOrdinal(b, smallest) < 0))
+                    smallest = b;
             }
+            if (smallest is not null)
+                subsumedBy[a] = smallest;
         }
         var subsumingToSubsumed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var kv in subsumedBy)

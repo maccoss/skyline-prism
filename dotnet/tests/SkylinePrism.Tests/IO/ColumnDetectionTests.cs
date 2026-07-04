@@ -74,6 +74,21 @@ public class ColumnDetectionTests
     }
 
     [Fact]
+    public void SampleId_WinsOverSampleColumnOverride()
+    {
+        // The merge synthesizes a batch-disambiguated "Sample ID" (<replicate>__@__<batch>); it must win
+        // over data.sample_column (which names the INPUT replicate column), so output columns keep the
+        // __@__ suffix and identical replicate names across batches stay distinct.
+        var cols = new HashSet<string>
+        {
+            "PeptideModifiedSequenceUnimodIds", "ReplicateName", "Sample ID", "Area", "FragmentIon",
+            "PrecursorCharge", "ProductCharge", "RetentionTime",
+        };
+        var d = SkylineColumns.Detect(cols, new ColumnOverrides(Sample: "Replicate Name"));
+        Assert.Equal("Sample ID", d.Sample);
+    }
+
+    [Fact]
     public void FindColumn_IgnoresCaseSpaceUnderscore()
     {
         var cols = new HashSet<string> { "peptide_modified_sequence" };

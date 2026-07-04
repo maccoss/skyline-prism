@@ -59,7 +59,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       `normalize_pipeline`). `BatchCorrectionEvaluatorTests`.
 
 ## Protein parsimony (Stage 3)
-- [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`.
+- [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`. Subsumable
+      detection uses the peptide->protein index (only proteins sharing a's rarest peptide are candidate
+      supersets) instead of an O(proteins^2) all-pairs scan - identical result, near-linear; the old scan
+      took ~2 h single-threaded on a real 190k-peptide set.
       Order-independent (groups depend only on the peptide/protein sets, not input row order;
       proven by `ParsimonyOspreyTests.Grouping_IsOrderIndependent`). Grouping matches
       maccoss/osprey (identical-set merge + subset elimination -> same maximal groups); the
@@ -185,6 +188,12 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       diff (6 proteins, all `n_unique=0` in high-homology families: myosins/histone/POTE/Na-channels) is a
       stale-output skew - the Python output (2026-05-25) predates the 2026-07-02 parsimony Osprey-alignment
       applied to both languages, so current Python would match.
+- [x] Real-world LIBRARY-ASSIST validation (Edge-Pilot: 35 samples / 190,726 peptides; library_assist
+      (438 MB BLIB) / rt_lowess / median_polish, ComBat off): 100% BLIB match (0 missing of 6.67M cells,
+      = Python's 225,975 matched); `peptides_rollup` BIT-EXACT vs Python (max 7.1e-15 across 6.67M values)
+      and `corrected_peptides` essentially exact - the BLIB loader, exact (no-I/L) matching, m/z fragment
+      matching, and median-polish library rollup all reproduce Python. (Also surfaced + fixed: the merge
+      OOM, the O(proteins^2) parsimony hot spot, and the Sample-ID output-column suffix - below.)
 - [~] End-to-end `output-lib-sum` parity gate — the Carafe-TSV loader now exists; the golden fixture
       still needs to be wired as a `PipelineMethodParityTests` case
 

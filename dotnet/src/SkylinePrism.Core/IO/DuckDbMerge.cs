@@ -51,7 +51,8 @@ public static class DuckDbMerge
         string outputPath,
         string? sortColumn = null,
         IReadOnlyList<string>? batchNames = null,
-        int sortBufferMb = 0)
+        int sortBufferMb = 0,
+        string? replicateColumn = null)
     {
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
@@ -100,7 +101,7 @@ public static class DuckDbMerge
         var unionParts = new List<string>();
         for (var i = 0; i < reportPaths.Count; i++)
         {
-            unionParts.Add(BuildFileSelect(reportPaths[i], batchNames[i], fileHeaders[i]));
+            unionParts.Add(BuildFileSelect(reportPaths[i], batchNames[i], fileHeaders[i], replicateColumn));
         }
         var unionQuery = string.Join(" UNION ALL ", unionParts);
 
@@ -154,7 +155,8 @@ public static class DuckDbMerge
         return new MergeResult(Path.GetFullPath(outputPath), sortColumn, totalRows);
     }
 
-    private static string BuildFileSelect(string filePath, string batchName, IReadOnlyList<string> header)
+    private static string BuildFileSelect(
+        string filePath, string batchName, IReadOnlyList<string> header, string? replicateColumn = null)
     {
         var suffix = Path.GetExtension(filePath).ToLowerInvariant();
         var isParquet = suffix == ".parquet";
@@ -163,7 +165,12 @@ public static class DuckDbMerge
         var batchEsc = batchName.Replace("'", "''");
         var stemEsc = stem.Replace("'", "''");
 
-        var fileReplicateCol = ReplicateColumnNames.FirstOrDefault(header.Contains)
+        // Prefer the configured replicate column (data.sample_column), matched case/space/underscore-
+        // insensitively, then the standard names. This is the INPUT column used to synthesize the
+        // batch-disambiguated "Sample ID"; the output sample column is always that synthesized Sample ID.
+        var fileReplicateCol =
+            (replicateColumn is not null ? SkylineColumns.FindColumn(header.ToList(), replicateColumn) : null)
+            ?? ReplicateColumnNames.FirstOrDefault(header.Contains)
             ?? throw new InvalidOperationException(
                 $"Could not find replicate column in {Path.GetFileName(filePath)}.");
 
