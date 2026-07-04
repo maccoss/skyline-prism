@@ -159,7 +159,7 @@ invariant/parquet export (`PeptideModifiedSequenceUnimodIds`) and the English/CS
 
 | Key | Default | Description | Availability |
 |-----|---------|-------------|--------------|
-| `data.peptide_column` | auto | Peptide modified-sequence column | **Both** |
+| `data.peptide_column` | auto (prefers `PeptideModifiedSequenceUnimodIds`, the Skyline-PRISM.skyr column) | Peptide modified-sequence column | **Both** |
 | `data.protein_column` / `data.protein_name_column` | auto | Protein accession / name columns | **Both** |
 | `data.abundance_column` | auto (`Area`) | Peak-area column | **Both** |
 | `data.rt_column` | auto (`Retention Time`) | Retention-time column | **Both** |

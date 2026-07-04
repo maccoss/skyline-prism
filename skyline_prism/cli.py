@@ -610,7 +610,7 @@ def load_config(config_path: Path | None) -> dict:
         "data": {
             "abundance_column": "Area",
             "rt_column": "Retention Time",
-            "peptide_column": "Peptide Modified Sequence",
+            "peptide_column": "Peptide Modified Sequence Unimod Ids",
             "protein_column": "Protein Accession",
             "protein_name_column": "Protein",
             "sample_column": "Replicate Name",
@@ -3092,8 +3092,9 @@ data:
   # Retention time column
   rt_column: "Retention Time"
 
-  # Peptide identification (modified sequence distinguishes peptidoforms)
-  peptide_column: "Peptide Modified Sequence"
+  # Peptide identification (modified sequence distinguishes peptidoforms). Skyline-PRISM.skyr exports
+  # "Peptide Modified Sequence Unimod Ids" (invariant: PeptideModifiedSequenceUnimodIds); preferred.
+  peptide_column: "Peptide Modified Sequence Unimod Ids"
 
   # Protein identification
   protein_column: "Protein Accession"
@@ -3555,11 +3556,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
         pep1_df = pd.read_parquet(run1_dir / "corrected_peptides.parquet")
         pep2_df = pd.read_parquet(run2_dir / "corrected_peptides.parquet")
 
-        # Determine peptide column
-        peptide_col = "Peptide Modified Sequence"
+        # Determine peptide column (Skyline-PRISM.skyr exports the Unimod-Ids column; prefer it)
+        peptide_col = "Peptide Modified Sequence Unimod Ids"
         if peptide_col not in pep1_df.columns:
             # Try alternative names
-            for alt in ["peptide", "Peptide"]:
+            for alt in ["Peptide Modified Sequence", "peptide", "Peptide"]:
                 if alt in pep1_df.columns:
                     peptide_col = alt
                     break
@@ -3636,10 +3637,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if sample_col not in available_cols:
             sample_col = "Replicate Name" if "Replicate Name" in available_cols else available_cols[0]
 
-        # Also find peptide column in transition data
-        trans_peptide_col = "Peptide Modified Sequence"
+        # Also find peptide column in transition data (Skyline-PRISM.skyr exports the Unimod-Ids column)
+        trans_peptide_col = "Peptide Modified Sequence Unimod Ids"
         if trans_peptide_col not in available_cols:
-            for alt in ["Peptide Modified Sequence Unimod Ids", "Peptide"]:
+            for alt in ["Peptide Modified Sequence", "Peptide"]:
                 if alt in available_cols:
                     trans_peptide_col = alt
                     break

@@ -15,7 +15,7 @@ public static class ConfigTemplate
 # (PeptideModifiedSequenceUnimodIds) and the English/CSV export (Peptide Modified Sequence) - leave
 # these commented unless a column needs to be forced. A set value wins over auto-detect.
 # data:
-#   peptide_column: "Peptide Modified Sequence"
+#   peptide_column: "Peptide Modified Sequence Unimod Ids"   # Skyline-PRISM.skyr's peptide column
 #   protein_column: "Protein Accession"
 #   protein_name_column: "Protein"
 #   abundance_column: "Area"
