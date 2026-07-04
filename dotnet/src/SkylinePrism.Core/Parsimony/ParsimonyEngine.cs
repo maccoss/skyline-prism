@@ -275,37 +275,36 @@ public static class ParsimonyEngine
             set.Add(pep);
         }
 
-        // Step 4: iterative greedy razor assignment.
+        // Step 4: greedy razor assignment. The selection criterion (highest unique count; ties -> largest
+        // total peptide set, matching Osprey's lowest-group-ID-to-largest-set; then lowest canonical
+        // accession for determinism) is FIXED - it does not depend on which shared peptides have already
+        // been assigned. So the greedy "pick the best candidate each iteration" is equivalent to processing
+        // canonical proteins ONCE in that ranked order and giving each whatever shared peptides still remain
+        // that it can claim. This replaces the old O(canonical x iterations) per-iteration rescan (which
+        // recomputed the candidate set every iteration) with a single sorted pass, and yields the identical
+        // assignment (verified by the razor parity tests).
         var remainingShared = new HashSet<string>(sharedPeptides, StringComparer.Ordinal);
         var canonicalToRazorPeps = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        var sortedCanonical = canonicalProteins.OrderBy(x => x, StringComparer.Ordinal).ToList();
-
-        while (remainingShared.Count > 0)
+        var razorOrder = canonicalProteins
+            .OrderByDescending(c => canonicalToUniquePeps.TryGetValue(c, out var s) ? s.Count : 0)
+            .ThenByDescending(c => protToPep[canonicalToMembers[c][0]].Count)
+            .ThenBy(c => c, StringComparer.Ordinal)
+            .ToList();
+        foreach (var can in razorOrder)
         {
-            var candidates = sortedCanonical
-                .Where(can => protToPep[canonicalToMembers[can][0]].Overlaps(remainingShared))
-                .ToList();
-            if (candidates.Count == 0)
+            if (remainingShared.Count == 0)
                 break;
-
-            // Highest unique count wins. Ties -> largest total peptide set (Osprey assigns the
-            // lowest group ID to the largest set and tiebreaks on lowest ID), then lowest canonical
-            // string so the choice stays deterministic where Osprey's group-ID order is arbitrary.
-            var bestCan = candidates
-                .OrderByDescending(c => canonicalToUniquePeps.TryGetValue(c, out var s) ? s.Count : 0)
-                .ThenByDescending(c => protToPep[canonicalToMembers[c][0]].Count)
-                .ThenBy(c => c, StringComparer.Ordinal)
-                .First();
-
-            var canPeps = protToPep[canonicalToMembers[bestCan][0]];
-            var toAssign = canPeps.Intersect(remainingShared).OrderBy(x => x, StringComparer.Ordinal).ToList();
-            if (!canonicalToRazorPeps.TryGetValue(bestCan, out var razorSet))
-                canonicalToRazorPeps[bestCan] = razorSet = new HashSet<string>(StringComparer.Ordinal);
+            var canPeps = protToPep[canonicalToMembers[can][0]];
+            var toAssign = canPeps.Where(remainingShared.Contains).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            if (toAssign.Count == 0)
+                continue;
+            var razorSet = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in toAssign)
             {
                 razorSet.Add(p);
                 remainingShared.Remove(p);
             }
+            canonicalToRazorPeps[can] = razorSet;
         }
 
         // Step 5: build groups.
