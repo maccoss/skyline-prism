@@ -99,7 +99,7 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | `ibaq.missed_cleavages` | `0` | Missed cleavages for the in-silico digest | **Both** |
 | `ibaq.min_peptide_length` | `6` | Min tryptic peptide length counted | **Both** |
 | `ibaq.max_peptide_length` | `30` | Max tryptic peptide length counted | **Both** |
-| `median_polish.max_iterations` / `median_polish.convergence_tolerance` | — | Median-polish convergence tuning | **Python only** — C# hardcodes the Python defaults |
+| `median_polish.max_iterations` / `median_polish.convergence_tolerance` | `20` / `1e-4` | Median-polish convergence tuning | **Python only** — C# hardcodes these exact Python defaults (`20`, `1e-4`); no divergence unless Python overrides them |
 | `shared_peptide_handling` | — | Duplicate of `parsimony.shared_peptide_handling` | **Python only** (set it under `parsimony`) |
 
 ⁴ Both engines use `3` at runtime. Python's *template text* shows `2`; the runtime default is `3`.
