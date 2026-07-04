@@ -235,8 +235,20 @@ public static class PlotRenderer
         plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, yLabels);
 
         plt.Title(title);
-        StyleQcPlot(plt);
-        // Rotate the x labels and right-align them (matplotlib ha="right") so each sits under its column.
+        // A heatmap needs no axis frame or tick marks - the cells are the grid. Big bold title, labels
+        // centred on the cells (y-labels centred on rows; x-labels rotated, right-aligned so they read
+        // up into their column). Keeps the labels but drops the L-shaped axis lines.
+        plt.Axes.Title.Label.FontSize = 22;
+        plt.Axes.Title.Label.Bold = true;
+        plt.Axes.Left.FrameLineStyle.Width = 0;
+        plt.Axes.Bottom.FrameLineStyle.Width = 0;
+        plt.Axes.Right.FrameLineStyle.Width = 0;
+        plt.Axes.Top.FrameLineStyle.Width = 0;
+        plt.Axes.Left.MajorTickStyle.Length = 0;
+        plt.Axes.Bottom.MajorTickStyle.Length = 0;
+        plt.Axes.Left.TickLabelStyle.FontSize = 13;
+        plt.Axes.Bottom.TickLabelStyle.FontSize = 13;
+        plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
         plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
         plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
