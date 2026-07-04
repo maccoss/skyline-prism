@@ -11,12 +11,12 @@ public static class ConfigTemplate
 # =====================================
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
 
-# Sample type detection (regex-free substring patterns against the sample/replicate name)
+# Sample type comes from the Skyline Replicates "Sample Type" column first (Standard -> reference,
+# Quality Control -> qc). These substring patterns (matched against the replicate/sample name) are a
+# FALLBACK, used only for replicates that have no Sample Type annotation.
 sample_annotations:
-  reference_pattern:
-    - "-Pool_"
-  qc_pattern:
-    - "-QC_"
+  reference_pattern: ["-Pool-", "-Pool_", "_Pool_", "CommercialPool", "Ref", "Reference"]
+  qc_pattern: ["-QC-", "-QC_", "_QC_", "QC", "Control", "StudyPool", "Quality Control"]
 
 # Protein parsimony. Set fasta_path for FASTA-based mapping; null uses the Skyline
 # Protein Accession column.

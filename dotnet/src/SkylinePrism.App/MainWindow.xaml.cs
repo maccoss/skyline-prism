@@ -133,7 +133,8 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Title = "Select spectral library",
-            Filter = "BiblioSpec library (*.blib)|*.blib|All files (*.*)|*.*",
+            Filter = "Spectral library (*.blib;*.tsv)|*.blib;*.tsv|BiblioSpec (*.blib)|*.blib"
+                + "|Carafe/DIA-NN (*.tsv)|*.tsv|All files (*.*)|*.*",
         };
         if (dlg.ShowDialog() == true)
         {

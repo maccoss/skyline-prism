@@ -58,8 +58,8 @@ public sealed class TransitionRollup
         {
             if (string.IsNullOrWhiteSpace(cfg.LibraryPath))
                 throw new InvalidOperationException(
-                    "Library-assisted rollup requires a spectral library (.blib) path.");
-            library = SpectralLibrary.LoadBlib(cfg.LibraryPath);
+                    "Library-assisted rollup requires a spectral library path (.blib or Carafe/DIA-NN .tsv).");
+            library = SpectralLibrary.Load(cfg.LibraryPath);
         }
 
         var captureResiduals = !isLibrary && cfg.Method == TransitionRollupMethod.MedianPolish

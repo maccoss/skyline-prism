@@ -44,7 +44,7 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | `topn_selection` | `correlation` | `correlation` (needs Shape Correlation) or `intensity` | **Both** |
 | `topn_weighting` | `sqrt` | `sqrt` or `sum` | **Both** |
 | `consensus_regularization` | `0.1` | Inverse-variance shrinkage for `method: consensus` | **C# only** (Python hardcodes) |
-| `library_path` | `null` | Spectral library (.blib) for `method: library_assist` | **Both**² |
+| `library_path` | `null` | Spectral library for `method: library_assist`: **`.blib`** (Skyline) or **`.tsv`** (Carafe/DIA-NN), auto-detected by extension | **Both**² |
 | `library_min_fragments` | `3` | Min matched library fragments for a fit | **Both**² |
 | `library_mz_tolerance` | `0.02` | m/z tolerance (Da) matching transitions to library | **Both**² |
 | `library_outlier_threshold` | `1.0` | Normalized-residual threshold for interference | **Both**² |
@@ -128,9 +128,11 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 
 | Key | Default | Description | Availability |
 |-----|---------|-------------|--------------|
-| `reference_pattern` | `["-Pool_", "_Pool_", "CommercialPool"]` | Substrings that mark reference samples | **Both** |
-| `qc_pattern` | `["-QC_", "_QC_", "StudyPool"]` | Substrings that mark QC samples | **Both** |
+| `reference_pattern` | `["-Pool-", "-Pool_", "_Pool_", "CommercialPool", "Ref", "Reference"]` | **Fallback** substrings for reference samples | **Both**⁵ |
+| `qc_pattern` | `["-QC-", "-QC_", "_QC_", "QC", "Control", "StudyPool", "Quality Control"]` | **Fallback** substrings for QC samples | **Both**⁵ |
 | `experimental_pattern` | — | Explicit experimental-sample patterns | **Python only** — C# treats anything not reference/qc as experimental |
+
+⁵ Sample type is taken from the Replicates **"Sample Type" column first** (`Standard` → reference, `Quality Control` → qc, `Unknown` → experimental). The patterns are a **fallback**, matched (case-sensitive) against the replicate/sample name only for replicates with no Sample Type annotation. C# applies these defaults as an always-on fallback; Python applies patterns only when the `sample_annotations` block is present (the generated template includes it, so both agree).
 
 ---
 

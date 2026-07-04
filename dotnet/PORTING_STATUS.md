@@ -28,9 +28,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       a clear error (was silently falling back to `sum`). `learn_adaptive_weights` + the `adaptive_rollup:`
       block are reported as unrecognized config keys. See "Config surface & parity" below.
 - [x] `consensus` (two-way-median decomposition + inverse-variance transition weighting) — `ConsensusRollup`
-- [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
-      (median-polish with library prior, interference removal, per-charge sum); library picker in
-      the tool. Carafe-TSV library loader not yet ported (BLIB only).
+- [x] `library_assist` (BLIB **and** Carafe/DIA-NN TSV) — `SpectralLibrary` (BLIB/SQLite reader +
+      `LoadCarafeTsv` streaming TSV reader; `Load()` auto-detects by extension) + `LibraryRollup`
+      (median-polish with library prior, interference removal, per-charge sum); library picker in the tool.
 
 ## Peptide normalization (Stage 2b)
 - [x] `median` — `Normalizer.MedianNormalize`
@@ -153,7 +153,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       collapse) — `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`)
 - [~] "Batch source" line — logs "N batches from acquisition-time gaps" when estimating, but not an
       explicit source line for the Source-Document / metadata cases
-- [ ] Pattern-based sample-type fallback (`reference_pattern`/`qc_pattern` regex when no metadata file)
+- [x] Pattern-based sample-type fallback — Replicates "Sample Type" column first (Standard/Quality
+      Control), then `reference_pattern`/`qc_pattern` substrings on the replicate name (`ClassifySampleType`).
+      Defaults broadened to Pool/Ref/Reference and QC/Control/StudyPool/Quality Control. NOTE: C# applies
+      the pattern fallback with built-in defaults; Python applies patterns only when configured (opt-in).
 
 ## Cross-language parity fixtures
 - [x] `mini/merge`, `mini/e2e-sum` (sum pipeline; full path incl. ComBat, tolerance-compared)
@@ -165,7 +168,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       (`median_abundance` default | `frequency` — swaps the primary sort key), previously parsed-but-ignored.
       median_abundance path verified exact by e2e-prot-topn.
 - [x] Library rollup algorithm unit-tested (median-polish scale, interference removal, m/z match)
-- [ ] End-to-end `output-lib-sum` parity gate (needs the Carafe-TSV loader)
+- [~] End-to-end `output-lib-sum` parity gate — the Carafe-TSV loader now exists; the golden fixture
+      still needs to be wired as a `PipelineMethodParityTests` case
 
 ## Config surface & parity (parameter exposure)
 

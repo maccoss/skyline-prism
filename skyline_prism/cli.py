@@ -2907,19 +2907,27 @@ def get_minimal_config_template() -> str:
 # Sample Type Detection (IMPORTANT - customize for your naming convention)
 # =============================================================================
 sample_annotations:
+  # Sample type comes from the Skyline Replicates "Sample Type" column first (Standard -> reference,
+  # Quality Control -> qc). These substring patterns are a FALLBACK for replicates with no Sample Type
+  # annotation, matched against the replicate/sample name.
   # Patterns to identify inter-experiment reference samples
-  # (used for learning technical variation)
   reference_pattern:
+    - "-Pool-"
     - "-Pool_"
     - "_Pool_"
     - "CommercialPool"
+    - "Ref"
+    - "Reference"
 
   # Patterns to identify intra-experiment QC samples
-  # (used for validating corrections)
   qc_pattern:
+    - "-QC-"
     - "-QC_"
     - "_QC_"
+    - "QC"
+    - "Control"
     - "StudyPool"
+    - "Quality Control"
 
 # =============================================================================
 # Protein Parsimony

@@ -297,8 +297,13 @@ public sealed class PrismConfig
 
     public sealed class SampleAnnotationsSection
     {
-        public List<string> ReferencePattern { get; set; } = new() { "-Pool_", "_Pool_", "CommercialPool" };
-        public List<string> QcPattern { get; set; } = new() { "-QC_", "_QC_", "StudyPool" };
+        // Fallback only: sample type comes from the Replicates-grid "Sample Type" column first (Standard
+        // -> reference, Quality Control -> qc). These substring patterns (case-sensitive, matched against
+        // the replicate/sample name) are used ONLY when a replicate has no Sample Type annotation.
+        public List<string> ReferencePattern { get; set; } = new()
+            { "-Pool-", "-Pool_", "_Pool_", "CommercialPool", "Ref", "Reference" };
+        public List<string> QcPattern { get; set; } = new()
+            { "-QC-", "-QC_", "_QC_", "QC", "Control", "StudyPool", "Quality Control" };
     }
 
     public sealed class ParsimonySection

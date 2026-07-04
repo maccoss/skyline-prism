@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
@@ -99,6 +101,108 @@ public sealed class SpectralLibrary
 
             lib._byKey[key] = spectrum;
             lib._strippedLookup.TryAdd(MakeStrippedKey(seq, precCharge), key);
+        }
+        return lib;
+    }
+
+    /// <summary>
+    /// Load a spectral library, auto-detecting the format by extension: <c>.tsv</c> = Carafe/DIA-NN,
+    /// <c>.blib</c> = Skyline BLIB. Mirrors Python <c>load_spectral_library</c>.
+    /// </summary>
+    public static SpectralLibrary Load(string path)
+    {
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Spectral library not found", path);
+        var suffix = Path.GetExtension(path).ToLowerInvariant();
+        return suffix switch
+        {
+            ".tsv" => LoadCarafeTsv(path),
+            ".blib" => LoadBlib(path),
+            _ => throw new NotSupportedException(
+                $"Unsupported spectral library format '{suffix}' ({path}). Use .blib (Skyline) or .tsv (Carafe/DIA-NN)."),
+        };
+    }
+
+    /// <summary>
+    /// Load a Carafe/DIA-NN TSV spectral library (ports <c>CarafeTSVLoader</c>). Required columns:
+    /// ModifiedPeptide, PrecursorCharge, FragmentMz, RelativeIntensity. Decoys (Decoy != 0) are skipped;
+    /// DIA-NN underscore-wrapped sequences (<c>_PEPTIDE_</c>) are unwrapped. Streams the file so 7GB+
+    /// libraries load without materializing the text. Fragment intensities are stored by rounded m/z
+    /// exactly as BLIB; the library-assist scale is invariant to the intensity normalization.
+    /// </summary>
+    public static SpectralLibrary LoadCarafeTsv(string path)
+    {
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Carafe TSV library not found", path);
+
+        var lib = new SpectralLibrary();
+        using var reader = new StreamReader(path);
+        var headerLine = reader.ReadLine();
+        if (headerLine is null)
+            throw new InvalidDataException($"Empty Carafe TSV library: {path}");
+
+        var header = headerLine.Split('\t');
+        var idx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < header.Length; i++)
+            idx[header[i].Trim()] = i;
+        int Col(string name) => idx.TryGetValue(name, out var i) ? i : -1;
+
+        var iMod = Col("ModifiedPeptide");
+        var iCharge = Col("PrecursorCharge");
+        var iMz = Col("FragmentMz");
+        var iIntensity = Col("RelativeIntensity");
+        var iPrecMz = Col("PrecursorMz");
+        var iDecoy = Col("Decoy");
+
+        var missing = new[] { ("ModifiedPeptide", iMod), ("PrecursorCharge", iCharge),
+            ("FragmentMz", iMz), ("RelativeIntensity", iIntensity) }
+            .Where(c => c.Item2 < 0).Select(c => c.Item1).ToList();
+        if (missing.Count > 0)
+            throw new InvalidDataException(
+                $"Carafe TSV missing required columns: {string.Join(", ", missing)} ({path}).");
+
+        var maxIdx = Math.Max(Math.Max(iMod, iCharge), Math.Max(iMz, iIntensity));
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (line.Length == 0)
+                continue;
+            var f = line.Split('\t');
+            if (f.Length <= maxIdx)
+                continue;
+            if (iDecoy >= 0 && iDecoy < f.Length)
+            {
+                var d = f[iDecoy].Trim();
+                if (d.Length > 0 && d != "0")
+                    continue; // skip decoys (Decoy != 0)
+            }
+
+            var modSeq = f[iMod].Trim().Trim('_'); // DIA-NN wraps in underscores
+            if (modSeq.Length == 0)
+                continue;
+            if (!int.TryParse(f[iCharge].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var charge))
+                continue;
+            if (!double.TryParse(f[iMz].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var mz))
+                continue;
+            if (!double.TryParse(f[iIntensity].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var intensity))
+                continue;
+
+            var key = MakePeptideKey(modSeq, charge);
+            if (!lib._byKey.TryGetValue(key, out var spectrum))
+            {
+                double precMz = 0;
+                if (iPrecMz >= 0 && iPrecMz < f.Length)
+                    double.TryParse(f[iPrecMz].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out precMz);
+                spectrum = new FragmentSpectrum
+                {
+                    ModifiedSequence = modSeq,
+                    PrecursorCharge = charge,
+                    PrecursorMz = precMz,
+                };
+                lib._byKey[key] = spectrum;
+                lib._strippedLookup.TryAdd(MakeStrippedKey(modSeq, charge), key);
+            }
+            spectrum.FragmentsByMz[Math.Round(mz, 2)] = intensity; // rounded m/z key, same as BLIB
         }
         return lib;
     }
