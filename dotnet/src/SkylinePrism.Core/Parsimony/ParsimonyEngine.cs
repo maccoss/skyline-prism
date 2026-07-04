@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.IO;
 
@@ -171,16 +173,17 @@ public static class ParsimonyEngine
 
         // Step 1: subsumable proteins (strict subset -> lexicographically smallest superset).
         var proteins = protToPep.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
-        var subsumedBy = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var a in proteins)
+        // Each protein's smallest proper superset depends only on the (read-only) maps, so this
+        // parallelizes cleanly and deterministically - each task writes its own key, no contention.
+        // A proper superset of a must contain ALL of a's peptides, so it appears in pepToProt for a's
+        // rarest peptide; scanning only those candidates (not every protein) makes it near-linear rather
+        // than O(proteins^2), keeping the identical result: the lexicographically smallest proper superset.
+        var subsumedByConc = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        Parallel.ForEach(proteins, a =>
         {
             var pepsA = protToPep[a];
             if (pepsA.Count == 0)
-                continue;
-            // A proper superset of a must contain ALL of a's peptides, so it appears in pepToProt for
-            // every peptide of a - in particular for a's rarest peptide. Scanning only those candidates
-            // (not every protein) makes this near-linear instead of O(proteins^2), with the identical
-            // result: the lexicographically smallest proper superset (the old ordered scan + break-on-first).
+                return;
             string pivot = null!;
             var fewest = int.MaxValue;
             foreach (var pep in pepsA)
@@ -199,14 +202,20 @@ public static class ParsimonyEngine
                     smallest = b;
             }
             if (smallest is not null)
-                subsumedBy[a] = smallest;
-        }
+                subsumedByConc[a] = smallest;
+        });
+        var subsumedBy = new Dictionary<string, string>(subsumedByConc, StringComparer.Ordinal);
+
+        // Build superset -> [subsumed] iterating proteins in sorted order, so the lists are deterministic
+        // regardless of the parallel fill order above.
         var subsumingToSubsumed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var kv in subsumedBy)
+        foreach (var a in proteins)
         {
-            if (!subsumingToSubsumed.TryGetValue(kv.Value, out var list))
-                subsumingToSubsumed[kv.Value] = list = new List<string>();
-            list.Add(kv.Key);
+            if (!subsumedBy.TryGetValue(a, out var sup))
+                continue;
+            if (!subsumingToSubsumed.TryGetValue(sup, out var list))
+                subsumingToSubsumed[sup] = list = new List<string>();
+            list.Add(a);
         }
 
         var activeProteins = new HashSet<string>(proteins.Where(p => !subsumedBy.ContainsKey(p)), StringComparer.Ordinal);
