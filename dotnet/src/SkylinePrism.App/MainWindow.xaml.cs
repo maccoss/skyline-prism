@@ -732,7 +732,7 @@ public partial class MainWindow : Window
             switch (kind)
             {
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
-                case "Intensity distribution": DrawIntensity(plt, matrix, types, level, view, groupLabel); break;
+                case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
                 default: DrawPca(plt, matrix, colorLabels, level, view, groupLabel); break;
             }
         }
@@ -743,6 +743,8 @@ public partial class MainWindow : Window
         // The Plot is reused across view/level/type switches, so fit the axes to the current data.
         PlotRenderer.StyleQcPlot(plt); // big fonts, thick left+bottom axes (matches the static plots)
         plt.Axes.AutoScale();
+        if (kind == "CV distribution") // bar plot: sit the bars on the x-axis (y starts at 0)
+            plt.Axes.SetLimitsY(0, plt.Axes.GetLimits().Top);
         QcPlot.Refresh();
     }
 
@@ -784,6 +786,7 @@ public partial class MainWindow : Window
             }
             var groupCols = GroupColumns(d.Samples);
             var value = ComboText(QcGroupCombo, "All");
+            var column = ComboText(QcGroupByCombo, "Sample Type");
             var groupLabel = string.Equals(value, "All", StringComparison.OrdinalIgnoreCase) ? "all samples" : value;
             var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
             var cap = view == "raw" ? "Raw" : "Corrected";
@@ -801,7 +804,7 @@ public partial class MainWindow : Window
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
                     if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
                     png = PlotRenderer.RtLowessCurves(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
-                        groupCols.Select(i => types[i]).ToList(), "");
+                        groupCols.Select(i => SampleAnnotation(d.Samples[i], column)).ToList(), "");
                     break;
                 case "RT-bin boxplot":
                     if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
@@ -1002,10 +1005,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
+    private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)
     {
-        // Per-sample KDE density curves (the Python "Intensity Distribution" plot), same renderer as the report.
-        PlotRenderer.DrawIntensityDensity(plt, featuresBySamples);
+        // Per-sample KDE density curves, coloured by Group-by value (N groups -> N colours). All samples shown.
+        PlotRenderer.DrawIntensityDensity(plt, featuresBySamples, labels);
         // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("Log2 Abundance");
         plt.YLabel("Density");

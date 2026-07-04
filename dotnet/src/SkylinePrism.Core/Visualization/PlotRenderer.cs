@@ -89,6 +89,7 @@ public static class PlotRenderer
         plt.Title(title);
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
+        plt.Axes.Margins(bottom: 0); // bars sit on the x-axis (y starts at 0)
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
@@ -135,6 +136,7 @@ public static class PlotRenderer
         plt.Title(title);
         plt.XLabel("CV (%)");
         plt.YLabel("Count");
+        plt.Axes.Margins(bottom: 0); // bars sit on the x-axis (y starts at 0)
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
@@ -399,6 +401,12 @@ public static class PlotRenderer
             for (var k = 0; k < g; k++)
                 grid[k] = rtMin + k * step;
 
+            // Colour by the passed label (sample type in the report, Group-by value in the tool): a
+            // distinct colour per distinct value, so N groups -> N colours.
+            var groupColors = new Dictionary<string, Color>(StringComparer.Ordinal);
+            var gci = 0;
+            foreach (var lab in types.Distinct().OrderBy(x => x, StringComparer.Ordinal))
+                groupColors[lab] = GroupColor(lab, gci++);
             var seenType = new HashSet<string>();
             for (var s = 0; s < nS; s++)
             {
@@ -447,7 +455,7 @@ public static class PlotRenderer
                 var sc = plt.Add.Scatter(gx.ToArray(), gy.ToArray());
                 sc.MarkerSize = 0;
                 sc.LineWidth = 3;
-                sc.Color = Color.FromHex(TypeColors.GetValueOrDefault(type, "#7f7f7f")).WithAlpha((byte)110);
+                sc.Color = groupColors[type].WithAlpha((byte)110);
                 if (seenType.Add(type))
                     sc.LegendText = type;
             }
@@ -500,6 +508,7 @@ public static class PlotRenderer
         plt.Title(title + " (light = before, solid = after)");
         plt.XLabel("RT bin");
         plt.YLabel("Median CV (%)");
+        plt.Axes.Margins(bottom: 0); // bars sit on the x-axis (y starts at 0)
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
@@ -610,12 +619,13 @@ public static class PlotRenderer
         return cvs.Count == 0 ? double.NaN : Numerics.Stats.NanMedian(cvs.ToArray());
     }
 
-    // matplotlib tab20 - one colour per sample, cycled, matching the Python density plot.
+    // The 10 distinct matplotlib tab10 hues first (so a few groups get well-separated colours), then
+    // their tab20 light variants (so many overlaid samples still each get a colour).
     private static readonly string[] Tab20 =
     {
-        "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896",
-        "#9467bd", "#c5b0d5", "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7",
-        "#bcbd22", "#dbdb8d", "#17becf", "#9edae5",
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#bcbd22", "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5", "#c49c94",
+        "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
     };
 
     /// <summary>Cycled per-sample colour for overlaid density curves.</summary>
@@ -644,7 +654,7 @@ public static class PlotRenderer
     /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG and
     /// the interactive tool. Each sample gets a distinct cycled colour; no legend (there can be many).
     /// </summary>
-    public static void DrawIntensityDensity(Plot plt, double[,] log2Matrix)
+    public static void DrawIntensityDensity(Plot plt, double[,] log2Matrix, IReadOnlyList<string>? groupLabels = null)
     {
         var nF = log2Matrix.GetLength(0);
         var nS = log2Matrix.GetLength(1);
@@ -674,6 +684,18 @@ public static class PlotRenderer
         for (var i = 0; i < gN; i++)
             grid[i] = gmin + i * step;
 
+        // Colour by group value if given (every sample in a group shares a colour; N groups -> N colours),
+        // else one colour per sample. Legend + a distinct colour per distinct group.
+        Dictionary<string, Color>? groupColors = null;
+        if (groupLabels is not null)
+        {
+            groupColors = new Dictionary<string, Color>(StringComparer.Ordinal);
+            var ci = 0;
+            foreach (var lab in groupLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal))
+                groupColors[lab] = GroupColor(lab, ci++);
+        }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
         for (var s = 0; s < nS; s++)
         {
             if (perSample[s].Count < 2)
@@ -682,8 +704,20 @@ public static class PlotRenderer
             var line = plt.Add.Scatter(grid, density);
             line.MarkerSize = 0;
             line.LineWidth = 3.0f; // thick, like the RT-lowess curves
-            line.Color = SampleColor(s).WithAlpha((byte)130);
+            if (groupColors is not null && groupLabels is not null)
+            {
+                var lab = groupLabels[s];
+                line.Color = groupColors[lab].WithAlpha((byte)150);
+                if (seen.Add(lab))
+                    line.LegendText = lab;
+            }
+            else
+            {
+                line.Color = SampleColor(s).WithAlpha((byte)130);
+            }
         }
+        if (groupColors is not null)
+            plt.ShowLegend();
     }
 
     /// <summary>Per-sample LOG2 intensity density curves (the Python "Intensity Distribution" plot).</summary>
