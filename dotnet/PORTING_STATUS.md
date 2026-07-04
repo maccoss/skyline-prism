@@ -106,11 +106,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging
 - [x] `run` flags: `-m/--metadata` (multi-file, merged), `--force-reprocess`; still `--reference-pattern`/`--qc-pattern`
 - [~] `qc` flag gaps: `-o` report-name, `--no-save-plots`, `--no-embed`; `merge`: `-m`, `--no-partition`
-- [ ] `config-template --minimal`; `-v` means version in C# but verbose in Python (collision)
+- [x] `config-template --minimal` (`ConfigTemplate.Minimal`). NOTE: `-v` = version in C# vs verbose in
+      Python is an unresolved minor CLI-flag collision.
 - [x] `compare` (control-CV comparison of two runs + ranked per-peptide CV differences) —
       `RollupComparison`. (The Python's per-peptide library-fit visualization is not ported.)
-- [ ] Timestamped `prism_run_<ts>.log` written to the output dir (CLI logs to console only)
-- [ ] Source-fingerprint cache + `--force-reprocess` (C# always re-merges)
+- [x] Timestamped `prism_run_<ts>.log` in the output dir, tee'd with the console — `Program.cs`
+- [x] Source-fingerprint cache + `--force-reprocess` (reuse merged_data.parquet when inputs unchanged) —
+      `PrismPipeline` + `SourceFingerprint`
 - [x] Unknown-config-key warnings — `PrismConfig.FindUnknownKeys` reports any key the pipeline doesn't
       read (Python-only or typo) on stderr; `PrismConfig.Validate` aborts on unported method choices
       (adaptive / least_squares / non-combat batch). CLI `run` + `qc` go through `LoadValidated`.
@@ -147,9 +149,10 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       any annotation), applied to PCA, CV, and intensity plots with a standardized per-group palette
 
 ## Validation status & warnings (Python validation.py)
-- [ ] Pass/fail verdict + warnings (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
-      collapse) rendered as a status banner; C# report has metrics/plots but no verdict layer
-- [ ] "Batch source" line (which of Source Document / metadata / acquisition-time supplied batch labels)
+- [x] Pass/fail verdict + warnings banner (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
+      collapse) — `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`)
+- [~] "Batch source" line — logs "N batches from acquisition-time gaps" when estimating, but not an
+      explicit source line for the Source-Document / metadata cases
 - [ ] Pattern-based sample-type fallback (`reference_pattern`/`qc_pattern` regex when no metadata file)
 
 ## Cross-language parity fixtures
