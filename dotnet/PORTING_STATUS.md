@@ -188,12 +188,16 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       diff (6 proteins, all `n_unique=0` in high-homology families: myosins/histone/POTE/Na-channels) is a
       stale-output skew - the Python output (2026-05-25) predates the 2026-07-02 parsimony Osprey-alignment
       applied to both languages, so current Python would match.
-- [x] Real-world LIBRARY-ASSIST validation (Edge-Pilot: 35 samples / 190,726 peptides; library_assist
-      (438 MB BLIB) / rt_lowess / median_polish, ComBat off): 100% BLIB match (0 missing of 6.67M cells,
-      = Python's 225,975 matched); `peptides_rollup` BIT-EXACT vs Python (max 7.1e-15 across 6.67M values)
-      and `corrected_peptides` essentially exact - the BLIB loader, exact (no-I/L) matching, m/z fragment
-      matching, and median-polish library rollup all reproduce Python. (Also surfaced + fixed: the merge
-      OOM, the O(proteins^2) parsimony hot spot, and the Sample-ID output-column suffix - below.)
+- [x] Real-world LIBRARY-ASSIST validation, END-TO-END (Edge-Pilot: 35 samples / 190,726 peptides /
+      10,914 proteins; library_assist (438 MB BLIB) / rt_lowess / median_polish, ComBat off): 100% BLIB
+      match (0 missing of 6.67M cells = Python's 225,975 matched); `peptides_rollup` BIT-EXACT (max 7.1e-15
+      over 6.67M values), `corrected_peptides` essentially exact, `corrected_proteins` 0.017% median /
+      0.064% max on the 10,913 shared proteins. Output sample columns carry the `__@__<source>` suffix,
+      matching Python. The only structural diff is 10,914 vs 10,913 proteins (+1) - the same stale-output
+      parsimony version-skew as SEA-AD (Python output predates the 2026-07-02 Osprey alignment). This run
+      surfaced + fixed: the merge memory OOM, the Sample-ID output-column suffix, and TWO parsimony hot
+      spots (subsumable O(proteins^2) and the razor's O(canonical x iterations) rescan) - parsimony now
+      ~1 min (dominated by the parallel FASTA BuildMap), whole pipeline ~2 min on cached merge.
 - [~] End-to-end `output-lib-sum` parity gate — the Carafe-TSV loader now exists; the golden fixture
       still needs to be wired as a `PipelineMethodParityTests` case
 
