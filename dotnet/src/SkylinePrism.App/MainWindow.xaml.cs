@@ -731,7 +731,7 @@ public partial class MainWindow : Window
         {
             switch (kind)
             {
-                case "CV distribution": DrawCv(plt, matrix, types, level, view, groupLabel); break;
+                case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, types, level, view, groupLabel); break;
                 default: DrawPca(plt, matrix, colorLabels, level, view, groupLabel); break;
             }
@@ -881,11 +881,9 @@ public partial class MainWindow : Window
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
-            // Known sample types keep their fixed palette colour; any other Group-by value (e.g. a
-            // Condition annotation) gets a distinct cycled colour so the groups are visually separable.
-            markers.Color = PlotRenderer.TypeColors.TryGetValue(label, out var hex)
-                ? Color.FromHex(hex)
-                : PlotRenderer.SampleColor(colorIndex++);
+            // Standardized colours (same across all plots): known sample types get their fixed colour,
+            // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled colour.
+            markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
             markers.MarkerSize = 11;
             markers.LegendText = label;
         }
@@ -895,23 +893,34 @@ public partial class MainWindow : Window
         plt.YLabel("PC2");
     }
 
-    private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
+    private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)
     {
-        if (group == "all")
+        // Groups = distinct Group-by column values with >= 2 samples (e.g. Standard / Quality Control).
+        var byLabel = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < labels.Count; i++)
         {
-            // Overlay one histogram per sample type present (>= 2 samples of that type).
-            foreach (var t in types.Distinct().OrderBy(x => x, StringComparer.Ordinal))
-            {
-                var idx = IndicesOf(types, t);
-                if (idx.Count >= 2)
-                    AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, idx),
-                        PlotRenderer.TypeColors.GetValueOrDefault(t, "#1f77b4"), Cap(t));
-            }
+            if (!byLabel.TryGetValue(labels[i], out var l))
+                byLabel[labels[i]] = l = new List<int>();
+            l.Add(i);
+        }
+        var present = byLabel.Where(kv => kv.Value.Count >= 2)
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => (Label: kv.Key, Cols: kv.Value))
+            .ToList();
+        var isAll = string.Equals(group, "all", StringComparison.OrdinalIgnoreCase);
+
+        if (isAll && present.Count >= 2 && present.Count <= 4)
+        {
+            AddGroupedCvHists(plt, featuresBySamples, present); // bars side by side
         }
         else
         {
-            AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, Enumerable.Range(0, types.Count).ToList()),
-                PlotRenderer.TypeColors.GetValueOrDefault(types.Count > 0 ? types[0] : "", "#1f77b4"), Cap(group));
+            // One group chosen, a single group present, or > 4 groups: a single aggregate histogram.
+            var allIdx = Enumerable.Range(0, labels.Count).ToList();
+            var lbl = !isAll && present.Count >= 1 ? present[0].Label
+                : present.Count == 1 ? present[0].Label
+                : "all samples";
+            AddCvHist(plt, CvMetrics.PerFeatureCvs(featuresBySamples, allIdx), PlotRenderer.GroupColor(lbl), lbl);
         }
         plt.ShowLegend(Alignment.UpperRight); // upper-right so it doesn't overlap the histogram bars
         // No title in the tool - the selectors above already describe the plot.
@@ -919,7 +928,8 @@ public partial class MainWindow : Window
         plt.YLabel("Count");
     }
 
-    private static void AddCvHist(Plot plt, double[] cvs, string colorHex, string label)
+    // Overlaid single-group CV histogram + median line.
+    private static void AddCvHist(Plot plt, double[] cvs, Color color, string label)
     {
         var valid = cvs.Where(c => !double.IsNaN(c)).ToArray();
         if (valid.Length == 0)
@@ -938,13 +948,58 @@ public partial class MainWindow : Window
                 counts[b]++;
         }
         var bars = plt.Add.Bars(centers, counts);
-        bars.Color = Color.FromHex(colorHex).WithAlpha((byte)140);
+        bars.Color = color.WithAlpha((byte)140);
         var med = Stats.NanMedian(cvs);
         var line = plt.Add.VerticalLine(med);
-        line.Color = Color.FromHex(colorHex);
+        line.Color = color;
         line.LineWidth = 4;
         line.LinePattern = LinePattern.Dashed;
-        line.LegendText = $"{label} median {med:0.0}%";
+        line.LegendText = $"{Cap(label)} median {med:0.0}%";
+    }
+
+    // 2-4 groups: histograms drawn as bars side by side per CV bin, with a median line each.
+    private static void AddGroupedCvHists(Plot plt, double[,] matrix, List<(string Label, List<int> Cols)> groups)
+    {
+        const int bins = 30;
+        var cvsPerGroup = groups
+            .Select(g => CvMetrics.PerFeatureCvs(matrix, g.Cols).Where(c => !double.IsNaN(c)).ToArray())
+            .ToList();
+        var maxCv = 1.0;
+        foreach (var cvs in cvsPerGroup)
+            foreach (var c in cvs)
+                if (c < 100.0 && c > maxCv) maxCv = c;
+        maxCv = Math.Min(maxCv, 100.0);
+        var binW = maxCv / bins;
+        var nG = groups.Count;
+        var slot = binW / (nG + 0.6); // width per group within a bin, leaving a small inter-bin gap
+
+        for (var gi = 0; gi < nG; gi++)
+        {
+            var counts = new double[bins];
+            foreach (var c in cvsPerGroup[gi])
+            {
+                var b = (int)Math.Min(c / binW, bins - 1);
+                if (b >= 0) counts[b]++;
+            }
+            var color = PlotRenderer.GroupColor(groups[gi].Label, gi);
+            var barList = new List<Bar>();
+            for (var b = 0; b < bins; b++)
+            {
+                if (counts[b] <= 0) continue;
+                var x = (b + 0.5) * binW + (gi - (nG - 1) / 2.0) * slot;
+                barList.Add(new Bar { Position = x, Value = counts[b], Size = slot * 0.9, FillColor = color });
+            }
+            if (barList.Count > 0)
+            {
+                var bars = plt.Add.Bars(barList);
+                bars.LegendText = Cap(groups[gi].Label);
+            }
+            var med = Stats.NanMedian(cvsPerGroup[gi]);
+            var line = plt.Add.VerticalLine(med);
+            line.Color = color;
+            line.LineWidth = 3;
+            line.LinePattern = LinePattern.Dashed;
+        }
     }
 
     private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
@@ -954,15 +1009,6 @@ public partial class MainWindow : Window
         // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("Log2 Abundance");
         plt.YLabel("Density");
-    }
-
-    private static List<int> IndicesOf(List<string> types, string type)
-    {
-        var idx = new List<int>();
-        for (var i = 0; i < types.Count; i++)
-            if (types[i] == type)
-                idx.Add(i);
-        return idx;
     }
 
     private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];

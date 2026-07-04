@@ -622,6 +622,24 @@ public static class PlotRenderer
     public static Color SampleColor(int index) => Color.FromHex(Tab20[((index % Tab20.Length) + Tab20.Length) % Tab20.Length]);
 
     /// <summary>
+    /// Standardized colour for a group label, consistent across every plot. Sample types map to fixed
+    /// colours in any spelling (Skyline "Standard"/"Quality Control"/"Unknown" or the PRISM
+    /// reference/qc/experimental names); any other value (e.g. a Condition annotation) gets a cycled colour.
+    /// </summary>
+    public static Color GroupColor(string? label, int cycleIndex = 0)
+    {
+        var key = (label ?? "").Trim().ToLowerInvariant().Replace(" ", "");
+        return key switch
+        {
+            "reference" or "standard" or "std" => Color.FromHex(TypeColors["reference"]),
+            "qc" or "qualitycontrol" => Color.FromHex(TypeColors["qc"]),
+            "experimental" or "unknown" => Color.FromHex(TypeColors["experimental"]),
+            "blank" or "solvent" or "doubleblank" => Color.FromHex(TypeColors["unknown"]),
+            _ => SampleColor(cycleIndex),
+        };
+    }
+
+    /// <summary>
     /// Overlay one Gaussian-KDE density curve per sample of the (features x samples) LOG2 matrix onto
     /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG and
     /// the interactive tool. Each sample gets a distinct cycled colour; no legend (there can be many).
