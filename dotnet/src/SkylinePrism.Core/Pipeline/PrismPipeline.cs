@@ -113,7 +113,15 @@ public sealed class PrismPipeline
         var combatNote = !multiBatch ? "skipped (needs >= 2 batches)"
             : !config.BatchCorrection.Enabled ? "disabled"
             : $"peptide={(peptideCombat ? "on" : "off")}, protein={(proteinCombat ? "on" : "off")}";
-        report($"Batches: {batches.Count} ({string.Join(", ", batches)}); ComBat {combatNote}.");
+        // Which source supplied the batch labels (metadata Batch column > per-file Source Document >
+        // acquisition-time estimation > a single default label).
+        var metaProvidedBatch = metadata is not null
+            && samples.Any(s => metadata.BatchByReplicate.ContainsKey(SampleIdToReplicate(s)));
+        var batchSource = metaProvidedBatch ? "metadata report (Batch column)"
+            : sourceBatchMap.Values.Distinct().Count() > 1 ? "Source Document (per-file)"
+            : batches.Count > 1 ? "acquisition-time estimation"
+            : "single label (no batch annotation)";
+        report($"Batches: {batches.Count} from {batchSource} ({string.Join(", ", batches)}); ComBat {combatNote}.");
 
         // Stage 2: transition -> peptide.
         report("============================================================");
@@ -259,7 +267,8 @@ public sealed class PrismPipeline
             report, refIdx, qcIdx,
             referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt",
             rtLowessFrac: config.GlobalNormalization.RtLowess.Frac,
-            rtLowessGridPoints: config.GlobalNormalization.RtLowess.NGridPoints);
+            rtLowessGridPoints: config.GlobalNormalization.RtLowess.NGridPoints,
+            autoRevert: config.BatchCorrection.AutoRevert);
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
@@ -334,7 +343,8 @@ public sealed class PrismPipeline
             proteinsRawPath, proteinMeta, samples, batchLabels, proteinCombat,
             config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath,
             report: report, refIdx: refIdx, qcIdx: qcIdx,
-            referenceAnchored: referenceAnchored, referenceMask: refMask);
+            referenceAnchored: referenceAnchored, referenceMask: refMask,
+            autoRevert: config.BatchCorrection.AutoRevert);
 
         report("============================================================");
         report("Stage 5: Output generation");
@@ -388,7 +398,8 @@ public sealed class PrismPipeline
         IReadOnlyList<bool>? referenceMask = null,
         string? rtColumn = null,
         double rtLowessFrac = 0.3,
-        int rtLowessGridPoints = 100)
+        int rtLowessGridPoints = 100,
+        bool autoRevert = false)
     {
         var table = ParquetTable.Load(wideParquet);
         var nAll = table.RowCount;
@@ -456,11 +467,38 @@ public sealed class PrismPipeline
 
         double[,] corrected;
         if (!combatEnabled)
+        {
             corrected = normalized;
-        else if (referenceAnchored && referenceMask is not null && referenceMask.Any(m => m))
-            corrected = ReferenceAnchoredComBat.Run(normalized, batchLabels, referenceMask);
+        }
         else
-            corrected = ComBat.Run(normalized, batchLabels);
+        {
+            var combatOut = referenceAnchored && referenceMask is not null && referenceMask.Any(m => m)
+                ? ReferenceAnchoredComBat.Run(normalized, batchLabels, referenceMask)
+                : ComBat.Run(normalized, batchLabels);
+
+            // Safety net (opt-in): if ComBat worsened the control CV by >10%, revert to the uncorrected
+            // (post-normalization) data; separately warn on reference/QC overfitting.
+            if (autoRevert)
+            {
+                var eval = BatchCorrectionEvaluator.Evaluate(normalized, combatOut, qcIdx, refIdx);
+                if (eval.OverfittingWarning is not null)
+                    report($"  WARNING: ComBat {eval.OverfittingWarning}");
+                if (eval.Revert)
+                {
+                    report($"  ComBat REVERTED: {eval.ControlName} CV worsened "
+                        + $"{eval.ControlCvBefore:F1}% -> {eval.ControlCvAfter:F1}% (>10%); keeping uncorrected data.");
+                    corrected = normalized;
+                }
+                else
+                {
+                    corrected = combatOut;
+                }
+            }
+            else
+            {
+                corrected = combatOut;
+            }
+        }
         if (!ReferenceEquals(corrected, normalized))
             normalized = null!; // dead after correction
 

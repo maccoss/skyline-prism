@@ -48,8 +48,11 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       estimates batch effects from ALL peptides in the reference samples across batches (not
       single-point calibration), EB-shrunk; applied to all samples. Falls back to standard ComBat
       when a batch has no references / none present.
-- [ ] ComBat auto-evaluate + revert-on-QC-failure — NOTE: only in Python's LEGACY `normalize_pipeline`,
-      not its production CLI path; valuable safety feature but lower priority
+- [x] ComBat auto-evaluate + revert-on-QC-failure (`batch_correction.auto_revert`, opt-in) —
+      `BatchCorrectionEvaluator` compares the control CV (QC preferred, else reference) pre/post ComBat
+      and reverts to the uncorrected data if it worsened by >10%; also warns on reference/QC overfitting.
+      Off by default to match Python's production path (Python has the revert only in legacy
+      `normalize_pipeline`). `BatchCorrectionEvaluatorTests`.
 
 ## Protein parsimony (Stage 3)
 - [x] `compute_protein_groups` (subsumable/indistinguishable/razor) — `ParsimonyEngine`.
@@ -105,9 +108,12 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 ## CLI
 - [x] `run`, `merge`, `qc`, `config-template`, `--version`, `--from-provenance`; per-stage console logging
 - [x] `run` flags: `-m/--metadata` (multi-file, merged), `--force-reprocess`; still `--reference-pattern`/`--qc-pattern`
-- [~] `qc` flag gaps: `-o` report-name, `--no-save-plots`, `--no-embed`; `merge`: `-m`, `--no-partition`
-- [x] `config-template --minimal` (`ConfigTemplate.Minimal`). NOTE: `-v` = version in C# vs verbose in
-      Python is an unresolved minor CLI-flag collision.
+- [x] `--no-save-plots` (skip `qc_plots/*.png`) on `run` + `qc`. Non-ports (deliberate): `qc -o`
+      report-name and `--no-embed` (C# hardcodes `qc_report.html` and always base64-embeds); `merge`
+      `--no-partition` (C# merge doesn't partition output).
+- [x] `config-template --minimal` (`ConfigTemplate.Minimal`). `-v` collision RESOLVED: `-v` is no longer
+      a version alias (Python uses it for verbose); use `--version`/`version`. C# has no verbosity levels
+      (always logs fully to console + `prism_run_<ts>.log`).
 - [x] `compare` (control-CV comparison of two runs + ranked per-peptide CV differences) —
       `RollupComparison`. (The Python's per-peptide library-fit visualization is not ported.)
 - [x] Timestamped `prism_run_<ts>.log` in the output dir, tee'd with the console — `Program.cs`
@@ -151,8 +157,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 ## Validation status & warnings (Python validation.py)
 - [x] Pass/fail verdict + warnings banner (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
       collapse) — `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`)
-- [~] "Batch source" line — logs "N batches from acquisition-time gaps" when estimating, but not an
-      explicit source line for the Source-Document / metadata cases
+- [x] "Batch source" line — the "Batches: N from <source>" log names where labels came from (metadata
+      Batch column > per-file Source Document > acquisition-time estimation > single default label)
 - [x] Pattern-based sample-type fallback — Replicates "Sample Type" column first (Standard/Quality
       Control), then `reference_pattern`/`qc_pattern` substrings on the replicate name (`ClassifySampleType`).
       Defaults broadened to Pool/Ref/Reference and QC/Control/StudyPool/Quality Control. NOTE: C# applies
@@ -187,6 +193,8 @@ schema sync).
 - [x] `protein_rollup.topn.selection: frequency` — now honored (was silently `median_abundance`)
 - [x] `protein_rollup.ibaq.{min,max}_peptide_length` — threaded into the iBAQ in-silico digest
 - [x] `output.include_residuals` template default corrected to `true` (matched the code default)
+- [x] `batch_correction.auto_revert` (opt-in, C#-only safety net) — revert ComBat if it worsens the
+      control CV by >10%; Python has this only in its legacy `normalize_pipeline`
 - removed dead `qc_report.embed_plots` (parsed, never read)
 
 **Deliberate non-ports (documented; surfaced at runtime):**

@@ -153,7 +153,7 @@ public sealed class PrismConfig
             ["transition_rollup"] = tr,
             ["global_normalization"] = gn,
             ["batch_correction"] = Leaves("enabled", "peptide_level", "protein_level", "method",
-                "reference_anchored", "reference_type"),
+                "reference_anchored", "reference_type", "auto_revert"),
             ["protein_rollup"] = pr,
             ["protein_normalization"] = Leaves("method"),
             ["sample_annotations"] = Leaves("reference_pattern", "qc_pattern"),
@@ -257,6 +257,13 @@ public sealed class PrismConfig
         public string Method { get; set; } = "combat";
         public bool ReferenceAnchored { get; set; }
         public string ReferenceType { get; set; } = "reference";
+
+        /// <summary>
+        /// Safety net (opt-in): after ComBat, if it worsened the control-sample CV (QC preferred, else
+        /// reference) by more than 10%, revert to the uncorrected data. Off by default to match Python's
+        /// production path (the revert exists only in Python's legacy normalize_pipeline).
+        /// </summary>
+        public bool AutoRevert { get; set; }
     }
 
     public sealed class ProteinRollupSection

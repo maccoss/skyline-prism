@@ -18,7 +18,9 @@ public static class Program
     {
         if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
             return PrintUsage();
-        if (args[0] is "--version" or "-v" or "version")
+        // Note: `-v` is intentionally NOT a version alias - Python's CLI uses -v for verbose. C# has no
+        // verbosity levels (it always logs fully to console + prism_run_<ts>.log). Use --version / version.
+        if (args[0] is "--version" or "version")
             return PrintVersion();
 
         var rest = args[1..];
@@ -75,11 +77,14 @@ public static class Program
                 : new PrismConfig();
         }
 
+        if (opts.GetSingleOrNull("--no-save-plots") is not null)
+            config.QcReport.SavePlots = false; // override: skip writing qc_plots/*.png
+
         if (inputs.Count == 0 || outputDir is null)
         {
             Console.Error.WriteLine(
                 "Usage: prism run -i <input...> -o <output-dir> [-c <config.yaml>] [-m <metadata...>] "
-                + "[--from-provenance <parameters.json>]");
+                + "[--from-provenance <parameters.json>] [--no-save-plots]");
             return 2;
         }
 
@@ -134,6 +139,8 @@ public static class Program
         var config = configPath is not null
             ? PrismConfig.LoadValidated(configPath, w => Console.Error.WriteLine($"WARNING: {w}"))
             : new PrismConfig();
+        if (opts.GetSingleOrNull("--no-save-plots") is not null)
+            config.QcReport.SavePlots = false;
         var path = QcReport.Generate(dir, config, savePlots: config.QcReport.SavePlots);
         Console.WriteLine($"QC report written to: {path}");
         return 0;

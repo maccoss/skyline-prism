@@ -64,6 +64,7 @@ batch_correction:
   method: "combat"
   reference_anchored: false   # estimate batch effects from reference samples across batches
   reference_type: "reference" # sample type used as the inter-batch reference
+  auto_revert: false          # if ComBat worsens control (QC/reference) CV by >10%, keep uncorrected data
 
 # Peptide -> protein rollup: "median_polish", "sum", "topn", "maxlfq", or "ibaq".
 protein_rollup:
