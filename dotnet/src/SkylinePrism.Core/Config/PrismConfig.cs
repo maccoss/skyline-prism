@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using YamlDotNet.Serialization;
@@ -26,11 +27,7 @@ public sealed class PrismConfig
     public ProcessingSection Processing { get; set; } = new();
     public BatchEstimationSection BatchEstimation { get; set; } = new();
 
-    public static PrismConfig Load(string path)
-    {
-        var yaml = File.ReadAllText(path);
-        return Parse(yaml);
-    }
+    public static PrismConfig Load(string path) => Parse(File.ReadAllText(path));
 
     public static PrismConfig Parse(string yaml)
     {
@@ -38,7 +35,136 @@ public sealed class PrismConfig
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
             .Build();
-        return deserializer.Deserialize<PrismConfig>(yaml) ?? new PrismConfig();
+        var config = deserializer.Deserialize<PrismConfig>(yaml) ?? new PrismConfig();
+        config.TransitionRollup.ResolveLibraryAssist();
+        return config;
+    }
+
+    /// <summary>
+    /// Load + resolve a config file, report any unrecognized keys via <paramref name="warn"/>
+    /// (Python-only or typo keys that C# would otherwise silently ignore), and throw on unsupported
+    /// method choices (adaptive rollup, least_squares library fit, non-combat batch correction).
+    /// </summary>
+    public static PrismConfig LoadValidated(string path, Action<string>? warn = null)
+    {
+        var yaml = File.ReadAllText(path);
+        var config = Parse(yaml);
+        if (warn is not null)
+            foreach (var key in FindUnknownKeys(yaml))
+                warn($"config key '{key}' is not recognized by the C# PRISM port and will be ignored "
+                    + "(a typo, or a Python-only setting not ported - see PORTING_STATUS.md).");
+        config.Validate();
+        return config;
+    }
+
+    /// <summary>Throw on config choices whose Python behavior is not implemented in the C# port.</summary>
+    public void Validate()
+    {
+        var trm = TransitionRollup.Method?.ToLowerInvariant();
+        if (trm == "adaptive")
+            throw new NotSupportedException(
+                "transition_rollup.method 'adaptive' is not implemented in the C# port. "
+                + "Use median_polish, sum, topn, consensus, or library_assist. "
+                + "(Adaptive/QuantUMS rollup is a documented non-port - see PORTING_STATUS.md.)");
+        var validTr = new[] { "sum", "median_polish", "topn", "consensus", "library_assist" };
+        if (trm is not null && Array.IndexOf(validTr, trm) < 0)
+            throw new NotSupportedException(
+                $"transition_rollup.method '{TransitionRollup.Method}' is not recognized. "
+                + $"Valid: {string.Join(", ", validTr)}.");
+
+        if (TransitionRollup.LibraryFittingMethod?.ToLowerInvariant() == "least_squares")
+            throw new NotSupportedException(
+                "library_assist.fitting_method 'least_squares' is not implemented in the C# port "
+                + "(only median_polish). See PORTING_STATUS.md.");
+
+        var bcm = BatchCorrection.Method?.ToLowerInvariant();
+        if (bcm is not null && bcm != "combat")
+            throw new NotSupportedException(
+                $"batch_correction.method '{BatchCorrection.Method}' is not implemented in the C# port (only combat).");
+    }
+
+    // Nested schema of every config key the C# pipeline actually reads. Keys absent here are
+    // reported by FindUnknownKeys. (null leaf = scalar key; nested dict = a subsection.)
+    private static readonly IReadOnlyDictionary<string, object?> KnownKeys = BuildSchema();
+
+    /// <summary>Dotted paths of keys in <paramref name="yaml"/> that the C# port does not read.</summary>
+    public static List<string> FindUnknownKeys(string yaml)
+    {
+        var warnings = new List<string>();
+        object? root;
+        try
+        {
+            root = new DeserializerBuilder().Build().Deserialize<object>(yaml);
+        }
+        catch
+        {
+            return warnings; // malformed YAML surfaces elsewhere
+        }
+        if (root is IDictionary<object, object> map)
+            WalkUnknown(map, KnownKeys, "", warnings);
+        return warnings;
+    }
+
+    private static void WalkUnknown(
+        IDictionary<object, object> node, IReadOnlyDictionary<string, object?> schema,
+        string prefix, List<string> warnings)
+    {
+        foreach (var kv in node)
+        {
+            var key = kv.Key?.ToString() ?? "";
+            var path = prefix.Length == 0 ? key : prefix + "." + key;
+            if (!schema.TryGetValue(key, out var sub))
+            {
+                warnings.Add(path);
+                continue;
+            }
+            if (sub is IReadOnlyDictionary<string, object?> subSchema
+                && kv.Value is IDictionary<object, object> childMap)
+                WalkUnknown(childMap, subSchema, path, warnings);
+        }
+    }
+
+    private static Dictionary<string, object?> Leaves(params string[] keys)
+    {
+        var d = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var k in keys)
+            d[k] = null;
+        return d;
+    }
+
+    private static Dictionary<string, object?> BuildSchema()
+    {
+        var tr = Leaves("method", "min_transitions", "topn_count", "topn_selection", "topn_weighting",
+            "consensus_regularization", "use_ms1", "library_path", "library_min_fragments",
+            "library_mz_tolerance", "library_outlier_threshold", "library_remove_outliers",
+            "library_fitting_method");
+        tr["library_assist"] = Leaves("library_path", "min_matched_fragments", "mz_tolerance",
+            "outlier_threshold", "remove_outliers", "fitting_method");
+
+        var gn = Leaves("method");
+        gn["rt_lowess"] = Leaves("frac", "n_grid_points");
+
+        var pr = Leaves("method", "min_peptides");
+        pr["topn"] = Leaves("n", "selection");
+        pr["ibaq"] = Leaves("fasta_path", "enzyme", "missed_cleavages", "min_peptide_length", "max_peptide_length");
+
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transition_rollup"] = tr,
+            ["global_normalization"] = gn,
+            ["batch_correction"] = Leaves("enabled", "peptide_level", "protein_level", "method",
+                "reference_anchored", "reference_type"),
+            ["protein_rollup"] = pr,
+            ["protein_normalization"] = Leaves("method"),
+            ["sample_annotations"] = Leaves("reference_pattern", "qc_pattern"),
+            ["parsimony"] = Leaves("enabled", "fasta_path", "shared_peptide_handling"),
+            ["output"] = Leaves("format", "include_residuals"),
+            ["qc_report"] = Leaves("enabled", "save_plots"),
+            ["sample_outlier_detection"] = Leaves("enabled", "action", "method", "iqr_multiplier", "fold_threshold"),
+            ["metadata"] = Leaves("batch_column", "sample_type_column"),
+            ["processing"] = Leaves("n_workers", "peptide_batch_size"),
+            ["batch_estimation"] = Leaves("method", "n_batches", "gap_iqr_multiplier"),
+        };
     }
 
     public sealed class TransitionRollupSection
@@ -55,11 +181,47 @@ public sealed class PrismConfig
         public double ConsensusRegularization { get; set; } = 0.1;
         public bool UseMs1 { get; set; }
 
-        // Library-assisted rollup (method: library_assist).
+        // Library-assisted rollup (method: library_assist). Flat keys (C# form) plus the nested
+        // `library_assist:` block (Python's canonical form) are both accepted; ResolveLibraryAssist
+        // folds the nested block onto these flat fields (nested wins).
         public string? LibraryPath { get; set; }
         public int LibraryMinFragments { get; set; } = 3;
         public double LibraryMzTolerance { get; set; } = 0.02;
         public double LibraryOutlierThreshold { get; set; } = 1.0;
+
+        /// <summary>Iteratively remove high-residual (interference) fragments before the final scale.</summary>
+        public bool LibraryRemoveOutliers { get; set; } = true;
+
+        /// <summary>median_polish only in C#; least_squares is validated-out (not ported).</summary>
+        public string LibraryFittingMethod { get; set; } = "median_polish";
+
+        /// <summary>Nested Python-style library_assist block; resolved onto the flat fields above.</summary>
+        public LibraryAssistSection? LibraryAssist { get; set; }
+
+        /// <summary>Fold the nested <c>library_assist:</c> block onto the flat library_* fields (nested wins).</summary>
+        public void ResolveLibraryAssist()
+        {
+            if (LibraryAssist is null)
+                return;
+            var la = LibraryAssist;
+            if (la.LibraryPath is not null) LibraryPath = la.LibraryPath;
+            if (la.MinMatchedFragments is not null) LibraryMinFragments = la.MinMatchedFragments.Value;
+            if (la.MzTolerance is not null) LibraryMzTolerance = la.MzTolerance.Value;
+            if (la.OutlierThreshold is not null) LibraryOutlierThreshold = la.OutlierThreshold.Value;
+            if (la.RemoveOutliers is not null) LibraryRemoveOutliers = la.RemoveOutliers.Value;
+            if (la.FittingMethod is not null) LibraryFittingMethod = la.FittingMethod;
+        }
+    }
+
+    /// <summary>Python's nested <c>transition_rollup.library_assist:</c> block.</summary>
+    public sealed class LibraryAssistSection
+    {
+        public string? LibraryPath { get; set; }
+        public int? MinMatchedFragments { get; set; }
+        public double? MzTolerance { get; set; }
+        public double? OutlierThreshold { get; set; }
+        public bool? RemoveOutliers { get; set; }
+        public string? FittingMethod { get; set; }
     }
 
     public sealed class GlobalNormalizationSection
@@ -67,6 +229,18 @@ public sealed class PrismConfig
         // RT-lowess is the recommended default: it removes RT-dependent systematic variation
         // (ion suppression, gradient drift) in addition to overall loading differences.
         public string Method { get; set; } = "rt_lowess";
+
+        /// <summary>LOWESS tuning for method: rt_lowess (matches Python global_normalization.rt_lowess).</summary>
+        public RtLowessSection RtLowess { get; set; } = new();
+    }
+
+    public sealed class RtLowessSection
+    {
+        /// <summary>Fraction of points in each local regression window (statsmodels frac).</summary>
+        public double Frac { get; set; } = 0.3;
+
+        /// <summary>Number of RT grid points the fitted curve is evaluated on before interpolation.</summary>
+        public int NGridPoints { get; set; } = 100;
     }
 
     public sealed class BatchCorrectionSection
@@ -110,6 +284,10 @@ public sealed class PrismConfig
         public string? FastaPath { get; set; }
         public string Enzyme { get; set; } = "trypsin";
         public int MissedCleavages { get; set; }
+
+        /// <summary>Min/max tryptic peptide length counted toward the iBAQ denominator (fasta.py digest bounds).</summary>
+        public int MinPeptideLength { get; set; } = 6;
+        public int MaxPeptideLength { get; set; } = 30;
     }
 
     public sealed class ProteinNormalizationSection
@@ -141,7 +319,8 @@ public sealed class PrismConfig
     {
         public bool Enabled { get; set; } = true;
         public bool SavePlots { get; set; } = true;
-        public bool EmbedPlots { get; set; } = true;
+        // Note: plots are always base64-embedded (self-contained HTML). Linking to external PNGs
+        // (Python's embed_plots: false) is a deliberate non-port - see PORTING_STATUS.md.
     }
 
     public sealed class MetadataSection

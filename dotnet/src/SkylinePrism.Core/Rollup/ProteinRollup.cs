@@ -17,6 +17,9 @@ public sealed class ProteinRollupConfig
     /// <summary>Peptides to average for the topn method.</summary>
     public int TopN { get; init; } = 3;
 
+    /// <summary>Peptide selection for the topn method: "median_abundance" (default) or "frequency".</summary>
+    public string TopNSelection { get; init; } = "median_abundance";
+
     /// <summary>
     /// Which peptide set feeds each protein: "all_groups" (all mapped peptides, shared go to every
     /// group), "unique_only" (unique peptides only), or "razor" (parsimony-assigned = unique + razor).
@@ -97,7 +100,7 @@ public sealed class ProteinRollup
             var nTheo = -1;
             if (theoreticalCounts is not null && theoreticalCounts.TryGetValue(group.LeadingProtein, out var c))
                 nTheo = c;
-            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo);
+            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo, cfg.TopNSelection);
 
             results[gi] = new ProteinRow
             {

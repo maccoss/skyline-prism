@@ -23,7 +23,8 @@ public enum ProteinRollupMethod
 public static class ProteinMatrixRollup
 {
     public static double[] Aggregate(
-        double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN = 3, int nTheoretical = -1)
+        double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN = 3,
+        int nTheoretical = -1, string topNSelection = "median_abundance")
     {
         var nPep = log2Matrix.GetLength(0);
         var nCols = log2Matrix.GetLength(1);
@@ -53,7 +54,7 @@ public static class ProteinMatrixRollup
             ProteinRollupMethod.MedianPolish =>
                 new MedianPolishRollup(addLog2NOffset: false).Aggregate(log2Matrix),
             ProteinRollupMethod.Sum => new SumRollup().Aggregate(log2Matrix),
-            ProteinRollupMethod.TopN => TopN(log2Matrix, topN),
+            ProteinRollupMethod.TopN => TopN(log2Matrix, topN, topNSelection),
             ProteinRollupMethod.MaxLfq => MaxLfq(log2Matrix),
             ProteinRollupMethod.Ibaq => Ibaq(log2Matrix, nTheoretical > 0 ? nTheoretical : nPep),
             _ => throw new NotSupportedException($"Unsupported protein method {method}"),
@@ -84,12 +85,14 @@ public static class ProteinMatrixRollup
     }
 
     /// <summary>
-    /// rollup.py:rollup_top_n (default "median_abundance" selection): pick the top-N peptides by
-    /// median LOG2 abundance across samples (freq as tie-break) - the SAME peptides for all samples
-    /// - then the per-sample mean (NaN-skipping) of those peptides.
+    /// rollup.py:rollup_top_n. Pick the SAME top-N peptides for all samples, then take the per-sample
+    /// NaN-skipping mean. "median_abundance" (default) sorts by [median log2 abundance desc, frequency
+    /// desc]; "frequency" sorts by [frequency desc, median abundance desc] (peptides seen in the most
+    /// samples first). freq = count of non-NaN samples.
     /// </summary>
-    private static double[] TopN(double[,] m, int n)
+    private static double[] TopN(double[,] m, int n, string selection = "median_abundance")
     {
+        var byFrequency = string.Equals(selection, "frequency", StringComparison.OrdinalIgnoreCase);
         var nPep = m.GetLength(0);
         var nCols = m.GetLength(1);
 
@@ -118,11 +121,20 @@ public static class ProteinMatrixRollup
             var nb = double.IsNaN(medianAbund[b]);
             if (na || nb)
                 return na == nb ? a.CompareTo(b) : (na ? 1 : -1); // NaN-median peptides last
-            var c = medianAbund[b].CompareTo(medianAbund[a]); // median desc
-            if (c != 0)
-                return c;
-            var f = freq[b].CompareTo(freq[a]); // frequency desc
-            return f != 0 ? f : a.CompareTo(b); // stable
+            int primary, secondary;
+            if (byFrequency)
+            {
+                primary = freq[b].CompareTo(freq[a]);                  // frequency desc
+                secondary = medianAbund[b].CompareTo(medianAbund[a]);  // median abundance desc
+            }
+            else
+            {
+                primary = medianAbund[b].CompareTo(medianAbund[a]);    // median abundance desc
+                secondary = freq[b].CompareTo(freq[a]);                // frequency desc
+            }
+            if (primary != 0)
+                return primary;
+            return secondary != 0 ? secondary : a.CompareTo(b); // stable
         });
 
         var nUse = Math.Min(n, nPep);

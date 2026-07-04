@@ -160,7 +160,8 @@ public static class LibraryRollup
         double[,] observedLinear,
         int minFragments,
         double mzTolerance,
-        double outlierThreshold)
+        double outlierThreshold,
+        bool removeOutliers = true)
     {
         var t = observedLinear.GetLength(0);
         var s = observedLinear.GetLength(1);
@@ -209,6 +210,6 @@ public static class LibraryRollup
             return nan;
         }
 
-        return MedianPolish(observedLinear, lib, minFragments, outlierThreshold);
+        return MedianPolish(observedLinear, lib, minFragments, outlierThreshold, removeOutliers: removeOutliers);
     }
 }

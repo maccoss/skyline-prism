@@ -411,7 +411,8 @@ public sealed class TransitionRollup
 
             var abund = LibraryRollup.RollupCharge(
                 library, block.Peptide, charge, mz, obs,
-                cfg.LibraryMinFragments, cfg.LibraryMzTolerance, cfg.LibraryOutlierThreshold);
+                cfg.LibraryMinFragments, cfg.LibraryMzTolerance, cfg.LibraryOutlierThreshold,
+                cfg.LibraryRemoveOutliers);
             for (var b = 0; b < nSamples; b++)
             {
                 var val = abund[b];

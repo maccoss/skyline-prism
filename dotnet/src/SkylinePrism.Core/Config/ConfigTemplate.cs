@@ -32,15 +32,21 @@ transition_rollup:
   topn_selection: "correlation"  # correlation | intensity (correlation needs Shape Correlation)
   topn_weighting: "sqrt"         # sqrt | sum
   use_ms1: false
-  # For method: library_assist (Skyline .blib):
+  # For method: library_assist (Skyline .blib). A nested `library_assist:` block with the same
+  # keys (library_path, min_matched_fragments, mz_tolerance, outlier_threshold, remove_outliers)
+  # is also accepted. fitting_method is median_polish only (least_squares is not ported).
   # library_path: null
   # library_min_fragments: 3
   # library_mz_tolerance: 0.02
   # library_outlier_threshold: 1.0
+  # library_remove_outliers: true   # iteratively drop interference fragments before scaling
 
 # Peptide normalization: "rt_lowess" (default), "median", "quantile", "vsn", or "none".
 global_normalization:
   method: "rt_lowess"
+  rt_lowess:              # tuning for method: rt_lowess
+    frac: 0.3             # LOWESS local-regression window fraction
+    n_grid_points: 100    # RT grid points the curve is evaluated on before interpolation
 
 # Low-signal sample outlier detection. action: "report" or "exclude".
 sample_outlier_detection:
@@ -69,6 +75,8 @@ protein_rollup:
   #   fasta_path: null    # falls back to parsimony.fasta_path
   #   enzyme: "trypsin"
   #   missed_cleavages: 0
+  #   min_peptide_length: 6
+  #   max_peptide_length: 30
 
 # Protein normalization: "median" or "none".
 protein_normalization:
@@ -88,7 +96,7 @@ batch_estimation:
 # Output.
 output:
   format: "parquet"
-  include_residuals: false
+  include_residuals: true   # write peptide_residuals.parquet for outlier/proteoform analysis
 
 # QC report (self-contained HTML + before/after plots).
 qc_report:

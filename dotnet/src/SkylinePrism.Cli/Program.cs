@@ -66,10 +66,13 @@ public static class Program
                 foreach (var s in Provenance.SourceFiles(provenancePath))
                     inputs.Add(s);
             provenanceLoaded = true;
+            config.Validate();
         }
         else
         {
-            config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
+            config = configPath is not null
+                ? PrismConfig.LoadValidated(configPath, w => Console.Error.WriteLine($"WARNING: {w}"))
+                : new PrismConfig();
         }
 
         if (inputs.Count == 0 || outputDir is null)
@@ -128,7 +131,9 @@ public static class Program
             Console.Error.WriteLine("Usage: prism qc -d <output-dir> [-c config]");
             return 2;
         }
-        var config = configPath is not null ? PrismConfig.Load(configPath) : new PrismConfig();
+        var config = configPath is not null
+            ? PrismConfig.LoadValidated(configPath, w => Console.Error.WriteLine($"WARNING: {w}"))
+            : new PrismConfig();
         var path = QcReport.Generate(dir, config, savePlots: config.QcReport.SavePlots);
         Console.WriteLine($"QC report written to: {path}");
         return 0;

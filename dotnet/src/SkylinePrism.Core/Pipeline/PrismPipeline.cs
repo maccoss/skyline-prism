@@ -140,6 +140,7 @@ public sealed class PrismPipeline
             LibraryMinFragments = config.TransitionRollup.LibraryMinFragments,
             LibraryMzTolerance = config.TransitionRollup.LibraryMzTolerance,
             LibraryOutlierThreshold = config.TransitionRollup.LibraryOutlierThreshold,
+            LibraryRemoveOutliers = config.TransitionRollup.LibraryRemoveOutliers,
             ResidualsPath = config.Output.IncludeResiduals
                 ? Path.Combine(outputDir, "peptide_residuals.parquet")
                 : null,
@@ -256,7 +257,9 @@ public sealed class PrismPipeline
             samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
             internalPath, correctedPepPath,
             report, refIdx, qcIdx,
-            referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt");
+            referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt",
+            rtLowessFrac: config.GlobalNormalization.RtLowess.Frac,
+            rtLowessGridPoints: config.GlobalNormalization.RtLowess.NGridPoints);
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
@@ -286,6 +289,7 @@ public sealed class PrismPipeline
             },
             MinPeptides = config.ProteinRollup.MinPeptides,
             TopN = config.ProteinRollup.Topn.N,
+            TopNSelection = config.ProteinRollup.Topn.Selection,
             SharedPeptideHandling = config.Parsimony.SharedPeptideHandling,
         };
 
@@ -303,9 +307,11 @@ public sealed class PrismPipeline
             {
                 var leading = new HashSet<string>(groups.Select(g => g.LeadingProtein), StringComparer.Ordinal);
                 theoreticalCounts = FastaParser.GetTheoreticalPeptideCounts(
-                    ibaqFasta, leading, config.ProteinRollup.Ibaq.Enzyme, config.ProteinRollup.Ibaq.MissedCleavages);
+                    ibaqFasta, leading, config.ProteinRollup.Ibaq.Enzyme, config.ProteinRollup.Ibaq.MissedCleavages,
+                    config.ProteinRollup.Ibaq.MinPeptideLength, config.ProteinRollup.Ibaq.MaxPeptideLength);
                 report($"  iBAQ: theoretical peptide counts for {theoreticalCounts.Count:N0} proteins "
-                    + $"(enzyme={config.ProteinRollup.Ibaq.Enzyme}, missed_cleavages={config.ProteinRollup.Ibaq.MissedCleavages}).");
+                    + $"(enzyme={config.ProteinRollup.Ibaq.Enzyme}, missed_cleavages={config.ProteinRollup.Ibaq.MissedCleavages}, "
+                    + $"length {config.ProteinRollup.Ibaq.MinPeptideLength}-{config.ProteinRollup.Ibaq.MaxPeptideLength}).");
             }
         }
         var protResult = ProteinRollup.Run(
@@ -380,7 +386,9 @@ public sealed class PrismPipeline
         IReadOnlyList<int> qcIdx,
         bool referenceAnchored = false,
         IReadOnlyList<bool>? referenceMask = null,
-        string? rtColumn = null)
+        string? rtColumn = null,
+        double rtLowessFrac = 0.3,
+        int rtLowessGridPoints = 100)
     {
         var table = ParquetTable.Load(wideParquet);
         var nAll = table.RowCount;
@@ -435,7 +443,7 @@ public sealed class PrismPipeline
         }
 
         var normalized = rtKept is not null
-            ? Normalizer.RtLowessNormalize(matrix, rtKept)
+            ? Normalizer.RtLowessNormalize(matrix, rtKept, rtLowessFrac, rtLowessGridPoints)
             : normMethod switch
             {
                 "quantile" => Normalizer.QuantileNormalize(matrix),

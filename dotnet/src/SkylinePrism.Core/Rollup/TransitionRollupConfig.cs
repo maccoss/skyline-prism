@@ -62,4 +62,7 @@ public sealed class TransitionRollupConfig
 
     /// <summary>Normalized-residual threshold above which a transition is treated as interfered.</summary>
     public double LibraryOutlierThreshold { get; init; } = 1.0;
+
+    /// <summary>Iteratively remove interference (high-residual) fragments before the final scale.</summary>
+    public bool LibraryRemoveOutliers { get; init; } = true;
 }

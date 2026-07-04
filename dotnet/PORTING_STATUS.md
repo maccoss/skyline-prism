@@ -24,7 +24,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       rollup), weighting sum | sqrt. Config keys/defaults aligned to Python: `topn_count`,
       `topn_selection` (default correlation), `topn_weighting` (default sqrt) — a golden-parity run
       caught that C# had used `top_n_*` with intensity/sum defaults.
-- [-] `adaptive` (learned weights, L-BFGS-B) — deferred, not planned for now
+- [-] `adaptive` (learned weights, L-BFGS-B) / QuantUMS — deferred; `method: adaptive` now ABORTS with
+      a clear error (was silently falling back to `sum`). `learn_adaptive_weights` + the `adaptive_rollup:`
+      block are reported as unrecognized config keys. See "Config surface & parity" below.
 - [x] `consensus` (two-way-median decomposition + inverse-variance transition weighting) — `ConsensusRollup`
 - [x] `library_assist` (BLIB) — `SpectralLibrary` (BLIB/SQLite reader) + `LibraryRollup`
       (median-polish with library prior, interference removal, per-charge sum); library picker in
@@ -35,7 +37,9 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `rt_lowess` (default) — `Normalizer.RtLowessNormalize` + `Lowess`
 - [x] `none`
 - [x] `quantile` — `Normalizer.QuantileNormalize`
-- [x] `vsn` (arcsinh; param optimization off, as in the pipeline default) — `Normalizer.VsnNormalize`
+- [x] `vsn` (arcsinh; param optimization off, as in the pipeline default) — `Normalizer.VsnNormalize`.
+      `vsn_params.optimize_params` (Nelder-Mead tuning) is a deliberate non-port (Python default = false).
+- [x] `rt_lowess` tuning exposed: `global_normalization.rt_lowess.frac` (0.3) + `.n_grid_points` (100)
 - [x] Sample outlier detection (iqr / fold_median) with report **and** exclude actions — wired at Stage 2a
 
 ## Batch correction (Stage 2c / 4c)
@@ -107,9 +111,13 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       `RollupComparison`. (The Python's per-peptide library-fit visualization is not ported.)
 - [ ] Timestamped `prism_run_<ts>.log` written to the output dir (CLI logs to console only)
 - [ ] Source-fingerprint cache + `--force-reprocess` (C# always re-merges)
-- [ ] Unknown-config-key warnings (C# silently ignores unknown keys)
-- [ ] config-template omits `data` (column map), `batch_estimation`, `processing`, and rollup/norm
-      sub-parameter blocks; `protein_rollup.min_peptides` default differs (Python 2 vs C# 3)
+- [x] Unknown-config-key warnings — `PrismConfig.FindUnknownKeys` reports any key the pipeline doesn't
+      read (Python-only or typo) on stderr; `PrismConfig.Validate` aborts on unported method choices
+      (adaptive / least_squares / non-combat batch). CLI `run` + `qc` go through `LoadValidated`.
+- [x] config-template now emits the `rt_lowess`, nested `library_assist`, and `ibaq` length blocks and
+      fixes `include_residuals` to match the default; a test guards template ↔ schema stay in sync.
+      `protein_rollup.min_peptides` default is 3 (Python runtime is also 3; only Python's *template text*
+      says 2). `data` (column map) is a deliberate non-port — see "Config surface & parity" below.
 
 ## Concurrency & memory
 - [x] Streaming merge + streaming peptide-block reader (single DuckDB producer)
@@ -135,7 +143,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] "Open provenance" - load a prior run's parameters.json and propagate settings into the UI
 - [-] Results explorer (protein/peptide tree + per-feature boxplots) — DEFERRED by decision; a
       .NET-native results view may be designed later, not a Python-parity goal
-- [ ] PCA color-by / group-by arbitrary metadata column (Python offers sample_type / batch / any category)
+- [x] Group-by / color-by any Replicates-report column in the interactive QC tab (Sample Type default;
+      any annotation), applied to PCA, CV, and intensity plots with a standardized per-group palette
 
 ## Validation status & warnings (Python validation.py)
 - [ ] Pass/fail verdict + warnings (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
@@ -149,7 +158,41 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       method-isolation fixtures (ComBat off -> every stage exact-parity to 1e-9) covering
       median_polish, maxLFQ, transition topN, protein topN, and consensus against Python goldens
       (`PipelineMethodParityTests`)
-- [x] Protein-rollup topN config nested to match Python (`protein_rollup.topn.{n,selection}`);
-      verified exact by e2e-prot-topn
+- [x] Protein-rollup topN nested config (`protein_rollup.topn.{n,selection}`); `selection` is now honored
+      (`median_abundance` default | `frequency` — swaps the primary sort key), previously parsed-but-ignored.
+      median_abundance path verified exact by e2e-prot-topn.
 - [x] Library rollup algorithm unit-tested (median-polish scale, interference removal, m/z match)
 - [ ] End-to-end `output-lib-sum` parity gate (needs the Carafe-TSV loader)
+
+## Config surface & parity (parameter exposure)
+
+Audited the full C# config against Python's `KNOWN_CONFIG_KEYS` + `config-template`. Policy: every Python
+setting is either implemented or a **deliberate, documented non-port that surfaces at runtime** — an
+unknown-key warning on stderr, or a hard error for method choices. Nothing is silently dropped. Guarded by
+`ConfigValidationTests` (unknown-key detection, nested-block resolution, method-choice aborts, template ↔
+schema sync).
+
+**Newly exposed (were hardcoded, or parsed-but-ignored):**
+- [x] `global_normalization.rt_lowess.frac` (0.3) + `.n_grid_points` (100) — threaded into `RtLowessNormalize`
+- [x] `transition_rollup.library_assist:` nested block (Python's canonical form) — folded onto the flat
+      `library_*` keys by `ResolveLibraryAssist` (nested wins); BOTH forms accepted
+- [x] `library_assist.remove_outliers` / flat `library_remove_outliers` — threaded to `LibraryRollup`
+- [x] `protein_rollup.topn.selection: frequency` — now honored (was silently `median_abundance`)
+- [x] `protein_rollup.ibaq.{min,max}_peptide_length` — threaded into the iBAQ in-silico digest
+- [x] `output.include_residuals` template default corrected to `true` (matched the code default)
+- removed dead `qc_report.embed_plots` (parsed, never read)
+
+**Deliberate non-ports (documented; surfaced at runtime):**
+- [-] `transition_rollup.method: adaptive` + `adaptive_rollup.*` + `learn_adaptive_weights` — adaptive/QuantUMS
+      rollup not ported; `method: adaptive` aborts, the keys warn as unrecognized
+- [-] `library_assist.fitting_method: least_squares` — only median_polish ported; `least_squares` aborts
+- [-] `batch_correction.method` non-combat — ComBat is the only algorithm; other values abort
+- [-] `global_normalization.vsn_params.optimize_params` — VSN runs unoptimized (Python default = false)
+- [-] `data.*` column-name overrides — C# auto-detects columns (`SkylineColumns`); no override. (C# reads
+      the batch / sample-type column names under `metadata.*`, not `data.*`.)
+- [-] `qc_report.plots.*` per-plot toggles, `qc_report.filename`, `embed_plots` link-mode — C# emits a
+      fixed, always-base64-embedded plot set
+- [-] `protein_rollup.median_polish.{max_iterations,convergence_tolerance}` — `TukeyMedianPolish`
+      convergence is hardcoded to the Python defaults
+- [-] niche / no-op: `sample_annotations.experimental_pattern`, `batch_estimation.{min,max}_samples_per_batch`,
+      `transition_rollup.enabled`, `output.compress`
