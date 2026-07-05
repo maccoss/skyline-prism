@@ -3,7 +3,7 @@
 These tests ensure data is correctly transformed between scales at each stage
 of the pipeline to prevent overflow errors and incorrect calculations.
 
-Scale Convention (from AGENTS.md):
+Scale Convention (from CLAUDE.md):
 - Input: LINEAR (raw peak areas from Skyline)
 - Internal: LOG2 (all rollup/normalization operates on log2 scale)
 - Output: LINEAR (final peptide/protein matrices are 2^x, not log2)
