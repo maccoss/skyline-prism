@@ -1,6 +1,7 @@
-# AGENTS.md - AI Agent Guidelines for Skyline-PRISM
+# CLAUDE.md - AI Agent Guidelines for Skyline-PRISM
 
 This document provides context and guidelines for AI agents working on the Skyline-PRISM project.
+It is the single source of truth for agent guidance (it supersedes the former `AGENTS.md`).
 
 ## Project Overview
 
@@ -757,6 +758,113 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 2. **Batch correction at reporting level**: Not before protein rollup
 3. **Median polish as default**: Quality-weighted is an alternative, not the primary method
 4. **All charge states as transitions**: Don't separate precursor→peptide rollup; treat all transitions equally
+
+## Release Process
+
+Skyline-PRISM currently ships **two implementations side by side**, released on **independent tracks**:
+
+- **Python** package (`skyline-prism` on PyPI) - the original reference implementation.
+- **C# (.NET 8)** tools - the `prism` CLI + the Windows Skyline external tool, published to GitHub Releases.
+
+> [!NOTE]
+> The side-by-side period is **temporary**. The Python package is planned for retirement once the C#
+> port is the sole supported implementation; at that point only the C# (`dotnet-v*`) track remains.
+> Until then keep both releasable, but treat Python as legacy - new development targets the C# port.
+
+### Versioning scheme (both tracks)
+
+Both tracks use CalVer **`YY.feature.patch`** (e.g. `26.5.0` = year 2026, feature release 5, patch 0):
+**YY** = two-digit year, **feature** bumps for new features, **patch** for bug-fix-only releases. The
+version is bumped **only at release time**, not during development. The two tracks share the *scheme*
+but keep **distinct tag namespaces and independent counters**, so their numbers need not match and
+never collide:
+
+- Python: tag `v{version}` (e.g. `v26.4.2`)
+- C#: tag `dotnet-v{version}` (e.g. `dotnet-v26.5.0`)
+
+### Release notes (both tracks)
+
+All release notes live in `release-notes/`; **`release-notes/README.md` is the canonical convention**.
+One file per release, with a rolling draft renamed at release time:
+
+- Python: draft `RELEASE_NOTES_next.md` -> released `RELEASE_NOTES_v{version}.md`
+- C#: draft `RELEASE_NOTES_dotnet-next.md` -> released `RELEASE_NOTES_dotnet-v{version}.md`
+
+The `dotnet-` prefix is what keeps the C# notes from colliding with the Python `RELEASE_NOTES_v*.md`
+when both tracks reach the same CalVer number. Content structure:
+`## New Features / ## Bug Fixes / ## Performance / ## Breaking Changes` (omit empty sections); past
+tense, lead with user impact, include concrete numbers, reference config keys by name.
+
+### C# (.NET) release - the primary track
+
+Two version sources MUST stay in lockstep; `dotnet-release.yml` fails the release if either differs
+from the tag:
+
+- `dotnet/Directory.Build.props` `<Version>` - drives every C# assembly version, the CLI's
+  `prism --version` (prints the 4-part `X.Y.Z.0`), and provenance `pipeline_version`.
+- `dotnet/src/SkylinePrism.App/tool-inf/info.properties` `Version =` - the Skyline tool manifest.
+
+Steps:
+
+1. Finalize `release-notes/RELEASE_NOTES_dotnet-next.md`; `git mv` it to
+   `RELEASE_NOTES_dotnet-v{version}.md`, update its heading, and create a fresh empty
+   `RELEASE_NOTES_dotnet-next.md`.
+2. Bump the version to `{version}` in **both** `Directory.Build.props` and `info.properties` (they
+   must match each other and the tag).
+3. **Run the ship gate** locally:
+   `pwsh -File dotnet/build/package-and-verify.ps1 -Configuration Release` (tests -> packages
+   `SkylinePrism.zip` -> extracts and launch-verifies the exe). Confirm `prism --version` prints
+   `{version}.0`.
+4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml` + Python `ci.yml`), run
+   `/pw-self-review`, then merge with a **merge commit** (`--no-ff`).
+5. Tag the merge commit and push the tag:
+   ```bash
+   git tag dotnet-v{version} origin/main
+   git push origin dotnet-v{version}
+   ```
+   **Pushing the tag both builds the artifacts AND creates the GitHub Release**
+   (`.github/workflows/dotnet-release.yml`). Do NOT hand-create the Release; there is no PyPI upload
+   for the C# track.
+
+Artifacts (7 assets, all **framework-dependent** - the .NET 8 runtime is NOT bundled; users install
+it once):
+
+- `SkylinePrism.zip` - the Windows Skyline external tool (needs the .NET 8 **Desktop** Runtime).
+- `prism-{win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64}.{zip,tar.gz}` - the CLI, one
+  native build per platform (needs the base .NET 8 Runtime).
+
+Framework-dependent is deliberate (small downloads, one shared runtime). Archives are still ~20-45 MB
+because they bundle the app's native deps (DuckDB, SkiaSharp), not the runtime. To publish a bare
+`prism` CLI for a new OS/arch, add a row to the `cli` matrix in `dotnet-release.yml`.
+
+### Python release - legacy track
+
+Two version sources, **both bumped together** (they have drifted before):
+
+- `pyproject.toml` `version` - the PyPI package version (source of truth for `importlib.metadata`).
+- `skyline_prism/__init__.py` `__version__` - what Python `prism --version` prints and what provenance
+  records.
+
+Steps:
+
+1. Finalize `RELEASE_NOTES_next.md`; `git mv` to `RELEASE_NOTES_v{version}.md`, update heading, create
+   a fresh `RELEASE_NOTES_next.md`.
+2. Bump `pyproject.toml` `version` AND `skyline_prism/__init__.py` `__version__` to `{version}`.
+3. Run `pytest tests/ -v` (all pass).
+4. Merge to `main`, then `git tag v{version}` and `git push origin main --tags`.
+5. **Publish a GitHub Release** for the `v{version}` tag - that is what triggers the PyPI upload via
+   `.github/workflows/release.yml` (trusted publishing / OIDC). Note the asymmetry with the C# track:
+   here you create the Release to trigger publish; there the workflow creates the Release for you.
+
+### Which track(s) to release
+
+The tracks are independent - release whichever the change affects. A Python-only fix -> Python release
+only; a C#-only change -> C# release only; a cross-cutting algorithm change -> release both, each with
+its own notes and version bump.
+
+Canonical references: `release-notes/README.md` (notes + step-by-step), `dotnet/README.md` (C#
+build/package/CI), and the workflows under `.github/workflows/` (`dotnet-release.yml`, `release.yml`,
+`dotnet-ci.yml`, `ci.yml`).
 
 ## Repository Information
 
