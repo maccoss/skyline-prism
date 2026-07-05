@@ -8,8 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
-**PRISM** (Proteomics Reference-Integrated Signal Modeling) normalizes transition-level LC-MS
-proteomics data exported from [Skyline](https://skyline.ms) and produces robust peptide- and
+**PRISM** normalizes transition-level LC-MS proteomics data exported from [Skyline](https://skyline.ms) and produces robust peptide- and
 protein-level quantities. It uses Tukey median polish for outlier-tolerant rollups, retention-time-aware
 normalization, and ComBat (optionally reference-anchored) batch correction, and reports reference/QC
 sample CVs before and after each correction.
