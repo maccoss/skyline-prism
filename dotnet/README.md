@@ -62,17 +62,21 @@ MainWindow (hence ScottPlot/SkiaSharp) loads at startup, so a missing/broken dep
 assembly/XAML load error in `%LOCALAPPDATA%\SkylinePrism\prism-tool.log`. A failed Skyline connection
 from the dummy arg is expected and ignored - only dependency/XAML load failures fail the check.
 
-Install the zip via Skyline's Tools > Tool Store > Install from file. When reinstalling over a running
-copy, **close the tool first** - Skyline can leave a partial extraction (locked files) that drops
-`deps.json` and DLLs, which then fails to load; reinstalling with the tool closed fixes it.
+The tool zip is **framework-dependent** — install the **.NET 8 Desktop Runtime**
+(`winget install Microsoft.DotNet.DesktopRuntime.8`) once, then install the zip via Skyline's
+Tools > Tool Store > Install from file. When reinstalling over a running copy, **close the tool
+first** - Skyline can leave a partial extraction (locked files) that drops `deps.json` and DLLs,
+which then fails to load; reinstalling with the tool closed fixes it.
 
 ## CI
 
 - `.github/workflows/dotnet-ci.yml` — builds + runs the parity suite on ubuntu/macos/windows
   (cross-platform subset) and packages the tool zip on Windows. Scoped to `dotnet/**`.
-- `.github/workflows/dotnet-release.yml` — on a `dotnet-v*` tag, verifies the tool-inf version
-  matches the tag, tests, and publishes a GitHub Release with the Skyline tool zip
-  (`SkylinePrism.zip`) plus self-contained `prism` CLI archives per platform
-  (`prism-win-x64.zip`, `prism-linux-x64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`).
+- `.github/workflows/dotnet-release.yml` — on a `dotnet-v*` tag, verifies both version sources
+  (`Directory.Build.props` and the tool-inf manifest) match the tag, tests, and publishes a GitHub
+  Release with the Skyline tool zip (`SkylinePrism.zip`) plus framework-dependent `prism` CLI
+  archives per platform (`prism-win-x64.zip`, `prism-win-arm64.zip`, `prism-linux-x64.tar.gz`,
+  `prism-linux-arm64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`). Both artifacts are
+  framework-dependent — users install the .NET 8 runtime (Desktop Runtime for the Skyline tool).
 
 The Python CI (`ci.yml`, `release.yml`) is unchanged and runs independently.

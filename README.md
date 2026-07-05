@@ -44,13 +44,31 @@ written back in **linear** scale (all internal processing is on log2).
 
 ## Install
 
+### Prerequisite: the .NET 8 runtime
+
+Both the `prism` CLI and the Skyline external tool are **framework-dependent** — they share one
+.NET 8 runtime that you install once (this keeps the downloads small). Install it before running
+either tool:
+
+| Platform | Install the .NET 8 runtime |
+|---|---|
+| **Windows** | `winget install Microsoft.DotNet.DesktopRuntime.8` — the **Desktop** Runtime covers both the CLI and the Skyline tool. |
+| **macOS** | `brew install dotnet@8`, or the installer from the link below (Apple Silicon = arm64, Intel = x64). |
+| **Linux** | Your distro package (e.g. `sudo apt install dotnet-runtime-8.0`) or the install script from the link below. |
+
+All platforms and architectures — **x64 and ARM64** — are available at
+<https://dotnet.microsoft.com/download/dotnet/8.0>. The CLI needs the base **.NET Runtime**; the
+Skyline tool (WPF) needs the **.NET Desktop Runtime** on Windows, which is a superset — so installing
+the Desktop Runtime covers both.
+
 ### CLI
 
-The `prism` CLI ships as a **self-contained** archive — no .NET install required. Download the one
-for your platform from the [Releases](https://github.com/maccoss/skyline-prism/releases) page and put
-its folder on your `PATH` (the extracted folder holds `prism` plus its runtime, so keep it together).
+Download the `prism` archive for your platform from the
+[Releases](https://github.com/maccoss/skyline-prism/releases) page and put its folder on your `PATH`.
+Available archives: `prism-win-x64.zip`, `prism-win-arm64.zip`, `prism-linux-x64.tar.gz`,
+`prism-linux-arm64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`.
 
-**Linux / WSL2**
+**Linux / WSL2** (use `prism-linux-arm64.tar.gz` on ARM, e.g. Graviton/Raspberry Pi)
 ```bash
 curl -L https://github.com/maccoss/skyline-prism/releases/latest/download/prism-linux-x64.tar.gz | tar xz -C "$HOME/.local"
 echo 'export PATH="$HOME/.local/prism-linux-x64:$PATH"' >> ~/.bashrc && source ~/.bashrc
@@ -58,7 +76,8 @@ prism --version
 ```
 QC plots need the system font libraries: `sudo apt install libfontconfig1 libfreetype6`.
 
-**Windows (PowerShell)** — download `prism-win-x64.zip` from Releases, then:
+**Windows (PowerShell)** — download `prism-win-x64.zip` (or `prism-win-arm64.zip` on a
+Windows-on-ARM PC) from Releases, then:
 ```powershell
 Expand-Archive prism-win-x64.zip -DestinationPath $env:LOCALAPPDATA\Programs
 # add  %LOCALAPPDATA%\Programs\prism-win-x64  to your PATH (System > Environment Variables)
@@ -83,9 +102,11 @@ dotnet build SkylinePrism.CrossPlatform.slnf -c Release
 
 ### Skyline external tool (Windows)
 
-Download `SkylinePrism.zip` from [Releases](https://github.com/maccoss/skyline-prism/releases) (or
-build it — see below) and install it in Skyline via **Tools → Tool Store → Install from file**. The
-tool appears under the Tools menu and connects to the running document.
+Install the **.NET 8 Desktop Runtime** (see the prerequisite above —
+`winget install Microsoft.DotNet.DesktopRuntime.8`), then download `SkylinePrism.zip` from
+[Releases](https://github.com/maccoss/skyline-prism/releases) (or build it — see below) and install
+it in Skyline via **Tools → Tool Store → Install from file**. The tool appears under the Tools menu
+and connects to the running document.
 
 ## Quick start (CLI)
 

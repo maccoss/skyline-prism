@@ -1,7 +1,7 @@
 # C# (.NET 8) release - triggered by a dotnet-v* tag (distinct from the Python v* tags,
 # so the two release cadences do not collide). Publishes, as GitHub Release assets:
-#   - SkylinePrism.zip           the Windows Skyline external tool
-#   - prism-<rid>.{zip,tar.gz}   self-contained `prism` CLI, one per platform (no .NET needed)
+#   - SkylinePrism.zip           the Windows Skyline external tool (needs the .NET 8 Desktop Runtime)
+#   - prism-<rid>.{zip,tar.gz}   framework-dependent `prism` CLI, one per platform (needs the .NET 8 Runtime)
 name: dotnet-release
 
 on:
@@ -24,15 +24,21 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      # Guard: the tool-inf manifest version must match the git tag (tag dotnet-vX.Y.Z -> X.Y.Z).
+      # Guard: both version sources must match the git tag (tag dotnet-vX.Y.Z -> X.Y.Z) so the
+      # tool manifest AND the assembly/CLI version (Directory.Build.props) stay in lockstep.
       - name: Verify version matches tag
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME#dotnet-v}"
           VER=$(sed -n 's/^Version = //p' src/SkylinePrism.App/tool-inf/info.properties | tr -d '[:space:]')
-          echo "tag=$TAG manifest=$VER"
+          PROPS=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | tr -d '[:space:]')
+          echo "tag=$TAG manifest=$VER props=$PROPS"
           if [ "$TAG" != "$VER" ]; then
             echo "::error::info.properties Version ($VER) does not match tag ($TAG)"
+            exit 1
+          fi
+          if [ "$TAG" != "$PROPS" ]; then
+            echo "::error::Directory.Build.props Version ($PROPS) does not match tag ($TAG)"
             exit 1
           fi
 
@@ -48,17 +54,21 @@ jobs:
           path: dotnet/publish/SkylinePrism.zip
           if-no-files-found: error
 
-  # Self-contained `prism` CLI, one archive per platform, built on its native runner so the Unix
-  # binaries keep their executable bit.
+  # Framework-dependent `prism` CLI, one small archive per platform (the user installs the .NET 8
+  # runtime). `-r <rid>` still gives each archive a native `prism`/`prism.exe` apphost; nothing is
+  # bundled. win-arm64 / linux-arm64 cross-publish fine from the x64 runners. Unix legs run on their
+  # native runner so the binary keeps its executable bit.
   cli:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, rid: win-x64,   archive: zip }
-          - { os: ubuntu-latest,  rid: linux-x64, archive: tar }
-          - { os: macos-latest,   rid: osx-x64,   archive: tar }
-          - { os: macos-latest,   rid: osx-arm64, archive: tar }
+          - { os: windows-latest, rid: win-x64,     archive: zip }
+          - { os: windows-latest, rid: win-arm64,   archive: zip }
+          - { os: ubuntu-latest,  rid: linux-x64,   archive: tar }
+          - { os: ubuntu-latest,  rid: linux-arm64, archive: tar }
+          - { os: macos-latest,   rid: osx-x64,     archive: tar }
+          - { os: macos-latest,   rid: osx-arm64,   archive: tar }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -72,7 +82,7 @@ jobs:
       - name: Publish prism (${{ matrix.rid }})
         run: >
           dotnet publish src/SkylinePrism.Cli/SkylinePrism.Cli.csproj
-          -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=false
+          -c Release -r ${{ matrix.rid }} --self-contained false -p:PublishSingleFile=false
           -o dist/prism-${{ matrix.rid }}
 
       - name: Archive (zip)
