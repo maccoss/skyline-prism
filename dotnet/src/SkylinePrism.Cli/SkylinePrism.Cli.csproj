@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Plain net8.0 Exe: the cross-platform `prism` command (Windows/Linux/macOS). -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>prism</AssemblyName>
+    <RootNamespace>SkylinePrism.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+  </ItemGroup>
+
+</Project>

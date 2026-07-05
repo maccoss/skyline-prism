@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows-targeted: the Skyline JSON-RPC client uses System.IO.Pipes named-pipe
+         APIs that are Windows-only at runtime, and Skyline itself is Windows-only.
+         This project is the ONLY place the vendored SkylineTool sources are
+         link-compiled, which keeps SkylinePrism.Core cross-platform. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>SkylinePrism.Skyline</RootNamespace>
+    <!-- The vendored SkylineTool sources predate nullable reference types. -->
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Vendored pwiz Skyline JSON-RPC client sources (Apache-2.0), link-compiled exactly
+         the way pwiz's SkylineMcpServer.csproj / skyline-cadenza do. Originals live in
+         pwiz_tools/Skyline/SkylineTool/ in the ProteoWizard repo. -->
+    <Compile Include="..\..\external\SkylineTool\SkylineJsonToolClient.cs" Link="Rpc\SkylineJsonToolClient.cs" />
+    <Compile Include="..\..\external\SkylineTool\IJsonToolService.cs" Link="Rpc\IJsonToolService.cs" />
+    <Compile Include="..\..\external\SkylineTool\JsonToolConstants.cs" Link="Rpc\JsonToolConstants.cs" />
+    <Compile Include="..\..\external\SkylineTool\JsonToolModels.cs" Link="Rpc\JsonToolModels.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The PRISM report definitions, staged next to the tool so they can be installed into
+         a Skyline document: the transition-level PRISM report and the replicate-level
+         PRISM-Replicates metadata report (Skyline's built-in Replicates view is not in the
+         exportable saved-report list, so we ship our own equivalent). -->
+    <None Include="Reports\Skyline-PRISM.skyr" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Reports\Skyline-PRISM-Replicates.skyr" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

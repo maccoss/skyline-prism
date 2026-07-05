@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "SkylinePrism.sln",
+    "projects": [
+      "src\\SkylinePrism.Core\\SkylinePrism.Core.csproj",
+      "src\\SkylinePrism.Cli\\SkylinePrism.Cli.csproj",
+      "tests\\SkylinePrism.Tests\\SkylinePrism.Tests.csproj"
+    ]
+  }
+}

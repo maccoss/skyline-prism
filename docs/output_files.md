@@ -204,11 +204,14 @@ These files are useful for debugging, custom analysis, or re-running specific st
 
 **Purpose**: Complete provenance information for reproducibility.
 
+`pipeline_version` is filled automatically from the installed tool's version, so the value in your
+output reflects whatever version you ran (the example below is illustrative).
+
 **Contents**:
 
 ```json
 {
-  "pipeline_version": "26.3.0",
+  "pipeline_version": "26.4.2",
   "processing_date": "2026-01-19T12:00:00+00:00",
   "source_files": [
     "/path/to/Plate1.csv",

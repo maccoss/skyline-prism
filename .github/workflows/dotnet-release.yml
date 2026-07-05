@@ -1,0 +1,118 @@
+# C# (.NET 8) release - triggered by a dotnet-v* tag (distinct from the Python v* tags,
+# so the two release cadences do not collide). Publishes, as GitHub Release assets:
+#   - SkylinePrism.zip           the Windows Skyline external tool (needs the .NET 8 Desktop Runtime)
+#   - prism-<rid>.{zip,tar.gz}   framework-dependent `prism` CLI, one per platform (needs the .NET 8 Runtime)
+name: dotnet-release
+
+on:
+  push:
+    tags: ['dotnet-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # Verify the tag matches the tool manifest, run the full suite, and build the Skyline tool zip.
+  tool:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      # Guard: both version sources must match the git tag (tag dotnet-vX.Y.Z -> X.Y.Z) so the
+      # tool manifest AND the assembly/CLI version (Directory.Build.props) stay in lockstep.
+      - name: Verify version matches tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#dotnet-v}"
+          VER=$(sed -n 's/^Version = //p' src/SkylinePrism.App/tool-inf/info.properties | tr -d '[:space:]')
+          PROPS=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | tr -d '[:space:]')
+          echo "tag=$TAG manifest=$VER props=$PROPS"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::info.properties Version ($VER) does not match tag ($TAG)"
+            exit 1
+          fi
+          if [ "$TAG" != "$PROPS" ]; then
+            echo "::error::Directory.Build.props Version ($PROPS) does not match tag ($TAG)"
+            exit 1
+          fi
+
+      - name: Test
+        run: dotnet test SkylinePrism.sln --configuration Release
+
+      - name: Package SkylinePrism.zip
+        run: dotnet msbuild build/package.proj /p:Configuration=Release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: skyline-tool
+          path: dotnet/publish/SkylinePrism.zip
+          if-no-files-found: error
+
+  # Framework-dependent `prism` CLI, one small archive per platform (the user installs the .NET 8
+  # runtime). `-r <rid>` still gives each archive a native `prism`/`prism.exe` apphost; nothing is
+  # bundled. win-arm64 / linux-arm64 cross-publish fine from the x64 runners. Unix legs run on their
+  # native runner so the binary keeps its executable bit.
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64,     archive: zip }
+          - { os: windows-latest, rid: win-arm64,   archive: zip }
+          - { os: ubuntu-latest,  rid: linux-x64,   archive: tar }
+          - { os: ubuntu-latest,  rid: linux-arm64, archive: tar }
+          - { os: macos-latest,   rid: osx-x64,     archive: tar }
+          - { os: macos-latest,   rid: osx-arm64,   archive: tar }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish prism (${{ matrix.rid }})
+        run: >
+          dotnet publish src/SkylinePrism.Cli/SkylinePrism.Cli.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained false -p:PublishSingleFile=false
+          -o dist/prism-${{ matrix.rid }}
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path dist/prism-${{ matrix.rid }} -DestinationPath prism-${{ matrix.rid }}.zip
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar'
+        run: |
+          chmod +x dist/prism-${{ matrix.rid }}/prism
+          tar -czf prism-${{ matrix.rid }}.tar.gz -C dist prism-${{ matrix.rid }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prism-${{ matrix.rid }}
+          path: dotnet/prism-${{ matrix.rid }}.*
+          if-no-files-found: error
+
+  # Gather every artifact and publish the GitHub Release once.
+  release:
+    needs: [tool, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}

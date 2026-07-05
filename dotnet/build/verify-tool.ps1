@@ -1,0 +1,66 @@
+<#
+  Smoke-test the packaged Skyline tool BEFORE shipping/installing it.
+
+  Extracts SkylinePrism.zip to a clean directory (a fresh-install simulation) and launches
+  SkylinePrism.exe with a dummy connection argument. The MainWindow - and thus ScottPlot/SkiaSharp -
+  loads during startup, so a missing or broken dependency surfaces as an assembly/XAML load error in
+  prism-tool.log. A failed connection from the dummy arg is expected and ignored; only binary/
+  dependency load failures fail the check. This catches exactly the class of failure that a
+  "the zip is complete" file check cannot (e.g. a XAML/SkiaSharp load regression).
+
+  Exit code 0 = launched and loaded the UI cleanly; 1 = load failure (or the exe is missing).
+
+  Usage:
+    pwsh dotnet/build/verify-tool.ps1
+    pwsh dotnet/build/verify-tool.ps1 -Zip path\to\SkylinePrism.zip -WaitSeconds 8
+#>
+param(
+    [string]$Zip = (Join-Path $PSScriptRoot '..\publish\SkylinePrism.zip'),
+    [int]$WaitSeconds = 8
+)
+$ErrorActionPreference = 'Stop'
+
+if (-not (Test-Path $Zip)) { Write-Host "VERIFY FAILED: zip not found: $Zip"; exit 1 }
+
+$log = Join-Path $env:LOCALAPPDATA 'SkylinePrism\prism-tool.log'
+$startLen = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
+
+$dir = Join-Path $env:TEMP 'prism-tool-verify'
+Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $dir)
+
+$exe = Join-Path $dir 'SkylinePrism.exe'
+if (-not (Test-Path $exe)) { Write-Host 'VERIFY FAILED: SkylinePrism.exe not found in the zip'; exit 1 }
+
+Write-Host "Launching (extracted) $exe ..."
+$p = Start-Process -FilePath $exe -ArgumentList 'verify-smoke-no-connection' -PassThru
+Start-Sleep -Seconds $WaitSeconds
+if (-not $p.HasExited) { $p.Kill(); [void]$p.WaitForExit(2000) }
+
+# Read only what this launch appended to the shared log.
+$tail = ''
+if (Test-Path $log) {
+    $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+    [void]$fs.Seek($startLen, 'Begin')
+    $sr = New-Object System.IO.StreamReader($fs)
+    $tail = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+}
+Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+
+# Broken-binary/dependency signatures. A failed Skyline connection (expected with the dummy arg)
+# throws pipe/IO/timeout errors that do NOT match these, so it will not fail the check.
+$loadFailure = 'Could not load file or assembly|XamlParseException|TypeInitializationException|DllNotFoundException|BadImageFormatException'
+if ($tail -match $loadFailure) {
+    Write-Host 'VERIFY FAILED: the tool hit a dependency/XAML load error on startup:'
+    Write-Host '----------------------------------------------------------------------'
+    Write-Host $tail
+    exit 1
+}
+if ($tail -notmatch 'Skyline-PRISM tool started') {
+    Write-Host 'VERIFY FAILED: the tool did not start (no startup entry in the log).'
+    Write-Host $tail
+    exit 1
+}
+Write-Host 'VERIFY PASSED: SkylinePrism.exe launched from the packaged zip and loaded the UI (no dependency/XAML load errors).'
+exit 0

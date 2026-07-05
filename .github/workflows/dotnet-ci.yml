@@ -1,0 +1,107 @@
+# C# (.NET 8) CI - cross-platform CLI matrix + Windows tool packaging.
+# Scoped to dotnet/** so it does not run on Python-only changes.
+name: dotnet-ci
+
+on:
+  push:
+    branches: [main, develop, csharp-port]
+    paths: ['dotnet/**', 'global.json', '.github/workflows/dotnet-ci.yml']
+  pull_request:
+    branches: [main]
+    paths: ['dotnet/**', 'global.json', '.github/workflows/dotnet-ci.yml']
+
+defaults:
+  run:
+    working-directory: dotnet
+
+jobs:
+  # The shared algorithm/IO/QC layer and the CLI are plain net8.0 and must build + pass
+  # the full parity suite on Linux, macOS, and Windows.
+  cli-crossplat:
+    name: CLI + tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      # ScottPlot/SkiaSharp QC rendering needs fontconfig/freetype on headless Linux.
+      # DuckDB.NET.Data.Full ships its own native libduckdb.
+      - name: Install SkiaSharp native deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1 libfreetype6
+
+      - name: Restore
+        run: dotnet restore SkylinePrism.CrossPlatform.slnf
+
+      - name: Build
+        run: dotnet build SkylinePrism.CrossPlatform.slnf --no-restore --configuration Debug
+
+      - name: Test
+        run: dotnet test SkylinePrism.CrossPlatform.slnf --no-build --configuration Debug --logger "console;verbosity=normal"
+
+  # Coverage gate for the Core + CLI layer. Runs on Linux only (coverage is platform-independent)
+  # and fails the build if line OR branch coverage falls below the floor - a regression guard, not a
+  # tight target. Current: ~87% line, ~74% branch; ratchet the floor up as coverage improves.
+  coverage:
+    name: Coverage gate (Core + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install SkiaSharp native deps (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1 libfreetype6
+
+      - name: Test with coverage threshold
+        run: >
+          dotnet test tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj
+          --configuration Debug
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:ThresholdType=line%2cbranch
+          /p:Threshold=70
+          /p:ThresholdStat=total
+
+  # The Windows Skyline external tool (WPF + named-pipe RPC) builds only on Windows;
+  # this leg also produces the distributable tool zip.
+  windows-pack:
+    name: Full solution + tool zip (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build (Debug)
+        run: dotnet build SkylinePrism.sln --configuration Debug
+
+      - name: Test
+        run: dotnet test SkylinePrism.sln --no-build --configuration Debug --logger "console;verbosity=normal"
+
+      - name: Build (Release)
+        run: dotnet build SkylinePrism.sln --configuration Release
+
+      - name: Package SkylinePrism.zip
+        run: dotnet msbuild build/package.proj /p:Configuration=Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: SkylinePrism-zip
+          path: dotnet/publish/SkylinePrism.zip
+          if-no-files-found: error

@@ -101,3 +101,16 @@ results/
 example-files/
 *.log
 bug-fix/
+
+# Exception: the C# cross-language parity fixtures are small committed goldens (~6 MB total) that
+# the CI parity tests read. Re-include them despite the *.parquet / *.csv / output/ ignores above.
+# The output/ directories must be un-ignored first, or git will not descend into them.
+!dotnet/tests/fixtures/**/output/
+!dotnet/tests/fixtures/**/*.parquet
+!dotnet/tests/fixtures/**/*.csv
+
+# Exception: dotnet/build/ is the Skyline-tool packaging script (source), not build output; keep
+# package.proj. The staging/ directory beside it IS publish output and stays ignored.
+!dotnet/build/
+!dotnet/build/package.proj
+dotnet/build/staging/

@@ -1,0 +1,43 @@
+# Deterministic PRISM config for the C# cross-language parity fixture (sum rollup).
+# Every stage here is exact-parity (no optimizer-driven methods): sum transition
+# rollup, median global normalization, standard ComBat, median-polish protein rollup,
+# median protein normalization. QC/plots disabled (validated separately).
+sample_annotations:
+  reference_pattern:
+    - "-Pool_"
+  qc_pattern:
+    - "-Carl_"
+
+parsimony:
+  fasta_path: null
+  shared_peptide_handling: "all_groups"
+
+processing:
+  n_workers: 1
+
+transition_rollup:
+  method: "sum"
+  min_transitions: 1
+
+global_normalization:
+  method: "median"
+
+batch_correction:
+  enabled: true
+  method: "combat"
+  reference_anchored: false
+  reference_type: "reference"
+
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+protein_normalization:
+  method: "median"
+
+output:
+  format: "parquet"
+  include_residuals: false
+
+qc_report:
+  enabled: false

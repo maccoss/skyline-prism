@@ -1,0 +1,27 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Allows cross-compiling Windows-targeted projects (net8.0-windows, WPF)
+         on non-Windows hosts (Linux / macOS / CI agents). No effect on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <!-- Single source of truth for the assembly version. The Skyline tool
+         manifest version lives separately in
+         src/SkylinePrism.App/tool-inf/info.properties and must be kept in sync
+         at release time; dotnet-release.yml verifies the match before publishing. -->
+    <Version>26.5.0</Version>
+
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- NOTE: do NOT set InvariantGlobalization=true here. WPF's font/text rendering
+         (MS.Internal.FontCache.MajorLanguages) requires real cultures (e.g. "en") and
+         throws CultureNotFoundException under invariant-globalization mode, crashing the
+         App window on first text layout. Cross-machine numeric reproducibility is instead
+         guaranteed by using CultureInfo.InvariantCulture explicitly in all data-output
+         formatting paths (parquet is binary; CSV/TSV writers pass InvariantCulture). -->
+  </PropertyGroup>
+
+</Project>

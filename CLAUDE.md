@@ -340,13 +340,39 @@ mypy skyline_prism/
 - When changing CLI commands, update the usage examples
 - When adding new configuration options, update the template functions in `cli.py` (see below)
 
-**CRITICAL: Configuration Template Updates**
+**CRITICAL: Configuration is a contract - keep the template, schema, and docs in sync**
 
-When adding or modifying configuration options, you MUST update the template functions in `skyline_prism/cli.py`:
-- `get_full_config_template()` - Full annotated template (all options)
-- `get_minimal_config_template()` - Minimal template (common options only)
+A config-driven feature has multiple surfaces that MUST stay consistent. Whenever you **add, rename, or
+remove** a configuration key, update ALL of the relevant surfaces in the SAME change:
 
-These functions generate the output of `prism config-template`. The static `config_template.yaml` file in the repo root is NOT used by the software - it's just a reference copy. Users generate their configs via:
+Python engine (`skyline_prism/`):
+1. `get_full_config_template()` in `skyline_prism/cli.py` - the annotated full template
+2. `get_minimal_config_template()` in `skyline_prism/cli.py` - only if it's a common option
+3. `KNOWN_CONFIG_KEYS` in `skyline_prism/cli.py` - the key-validation schema
+
+C# port (`dotnet/`):
+1. The config class property in `dotnet/src/SkylinePrism.Core/Config/PrismConfig.cs`
+2. `ConfigTemplate.Default()` (and `.Minimal()` if common) in `ConfigTemplate.cs` - the emitted YAML
+3. The `KnownKeys` schema (`BuildSchema()`) in `PrismConfig.cs` - so `FindUnknownKeys` accepts it while
+   still warning on typos/unknown keys
+
+Both engines:
+4. `docs/parameters.md` - the cross-engine parameter reference (key, default, availability).
+
+Confirmation is MANDATORY, not optional:
+- **Adding a feature:** run `prism config-template` and confirm the new key appears in the generated YAML
+  (active, or a commented example for method-specific keys), and add a row to `docs/parameters.md`. The
+  C# test `ConfigValidationTests.ConfigTemplate_HasNoUnknownKeysAndValidates` fails if the emitted
+  template contains a key the schema does not know - fix the schema/template, do not silence it.
+- **Removing a feature:** delete the key from the template AND the schema AND `docs/parameters.md`. A
+  removed key must never linger in the generated YAML.
+- **Deliberately NOT porting a feature to C# (or vice-versa):** this is a specific, recorded decision.
+  Note it in `docs/parameters.md` (availability "Python only" / "C# only", with the reason) and in
+  `dotnet/PORTING_STATUS.md` "Config surface & parity". The C# port must never silently ignore a key -
+  make it warn (`FindUnknownKeys`) or abort (`PrismConfig.Validate`).
+
+These functions/files - NOT the static `config_template.yaml` in the repo root - are what the software
+emits. `config_template.yaml` is a reference copy only. Users generate their configs via:
 ```bash
 prism config-template -o config.yaml           # Full template
 prism config-template --minimal -o config.yaml  # Minimal template
@@ -367,10 +393,13 @@ The authoritative technical specification. Contains:
 
 **The configuration templates are generated from functions in `skyline_prism/cli.py`, NOT from `config_template.yaml`.**
 
-To update configuration options:
+To update configuration options (see "CRITICAL: Configuration is a contract" above for the full
+checklist across both engines + `docs/parameters.md`):
 1. Edit `get_full_config_template()` in `cli.py` for full template
 2. Edit `get_minimal_config_template()` in `cli.py` for minimal template
-3. The static `config_template.yaml` is just a reference and is NOT read by the software
+3. The C# port has its own template in `dotnet/src/SkylinePrism.Core/Config/ConfigTemplate.cs`
+   (`Default()` / `Minimal()`) plus the `KnownKeys` schema in `PrismConfig.cs` - keep them in sync
+4. The static `config_template.yaml` is just a reference and is NOT read by the software
 
 Users generate templates via:
 - `prism config-template -o config.yaml` (full template)
@@ -466,7 +495,10 @@ prism config-template --minimal -o config.yaml
 3. Add tests in `tests/`
 4. Run `pytest tests/ -v` to verify
 5. Update README.md if user-facing
-6. If configurable: update `get_full_config_template()` and `get_minimal_config_template()` in `cli.py`
+6. If configurable: update every config surface and confirm the generated YAML has the key - see
+   "CRITICAL: Configuration is a contract" above (templates + schema in `cli.py` AND, for the C# port,
+   `ConfigTemplate.cs` + `PrismConfig.cs`; plus `docs/parameters.md`). Run `prism config-template` and
+   verify the key appears; remove it everywhere when removing a feature.
 7. Commit with descriptive message
 
 ### Fixing a Bug

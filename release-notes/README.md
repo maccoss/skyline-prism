@@ -71,14 +71,41 @@ Sections can be omitted if empty. For major releases with many changes, subsecti
 - Reference config options by their CLI flag or YAML key name
 - Reference modified files with paths so reviewers can locate the change
 
-## Release Process
+## Two release tracks: Python and C# (.NET)
+
+Skyline-PRISM ships two implementations side by side, released independently:
+
+- **Python** — the `skyline-prism` PyPI package. Notes: `RELEASE_NOTES_v{version}.md`
+  (draft `RELEASE_NOTES_next.md`). Version source: `pyproject.toml`. Tag: `v{version}`.
+- **C# (.NET)** — the `prism` CLI + Windows Skyline external tool, published to GitHub Releases.
+  Notes: `RELEASE_NOTES_dotnet-v{version}.md` (draft `RELEASE_NOTES_dotnet-next.md`). Version source:
+  `dotnet/Directory.Build.props` **and** `dotnet/src/SkylinePrism.App/tool-inf/info.properties`
+  (kept in lockstep). Tag: `dotnet-v{version}`.
+
+Both tracks use the same CalVer `YY.feature.patch` scheme but keep **distinct tag namespaces and
+notes filenames** so their counters never collide.
+
+## Python Release Process
 
 1. Finalize `RELEASE_NOTES_next.md` on the development branch
 2. Rename it: `git mv release-notes/RELEASE_NOTES_next.md release-notes/RELEASE_NOTES_v{version}.md`
 3. Update the title heading inside the file to match the version
 4. Create a fresh empty `RELEASE_NOTES_next.md` for the following release
-5. Update `version` in `pyproject.toml` to match the release
+5. Update `version` in `pyproject.toml` **and** `__version__` in `skyline_prism/__init__.py` to match
 6. Commit the version bump and renames
 7. Merge to `main`
 8. Tag: `git tag v{version}`
-9. Push: `git push origin main --tags`
+9. Push: `git push origin main --tags` — then publish a GitHub Release, which triggers PyPI upload.
+
+## C# (.NET) Release Process
+
+1. Finalize `RELEASE_NOTES_dotnet-next.md`; rename to `RELEASE_NOTES_dotnet-v{version}.md` and update
+   its heading; create a fresh empty `RELEASE_NOTES_dotnet-next.md`
+2. Bump the version in **both** `dotnet/Directory.Build.props` (`<Version>`) and
+   `dotnet/src/SkylinePrism.App/tool-inf/info.properties` (`Version =`) to `{version}` — they must
+   match, and `dotnet-release.yml` fails the release if either differs from the tag
+3. Commit and merge to `main`
+4. Tag: `git tag dotnet-v{version}`
+5. Push the tag: `git push origin dotnet-v{version}` — **pushing the tag both builds the artifacts
+   and creates the GitHub Release** (via `dotnet-release.yml`). Do **not** hand-create the GitHub
+   Release. There is no PyPI step for the C# track.

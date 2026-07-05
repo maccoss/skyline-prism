@@ -1,0 +1,187 @@
+<Window x:Class="SkylinePrism.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sp="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
+        Title="Skyline-PRISM" Height="740" Width="1040"
+        Icon="skyline-prism.ico">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="Skyline-PRISM" FontSize="22" FontWeight="Bold" Foreground="#1a3c6e" />
+        <TextBlock Grid.Row="1" x:Name="StatusText" Margin="0,4,0,10" Foreground="#555"
+                   Text="Not connected to Skyline." TextWrapping="Wrap" />
+
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="Output directory:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Column="1" x:Name="OutputDirBox" VerticalAlignment="Center" TextChanged="OnOutputDirChanged" />
+            <Button Grid.Column="2" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowse" />
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
+            <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
+                       Text="Pick the report carrying replicate annotations (default = our PRISM-Replicates), then the batch/plate column name." TextWrapping="Wrap" />
+        </Grid>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button x:Name="OpenProvenanceButton" Content="Open provenance..." Padding="12,4" Margin="0,0,8,0"
+                    Click="OnOpenProvenance"
+                    ToolTip="Load settings from a previous run's parameters.json into the Settings tab." />
+            <Button x:Name="RunButton" Content="Run PRISM" Padding="22,4" FontWeight="Bold" Click="OnRun" />
+        </StackPanel>
+
+        <TabControl Grid.Row="5" x:Name="MainTabs">
+            <TabItem Header="Settings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="1. Transition &#8594; peptide rollup:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="TransitionRollupCombo" Width="160" SelectionChanged="OnTransitionRollupChanged">
+                                <ComboBoxItem>sum</ComboBoxItem>
+                                <ComboBoxItem>median_polish</ComboBoxItem>
+                                <ComboBoxItem>library_assist</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Text="min transitions:" VerticalAlignment="Center" Margin="20,0,6,0" />
+                            <TextBox x:Name="MinTransitionsBox" Width="46" Text="3" />
+                            <CheckBox x:Name="UseMs1Check" Content="include MS1 precursors" VerticalAlignment="Center" Margin="20,0,0,0" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="LibraryRow" Orientation="Horizontal" Margin="0,2,0,6" IsEnabled="False">
+                            <TextBlock Text="    Spectral library (.blib):" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <ComboBox x:Name="LibraryCombo" Width="330" IsEditable="True" />
+                            <Button Content="Browse..." Margin="8,0,0,0" Padding="8,2" Click="OnBrowseLibrary" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="2. Peptide normalization:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="PeptideNormCombo" Width="160">
+                                <ComboBoxItem>rt_lowess</ComboBoxItem>
+                                <ComboBoxItem>median</ComboBoxItem>
+                                <ComboBoxItem>quantile</ComboBoxItem>
+                                <ComboBoxItem>vsn</ComboBoxItem>
+                                <ComboBoxItem>none</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="   Sample outliers:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <CheckBox x:Name="ExcludeOutliersCheck" Content="exclude low-signal outlier samples (otherwise report only)" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="4. Protein parsimony:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ParsimonyCheck" Content="group proteins (razor/parsimony)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="5. Peptide &#8594; protein rollup:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ProteinRollupCombo" Width="160">
+                                <ComboBoxItem>median_polish</ComboBoxItem>
+                                <ComboBoxItem>sum</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Text="min peptides:" VerticalAlignment="Center" Margin="20,0,6,0" />
+                            <TextBox x:Name="MinPeptidesBox" Width="46" Text="3" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="6. Protein normalization:" Width="230" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ProteinNormCombo" Width="160">
+                                <ComboBoxItem>median</ComboBoxItem>
+                                <ComboBoxItem>none</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
+                                   Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Log" x:Name="LogTab">
+                <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                         VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
+                         HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
+            </TabItem>
+            <TabItem Header="QC Plots" x:Name="QcTab">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,6,6,2">
+                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="QcViewCombo" Width="110" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>Corrected</ComboBoxItem>
+                            <ComboBoxItem>Raw</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcLevelCombo" Width="100" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>Peptide</ComboBoxItem>
+                            <ComboBoxItem>Protein</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
+                                  ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
+                        <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
+                        <ComboBox x:Name="QcGroupCombo" Width="150" SelectionChanged="OnQcChanged"
+                                  ToolTip="Value in that column to show (All keeps every sample)." />
+                        <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
+                            <ComboBoxItem>PCA</ComboBoxItem>
+                            <ComboBoxItem>CV distribution</ComboBoxItem>
+                            <ComboBoxItem>Intensity distribution</ComboBoxItem>
+                            <ComboBoxItem>Control correlation</ComboBoxItem>
+                            <ComboBoxItem>RT-lowess</ComboBoxItem>
+                            <ComboBoxItem>RT-binned CV</ComboBoxItem>
+                            <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
+                                   VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
+                    </StackPanel>
+                    <Grid>
+                        <sp:WpfPlot x:Name="QcPlot" />
+                        <Image x:Name="QcImage" Visibility="Collapsed" Stretch="Uniform" Margin="4" />
+                    </Grid>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="ShowCommandButton" Content="Show Command Line" Padding="12,4" Margin="0,0,8,0"
+                    Click="OnShowCommandLine"
+                    ToolTip="Show the prism CLI command + config YAML that reproduces the current GUI settings." />
+            <Button x:Name="OpenReportButton" Content="Open QC Report" Padding="12,4" IsEnabled="False"
+                    Click="OnOpenReport" />
+        </StackPanel>
+    </Grid>
+</Window>
