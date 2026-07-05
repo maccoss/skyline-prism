@@ -9,7 +9,15 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>SkylinePrism</AssemblyName>
     <RootNamespace>SkylinePrism.App</RootNamespace>
+    <!-- PRISM app icon: embedded in the exe (Explorer + default taskbar/title-bar
+         icon). Also referenced as a WPF resource by MainWindow's Icon for a crisp
+         title-bar render. -->
+    <ApplicationIcon>skyline-prism.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="skyline-prism.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ScottPlot.WPF" Version="5.0.55" />

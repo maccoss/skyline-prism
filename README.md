@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/skyline-prism-logo.png" alt="Skyline-PRISM logo" width="280" />
+</p>
+
 # Skyline-PRISM
 
 [![dotnet CI](https://github.com/maccoss/skyline-prism/actions/workflows/dotnet-ci.yml/badge.svg)](https://github.com/maccoss/skyline-prism/actions/workflows/dotnet-ci.yml)
