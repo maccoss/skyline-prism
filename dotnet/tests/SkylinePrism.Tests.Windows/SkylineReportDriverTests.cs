@@ -161,12 +161,17 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work);
 
-        // The select carries curated built-ins + annotations, but not file/instrument noise.
+        // The select carries the Replicates view's standard columns + annotations, but not file/instrument
+        // noise (FilePath) nor Replicate-entity properties the built-in view doesn't show (BatchName,
+        // SampleDilutionFactor, SampleId).
         Assert.NotNull(client.RequestedSelect);
         Assert.Contains("SampleType", client.RequestedSelect!);
         Assert.Contains("Condition", client.RequestedSelect!);
         Assert.Contains("Subject", client.RequestedSelect!);
         Assert.DoesNotContain("FilePath", client.RequestedSelect!);
+        Assert.DoesNotContain("BatchName", client.RequestedSelect!);
+        Assert.DoesNotContain("SampleDilutionFactor", client.RequestedSelect!);
+        Assert.DoesNotContain("SampleId", client.RequestedSelect!);
 
         // Metadata.csv is written from the grid, not exported from a saved report.
         Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith("Metadata.csv"));

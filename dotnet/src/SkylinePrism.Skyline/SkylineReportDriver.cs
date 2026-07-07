@@ -135,15 +135,23 @@ public sealed class SkylineReportDriver
         "AnalyteConcentration", "SampleDilutionFactor", "BatchName", "ReplicateLocator",
     };
 
-    // Built-in metadata columns worth carrying (skipping file/instrument/computed noise).
+    // The standard columns Skyline's built-in "Replicates" document-grid view shows: the replicate name
+    // plus Sample Type and Analyte Concentration. We deliberately do NOT carry the other Replicate-entity
+    // properties (BatchName, SampleDilutionFactor, SampleId, file/instrument/computed columns): the
+    // built-in Replicates view does not display them, so including them put phantom fields into the
+    // metadata / QC "Group by" list that are not in the user's actual Replicates grid. Every replicate
+    // annotation is still carried dynamically (see TryWriteMetadataFromGrid), so the reconstructed report
+    // matches the Replicates view: standard columns + annotations.
     private static readonly string[] ReplicateCuratedColumns =
-        { "ReplicateName", "SampleType", "BatchName", "AnalyteConcentration", "SampleDilutionFactor", "SampleId" };
+        { "ReplicateName", "SampleType", "AnalyteConcentration" };
 
     /// <summary>
-    /// Read the Replicate document-grid data over the RPC and write it to <paramref name="csvPath"/>.
-    /// The built-in "Replicates" view is not a named report, so we enumerate the Replicate entity's
-    /// columns and run a report definition selecting the curated built-ins plus every user-defined
-    /// annotation. Returns the path on success, or null to fall back to a saved report.
+    /// Reconstruct Skyline's built-in "Replicates" document-grid view (which is not itself a named,
+    /// RPC-exportable report) and write it to <paramref name="csvPath"/>: enumerate the Replicate entity's
+    /// columns, then run a report definition selecting the view's standard columns (Sample Type, Analyte
+    /// Concentration) plus every replicate annotation - the columns not in <see cref="ReplicateBuiltinColumns"/>.
+    /// The result matches the columns the user sees in the Replicates grid. Returns the path on success, or
+    /// null to fall back to a saved report.
     /// </summary>
     private string? TryWriteMetadataFromGrid(string csvPath)
     {
