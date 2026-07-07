@@ -605,6 +605,32 @@ public partial class MainWindow : Window
         return i >= 0 ? sampleId[..i] : sampleId;
     }
 
+    // Sample IDs carry a "<replicate>__@__<batch>" suffix, added during merge so identical replicate names
+    // from different batches / source documents stay distinct. When every sample in the dataset shares the
+    // SAME suffix (a single batch/source), it is redundant noise, so strip it for display. When suffixes
+    // differ (a real multi-batch merge), keep them so the replicates remain distinguishable.
+    private static List<string> StripSharedBatchSuffix(IReadOnlyList<string> display, IReadOnlyList<string> allSamples)
+    {
+        const string sep = "__@__";
+        string? suffix = null;
+        foreach (var n in allSamples)
+        {
+            var i = n.IndexOf(sep, StringComparison.Ordinal);
+            if (i < 0)
+                return display.ToList(); // a sample has no suffix -> leave everything as-is
+            var s = n[i..];
+            if (suffix is null)
+                suffix = s;
+            else if (!string.Equals(suffix, s, StringComparison.Ordinal))
+                return display.ToList(); // suffixes differ -> keep them
+        }
+        return display.Select(n =>
+        {
+            var i = n.IndexOf(sep, StringComparison.Ordinal);
+            return i >= 0 ? n[..i] : n;
+        }).ToList();
+    }
+
     private string SampleAnnotation(string sampleId, string column)
     {
         if (_replicateAnn.TryGetValue(ReplicateOf(sampleId), out var m) && m.TryGetValue(column, out var v))
@@ -765,7 +791,8 @@ public partial class MainWindow : Window
         _pcaHoverPoints = null; // only PCA populates it; disables the hover handler for the other plots
         _pcaHoverMarker = null;
         _pcaHoverText = null;
-        var sampleNames = cols.Select(i => d.Samples[i]).ToList(); // replicate name per plotted column
+        // Replicate name per plotted column, with the shared __@__<batch> suffix stripped when redundant.
+        var sampleNames = StripSharedBatchSuffix(cols.Select(i => d.Samples[i]).ToList(), d.Samples);
         try
         {
             switch (kind)
