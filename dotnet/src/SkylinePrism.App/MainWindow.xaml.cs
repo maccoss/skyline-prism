@@ -136,6 +136,9 @@ public partial class MainWindow : Window
             Filter = "Spectral library (*.blib;*.tsv)|*.blib;*.tsv|BiblioSpec (*.blib)|*.blib"
                 + "|Carafe/DIA-NN (*.tsv)|*.tsv|All files (*.*)|*.*",
         };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() == true)
         {
             if (!LibraryCombo.Items.Contains(dlg.FileName))
@@ -151,6 +154,9 @@ public partial class MainWindow : Window
             Title = "Open provenance (parameters.json)",
             Filter = "PRISM provenance|parameters.json;metadata.json|JSON (*.json)|*.json|All files (*.*)|*.*",
         };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() != true)
             return;
         try
@@ -251,7 +257,9 @@ public partial class MainWindow : Window
     private static int ParseInt(string? s, int fallback)
         => int.TryParse(s, out var v) && v > 0 ? v : fallback;
 
-    private const string DefaultMetadataItem = "(default) PRISM-Replicates";
+    // Default: read Skyline's built-in "Replicates" document grid directly, dynamically capturing all of
+    // its column headings (curated built-ins + every user annotation) into a custom metadata report.
+    private const string DefaultMetadataItem = "(default) Replicates";
 
     private async Task LoadReportsAsync()
     {
@@ -274,9 +282,26 @@ public partial class MainWindow : Window
         }
     }
 
+    // Nearest existing directory at or above the "Output directory" box, so Browse dialogs open there.
+    // Walks up parents so a not-yet-created output dir still opens in its closest existing ancestor.
+    private string? DialogStartDir()
+    {
+        var dir = OutputDirBox?.Text?.Trim();
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (Directory.Exists(dir))
+                return dir;
+            dir = Path.GetDirectoryName(dir);
+        }
+        return null;
+    }
+
     private void OnBrowse(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFolderDialog { Title = "Select output directory" };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() == true)
             OutputDirBox.Text = dlg.FolderName;
     }
@@ -444,8 +469,9 @@ public partial class MainWindow : Window
 
         Log("Exporting reports from Skyline...");
         var driver = new SkylineReportDriver(session, Log);
-        // When no explicit metadata report is chosen, build our PRISM-Replicates report to
-        // include the user's batch annotation column (annotation_<name>).
+        // Default (no explicit report): the driver reads the "Replicates" document grid dynamically,
+        // capturing all its columns. batchAnnotation ensures the user's batch column is included in the
+        // saved-report fallback (the dynamic grid read already picks up all annotations).
         var batchAnnotation = metadataReport is null ? config.Metadata.BatchColumn : null;
         var reports = driver.Export(reportsDir, metadataReport, batchAnnotation);
 
