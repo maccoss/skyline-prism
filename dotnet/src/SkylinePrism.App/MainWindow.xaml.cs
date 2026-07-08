@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
 
         // Run stays disabled until an output directory is set. When connected to a saved document,
         // SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the box stays
@@ -136,6 +137,9 @@ public partial class MainWindow : Window
             Filter = "Spectral library (*.blib;*.tsv)|*.blib;*.tsv|BiblioSpec (*.blib)|*.blib"
                 + "|Carafe/DIA-NN (*.tsv)|*.tsv|All files (*.*)|*.*",
         };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() == true)
         {
             if (!LibraryCombo.Items.Contains(dlg.FileName))
@@ -151,6 +155,9 @@ public partial class MainWindow : Window
             Title = "Open provenance (parameters.json)",
             Filter = "PRISM provenance|parameters.json;metadata.json|JSON (*.json)|*.json|All files (*.*)|*.*",
         };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() != true)
             return;
         try
@@ -251,7 +258,9 @@ public partial class MainWindow : Window
     private static int ParseInt(string? s, int fallback)
         => int.TryParse(s, out var v) && v > 0 ? v : fallback;
 
-    private const string DefaultMetadataItem = "(default) PRISM-Replicates";
+    // Default: read Skyline's built-in "Replicates" document grid directly, dynamically capturing all of
+    // its column headings (curated built-ins + every user annotation) into a custom metadata report.
+    private const string DefaultMetadataItem = "(default) Replicates";
 
     private async Task LoadReportsAsync()
     {
@@ -274,9 +283,26 @@ public partial class MainWindow : Window
         }
     }
 
+    // Nearest existing directory at or above the "Output directory" box, so Browse dialogs open there.
+    // Walks up parents so a not-yet-created output dir still opens in its closest existing ancestor.
+    private string? DialogStartDir()
+    {
+        var dir = OutputDirBox?.Text?.Trim();
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (Directory.Exists(dir))
+                return dir;
+            dir = Path.GetDirectoryName(dir);
+        }
+        return null;
+    }
+
     private void OnBrowse(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFolderDialog { Title = "Select output directory" };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
         if (dlg.ShowDialog() == true)
             OutputDirBox.Text = dlg.FolderName;
     }
@@ -444,8 +470,9 @@ public partial class MainWindow : Window
 
         Log("Exporting reports from Skyline...");
         var driver = new SkylineReportDriver(session, Log);
-        // When no explicit metadata report is chosen, build our PRISM-Replicates report to
-        // include the user's batch annotation column (annotation_<name>).
+        // Default (no explicit report): the driver reads the "Replicates" document grid dynamically,
+        // capturing all its columns. batchAnnotation ensures the user's batch column is included in the
+        // saved-report fallback (the dynamic grid read already picks up all annotations).
         var batchAnnotation = metadataReport is null ? config.Metadata.BatchColumn : null;
         var reports = driver.Export(reportsDir, metadataReport, batchAnnotation);
 
@@ -462,6 +489,13 @@ public partial class MainWindow : Window
     // Cached QC matrices ([features, samples], LOG2) keyed by "view|level" (view in raw/corrected).
     private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples, double[]? MeanRt)> _qcData = new();
     private Dictionary<string, string> _qcTypes = new();
+
+    // PCA hover: the current PCA points (data coordinate + replicate name) and the highlight overlay
+    // (a ring marker + a text label). Recreated on every render because Plot.Clear() drops all plottables;
+    // null when the active QC plot is not PCA, which makes the hover handler a no-op.
+    private List<(ScottPlot.Coordinates Loc, string Name)>? _pcaHoverPoints;
+    private ScottPlot.Plottables.Marker? _pcaHoverMarker;
+    private ScottPlot.Plottables.Text? _pcaHoverText;
     private string? _qcOutputDir;
     // Replicate annotations from the exported Replicates report: replicate -> (column -> value).
     private readonly Dictionary<string, Dictionary<string, string>> _replicateAnn = new(StringComparer.Ordinal);
@@ -569,6 +603,32 @@ public partial class MainWindow : Window
         const string sep = "__@__";
         var i = sampleId.IndexOf(sep, StringComparison.Ordinal);
         return i >= 0 ? sampleId[..i] : sampleId;
+    }
+
+    // Sample IDs carry a "<replicate>__@__<batch>" suffix, added during merge so identical replicate names
+    // from different batches / source documents stay distinct. When every sample in the dataset shares the
+    // SAME suffix (a single batch/source), it is redundant noise, so strip it for display. When suffixes
+    // differ (a real multi-batch merge), keep them so the replicates remain distinguishable.
+    private static List<string> StripSharedBatchSuffix(IReadOnlyList<string> display, IReadOnlyList<string> allSamples)
+    {
+        const string sep = "__@__";
+        string? suffix = null;
+        foreach (var n in allSamples)
+        {
+            var i = n.IndexOf(sep, StringComparison.Ordinal);
+            if (i < 0)
+                return display.ToList(); // a sample has no suffix -> leave everything as-is
+            var s = n[i..];
+            if (suffix is null)
+                suffix = s;
+            else if (!string.Equals(suffix, s, StringComparison.Ordinal))
+                return display.ToList(); // suffixes differ -> keep them
+        }
+        return display.Select(n =>
+        {
+            var i = n.IndexOf(sep, StringComparison.Ordinal);
+            return i >= 0 ? n[..i] : n;
+        }).ToList();
     }
 
     private string SampleAnnotation(string sampleId, string column)
@@ -728,17 +788,23 @@ public partial class MainWindow : Window
             return string.IsNullOrEmpty(v) ? "(none)" : v;
         }).ToList();
 
+        _pcaHoverPoints = null; // only PCA populates it; disables the hover handler for the other plots
+        _pcaHoverMarker = null;
+        _pcaHoverText = null;
+        // Replicate name per plotted column, with the shared __@__<batch> suffix stripped when redundant.
+        var sampleNames = StripSharedBatchSuffix(cols.Select(i => d.Samples[i]).ToList(), d.Samples);
         try
         {
             switch (kind)
             {
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
-                default: DrawPca(plt, matrix, colorLabels, level, view, groupLabel); break;
+                default: _pcaHoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
             }
         }
         catch (Exception ex)
         {
+            _pcaHoverPoints = null;
             plt.Title("render failed: " + ex.Message);
         }
         // The Plot is reused across view/level/type switches, so fit the axes to the current data.
@@ -746,6 +812,9 @@ public partial class MainWindow : Window
         plt.Axes.AutoScale();
         if (kind == "CV distribution") // bar plot: sit the bars on the x-axis (y starts at 0)
             plt.Axes.SetLimitsY(0, plt.Axes.GetLimits().Top);
+        // Added AFTER autoscaling so the initially-hidden overlay doesn't skew the axis limits.
+        if (_pcaHoverPoints is { Count: > 0 })
+            AddPcaHoverOverlay(plt, _pcaHoverPoints[0].Loc);
         QcPlot.Refresh();
     }
 
@@ -863,7 +932,68 @@ public partial class MainWindow : Window
         QcPlot.Refresh();
     }
 
-    private static void DrawPca(Plot plt, double[,] featuresBySamples, List<string> types, string level, string view, string group)
+    // Create the (initially hidden) PCA hover overlay - a ring marker + a text label seeded at a point.
+    private void AddPcaHoverOverlay(Plot plt, Coordinates seed)
+    {
+        var marker = plt.Add.Marker(seed.X, seed.Y, MarkerShape.OpenCircle, 20, Colors.Black);
+        marker.IsVisible = false;
+        _pcaHoverMarker = marker;
+
+        var text = plt.Add.Text(" ", seed.X, seed.Y);
+        text.LabelFontSize = 14;
+        text.LabelBold = true;
+        text.LabelFontColor = Colors.Black;
+        text.LabelBackgroundColor = Colors.White.WithAlpha(0.85);
+        text.LabelAlignment = Alignment.LowerLeft;
+        text.IsVisible = false;
+        _pcaHoverText = text;
+    }
+
+    // Show the replicate name when the cursor is within ~18 px of a PCA point. Active only while the PCA
+    // plot is shown (_pcaHoverPoints non-null); a no-op for the CV / intensity plots.
+    private void QcPlot_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var points = _pcaHoverPoints;
+        if (points is null || points.Count == 0 || _pcaHoverMarker is null || _pcaHoverText is null)
+            return;
+
+        var plt = QcPlot.Plot;
+        var pos = e.GetPosition(QcPlot);
+        var scale = QcPlot.DisplayScale;
+        double mx = pos.X * scale, my = pos.Y * scale;
+
+        var best = double.MaxValue;
+        var bestIdx = -1;
+        for (var i = 0; i < points.Count; i++)
+        {
+            var px = plt.GetPixel(points[i].Loc);
+            double dx = px.X - mx, dy = px.Y - my;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best) { best = d2; bestIdx = i; }
+        }
+
+        const double thresholdPx = 18;
+        if (bestIdx >= 0 && best <= thresholdPx * thresholdPx)
+        {
+            var p = points[bestIdx];
+            _pcaHoverMarker.Location = p.Loc;
+            _pcaHoverMarker.IsVisible = true;
+            _pcaHoverText.Location = p.Loc;
+            _pcaHoverText.LabelText = p.Name;
+            _pcaHoverText.IsVisible = true;
+            QcPlot.Refresh();
+        }
+        else if (_pcaHoverMarker.IsVisible)
+        {
+            _pcaHoverMarker.IsVisible = false;
+            _pcaHoverText.IsVisible = false;
+            QcPlot.Refresh();
+        }
+    }
+
+    private static List<(Coordinates Loc, string Name)> DrawPca(
+        Plot plt, double[,] featuresBySamples, List<string> types, List<string> names,
+        string level, string view, string group)
     {
         var nF = featuresBySamples.GetLength(0);
         var nS = featuresBySamples.GetLength(1);
@@ -873,6 +1003,7 @@ public partial class MainWindow : Window
                 samplesByFeatures[s, f] = featuresBySamples[f, s];
         var scores = Pca.Fit2D(samplesByFeatures);
         var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
+        var points = new List<(Coordinates Loc, string Name)>(nS);
         for (var i = 0; i < nS; i++)
         {
             var t = types[i];
@@ -880,6 +1011,7 @@ public partial class MainWindow : Window
                 groups[t] = g = (new List<double>(), new List<double>());
             g.X.Add(scores[i, 0]);
             g.Y.Add(scores[i, 1]);
+            points.Add((new Coordinates(scores[i, 0], scores[i, 1]), names[i]));
         }
         var colorIndex = 0;
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -895,6 +1027,7 @@ public partial class MainWindow : Window
         // No title in the tool - the View/Level/Group/Plot selectors above already describe the plot.
         plt.XLabel("PC1");
         plt.YLabel("PC2");
+        return points;
     }
 
     private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)

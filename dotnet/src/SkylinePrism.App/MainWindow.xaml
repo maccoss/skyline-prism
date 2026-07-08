@@ -43,7 +43,7 @@
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
             <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center" />
             <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
-                       Text="Pick the report carrying replicate annotations (default = our PRISM-Replicates), then the batch/plate column name." TextWrapping="Wrap" />
+                       Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
