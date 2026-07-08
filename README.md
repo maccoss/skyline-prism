@@ -5,6 +5,8 @@
 # Skyline-PRISM
 
 [![dotnet CI](https://github.com/maccoss/skyline-prism/actions/workflows/dotnet-ci.yml/badge.svg)](https://github.com/maccoss/skyline-prism/actions/workflows/dotnet-ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/maccoss/skyline-prism?display_name=tag&label=release)](https://github.com/maccoss/skyline-prism/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/maccoss/skyline-prism/total?label=downloads&color=success)](https://github.com/maccoss/skyline-prism/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
