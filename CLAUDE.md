@@ -3,6 +3,11 @@
 This document provides context and guidelines for AI agents working on the Skyline-PRISM project.
 It is the single source of truth for agent guidance (it supersedes the former `AGENTS.md`).
 
+> **Building or extending the Skyline external tool?** The canonical field guide (RPC, reports, `.blib`,
+> chromatograms, packaging), a scaffolding skill, and a `dotnet new` template now live in
+> **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw-maccosslab/skyline-external-tools-ai)**
+> (`docs/skyline-external-tools.md`). PRISM is one of the example tools it draws from.
+
 ## Project Overview
 
 **Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction.

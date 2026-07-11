@@ -194,7 +194,7 @@ dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
 
 - **[dotnet/README.md](dotnet/README.md)** — building, testing, project layout, and CI for the C# code.
 - **[SPECIFICATION.md](SPECIFICATION.md)** — the authoritative algorithm/format specification.
-- **[docs/](docs/)** — [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](docs/skyline-external-tools.md).
+- **[docs/](docs/)** — [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
 - **[README-python.md](README-python.md)** — the original Python `skyline-prism` package.
 
 ## License
