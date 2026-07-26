@@ -37,6 +37,12 @@ sample_annotations:
 parsimony:
   fasta_path: null                     # set to a .fasta for substring-based parsimony mapping
   shared_peptide_handling: "all_groups"  # all_groups | unique_only | razor
+  # Enzyme-aware terminus check for fasta_path mapping (ignored when null). Only attaches a peptide to
+  # a protein when it occurs there with enzyme-consistent termini, removing phantom homolog assignments
+  # (e.g. AKEGVVAAAEK is a substring of beta-synuclein but preceded there by M, not K/R). The Skyline
+  # external tool overrides `enzyme` from the document's digestion settings; the CLI defaults to trypsin.
+  enzyme: "trypsin"                    # trypsin (not before P) | trypsin/p (before P too, e.g. DIA-NN) | lysc | lysn | argc | aspn | gluc | chymotrypsin | nonspecific
+  enzyme_specificity: "full"           # full (both termini) | semi (either) | none (legacy substring)
 
 # Transition -> peptide rollup: "sum", "median_polish", "topn", "consensus", or "library_assist".
 transition_rollup:

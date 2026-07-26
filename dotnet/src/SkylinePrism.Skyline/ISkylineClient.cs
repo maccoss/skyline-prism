@@ -18,6 +18,13 @@ public interface ISkylineClient
     string GetVersion();
     void ExportReport(string reportName, string filePath, string culture);
     string[] GetSettingsListNames(string listType, string? groupName);
+
+    /// <summary>Names of the settings-list items currently active in the document (e.g. the selected enzyme).</summary>
+    string[] GetSettingsListSelectedItems(string listType);
+
+    /// <summary>XML definition of a single settings-list item (e.g. an enzyme's cut/no_cut/sense).</summary>
+    string GetSettingsListItem(string listType, string itemName);
+
     void RunCommandSilent(string[] args);
 
     /// <summary>Column names of the Replicate entity (built-ins + user-defined document annotations).</summary>

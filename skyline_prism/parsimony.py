@@ -255,6 +255,8 @@ def build_peptide_protein_map_from_fasta(
     fasta_path: str,
     peptide_col: str = "peptide_sequence",
     handle_il_ambiguity: bool = True,
+    enzyme: str = "trypsin",
+    enzyme_specificity: str = "full",
 ) -> tuple[
     dict[str, set[str]],
     dict[str, set[str]],
@@ -264,15 +266,19 @@ def build_peptide_protein_map_from_fasta(
 ]:
     """Build peptide-protein mapping from FASTA database.
 
-    This is the RECOMMENDED method for proper parsimony analysis.
-    Uses direct substring matching - each detected peptide is searched
-    for in all protein sequences.
+    This is the RECOMMENDED method for proper parsimony analysis. Each detected
+    peptide is searched for in all protein sequences and assigned to a protein
+    only when an occurrence has enzyme-consistent termini (unless the check is
+    disabled), which removes phantom paralog assignments (see
+    :func:`skyline_prism.fasta.build_peptide_protein_map_from_fasta`).
 
     Args:
         df: DataFrame with detected peptides
         fasta_path: Path to FASTA database used for search
         peptide_col: Column containing peptide sequences (may have modifications)
         handle_il_ambiguity: Replace I with L for matching (MS cannot distinguish)
+        enzyme: Digestion enzyme for the terminus check (default "trypsin")
+        enzyme_specificity: "full" (default), "semi", or "none" (disables check)
 
     Returns:
         Tuple of:
@@ -304,6 +310,8 @@ def build_peptide_protein_map_from_fasta(
         fasta_path=fasta_path,
         detected_peptides=detected_peptides,
         handle_il_ambiguity=handle_il_ambiguity,
+        enzyme=enzyme,
+        enzyme_specificity=enzyme_specificity,
     )
 
     # Build protein name map

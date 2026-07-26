@@ -422,6 +422,87 @@ def get_theoretical_peptide_counts(
 
 
 # =============================================================================
+# Enzyme-Aware Terminus Check (for FASTA peptide-protein mapping)
+# =============================================================================
+
+# Valid values for the terminus specificity of a FASTA membership match.
+ENZYME_SPECIFICITIES = ("full", "semi", "none")
+
+
+def cleavage_boundary_set(sequence: str, enzyme: str) -> set[int]:
+    """Positions in ``sequence`` where ``enzyme`` creates a peptide boundary.
+
+    A boundary index ``b`` marks a bond the enzyme cleaves: a peptide may START
+    at ``b`` (the residue before ``b`` is a cleavage site) or END at ``b`` (the
+    residue at ``b - 1`` is a cleavage site). The protein termini (0 and
+    ``len(sequence)``) are always boundaries, and index 1 is added when the
+    protein starts with ``M`` to allow for initiator-methionine excision (a
+    common ragged N-terminus that would otherwise drop legitimate N-terminal
+    peptides).
+
+    Boundaries are computed on the ORIGINAL (not I/L-normalized) sequence so
+    enzymes whose specificity distinguishes I from L (e.g. chymotrypsin cleaves
+    after L but not I) stay correct. Index positions are unchanged by I/L
+    normalization, so the returned set still aligns with the normalized sequence
+    used for substring search.
+
+    Args:
+        sequence: Amino acid sequence (uppercase, not I/L-normalized)
+        enzyme: Enzyme name (see ENZYME_RULES) or "nonspecific"
+
+    Returns:
+        Set of boundary indices in [0, len(sequence)]
+
+    """
+    n = len(sequence)
+    boundaries = {0, n}
+    if n and sequence[0] == "M":
+        boundaries.add(1)  # initiator-methionine excision
+
+    enzyme = enzyme.lower()
+    if enzyme == "nonspecific":
+        boundaries.update(range(n + 1))
+        return boundaries
+
+    if enzyme not in ENZYME_RULES:
+        raise ValueError(f"Unknown enzyme: {enzyme}. Available: {', '.join(ENZYME_RULES)}")
+
+    pattern, cleave_after = ENZYME_RULES[enzyme]
+    for match in re.finditer(pattern, sequence):
+        boundaries.add(match.end() if cleave_after else match.start())
+
+    return boundaries
+
+
+def terminus_is_enzymatic(
+    start: int,
+    end: int,
+    boundaries: set[int],
+    specificity: str,
+) -> bool:
+    """Whether a peptide occupying ``sequence[start:end]`` is an enzymatic product.
+
+    Args:
+        start: Match start index (inclusive)
+        end: Match end index (exclusive)
+        boundaries: Cleavage boundaries from :func:`cleavage_boundary_set`
+        specificity: "full" (both termini must be cleavage-consistent),
+            "semi" (at least one terminus), or "none" (no check - always True)
+
+    Returns:
+        True if the match is consistent with the enzyme at the given specificity
+
+    """
+    if specificity == "none":
+        return True
+    n_term_ok = start in boundaries
+    if specificity == "semi":
+        return n_term_ok or (end in boundaries)
+    # "full" (default): both termini must be cleavage-consistent.
+    return n_term_ok and (end in boundaries)
+
+
+# =============================================================================
 # Modified Sequence Handling
 # =============================================================================
 
@@ -518,20 +599,38 @@ def build_peptide_protein_map_from_fasta(
     fasta_path: str | Path,
     detected_peptides: set[str],
     handle_il_ambiguity: bool = True,
+    enzyme: str = "trypsin",
+    enzyme_specificity: str = "full",
 ) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, ProteinEntry]]:
     """Build peptide-protein mapping by searching for peptides in protein sequences.
 
-    This is the main entry point for parsimony analysis. Uses direct substring
-    matching - no need to specify enzyme or digestion parameters.
+    This is the main entry point for parsimony analysis. For each detected
+    peptide it finds every protein that can enzymatically produce it: the
+    peptide must occur as a substring (after stripping modifications and
+    handling I/L ambiguity) AND, unless the enzyme check is disabled, at least
+    one occurrence must have termini consistent with the digestion enzyme.
 
-    For each detected peptide, finds all proteins whose sequence contains that
-    peptide as a substring (after stripping modifications and handling I/L
-    ambiguity).
+    The enzyme check removes "phantom" assignments where a peptide is a
+    substring of a protein it cannot come from because the required flanking
+    cleavage site is absent (e.g. ``AKEGVVAAAEK`` is a substring of beta-
+    synuclein but is preceded there by ``M``, not ``K/R``, so trypsin cannot
+    liberate it; it is proteotypic to alpha-synuclein). Substring containment
+    is necessary but not sufficient for a peptide to originate from a protein.
 
     Args:
         fasta_path: Path to FASTA file
         detected_peptides: Set of detected peptide sequences (may have modifications)
         handle_il_ambiguity: Replace I with L for matching (MS cannot distinguish)
+        enzyme: Digestion enzyme for the terminus check (see ENZYME_RULES).
+            Default "trypsin" (cleave after K/R, but NOT before P). Use
+            "trypsin/p" for searches that cleave K/R even before P (e.g. the
+            common DIA-NN default). The Skyline external tool overrides this
+            from the document's digestion settings.
+        enzyme_specificity: Terminus requirement (see ENZYME_SPECIFICITIES):
+            - "full" (default): both peptide termini must be cleavage-consistent
+              (or a protein terminus). Removes phantom paralog assignments.
+            - "semi": at least one terminus must be cleavage-consistent.
+            - "none": no enzyme check (legacy pure-substring behavior).
 
     Returns:
         Tuple of:
@@ -540,21 +639,38 @@ def build_peptide_protein_map_from_fasta(
         - proteins: dict[accession] -> ProteinEntry (for name lookup)
 
     """
+    specificity = enzyme_specificity.lower()
+    if specificity not in ENZYME_SPECIFICITIES:
+        raise ValueError(
+            f"Unknown enzyme_specificity: {enzyme_specificity}. "
+            f"Available: {', '.join(ENZYME_SPECIFICITIES)}"
+        )
+
     logger.info(f"Building peptide-protein map from {fasta_path}")
     logger.info(f"Detected peptides: {len(detected_peptides)}")
+    if specificity == "none":
+        logger.info("  Enzyme terminus check disabled (enzyme_specificity=none)")
+    else:
+        logger.info(
+            f"  Enzyme terminus check: enzyme={enzyme}, specificity={specificity}"
+        )
 
     # Parse FASTA
     proteins = parse_fasta(fasta_path)
 
-    # Normalize all protein sequences for matching (handle I/L ambiguity)
+    # Normalize protein sequences for substring matching (handle I/L ambiguity) and, unless
+    # the enzyme check is disabled, precompute each protein's cleavage boundaries from the
+    # ORIGINAL sequence (indices align with the normalized sequence).
     protein_sequences: dict[str, str] = {}
+    protein_boundaries: dict[str, set[int]] = {}
     for accession, entry in proteins.items():
-        seq = entry.sequence.upper()
-        if handle_il_ambiguity:
-            seq = seq.replace("I", "L")
-        protein_sequences[accession] = seq
+        original = entry.sequence.upper()
+        normalized_seq = original.replace("I", "L") if handle_il_ambiguity else original
+        protein_sequences[accession] = normalized_seq
+        if specificity != "none":
+            protein_boundaries[accession] = cleavage_boundary_set(original, enzyme)
 
-    # Map detected peptides to proteins by substring search
+    # Map detected peptides to proteins by (enzyme-aware) substring search
     peptide_to_proteins: dict[str, set[str]] = {}
     protein_to_detected: dict[str, set[str]] = {}
     unmatched: list[str] = []
@@ -562,12 +678,28 @@ def build_peptide_protein_map_from_fasta(
     for detected_pep in detected_peptides:
         # Normalize detected peptide for matching
         normalized = normalize_for_matching(detected_pep, handle_il_ambiguity)
+        if not normalized:
+            unmatched.append(detected_pep)
+            continue
+
+        pep_len = len(normalized)
 
         # Search for this peptide in all protein sequences
         matched_proteins: set[str] = set()
         for accession, seq in protein_sequences.items():
-            if normalized in seq:
+            pos = seq.find(normalized)
+            if pos == -1:
+                continue
+            if specificity == "none":
                 matched_proteins.add(accession)
+                continue
+            # Accept the protein if ANY occurrence has enzyme-consistent termini.
+            boundaries = protein_boundaries[accession]
+            while pos != -1:
+                if terminus_is_enzymatic(pos, pos + pep_len, boundaries, specificity):
+                    matched_proteins.add(accession)
+                    break
+                pos = seq.find(normalized, pos + 1)
 
         if matched_proteins:
             peptide_to_proteins[detected_pep] = matched_proteins
