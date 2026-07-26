@@ -429,6 +429,19 @@ def get_theoretical_peptide_counts(
 ENZYME_SPECIFICITIES = ("full", "semi", "none")
 
 
+def normalize_enzyme(enzyme: str) -> str:
+    r"""Canonicalize an enzyme name for the terminus check.
+
+    Trims and lowercases, and accepts the ``trypsinp`` and ``trypsin\p``
+    spellings as aliases for ``trypsin/p``. Mirrors the C#
+    ``FastaParser.NormalizeEnzyme`` so both engines accept the same config values.
+    """
+    e = (enzyme or "").strip().lower()
+    if e in ("trypsin\\p", "trypsinp"):
+        return "trypsin/p"
+    return e
+
+
 def cleavage_boundary_set(sequence: str, enzyme: str) -> set[int]:
     """Positions in ``sequence`` where ``enzyme`` creates a peptide boundary.
 
@@ -459,7 +472,7 @@ def cleavage_boundary_set(sequence: str, enzyme: str) -> set[int]:
     if n and sequence[0] == "M":
         boundaries.add(1)  # initiator-methionine excision
 
-    enzyme = enzyme.lower()
+    enzyme = normalize_enzyme(enzyme)
     if enzyme == "nonspecific":
         boundaries.update(range(n + 1))
         return boundaries
@@ -651,9 +664,7 @@ def build_peptide_protein_map_from_fasta(
     if specificity == "none":
         logger.info("  Enzyme terminus check disabled (enzyme_specificity=none)")
     else:
-        logger.info(
-            f"  Enzyme terminus check: enzyme={enzyme}, specificity={specificity}"
-        )
+        logger.info(f"  Enzyme terminus check: enzyme={enzyme}, specificity={specificity}")
 
     # Parse FASTA
     proteins = parse_fasta(fasta_path)

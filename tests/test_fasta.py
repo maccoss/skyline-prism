@@ -488,7 +488,7 @@ class TestEnzymeAwareMapping:
             fasta_path.unlink()
 
     def test_specificity_semi_still_keeps_snca(self):
-        """semi accepts SNCB too here (its C-terminus IS a valid cleavage site).
+        """Semi accepts SNCB too here (its C-terminus IS a valid cleavage site).
 
         Documents why "full" is the default: a one-terminus rule does not catch
         this phantom because AKEGVVAAAEK ends in K before T in SNCB.
@@ -539,6 +539,7 @@ class TestCleavageBoundarySet:
     """Unit tests for the enzyme cleavage-boundary helper."""
 
     def test_trypsin_boundaries(self):
+        """Trypsin boundaries include cleavage sites after K/R and the termini."""
         from skyline_prism.fasta import cleavage_boundary_set
 
         # PEPK|SAMPLER|END : cleave after K3 and R10; termini 0 and 14; Met not present.
@@ -549,6 +550,7 @@ class TestCleavageBoundarySet:
         assert 11 in boundaries  # after R (index 10)
 
     def test_trypsin_not_before_proline(self):
+        """Trypsin does not cleave K/R before proline; trypsin/p does."""
         from skyline_prism.fasta import cleavage_boundary_set
 
         # K at index 2 is followed by P -> trypsin does NOT cleave, trypsin/p does.
@@ -557,10 +559,27 @@ class TestCleavageBoundarySet:
         assert 3 in cleavage_boundary_set(seq, "trypsin/p")
 
     def test_initiator_methionine_boundary(self):
+        """Index 1 is a boundary only when the protein starts with M (Met excision)."""
         from skyline_prism.fasta import cleavage_boundary_set
 
         assert 1 in cleavage_boundary_set("MASTVGGK", "trypsin")
         assert 1 not in cleavage_boundary_set("ASTVGGK", "trypsin")
+
+    def test_enzyme_name_normalized(self):
+        r"""Enzyme names are trimmed/lowercased; trypsinp / trypsin\p alias trypsin/p.
+
+        Mirrors the C# FastaParser.NormalizeEnzyme so both engines accept the
+        same config values.
+        """
+        from skyline_prism.fasta import cleavage_boundary_set, normalize_enzyme
+
+        assert normalize_enzyme(" Trypsin/P ") == "trypsin/p"
+        assert normalize_enzyme("trypsin\\p") == "trypsin/p"
+        assert normalize_enzyme("trypsinp") == "trypsin/p"
+
+        # K@2 before P: trypsin/p cleaves (boundary at 3), and the aliases behave identically.
+        for name in ("trypsin/p", "TRYPSIN/P", "trypsinp", "trypsin\\p"):
+            assert 3 in cleavage_boundary_set("AAKPEPTIDER", name)
 
 
 class TestGetDetectedPeptides:

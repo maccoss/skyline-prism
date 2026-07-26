@@ -361,7 +361,7 @@ PEPTIDEKFGRIGRLVTR
         fasta_path.write_text(fasta_content)
 
         # Create DataFrame with detected peptides. Mapping is enzyme-aware
-        # (default trypsin/p, full specificity):
+        # (default trypsin, full specificity):
         #   VGVNGFGR   - valid tryptic peptide of P001 (preceded by K, ends in R)
         #   PEPTIDEK   - valid tryptic peptide of P002 (protein N-terminus .. K)
         #   FGRIGRLVTR - substring of BOTH, but tryptic ONLY in P002 (in P001 it
@@ -456,9 +456,7 @@ MDVFMKGLSMAKEGVVAAAEKTKQGVSEAAGK
         # AKEGVVAAAEK is shared by substring; QGVAEAAGK / QGVSEAAGK are unique
         # tryptic C-terminal peptides of SNCA / SNCB respectively (each preceded
         # by K, ending at the protein C-terminus).
-        df = pd.DataFrame(
-            {"peptide_sequence": ["AKEGVVAAAEK", "QGVAEAAGK", "QGVSEAAGK"]}
-        )
+        df = pd.DataFrame({"peptide_sequence": ["AKEGVVAAAEK", "QGVAEAAGK", "QGVSEAAGK"]})
 
         pep_to_prot, prot_to_pep, prot_to_name, prot_to_gene, prot_to_desc = (
             build_peptide_protein_map_from_fasta(
