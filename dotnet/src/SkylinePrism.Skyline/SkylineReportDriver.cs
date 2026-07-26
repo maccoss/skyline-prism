@@ -232,6 +232,32 @@ public sealed class SkylineReportDriver
         return blibs;
     }
 
+    /// <summary>
+    /// The document's active digestion enzyme, mapped to a PRISM enzyme name (parsimony.enzyme). Reads
+    /// the selected "Enzymes" settings item over JSON-RPC and parses its cut/no_cut/sense XML. Returns
+    /// null when the document has no enzyme, the RPC is unavailable, or the enzyme has no PRISM
+    /// equivalent - the caller then keeps the config default. Used so the Skyline external tool's
+    /// FASTA-based parsimony matches the document's digestion instead of a hardcoded default.
+    /// </summary>
+    public string? GetDigestionEnzyme()
+    {
+        var selected = Try(() => _session.Execute(c => c.GetSettingsListSelectedItems("Enzymes")));
+        var name = selected?.FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var xml = Try(() => _session.Execute(c => c.GetSettingsListItem("Enzymes", name!)));
+        if (string.IsNullOrWhiteSpace(xml))
+            return null;
+
+        var prism = SkylineDigestion.PrismEnzymeFromXml(xml);
+        if (prism is null)
+            _log($"Document enzyme '{name}' has no PRISM equivalent; using the configured default enzyme.");
+        else
+            _log($"Document digestion enzyme: {name} -> PRISM enzyme '{prism}'.");
+        return prism;
+    }
+
     private List<string> GetAvailableReportNames()
     {
         var names = new List<string>();

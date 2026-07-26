@@ -120,8 +120,10 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | Key | Default | Description | Availability |
 |-----|---------|-------------|--------------|
 | `enabled` | `true` | When false, each accession is its own group | **Both** |
-| `fasta_path` | `null` | FASTA for substring-based peptide→protein mapping; null uses the Skyline Protein Accession column | **Both** |
+| `fasta_path` | `null` | FASTA for enzyme-aware peptide→protein mapping; null uses the Skyline Protein Accession column | **Both** |
 | `shared_peptide_handling` | `all_groups` | `all_groups`, `unique_only`, `razor` | **Both** |
+| `enzyme` | `trypsin` | Digestion enzyme for the FASTA-mapping terminus check (ignored when `fasta_path` is null): `trypsin` (not before P), `trypsin/p` (before P too, e.g. DIA-NN), `lysc`, `lysn`, `argc`, `aspn`, `gluc`, `chymotrypsin`, `nonspecific`. The Skyline external tool overrides this from the document's digestion settings | **Both** |
+| `enzyme_specificity` | `full` | Terminus requirement for FASTA membership: `full` (both termini cleavage-consistent — removes phantom homolog assignments), `semi` (either), `none` (legacy pure substring) | **Both** |
 
 ---
 

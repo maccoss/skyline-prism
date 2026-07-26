@@ -37,17 +37,22 @@ public static class ParsimonyEngine
 
     /// <summary>
     /// Read distinct peptide/protein records from the merged parquet and compute groups. When
-    /// <paramref name="fastaPath"/> is set, the peptide-&gt;protein map is built by substring search
-    /// against the FASTA (proper parsimony) instead of the Skyline Protein Accession column.
+    /// <paramref name="fastaPath"/> is set, the peptide-&gt;protein map is built by enzyme-aware
+    /// substring search against the FASTA (proper parsimony) instead of the Skyline Protein Accession
+    /// column. The <paramref name="enzyme"/>/<paramref name="enzymeSpecificity"/> terminus check
+    /// removes phantom assignments to homologs that share the sequence but not the flanking cleavage
+    /// site; it is ignored on the Skyline-column path (already enzyme-aware).
     /// </summary>
     public static List<ProteinGroup> Run(
-        string mergedParquet, SkylineColumns cols, bool applyParsimony = true, string? fastaPath = null)
+        string mergedParquet, SkylineColumns cols, bool applyParsimony = true, string? fastaPath = null,
+        string enzyme = "trypsin", string enzymeSpecificity = "full")
     {
         var records = ReadRecords(mergedParquet, cols);
         var map = string.IsNullOrWhiteSpace(fastaPath)
             ? BuildMap(records)
             : FastaParser.BuildMap(
-                fastaPath!, records.Select(r => r.Peptide).Where(p => p.Length > 0).Distinct());
+                fastaPath!, records.Select(r => r.Peptide).Where(p => p.Length > 0).Distinct(),
+                enzyme: enzyme, enzymeSpecificity: enzymeSpecificity);
         return applyParsimony ? ComputeProteinGroups(map) : BuildUngroupedGroups(map);
     }
 

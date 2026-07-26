@@ -267,6 +267,19 @@ parsimony:
   #   razor       - Assign to group with most peptides (MaxQuant-style)
   shared_peptide_handling: "all_groups"
 
+  # Enzyme-aware terminus check for FASTA-based mapping (ignored when fasta_path
+  # is null; the Skyline Protein Accession column is already enzyme-aware). Only
+  # attaches a peptide to a protein when it occurs there with enzyme-consistent
+  # termini, removing "phantom" homolog assignments (e.g. AKEGVVAAAEK is a
+  # substring of beta-synuclein but preceded there by M, not K/R). The Skyline
+  # external tool overrides `enzyme` from the document's digestion settings.
+  #   enzyme: trypsin (default; not before P), trypsin/p (before P too, e.g.
+  #           DIA-NN), lysc, lysn, argc, aspn, gluc, chymotrypsin, nonspecific
+  enzyme: "trypsin"
+  #   enzyme_specificity: full (both termini; default) | semi (either) |
+  #                       none (legacy pure-substring behavior)
+  enzyme_specificity: "full"
+
 # =============================================================================
 # Protein Rollup
 # =============================================================================

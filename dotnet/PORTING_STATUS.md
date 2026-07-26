@@ -71,10 +71,19 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       group-ID order is arbitrary. Same fix applied to Python `parsimony.py` to keep them in step.
 - [x] Skyline CSV-based peptide→protein map
 - [x] Parsimony on/off (one group per protein) — `BuildUngroupedGroups`
-- [x] FASTA-based map (substring + I/L equivalence) — `FastaParser`; set `parsimony.fasta_path`.
-      Osprey reads pre-assigned protein_ids from the library (osprey-io library/diann.rs `split_list`),
-      the same model as the Skyline Protein-Accession path; the FASTA option re-derives the same
-      substring+I/L edges. Verified by `ParsimonyFastaMapTests`.
+- [x] FASTA-based map (substring + I/L equivalence + enzyme-aware terminus check) — `FastaParser`;
+      set `parsimony.fasta_path`. Osprey reads pre-assigned protein_ids from the library (osprey-io
+      library/diann.rs `split_list`), the same model as the Skyline Protein-Accession path; the FASTA
+      option re-derives the same substring+I/L edges, then applies `parsimony.enzyme` /
+      `parsimony.enzyme_specificity` (default `trypsin` / `full`) so a peptide is only attached to a
+      protein it can enzymatically produce (removes phantom homolog assignments — the SNCA/SNCB case).
+      C# and Python share the enzyme rules exactly. Verified by `ParsimonyFastaMapTests` +
+      `FastaParserTests` (C#) and `test_fasta.py`/`test_parsimony.py` (Python).
+- [x] `parsimony.enzyme` / `parsimony.enzyme_specificity` — both engines, same defaults/keys. The
+      **Skyline external tool** overrides `enzyme` from the document's digestion settings
+      (`SkylineReportDriver.GetDigestionEnzyme` -> `SkylineDigestion`, reading the selected "Enzymes"
+      item's cut/no_cut/sense XML); the CLI uses the config default. This document-derived override has
+      no Python equivalent (Python is CLI-only) and is not a config key — it just sets the same key.
 - Osprey parity is asserted in BOTH languages: `ParsimonyOspreyTests` (C#) and
   `tests/test_parsimony_osprey.py` (Python) run the same identical-set/subset/all-mode/razor/
   determinism cases, keeping Python <-> C# <-> Osprey in lockstep.

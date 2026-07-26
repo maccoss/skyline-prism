@@ -38,6 +38,16 @@ public class SkylineReportDriverTests
         public string[] GetSettingsListNames(string listType, string? groupName)
             => ReportsByGroup.TryGetValue(groupName ?? "", out var l) ? l.ToArray() : Array.Empty<string>();
 
+        // Settings-list items keyed by "<listType>/<itemName>"; SelectedByList holds the active items.
+        public readonly Dictionary<string, string> SettingsItems = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, string[]> SelectedByList = new(StringComparer.Ordinal);
+
+        public string[] GetSettingsListSelectedItems(string listType)
+            => SelectedByList.TryGetValue(listType, out var s) ? s : Array.Empty<string>();
+
+        public string GetSettingsListItem(string listType, string itemName)
+            => SettingsItems.TryGetValue($"{listType}/{itemName}", out var xml) ? xml : "";
+
         public void RunCommandSilent(string[] args) => Commands.Add(args);
 
         // Replicate-grid read: no report by default (so the driver falls back to a saved report).
@@ -231,5 +241,47 @@ public class SkylineReportDriverTests
 
         // The dynamic PRISM-Replicates install issues a --report-add command.
         Assert.Contains(client.Commands, cmd => cmd.Any(a => a.StartsWith("--report-add=")));
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_MapsTrypsinFromDocument()
+    {
+        var client = new FakeClient();
+        client.SelectedByList["Enzymes"] = new[] { "Trypsin" };
+        client.SettingsItems["Enzymes/Trypsin"] = "<enzyme name=\"Trypsin\" cut=\"KR\" no_cut=\"P\" sense=\"C\" />";
+
+        var enzyme = new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme();
+
+        Assert.Equal("trypsin", enzyme);
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_DistinguishesTrypsinP()
+    {
+        var client = new FakeClient();
+        client.SelectedByList["Enzymes"] = new[] { "Trypsin/P" };
+        client.SettingsItems["Enzymes/Trypsin/P"] = "<enzyme name=\"Trypsin/P\" cut=\"KR\" no_cut=\"\" sense=\"C\" />";
+
+        var enzyme = new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme();
+
+        Assert.Equal("trypsin/p", enzyme);
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_ReturnsNull_WhenNoEnzymeSelected()
+    {
+        var client = new FakeClient(); // no selected "Enzymes" item
+        Assert.Null(new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_ReturnsNull_ForUnmappableEnzyme()
+    {
+        var client = new FakeClient();
+        client.SelectedByList["Enzymes"] = new[] { "CNBr" };
+        client.SettingsItems["Enzymes/CNBr"] = "<enzyme name=\"CNBr\" cut=\"M\" no_cut=\"\" sense=\"C\" />";
+
+        // M (methionine) has no PRISM enzyme equivalent -> null so the caller keeps the config default.
+        Assert.Null(new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
     }
 }

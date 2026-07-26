@@ -96,6 +96,96 @@ public static class FastaParser
     private static readonly Regex TrypsinSite = new(@"[KR](?!P)", RegexOptions.Compiled);
     private static readonly Regex TrypsinPSite = new(@"[KR]", RegexOptions.Compiled);
 
+    // Enzyme cleavage rules for the terminus check (mirrors fasta.py ENZYME_RULES exactly, so the
+    // C# and Python FASTA maps agree). Each rule is (site regex, cleave C-terminal to the match).
+    private static readonly Dictionary<string, (Regex Pattern, bool CleaveAfter)> EnzymeRules =
+        new(StringComparer.Ordinal)
+        {
+            ["trypsin"] = (new Regex("[KR](?!P)", RegexOptions.Compiled), true),
+            ["trypsin/p"] = (new Regex("[KR]", RegexOptions.Compiled), true),
+            ["lysc"] = (new Regex("K", RegexOptions.Compiled), true),
+            ["lysn"] = (new Regex("K", RegexOptions.Compiled), false),
+            ["argc"] = (new Regex("R", RegexOptions.Compiled), true),
+            ["aspn"] = (new Regex("D", RegexOptions.Compiled), false),
+            ["gluc"] = (new Regex("E", RegexOptions.Compiled), true),
+            ["chymotrypsin"] = (new Regex("[FYWL](?!P)", RegexOptions.Compiled), true),
+        };
+
+    /// <summary>Terminus requirement for a FASTA membership match (parsimony.enzyme_specificity).</summary>
+    public enum Specificity
+    {
+        /// <summary>Both peptide termini must be cleavage-consistent (default).</summary>
+        Full,
+
+        /// <summary>At least one terminus must be cleavage-consistent.</summary>
+        Semi,
+
+        /// <summary>No enzyme check (legacy pure-substring behavior).</summary>
+        None,
+    }
+
+    /// <summary>Canonicalize an enzyme name (lowercase; accept trypsin\p / trypsinp for trypsin/p).</summary>
+    public static string NormalizeEnzyme(string enzyme)
+    {
+        var e = (enzyme ?? "").Trim().ToLowerInvariant();
+        return e is "trypsin\\p" or "trypsinp" ? "trypsin/p" : e;
+    }
+
+    /// <summary>Parse parsimony.enzyme_specificity ("full" | "semi" | "none").</summary>
+    public static Specificity ParseSpecificity(string specificity) =>
+        (specificity ?? "").Trim().ToLowerInvariant() switch
+        {
+            "full" => Specificity.Full,
+            "semi" => Specificity.Semi,
+            "none" => Specificity.None,
+            _ => throw new NotSupportedException(
+                $"Unknown enzyme_specificity '{specificity}' (expected full, semi, or none)."),
+        };
+
+    /// <summary>
+    /// Positions in <paramref name="sequence"/> where <paramref name="enzyme"/> creates a peptide
+    /// boundary (fasta.py:cleavage_boundary_set). A boundary index b marks a bond the enzyme cleaves:
+    /// a peptide may START at b (residue before b is a cleavage site) or END at b (residue at b-1 is).
+    /// The protein termini (0 and length) are always boundaries; index 1 is added when the protein
+    /// starts with M to allow initiator-methionine excision. Computed on the ORIGINAL (not
+    /// I/L-normalized) sequence so I/L-sensitive enzymes (e.g. chymotrypsin) stay correct; indices are
+    /// unchanged by I/L normalization so the set aligns with the normalized search sequence.
+    /// </summary>
+    public static HashSet<int> CleavageBoundaries(string sequence, string enzyme)
+    {
+        var n = sequence.Length;
+        var boundaries = new HashSet<int> { 0, n };
+        if (n > 0 && sequence[0] == 'M')
+            boundaries.Add(1); // initiator-methionine excision
+
+        var e = NormalizeEnzyme(enzyme);
+        if (e == "nonspecific")
+        {
+            for (var i = 0; i <= n; i++)
+                boundaries.Add(i);
+            return boundaries;
+        }
+
+        if (!EnzymeRules.TryGetValue(e, out var rule))
+            throw new NotSupportedException(
+                $"Enzyme '{enzyme}' not supported. Available: {string.Join(", ", EnzymeRules.Keys)}, nonspecific.");
+
+        foreach (Match m in rule.Pattern.Matches(sequence))
+            boundaries.Add(rule.CleaveAfter ? m.Index + m.Length : m.Index);
+        return boundaries;
+    }
+
+    /// <summary>Whether a peptide occupying sequence[start..end) is an enzymatic product.</summary>
+    private static bool TerminusIsEnzymatic(int start, int end, HashSet<int> boundaries, Specificity spec)
+    {
+        if (spec == Specificity.None)
+            return true;
+        var nTermOk = boundaries.Contains(start);
+        if (spec == Specificity.Semi)
+            return nTermOk || boundaries.Contains(end);
+        return nTermOk && boundaries.Contains(end); // Full (default)
+    }
+
     /// <summary>
     /// In-silico digest (fasta.py:digest_protein). Trypsin (cleave after K/R unless followed by P)
     /// and trypsin/p; up to <paramref name="missedCleavages"/> missed cleavages, length-bounded.
@@ -165,19 +255,32 @@ public static class FastaParser
     }
 
     /// <summary>
-    /// Build the peptide-&gt;protein map by substring-matching each detected peptide against every
-    /// protein sequence (both I/L-normalized). O(peptides × proteins); parallelized over peptides.
+    /// Build the peptide-&gt;protein map by enzyme-aware substring-matching each detected peptide
+    /// against every protein sequence (both I/L-normalized). A peptide is attached to a protein only
+    /// when it occurs there as a substring AND (unless <paramref name="enzymeSpecificity"/> is "none")
+    /// at least one occurrence has termini consistent with the digestion enzyme. This removes phantom
+    /// assignments to homologs that share the sequence but not the flanking cleavage site (e.g.
+    /// AKEGVVAAAEK is a substring of beta-synuclein but is preceded there by M, not K/R, so trypsin
+    /// cannot liberate it; it is proteotypic to alpha-synuclein). O(peptides × proteins); parallelized
+    /// over peptides. Mirrors fasta.py:build_peptide_protein_map_from_fasta.
     /// </summary>
     public static PeptideProteinMap BuildMap(
-        string fastaPath, IEnumerable<string> detectedPeptides, bool handleIlAmbiguity = true)
+        string fastaPath, IEnumerable<string> detectedPeptides, bool handleIlAmbiguity = true,
+        string enzyme = "trypsin", string enzymeSpecificity = "full")
     {
+        var spec = ParseSpecificity(enzymeSpecificity);
         var proteins = Parse(fastaPath);
         var accs = proteins.Keys.ToArray();
         var normSeq = new string[accs.Length];
+        // Cleavage boundaries per protein (from the ORIGINAL, not I/L-normalized, sequence). Null when
+        // the enzyme check is disabled so we keep the fast pure-substring path.
+        var boundaries = spec == Specificity.None ? null : new HashSet<int>[accs.Length];
         for (var i = 0; i < accs.Length; i++)
         {
-            var s = proteins[accs[i]].Sequence.ToUpperInvariant();
-            normSeq[i] = handleIlAmbiguity ? s.Replace('I', 'L') : s;
+            var orig = proteins[accs[i]].Sequence.ToUpperInvariant();
+            normSeq[i] = handleIlAmbiguity ? orig.Replace('I', 'L') : orig;
+            if (boundaries != null)
+                boundaries[i] = CleavageBoundaries(orig, enzyme);
         }
 
         var peptides = detectedPeptides.Distinct().ToArray();
@@ -189,8 +292,27 @@ public static class FastaParser
             var hits = new List<string>();
             if (norm.Length > 0)
                 for (var i = 0; i < normSeq.Length; i++)
-                    if (normSeq[i].Contains(norm, StringComparison.Ordinal))
+                {
+                    var pos = normSeq[i].IndexOf(norm, StringComparison.Ordinal);
+                    if (pos < 0)
+                        continue;
+                    if (boundaries == null)
+                    {
                         hits.Add(accs[i]);
+                        continue;
+                    }
+                    // Accept the protein if ANY occurrence has enzyme-consistent termini.
+                    var b = boundaries[i];
+                    while (pos >= 0)
+                    {
+                        if (TerminusIsEnzymatic(pos, pos + norm.Length, b, spec))
+                        {
+                            hits.Add(accs[i]);
+                            break;
+                        }
+                        pos = normSeq[i].IndexOf(norm, pos + 1, StringComparison.Ordinal);
+                    }
+                }
             matchesPerPeptide[p] = hits;
         });
 

@@ -15,10 +15,12 @@ namespace SkylinePrism.Tests.Parsimony;
 /// </summary>
 public class ParsimonyFastaMapTests
 {
-    // PROTA contains PEPTIDEAK, SHAREDPEPTIDER, ELVISK. PROTB contains OTHERPEPTIDER, SHAREDPEPTIDER.
+    // PROTA contains AVEDNGK, SHAREDPEPTIDER, ELVISK. PROTB contains OTHERPEPTIDER, SHAREDPEPTIDER.
+    // Every peptide is a valid tryptic product (flanked by K/R or a terminus, none at a K/R-P junction),
+    // so the default enzyme-aware map keeps them all.
     private const string Fasta =
         ">sp|PROTA|PROTA_HUMAN Protein A OS=Homo sapiens GN=GENEA PE=1 SV=1\n" +
-        "MKPEPTIDEAKRSHAREDPEPTIDERKELVISKAA\n" +
+        "MKAVEDNGKRSHAREDPEPTIDERKELVISKAA\n" +
         ">sp|PROTB|PROTB_HUMAN Protein B OS=Homo sapiens GN=GENEB PE=1 SV=1\n" +
         "MKOTHERPEPTIDERKSHAREDPEPTIDERKQQ\n";
 
@@ -37,7 +39,7 @@ public class ParsimonyFastaMapTests
         {
             var detected = new[]
             {
-                "PEPTIDEAK",        // unique to PROTA
+                "AVEDNGK",          // unique to PROTA
                 "OTHERPEPTIDER",    // unique to PROTB
                 "SHAREDPEPTIDER",   // in both -> shared
                 "ELVLSK",           // protein has ELVISK (I); matches PROTA only via I/L equivalence
@@ -45,7 +47,7 @@ public class ParsimonyFastaMapTests
             };
             var map = FastaParser.BuildMap(path, detected);
 
-            Assert.Equal(new[] { "PROTA" }, map.PeptideToProteins["PEPTIDEAK"].OrderBy(x => x, StringComparer.Ordinal));
+            Assert.Equal(new[] { "PROTA" }, map.PeptideToProteins["AVEDNGK"].OrderBy(x => x, StringComparer.Ordinal));
             Assert.Equal(new[] { "PROTB" }, map.PeptideToProteins["OTHERPEPTIDER"].OrderBy(x => x, StringComparer.Ordinal));
             Assert.Equal(new[] { "PROTA", "PROTB" },
                 map.PeptideToProteins["SHAREDPEPTIDER"].OrderBy(x => x, StringComparer.Ordinal));
@@ -61,7 +63,7 @@ public class ParsimonyFastaMapTests
         var path = WriteFasta();
         try
         {
-            var detected = new[] { "PEPTIDEAK", "OTHERPEPTIDER", "SHAREDPEPTIDER", "ELVLSK" };
+            var detected = new[] { "AVEDNGK", "OTHERPEPTIDER", "SHAREDPEPTIDER", "ELVLSK" };
             var m1 = FastaParser.BuildMap(path, detected);
             var m2 = FastaParser.BuildMap(path, Enumerable.Reverse(detected).ToArray());
             foreach (var pep in detected)
@@ -78,14 +80,14 @@ public class ParsimonyFastaMapTests
         var path = WriteFasta();
         try
         {
-            var detected = new[] { "PEPTIDEAK", "OTHERPEPTIDER", "SHAREDPEPTIDER", "ELVLSK" };
+            var detected = new[] { "AVEDNGK", "OTHERPEPTIDER", "SHAREDPEPTIDER", "ELVLSK" };
             var groups = ParsimonyEngine.ComputeProteinGroups(FastaParser.BuildMap(path, detected));
 
             Assert.Equal(2, groups.Count);
             var a = groups.Single(g => g.LeadingProtein == "PROTA");
             var b = groups.Single(g => g.LeadingProtein == "PROTB");
 
-            Assert.Equal(new[] { "ELVLSK", "PEPTIDEAK" },
+            Assert.Equal(new[] { "AVEDNGK", "ELVLSK" },
                 a.UniquePeptides.OrderBy(x => x, StringComparer.Ordinal));
             Assert.Equal(new[] { "OTHERPEPTIDER" }, b.UniquePeptides.OrderBy(x => x, StringComparer.Ordinal));
             // Default all_groups: the shared peptide belongs to both groups.

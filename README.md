@@ -36,7 +36,9 @@ PRISM ships two ways to run the same pipeline:
   opt-in reference-anchored variant estimates each batch's effect from inter-experiment reference
   samples across batches.
 - **Protein parsimony** — indistinguishable-protein grouping, subset elimination, and shared-peptide
-  handling (`all_groups`, `unique_only`, `razor`); mapping from Skyline's protein column or a FASTA.
+  handling (`all_groups`, `unique_only`, `razor`); mapping from Skyline's protein column or an
+  enzyme-aware FASTA search (a peptide is attached to a protein only when its termini are consistent
+  with the digestion enzyme, so it is not folded into homologs that merely share the subsequence).
 - **Dual-control QC** — a self-contained HTML report with before/after intensity, PCA, and CV plots,
   a control-correlation heatmap, RT diagnostics, and a pass/fail validation banner.
 
@@ -159,7 +161,7 @@ normalization and reference sample handling are learned from control samples onl
 transition_rollup:    # sum | median_polish (default) | topn | consensus | library_assist
 global_normalization: # rt_lowess (default) | median | quantile | vsn | none
 batch_correction:     # ComBat; peptide/protein levels; reference_anchored: true|false
-parsimony:            # fasta_path; shared_peptide_handling: all_groups | unique_only | razor
+parsimony:            # fasta_path; shared_peptide_handling; enzyme (default trypsin) + enzyme_specificity
 protein_rollup:       # median_polish (default) | sum | topn | maxlfq | ibaq
 qc_report:            # HTML report + plots
 ```

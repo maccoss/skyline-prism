@@ -543,7 +543,8 @@ The `fasta.py` module provides FASTA parsing for proper protein parsimony:
 - `parse_fasta()`: Parse UniProt/NCBI format FASTA files
 - `strip_modifications()`: Remove modifications from peptide sequences for matching
 - `normalize_for_matching()`: Handle I/L ambiguity (MS cannot distinguish)
-- `build_peptide_protein_map_from_fasta()`: Build complete peptide-protein mapping via substring search
+- `build_peptide_protein_map_from_fasta()`: Build peptide-protein mapping via **enzyme-aware** substring search
+- `cleavage_boundary_set()` / `terminus_is_enzymatic()`: enzyme terminus check helpers
 
 **Usage in parsimony:**
 ```python
@@ -552,12 +553,25 @@ from skyline_prism.parsimony import build_peptide_protein_map_from_fasta
 pep_to_prot, prot_to_pep, prot_names = build_peptide_protein_map_from_fasta(
     df,
     fasta_path="/path/to/search.fasta",
+    enzyme="trypsin",           # parsimony.enzyme (see docs/parameters.md)
+    enzyme_specificity="full",  # full | semi | none
 )
 ```
 
+**Enzyme-aware membership (important):** substring containment is *necessary but not sufficient* for a
+peptide to originate from a protein. The map attaches a peptide to a protein only when it occurs there
+with termini consistent with the digestion enzyme (`parsimony.enzyme` / `parsimony.enzyme_specificity`,
+default `trypsin` / `full`, with initiator-methionine excision handled). This removes "phantom"
+assignments to homologs that share the subsequence but not the flanking cleavage site — e.g.
+`AKEGVVAAAEK` is a substring of beta-synuclein (SNCB) but is preceded there by `M`, not `K/R`, so
+trypsin cannot liberate it; it is proteotypic to alpha-synuclein (SNCA). Set `enzyme_specificity: none`
+to restore the legacy pure-substring behavior. The check only applies on the FASTA path; the Skyline
+Protein Accession column is already enzyme-aware. C# mirrors this exactly in
+`FastaParser.CleavageBoundaries` / `BuildMap`, so the two engines produce identical maps.
+
 **Note:** The module also contains in-silico digestion functions (`digest_protein()`, `digest_fasta()`)
-which are used for iBAQ (to count theoretical peptides per protein). Peptide-protein mapping for
-parsimony uses direct substring search - no enzyme parameters needed.
+which are used for iBAQ (to count theoretical peptides per protein). iBAQ digestion and the parsimony
+terminus check share the same enzyme rules but are separate code paths.
 
 ## iBAQ Support
 
@@ -587,6 +601,41 @@ protein_rollup:
     enzyme: "trypsin"
     missed_cleavages: 0
 ```
+
+---
+
+## Interacting with Skyline (C# external tool)
+
+The C# Skyline external tool (`dotnet/src/SkylinePrism.App`) drives a **running** Skyline instance to
+export the reports the pipeline consumes and to read document settings. The authoritative how-to is the
+field guide in **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw-maccosslab/skyline-external-tools-ai)**
+(`docs/skyline-external-tools.md`) — read it before extending the tool's Skyline integration. Key points
+(mirrored in the code under `dotnet/src/SkylinePrism.Skyline/`):
+
+- **Transport:** JSON-RPC 2.0 over a **named pipe**. Skyline passes the pipe name as `args[0]`
+  (`$(SkylineConnection)`); transform it with `JsonToolConstants.GetJsonPipeName`. **Connect per call**
+  — open a fresh `NamedPipeClientStream` (message mode) for each request and close it; never hold the
+  pipe open (idle reuse throws deserialization errors). `SkylineSession` implements this; the driver
+  talks to it through the small `ISkylineClient` interface so tests can use a fake (no live Skyline).
+- **Report export:** prefer exporting whole reports to **parquet** (typed, ~20× faster than paginating),
+  falling back to invariant-culture CSV. `SkylineReportDriver.Export` does this and also reads the
+  built-in "Replicates" document grid for metadata.
+- **Reading document settings** (e.g. the digestion **enzyme**): use the settings-list RPCs —
+  `GetSettingsListSelectedItems("Enzymes")` for the active enzyme name, then
+  `GetSettingsListItem("Enzymes", name)` for its XML. An enzyme element looks like
+  `<enzyme name="Trypsin" cut="KR" no_cut="P" sense="C" />` (`cut` = cleavage residues, `no_cut` =
+  blocking residues, `sense` = `C` cleave-after / `N` cleave-before). `SkylineDigestion` parses that XML
+  and maps it to a PRISM `parsimony.enzyme` name; `SkylineReportDriver.GetDigestionEnzyme()` wires it up.
+  The same `GetSettingsListSelectedItems`/`GetSettingsListItem` pattern reads the active spectral library.
+- **General rule (per Nick Shulman):** anything `SkylineCmd` can do is reachable via
+  `RunCommand([...flags...])` against the live document — but SkylineCmd aborts the whole batch on the
+  first bad flag, so send flags one per `RunCommand` (except fields Skyline mutually validates).
+
+**Why PRISM reads the enzyme from the document:** PRISM's FASTA-based parsimony is enzyme-aware (see
+"FASTA-Based Protein Parsimony"). The **CLI** takes the enzyme from `parsimony.enzyme` (default
+`trypsin`), but the **external tool** overrides it from the document's digestion settings so the
+membership check matches the search that produced the data. If the document enzyme has no PRISM
+equivalent (or can't be read), the tool keeps the config default.
 
 ---
 

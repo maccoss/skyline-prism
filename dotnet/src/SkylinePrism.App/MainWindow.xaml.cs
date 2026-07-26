@@ -470,6 +470,14 @@ public partial class MainWindow : Window
 
         Log("Exporting reports from Skyline...");
         var driver = new SkylineReportDriver(session, Log);
+
+        // Derive the digestion enzyme from the Skyline document so FASTA-based parsimony matches the
+        // document's search settings instead of the CLI default. Only relevant when a FASTA map is
+        // used; harmless otherwise (the pipeline ignores the enzyme for the Skyline-column path).
+        var docEnzyme = driver.GetDigestionEnzyme();
+        if (docEnzyme is not null)
+            config.Parsimony.Enzyme = docEnzyme;
+
         // Default (no explicit report): the driver reads the "Replicates" document grid dynamically,
         // capturing all its columns. batchAnnotation ensures the user's batch column is included in the
         // saved-report fallback (the dynamic grid read already picks up all annotations).

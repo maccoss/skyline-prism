@@ -162,7 +162,8 @@ public sealed class PrismConfig
             ["protein_rollup"] = pr,
             ["protein_normalization"] = Leaves("method"),
             ["sample_annotations"] = Leaves("reference_pattern", "qc_pattern"),
-            ["parsimony"] = Leaves("enabled", "fasta_path", "shared_peptide_handling"),
+            ["parsimony"] = Leaves(
+                "enabled", "fasta_path", "shared_peptide_handling", "enzyme", "enzyme_specificity"),
             ["output"] = Leaves("format", "include_residuals"),
             ["qc_report"] = Leaves("enabled", "save_plots"),
             ["sample_outlier_detection"] = Leaves("enabled", "action", "method", "iqr_multiplier", "fold_threshold"),
@@ -356,6 +357,21 @@ public sealed class PrismConfig
         public bool Enabled { get; set; } = true;
         public string? FastaPath { get; set; }
         public string SharedPeptideHandling { get; set; } = "all_groups";
+
+        /// <summary>
+        /// Digestion enzyme for the FASTA-mapping terminus check (ignored when FastaPath is null; the
+        /// Skyline Protein Accession column is already enzyme-aware). Default "trypsin" (cleave after
+        /// K/R, but NOT before P); use "trypsin/p" for K/R-P cleavage (e.g. DIA-NN). The Skyline
+        /// external tool overrides this from the document's digestion settings.
+        /// </summary>
+        public string Enzyme { get; set; } = "trypsin";
+
+        /// <summary>
+        /// Terminus requirement for FASTA membership: "full" (both termini cleavage-consistent -
+        /// removes phantom paralog assignments), "semi" (either terminus), or "none" (legacy pure
+        /// substring). Skyline background-proteome digestion is full-specific, so "full" is the default.
+        /// </summary>
+        public string EnzymeSpecificity { get; set; } = "full";
     }
 
     public sealed class OutputSection

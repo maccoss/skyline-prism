@@ -555,6 +555,8 @@ KNOWN_CONFIG_KEYS = {
         "enabled",
         "fasta_path",
         "shared_peptide_handling",
+        "enzyme",
+        "enzyme_specificity",
     },
     "protein_rollup": {
         "method",
@@ -2313,6 +2315,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             fasta_path=fasta_path,
             peptide_col=peptide_col,
             handle_il_ambiguity=True,
+            enzyme=config["parsimony"].get("enzyme", "trypsin"),
+            enzyme_specificity=config["parsimony"].get("enzyme_specificity", "full"),
         )
     else:
         if fasta_path:
@@ -3356,6 +3360,25 @@ parsimony:
   #   unique_only - Only use peptides unique to one protein
   #   razor       - Assign to group with most peptides (MaxQuant-style)
   shared_peptide_handling: "all_groups"
+
+  # Enzyme-aware terminus check for FASTA-based mapping (ignored when fasta_path
+  # is null; the Skyline Protein Accession column is already enzyme-aware).
+  # A peptide is only attached to a protein when it occurs there with termini
+  # consistent with the digestion enzyme - this removes "phantom" assignments to
+  # homologs that share the sequence but not the flanking cleavage site (e.g.
+  # AKEGVVAAAEK is a substring of beta-synuclein but is preceded there by M, not
+  # K/R, so trypsin cannot liberate it; it is proteotypic to alpha-synuclein).
+  # The Skyline external tool overrides `enzyme` from the document's digestion
+  # settings; on the command line it defaults to trypsin.
+  #   enzyme: trypsin (default; cleave after K/R, NOT before P),
+  #           trypsin/p (cleave after K/R, including before P - e.g. DIA-NN),
+  #           lysc, lysn, argc, aspn, gluc, chymotrypsin, nonspecific
+  enzyme: "trypsin"
+  #   enzyme_specificity:
+  #     full - both peptide termini must be cleavage-consistent (default)
+  #     semi - at least one terminus must be cleavage-consistent
+  #     none - disable the check (legacy pure-substring behavior)
+  enzyme_specificity: "full"
 
 # =============================================================================
 # Protein Rollup

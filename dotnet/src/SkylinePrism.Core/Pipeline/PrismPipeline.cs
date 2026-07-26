@@ -279,8 +279,11 @@ public sealed class PrismPipeline
         report(config.Parsimony.Enabled ? "Stage 3: Protein parsimony" : "Stage 3: Protein grouping (parsimony disabled)");
         report("============================================================");
         if (!string.IsNullOrWhiteSpace(config.Parsimony.FastaPath))
-            report($"  FASTA-based parsimony map: {config.Parsimony.FastaPath}");
-        var groups = ParsimonyEngine.Run(mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath);
+            report($"  FASTA-based parsimony map: {config.Parsimony.FastaPath} "
+                + $"(enzyme={config.Parsimony.Enzyme}, specificity={config.Parsimony.EnzymeSpecificity})");
+        var groups = ParsimonyEngine.Run(
+            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
+            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
         report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
 

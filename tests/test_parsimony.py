@@ -360,16 +360,18 @@ PEPTIDEKFGRIGRLVTR
         fasta_path = tmp_path / "test.fasta"
         fasta_path.write_text(fasta_content)
 
-        # Create DataFrame with detected peptides
-        # VGVNGFGR should match P001 (from MVKVGVNGFGRIGR...)
-        # PEPTIDEK should match P002
-        # FGRIGRLVTR should match both P001 and P002 (shared)
+        # Create DataFrame with detected peptides. Mapping is enzyme-aware
+        # (default trypsin, full specificity):
+        #   VGVNGFGR   - valid tryptic peptide of P001 (preceded by K, ends in R)
+        #   PEPTIDEK   - valid tryptic peptide of P002 (protein N-terminus .. K)
+        #   FGRIGRLVTR - substring of BOTH, but tryptic ONLY in P002 (in P001 it
+        #                starts mid-peptide at F, not after a K/R)
         df = pd.DataFrame(
             {
                 "peptide_sequence": [
-                    "VGVNGFGR",  # In P001 only
-                    "PEPTIDEK",  # In P002 only
-                    "FGRIGRLVTR",  # In both
+                    "VGVNGFGR",  # tryptic in P001
+                    "PEPTIDEK",  # tryptic in P002
+                    "FGRIGRLVTR",  # substring of both, tryptic only in P002
                 ],
             }
         )
@@ -386,9 +388,11 @@ PEPTIDEKFGRIGRLVTR
             peptide_col="peptide_sequence",
         )
 
-        # Check peptide mappings
-        # Note: uses direct substring matching now
-        assert len(pep_to_prot) > 0  # At least some peptides should match
+        # Enzyme-aware substring matching (default)
+        assert pep_to_prot["VGVNGFGR"] == {"P001"}
+        assert pep_to_prot["PEPTIDEK"] == {"P002"}
+        # FGRIGRLVTR is a substring of P001 too, but not a tryptic peptide there.
+        assert pep_to_prot["FGRIGRLVTR"] == {"P002"}
 
         # Check protein name map
         if "P001" in prot_to_name:
@@ -430,3 +434,46 @@ MVCPEPTIDEKFGR
         # Modified peptide should match if CPEPTIDEK is in the FASTA digest
         # The match depends on digestion - just verify the function runs
         assert isinstance(pep_to_prot, dict)
+
+    def test_shared_peptide_not_double_assigned_to_paralog(self, tmp_path):
+        """A peptide tryptic in one paralog only is unique after parsimony.
+
+        Regression for the shared-peptide substring-mapping bug: AKEGVVAAAEK is
+        a substring of both alpha- and beta-synuclein but is a tryptic peptide
+        of alpha-synuclein (SNCA) only. It must NOT be folded into the beta-
+        synuclein (SNCB) rollup/residuals via all_mapped_peptides.
+        """
+        from skyline_prism.parsimony import build_peptide_protein_map_from_fasta
+
+        fasta_content = """>sp|P37840|SYUA_HUMAN Alpha-synuclein GN=SNCA
+MDVFMKGLSKAKEGVVAAAEKTKQGVAEAAGK
+>sp|Q16143|SYUB_HUMAN Beta-synuclein GN=SNCB
+MDVFMKGLSMAKEGVVAAAEKTKQGVSEAAGK
+"""
+        fasta_path = tmp_path / "synuclein.fasta"
+        fasta_path.write_text(fasta_content)
+
+        # AKEGVVAAAEK is shared by substring; QGVAEAAGK / QGVSEAAGK are unique
+        # tryptic C-terminal peptides of SNCA / SNCB respectively (each preceded
+        # by K, ending at the protein C-terminus).
+        df = pd.DataFrame({"peptide_sequence": ["AKEGVVAAAEK", "QGVAEAAGK", "QGVSEAAGK"]})
+
+        pep_to_prot, prot_to_pep, prot_to_name, prot_to_gene, prot_to_desc = (
+            build_peptide_protein_map_from_fasta(
+                df, fasta_path=str(fasta_path), peptide_col="peptide_sequence"
+            )
+        )
+
+        # The phantom SNCB attachment is gone: AKEGVVAAAEK is proteotypic to SNCA.
+        assert pep_to_prot["AKEGVVAAAEK"] == {"P37840"}
+
+        groups = compute_protein_groups(prot_to_pep, pep_to_prot, prot_to_name, prot_to_gene)
+
+        snca = next(g for g in groups if g.leading_protein == "P37840")
+        sncb = next(g for g in groups if g.leading_protein == "Q16143")
+
+        # SNCA owns the peptide; SNCB never sees it anywhere (unique/razor/all_mapped).
+        assert "AKEGVVAAAEK" in snca.unique_peptides
+        assert "AKEGVVAAAEK" in snca.all_mapped_peptides
+        assert "AKEGVVAAAEK" not in sncb.all_mapped_peptides
+        assert "AKEGVVAAAEK" not in sncb.peptides

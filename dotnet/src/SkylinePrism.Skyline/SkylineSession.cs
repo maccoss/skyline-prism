@@ -80,6 +80,8 @@ public sealed class SkylineSession : ISkylineExecutor
         public string GetVersion() => _c.GetVersion();
         public void ExportReport(string reportName, string filePath, string culture) => _c.ExportReport(reportName, filePath, culture);
         public string[] GetSettingsListNames(string listType, string? groupName) => _c.GetSettingsListNames(listType, groupName);
+        public string[] GetSettingsListSelectedItems(string listType) => _c.GetSettingsListSelectedItems(listType);
+        public string GetSettingsListItem(string listType, string itemName) => _c.GetSettingsListItem(listType, itemName);
         public void RunCommandSilent(string[] args) => _c.RunCommandSilent(args);
 
         public string[] GetReplicateColumns()

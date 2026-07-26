@@ -429,7 +429,8 @@ class TestBuildPeptideProteinMap:
                 build_peptide_protein_map_from_fasta(fasta_path, detected)
             )
 
-            # VGVNGFGR should map to GAPDH (P04406) via substring search
+            # VGVNGFGR should map to GAPDH (P04406): it is a valid tryptic
+            # peptide there (preceded by K, ends in R before I).
             if "VGVNGFGR" in peptide_to_proteins:
                 assert "P04406" in peptide_to_proteins["VGVNGFGR"]
 
@@ -437,6 +438,148 @@ class TestBuildPeptideProteinMap:
             assert "P04406" in proteins
         finally:
             fasta_path.unlink()
+
+
+# Alpha-synuclein (SNCA) and beta-synuclein (SNCB) N-termini. The peptide
+# AKEGVVAAAEK is a substring of BOTH, but is tryptic ONLY in SNCA:
+#   SNCA ...GLS K | AKEGVVAAAEK   (preceded by K -> valid trypsin N-terminus)
+#   SNCB ...GLS M | AKEGVVAAAEK   (preceded by M -> trypsin cannot cleave here)
+SYNUCLEIN_FASTA = """>sp|P37840|SYUA_HUMAN Alpha-synuclein OS=Homo sapiens GN=SNCA
+MDVFMKGLSKAKEGVVAAAEKTKQG
+>sp|Q16143|SYUB_HUMAN Beta-synuclein OS=Homo sapiens GN=SNCB
+MDVFMKGLSMAKEGVVAAAEKTKQG
+"""
+
+
+class TestEnzymeAwareMapping:
+    """Enzyme-aware terminus check in build_peptide_protein_map_from_fasta.
+
+    Regression coverage for the shared-peptide substring-mapping bug: a peptide
+    must not be attached to a protein that cannot enzymatically produce it.
+    """
+
+    def test_snca_sncb_phantom_removed_by_default(self):
+        """AKEGVVAAAEK is proteotypic to SNCA; SNCB attachment is a phantom.
+
+        This is the definitive example from the bug report. With the default
+        enzyme-aware check, the peptide maps to SNCA (P37840) only.
+        """
+        fasta_path = create_temp_fasta(SYNUCLEIN_FASTA)
+        try:
+            pep_to_prot, prot_to_pep, _ = build_peptide_protein_map_from_fasta(
+                fasta_path, {"AKEGVVAAAEK"}
+            )
+            assert pep_to_prot["AKEGVVAAAEK"] == {"P37840"}
+            assert "AKEGVVAAAEK" in prot_to_pep["P37840"]
+            assert "Q16143" not in prot_to_pep  # SNCB never claims the phantom
+        finally:
+            fasta_path.unlink()
+
+    def test_specificity_none_restores_substring_behavior(self):
+        """enzyme_specificity=none reproduces the legacy pure-substring map."""
+        fasta_path = create_temp_fasta(SYNUCLEIN_FASTA)
+        try:
+            pep_to_prot, _, _ = build_peptide_protein_map_from_fasta(
+                fasta_path, {"AKEGVVAAAEK"}, enzyme_specificity="none"
+            )
+            # Pure substring: the peptide is contained in both synucleins.
+            assert pep_to_prot["AKEGVVAAAEK"] == {"P37840", "Q16143"}
+        finally:
+            fasta_path.unlink()
+
+    def test_specificity_semi_still_keeps_snca(self):
+        """Semi accepts SNCB too here (its C-terminus IS a valid cleavage site).
+
+        Documents why "full" is the default: a one-terminus rule does not catch
+        this phantom because AKEGVVAAAEK ends in K before T in SNCB.
+        """
+        fasta_path = create_temp_fasta(SYNUCLEIN_FASTA)
+        try:
+            pep_to_prot, _, _ = build_peptide_protein_map_from_fasta(
+                fasta_path, {"AKEGVVAAAEK"}, enzyme_specificity="semi"
+            )
+            assert pep_to_prot["AKEGVVAAAEK"] == {"P37840", "Q16143"}
+        finally:
+            fasta_path.unlink()
+
+    def test_initiator_methionine_excision_kept(self):
+        """A mature N-terminal peptide (after Met excision) is not dropped."""
+        fasta = """>sp|P999|TEST_HUMAN Test GN=TEST
+MASTVGGKSPEPTIDEK
+"""
+        fasta_path = create_temp_fasta(fasta)
+        try:
+            # ASTVGGK starts at index 1 (after the initiator Met) and ends at K
+            # before S: a valid mature-protein N-terminal tryptic peptide.
+            pep_to_prot, _, _ = build_peptide_protein_map_from_fasta(fasta_path, {"ASTVGGK"})
+            assert pep_to_prot["ASTVGGK"] == {"P999"}
+        finally:
+            fasta_path.unlink()
+
+    def test_internal_nontryptic_substring_dropped(self):
+        """A substring that is not flanked by cleavage sites is not attached."""
+        fasta = """>sp|P100|TEST_HUMAN Test GN=TEST
+MKAAASTVGGREND
+"""
+        fasta_path = create_temp_fasta(fasta)
+        try:
+            # STVGG is inside AAASTVGGR; neither terminus is a tryptic boundary.
+            pep_to_prot, _, _ = build_peptide_protein_map_from_fasta(fasta_path, {"STVGG"})
+            assert "STVGG" not in pep_to_prot
+            # ...but disabling the check finds it as a pure substring.
+            pep_to_prot_none, _, _ = build_peptide_protein_map_from_fasta(
+                fasta_path, {"STVGG"}, enzyme_specificity="none"
+            )
+            assert pep_to_prot_none["STVGG"] == {"P100"}
+        finally:
+            fasta_path.unlink()
+
+
+class TestCleavageBoundarySet:
+    """Unit tests for the enzyme cleavage-boundary helper."""
+
+    def test_trypsin_boundaries(self):
+        """Trypsin boundaries include cleavage sites after K/R and the termini."""
+        from skyline_prism.fasta import cleavage_boundary_set
+
+        # PEPK|SAMPLER|END : cleave after K3 and R10; termini 0 and 14; Met not present.
+        seq = "PEPKSAMPLEREND"
+        boundaries = cleavage_boundary_set(seq, "trypsin")
+        assert 0 in boundaries and len(seq) in boundaries
+        assert 4 in boundaries  # after K (index 3)
+        assert 11 in boundaries  # after R (index 10)
+
+    def test_trypsin_not_before_proline(self):
+        """Trypsin does not cleave K/R before proline; trypsin/p does."""
+        from skyline_prism.fasta import cleavage_boundary_set
+
+        # K at index 2 is followed by P -> trypsin does NOT cleave, trypsin/p does.
+        seq = "AAKPEPTIDER"
+        assert 3 not in cleavage_boundary_set(seq, "trypsin")
+        assert 3 in cleavage_boundary_set(seq, "trypsin/p")
+
+    def test_initiator_methionine_boundary(self):
+        """Index 1 is a boundary only when the protein starts with M (Met excision)."""
+        from skyline_prism.fasta import cleavage_boundary_set
+
+        assert 1 in cleavage_boundary_set("MASTVGGK", "trypsin")
+        assert 1 not in cleavage_boundary_set("ASTVGGK", "trypsin")
+
+    def test_enzyme_name_normalized(self):
+        r"""Enzyme names are trimmed/lowercased; trypsinp / trypsin\p alias trypsin/p.
+
+        Mirrors the C# FastaParser.NormalizeEnzyme so both engines accept the
+        same config values.
+        """
+        from skyline_prism.fasta import cleavage_boundary_set, normalize_enzyme
+
+        assert normalize_enzyme(" Trypsin/P ") == "trypsin/p"
+        assert normalize_enzyme("trypsin\\p") == "trypsin/p"
+        assert normalize_enzyme("trypsinp") == "trypsin/p"
+
+        # K@2 before P: trypsin/p cleaves (boundary at 3), and the aliases behave identically.
+        for name in ("trypsin/p", "TRYPSIN/P", "trypsinp", "trypsin\\p"):
+            assert 3 in cleavage_boundary_set("AAKPEPTIDER", name)
 
 
 class TestGetDetectedPeptides:
