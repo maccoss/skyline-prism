@@ -585,7 +585,7 @@ public static class PlotRenderer
                     BoxMax = q3,
                     WhiskerMin = Math.Max(dataMin, q1 - 1.5 * iqr),
                     WhiskerMax = Math.Min(dataMax, q3 + 1.5 * iqr),
-                    Fill = new ScottPlot.FillStyle { Color = fill },
+                    FillColor = fill, // Box.Fill is obsolete in ScottPlot 5; only the colour is set here
                 });
             }
             if (boxes.Count > 0)
