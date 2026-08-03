@@ -18,6 +18,13 @@ cross-platform `prism` CLI (Windows / Linux / macOS) and a Windows Skyline exter
 `SkylinePrism.CrossPlatform.slnf` is the OS-agnostic subset (Core + Cli + Tests) built and
 tested on Linux/macOS; the full `SkylinePrism.sln` adds the Windows-only projects.
 
+**The platform split is deliberate: a cross-platform CLI, a Windows-only GUI.** Skyline runs only on
+Windows, so the tool's attached mode could never be portable, and the standalone case is covered by the
+`prism` CLI on all three platforms. `SkylinePrism.App` therefore stays WPF and is not to be ported to
+another UI framework; keep `Core` (and anything a headless user needs) platform-neutral, and let
+GUI-only helpers depend freely on the Windows-only `SkylinePrism.Skyline`. See "Design Decisions to
+Preserve" in [CLAUDE.md](../CLAUDE.md).
+
 ## Build & test
 
 ```bash
@@ -40,6 +47,74 @@ prism merge plate1.csv plate2.csv -o merged.parquet          # merge only
 prism qc -d out/                                             # (re)generate qc_report.html
 prism config-template -o config.yaml                         # emit a config template
 ```
+
+## The Skyline external tool (`SkylinePrism.exe`)
+
+The WPF tool runs in two ways from the same executable:
+
+- **From Skyline** (Tools menu): Skyline passes `$(SkylineConnection)`, and the open document is added
+  to the **Inputs** list automatically.
+- **Standalone**: launched with no connection argument (double-click the installed
+  `SkylinePrism.exe`), it starts in standalone mode as a plain PRISM GUI - no Skyline required.
+
+### Inputs: combining several Skyline documents
+
+The Inputs tab holds one row per batch, and the run merges them all into a single cohort so ComBat can
+correct between them. Each row's **Batch label** (editable, defaults to the document name and is
+de-duplicated automatically) is used as the exported report's file stem, which is exactly what
+`DuckDbMerge` reads back as that input's `Source Document` / `Batch` - and what distinguishes the
+identically named reference/QC replicates that every plate's document contains.
+
+| Add... | Source | Export mechanism | Format |
+|---|---|---|---|
+| `Add open document...` | any running Skyline instance | JSON-RPC `ExportReport` | parquet |
+| `Add Skyline document (.sky)...` | a closed `.sky` | installed Skyline, headless (SkylineRunner); `SkylineCmd.exe` fallback | parquet via SkylineRunner, else invariant CSV |
+| `Add exported report...` | a report you already have | none - read in place | as-is |
+
+Kinds may be mixed in one run; the merge reads parquet and CSV together.
+
+**Headless export: two runners, behind `ISkylineCommandRunner`.**
+
+1. **`SkylineAppRunner` (preferred).** Drives the *installed* Skyline with no UI - the SkylineRunner
+   mechanism, reimplemented (`SkylineAppRunner.cs`) because the official shim is a separate download built
+   per channel (one binary finds only `Skyline`, another only `Skyline-daily`); ours probes both. It
+   launches the ClickOnce `.appref-ms` with `CMD-<guid>`, then exchanges arguments and console output over
+   `SkylineInputPipe-<guid>` / `SkylineOutputPipe-<guid>`. ⚠️ There is **no exit code** (the launching
+   `cmd.exe` returns at once), so failure is detected from an `Error:` prefix in the piped output.
+2. **`SkylineCmdRunner` (fallback).** `SkylineCmd.exe`, discovered under `%LOCALAPPDATA%\Apps\2.0\**` -
+   only the ClickOnce *application* folder counts, i.e. the one with `Skyline.exe`/`Skyline-daily.exe`
+   beside it (the copy in the sibling `…exe_…` folders fails with *"Unable to find Skyline.exe"*). Newest
+   wins; set `PRISM_SKYLINECMD` to override.
+
+Either way the document is opened with `--in` and **never saved**; `--report-add` installs the PRISM
+report definitions into Skyline's saved-report list, exactly as the live RPC path does. Each closed
+document is loaded twice, once per report, because `--report-name` takes a single report.
+
+**Why the runner matters: parquet.** There is no `--report-format=parquet` (that flag takes only
+`csv|tsv`) - Skyline picks parquet from a `.parquet` output extension, so PRISM asks for `.parquet` and
+verifies the `PAR1` magic. That works through `SkylineAppRunner` (61 KB parquet vs 946 KB CSV on the same
+report) but **fails through `SkylineCmd`**:
+
+```text
+Could not load file or assembly 'Parquet, Version=4.0.0.0, …'.
+The module was expected to contain an assembly manifest.
+```
+
+`SkylineCmd.exe.config` is missing the `<assemblyBinding>` section that `Skyline.exe.config` carries for
+Parquet.Net. The managed assembly ships as **`ParquetNet.dll`** (identity `Parquet, Version=4.0.0.0`) and
+needs an explicit `<codeBase href="ParquetNet.dll" />`, because a **native** `parquet.dll` (Apache Arrow)
+occupies the default probe path; the redirects for its dependency chain (`IronCompress`,
+`Microsoft.IO.RecyclableMemoryStream`, `System.Buffers`, `System.Memory`, `System.Numerics.Vectors`,
+`System.Runtime.CompilerServices.Unsafe`, `System.Threading.Tasks.Extensions`) are needed too - copying
+those eight entries into `SkylineCmd.exe.config` fixes it (verified). Reported upstream; PRISM does not
+depend on the fix, since `SkylineCmdRunner` reports `SupportsParquet = false` and goes straight to CSV.
+
+**Replicate metadata.** For an open document PRISM reconstructs Skyline's built-in Replicates grid over
+the RPC. For a closed one it reads the `.sky` header for the replicate-targeted Document Annotations,
+generates a matching `PRISM-Replicates` view, and exports it with `SkylineCmd`. Both paths build the
+view through `ReplicatesReportBuilder`, which **quotes** annotation columns (`"annotation_Plate"`):
+Skyline parses `column/@name` as a databinding property path, where the `annotation_` prefix's
+underscore is illegal unquoted and aborts the export with *"Invalid character _"*.
 
 ## Package the Skyline external tool
 

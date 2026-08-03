@@ -68,18 +68,26 @@ public sealed class PrismPipeline
         // Resolve per-sample batch and type: prefer the Replicates metadata (Batch annotation /
         // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
         var sourceBatchMap = GetBatchMap(mergedPath, cols);
+        // Metadata files are matched to inputs positionally so each file's rows can be qualified by its
+        // source document ("<replicate>__@__<document>"). Without that, a replicate name reused across
+        // documents (every plate has a "Ref_01") would take the LAST file's type/batch for every document.
+        // Only 1:1 metadata-per-input is unambiguous; otherwise fall back to bare replicate keys.
+        var documentLabels = metadataPaths is not null && metadataPaths.Count == inputs.Count && inputs.Count > 1
+            ? inputs.Select(p => Path.GetFileNameWithoutExtension(p) ?? p).ToList()
+            : null;
         var metadata = ReplicateMetadata.TryLoad(
             metadataPaths, report,
             config.Data.SampleTypeColumn ?? config.Metadata.SampleTypeColumn,
-            config.Data.BatchColumn ?? config.Metadata.BatchColumn);
+            config.Data.BatchColumn ?? config.Metadata.BatchColumn,
+            documentLabels);
         var resolvedBatch = new Dictionary<string, string>(StringComparer.Ordinal);
         var resolvedType = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var s in samples)
         {
             var rep = SampleIdToReplicate(s);
-            resolvedBatch[s] = metadata?.BatchByReplicate.GetValueOrDefault(rep)
+            resolvedBatch[s] = metadata?.BatchFor(s, rep)
                 ?? sourceBatchMap.GetValueOrDefault(s, "batch1");
-            resolvedType[s] = metadata?.TypeByReplicate.GetValueOrDefault(rep)
+            resolvedType[s] = metadata?.TypeFor(s, rep)
                 ?? ClassifySampleType(s, rep, config);
         }
 
@@ -99,7 +107,7 @@ public sealed class PrismPipeline
                 foreach (var s in samples)
                 {
                     var rep = SampleIdToReplicate(s);
-                    var hasMeta = metadata?.BatchByReplicate.ContainsKey(rep) == true;
+                    var hasMeta = metadata?.HasBatchFor(s, rep) == true;
                     if (!hasMeta && est.TryGetValue(s, out var b))
                         resolvedBatch[s] = b;
                 }
@@ -119,7 +127,7 @@ public sealed class PrismPipeline
         // Which source supplied the batch labels (metadata Batch column > per-file Source Document >
         // acquisition-time estimation > a single default label).
         var metaProvidedBatch = metadata is not null
-            && samples.Any(s => metadata.BatchByReplicate.ContainsKey(SampleIdToReplicate(s)));
+            && samples.Any(s => metadata.HasBatchFor(s, SampleIdToReplicate(s)));
         var batchSource = metaProvidedBatch ? "metadata report (Batch column)"
             : sourceBatchMap.Values.Distinct().Count() > 1 ? "Source Document (per-file)"
             : batches.Count > 1 ? "acquisition-time estimation"

@@ -16,6 +16,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lets the Windows test project exercise implementation details that carry real risk but do not
+         belong on the public surface: SkylineAppRunner's error-line detection (the ONLY signal that a
+         headless batch failed) and its cmd.exe escaping. -->
+    <InternalsVisibleTo Include="SkylinePrism.Tests.Windows" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Vendored pwiz Skyline JSON-RPC client sources (Apache-2.0), link-compiled exactly
          the way pwiz's SkylineMcpServer.csproj / skyline-cadenza do. Originals live in
          pwiz_tools/Skyline/SkylineTool/ in the ProteoWizard repo. -->

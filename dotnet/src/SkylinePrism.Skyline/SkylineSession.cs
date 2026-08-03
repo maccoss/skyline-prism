@@ -54,6 +54,80 @@ public sealed class SkylineSession : ISkylineExecutor
         return new SkylineSession(info.PipeName, info.ProcessId, to);
     }
 
+    /// <summary>
+    /// Construct a session for an already-known pipe name (e.g. one returned by
+    /// <see cref="DiscoverAll"/>), so PRISM can talk to a Skyline instance other than the one that
+    /// launched it. The name is transformed to the JSON-RPC pipe name if it is not already one.
+    /// </summary>
+    public static SkylineSession FromPipeName(string pipeName, int? processId = null, TimeSpan? timeout = null)
+    {
+        if (string.IsNullOrWhiteSpace(pipeName))
+            throw new ArgumentException("Pipe name is required.", nameof(pipeName));
+        var jsonName = pipeName.StartsWith(JsonToolConstants.JSON_PIPE_PREFIX, StringComparison.Ordinal)
+            ? pipeName
+            : JsonToolConstants.GetJsonPipeName(pipeName);
+        return new SkylineSession(jsonName, processId, timeout ?? TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>A running Skyline instance that answered, together with the document it has open.</summary>
+    public sealed record RunningInstance(
+        SkylineSession Session, string? DocumentPath, string? Version, int? ProcessId)
+    {
+        /// <summary>Display name: the document file name, or the pipe when the document is unsaved.</summary>
+        public string DisplayName => string.IsNullOrWhiteSpace(DocumentPath)
+            ? $"(unsaved document, pid {ProcessId?.ToString() ?? "?"})"
+            : Path.GetFileName(DocumentPath);
+    }
+
+    /// <summary>
+    /// Every running Skyline instance that responds, with the document each has open, so the user can pick
+    /// documents from several open Skyline windows.
+    ///
+    /// <para>Discovery reads <c>~/.skyline-mcp/connection-*.json</c>, which a Skyline instance only writes
+    /// when its MCP/JSON-RPC server is running. Instances that have not registered there are invisible -
+    /// so this list is a convenience, not a complete inventory. <paramref name="include"/> (typically the
+    /// launching session from <c>args[0]</c>) is always probed, and a closed document can always be exported
+    /// with <see cref="HeadlessSkylineExporter"/>.</para>
+    /// </summary>
+    public static List<RunningInstance> DiscoverRunning(
+        SkylineSession? include = null, TimeSpan? timeout = null, Action<string>? log = null)
+    {
+        var sessions = new List<SkylineSession>();
+        if (include is not null)
+            sessions.Add(include);
+        foreach (var info in DiscoverAll())
+        {
+            if (sessions.Any(s => string.Equals(s.PipeName, info.PipeName, StringComparison.Ordinal)
+                                  || string.Equals(s.PipeName, JsonToolConstants.GetJsonPipeName(info.PipeName),
+                                      StringComparison.Ordinal)))
+            {
+                continue; // already have it (usually the launching instance)
+            }
+            sessions.Add(FromPipeName(info.PipeName, info.ProcessId, timeout));
+        }
+
+        var result = new List<RunningInstance>();
+        var seenDocuments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var session in sessions)
+        {
+            try
+            {
+                var doc = session.Execute(c => c.GetDocumentPath());
+                var version = session.Execute(c => c.GetVersion());
+                // The same document reachable on two pipes is still one document.
+                if (!string.IsNullOrWhiteSpace(doc) && !seenDocuments.Add(Path.GetFullPath(doc)))
+                    continue;
+                result.Add(new RunningInstance(session, doc, version, session.SkylineProcessId));
+            }
+            catch (Exception ex)
+            {
+                // A stale connection file, or an instance that has since exited: not an error.
+                log?.Invoke($"(Skyline instance on pipe {session.PipeName} did not respond: {ex.Message})");
+            }
+        }
+        return result;
+    }
+
     /// <summary>Open a fresh pipe, hand the client to <paramref name="action"/>, and dispose.</summary>
     public T Execute<T>(Func<ISkylineClient, T> action)
     {

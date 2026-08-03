@@ -7,6 +7,14 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 > chromatograms, packaging), a scaffolding skill, and a `dotnet new` template now live in
 > **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw-maccosslab/skyline-external-tools-ai)**
 > (`docs/skyline-external-tools.md`). PRISM is one of the example tools it draws from.
+>
+> **Read it from the local clone before touching anything under `dotnet/src/SkylinePrism.{Skyline,App}/`:**
+> `C:\Users\macco\Documents\GitHub\uw-maccosslab\skyline-external-tools-ai`
+> (on Linux/macOS, a sibling clone of the same repo). Start with `CRITICAL-RULES.md` (the hard-won
+> gotchas: transform `args[0]`, connect-per-call, `PipeTransmissionMode.Message`, invariant culture,
+> `.blib` `Pooling=False`, the launch-verify ship gate), then `TOC.md` -> `docs/skyline-external-tools.md`
+> for the section you need. `git pull` it if it looks stale; **update the guide there, not here** -
+> `docs/skyline-external-tools.md` in this repo is only a pointer stub.
 
 ## Project Overview
 
@@ -606,11 +614,13 @@ protein_rollup:
 
 ## Interacting with Skyline (C# external tool)
 
-The C# Skyline external tool (`dotnet/src/SkylinePrism.App`) drives a **running** Skyline instance to
-export the reports the pipeline consumes and to read document settings. The authoritative how-to is the
+The C# Skyline external tool (`dotnet/src/SkylinePrism.App`) exports the reports the pipeline consumes
+and reads document settings — from a **running** Skyline over JSON-RPC, or from a **closed** `.sky` via
+`SkylineCmd`. The authoritative how-to is the
 field guide in **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw-maccosslab/skyline-external-tools-ai)**
-(`docs/skyline-external-tools.md`) — read it before extending the tool's Skyline integration. Key points
-(mirrored in the code under `dotnet/src/SkylinePrism.Skyline/`):
+(`docs/skyline-external-tools.md`), cloned locally at
+`C:\Users\macco\Documents\GitHub\uw-maccosslab\skyline-external-tools-ai` — read it before extending the
+tool's Skyline integration. Key points (mirrored in the code under `dotnet/src/SkylinePrism.Skyline/`):
 
 - **Transport:** JSON-RPC 2.0 over a **named pipe**. Skyline passes the pipe name as `args[0]`
   (`$(SkylineConnection)`); transform it with `JsonToolConstants.GetJsonPipeName`. **Connect per call**
@@ -630,6 +640,57 @@ field guide in **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw
 - **General rule (per Nick Shulman):** anything `SkylineCmd` can do is reachable via
   `RunCommand([...flags...])` against the live document — but SkylineCmd aborts the whole batch on the
   first bad flag, so send flags one per `RunCommand` (except fields Skyline mutually validates).
+
+> [!CAUTION]
+> **Annotation columns in a generated `.skyr` MUST be quoted:** `<column name="&quot;annotation_Plate&quot;" />`,
+> never the bare `annotation_Plate`. Skyline parses `column/@name` as a databinding PropertyPath, whose
+> bare-identifier syntax rejects `_` — and the `annotation_` prefix contains one. Unquoted, the export
+> aborts with `Error parsing annotation_Plate at location 10: Invalid character _` and **no report is
+> written**, so the annotation silently never reaches the metadata. Quoted, the exported column is headed
+> with the plain annotation name (`Plate`). Both engines build the view through
+> `ReplicatesReportBuilder`, which applies the quoting — go through it rather than hand-rolling XML.
+
+### Inputs: multiple documents, open or closed (`PrismInput`)
+
+The tool takes a LIST of inputs — one per batch/plate — merged into a single cohort. `PrismInput.Prepare`
+resolves each to a report + metadata file:
+
+- **Running Skyline** (`SkylineSession`): the launching instance, or any other found by
+  `SkylineSession.DiscoverRunning` (which reads `~/.skyline-mcp/connection-*.json` — Skyline only appears
+  there while its JSON-RPC server runs, so treat that list as a convenience, not an inventory).
+- **Closed `.sky`** (`HeadlessSkylineExporter` over `ISkylineCommandRunner`): the document is loaded once
+  per report (`--report-name` takes one), always with `--in` and **never** `--save`. Two runners:
+  - `SkylineAppRunner` (**preferred**) drives the installed Skyline headlessly — the SkylineRunner
+    protocol, reimplemented so it finds Skyline *or* Skyline-daily. It runs the real `Skyline.exe`, so
+    `Skyline.exe.config` applies and **parquet export works**. ⚠️ No exit code: failure is only visible as
+    an `Error:` prefix in the piped output (`SkylineAppRunner.IsErrorLine`).
+  - `SkylineCmdRunner` (fallback) uses `SkylineCmd.exe` via `SkylineCmdLocator` (ClickOnce **application**
+    folder — the one with `Skyline*.exe` beside it; the sibling `…exe_…` copies fail with "Unable to find
+    Skyline.exe" — newest first, overridable with `PRISM_SKYLINECMD`). It reports
+    `SupportsParquet = false`: `SkylineCmd.exe.config` lacks the Parquet.Net assembly bindings, so a
+    `.parquet` request dies with "Could not load file or assembly 'Parquet'".
+
+  Format follows the output **extension** (`--report-format` only accepts `csv|tsv`), and the result is
+  verified with `ParquetMagic` rather than trusted.
+- **Pre-exported report**: used in place; no Skyline at all. This is what makes the window usable as a
+  **standalone PRISM GUI** — `MainWindow` must never require a non-null `_session` to run.
+- **Closed-document metadata** comes from `SkyDocumentInfo`, which stream-parses the `.sky` header
+  (stopping at `</settings_summary>`, so a 2 GB document reads in ~1 s) for the replicate-targeted
+  `<annotation targets="…replicate…">` names, the `<enzyme>` element, and the replicate list. Read-only.
+
+**Batch labels are file stems.** Each input's label is the exported report's file name, because
+`DuckDbMerge` derives `Batch` / `Source Document` from the stem and builds sample IDs as
+`<replicate>__@__<batch>`. Labels must therefore be unique and file-name safe
+(`PrismInput.EnsureUniqueLabels`). Metadata files are passed to the pipeline **positionally**, 1:1 with
+the inputs, so `ReplicateMetadata` can key rows by source document — see the caution below.
+
+> [!CAUTION]
+> **Replicate names collide across documents.** Reference and QC injections are normally named
+> identically in every plate's document. `ReplicateMetadata` therefore stores each file's rows under the
+> document-qualified key `<replicate>__@__<document>` in addition to the bare name, and
+> `TypeFor`/`BatchFor`/`HasBatchFor` prefer the qualified entry. Keyed by bare name alone the last file
+> silently wins — collapsing two batches into one label (so ComBat is skipped without a word) and giving
+> every plate the last document's sample types. Do not "simplify" these lookups back to the bare map.
 
 **Why PRISM reads the enzyme from the document:** PRISM's FASTA-based parsimony is enzyme-aware (see
 "FASTA-Based Protein Parsimony"). The **CLI** takes the enzyme from `parsimony.enzyme` (default
@@ -812,6 +873,19 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 2. **Batch correction at reporting level**: Not before protein rollup
 3. **Median polish as default**: Quality-weighted is an alternative, not the primary method
 4. **All charge states as transitions**: Don't separate precursor→peptide rollup; treat all transitions equally
+5. **Cross-platform CLI, Windows-only GUI** (decided, not an interim state): the `prism` CLI ships for
+   Windows/Linux/macOS and `SkylinePrism.Core` stays platform-neutral, while the GUI stays **WPF on
+   Windows**. A cross-platform GUI (Avalonia et al.) was considered and declined - Skyline itself is
+   Windows-only, so the attached mode could never be portable, and the standalone case is served by the
+   CLI. Consequences to respect:
+   - Do **not** port `SkylinePrism.App` to another UI framework, and do not add a `net8.0` target to it.
+   - GUI-only helpers may sit in `SkylinePrism.App` and depend on the Windows-only
+     `SkylinePrism.Skyline` (e.g. `PrismInput`, `StandaloneShortcut`); they do **not** need to move to
+     Core "for portability".
+   - Anything a headless/Linux user needs must be reachable from the CLI. The GUI's "Show Command Line"
+     exists to keep that honest - it emits the exact `prism run` invocation for the current settings.
+   - The one thing still worth extracting from `MainWindow` is a view-model for **testability**
+     (it is ~1000 lines of code-behind at 0% coverage), not for portability.
 
 ## Release Process
 

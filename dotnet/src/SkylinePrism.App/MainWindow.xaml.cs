@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Win32;
@@ -28,14 +29,24 @@ public partial class MainWindow : Window
     private string? _lastReportPath;
     private bool _isRunning;
 
+    /// <summary>
+    /// The inputs to combine in one run - one per batch. Populated with the launching Skyline document
+    /// when started from the Tools menu, and freely extended with other open documents, closed .sky files,
+    /// or already-exported reports. A non-empty list is all Run needs, so the window is equally usable as a
+    /// standalone PRISM GUI with no Skyline running.
+    /// </summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<PrismInput> _inputs = new();
+
     public MainWindow()
     {
         InitializeComponent();
         QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
+        InputsGrid.ItemsSource = _inputs;
+        _inputs.CollectionChanged += (_, _) => UpdateRunEnabled();
 
-        // Run stays disabled until an output directory is set. When connected to a saved document,
-        // SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the box stays
-        // empty so the user must choose (no more defaulting into OneDrive-synced Documents).
+        // Run stays disabled until there is an output directory AND at least one input. When connected to a
+        // saved document, SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the
+        // box stays empty so the user must choose (no defaulting into OneDrive-synced Documents).
         RunButton.IsEnabled = false;
 
         try
@@ -47,15 +58,22 @@ public partial class MainWindow : Window
         {
             _session = null;
             StatusText.Text =
-                "Not connected to a running Skyline instance. Launch this tool from Skyline's Tools menu. "
-                + $"({ex.Message})";
+                "Standalone mode - not attached to a running Skyline. Add exported reports or .sky files "
+                + "on the Inputs tab, or launch this tool from Skyline's Tools menu to use the open document.";
+            App.WriteLog("No Skyline connection at startup: " + ex.Message);
         }
 
         Log("Skyline-PRISM tool ready.");
         Log("Diagnostic log: " + App.LogFilePath);
         Log(_session is not null
             ? "Connected. Set an output directory and click Run PRISM."
-            : "Not connected to Skyline. Launch this tool from Skyline's Tools menu.");
+            : "Standalone mode. Add inputs on the Inputs tab (exported reports, or .sky documents exported "
+              + "via SkylineCmd), set an output directory, then click Run PRISM.");
+
+        // Skyline reinstalls its tools into a NEW versioned folder on every update, so an existing
+        // shortcut is re-pointed at this build whenever PRISM starts.
+        StandaloneShortcut.Refresh(Log);
+        UpdateShortcutButton();
 
         MetadataReportCombo.Items.Add(DefaultMetadataItem);
         MetadataReportCombo.SelectedIndex = 0;
@@ -71,10 +89,217 @@ public partial class MainWindow : Window
 
         if (_session is not null)
         {
+            _ = AddLaunchingDocumentAsync();
             _ = SetDefaultOutputDirAsync();
             _ = LoadReportsAsync();
             _ = LoadLibrariesAsync();
         }
+        else
+        {
+            AddOpenDocButton.IsEnabled = false; // re-enabled if a running instance turns up when clicked
+            MainTabs.SelectedItem = InputsTab;  // standalone: the first thing to do is add an input
+        }
+    }
+
+    /// <summary>Seed the Inputs list with the document of the Skyline that launched the tool.</summary>
+    private async Task AddLaunchingDocumentAsync()
+    {
+        if (_session is null)
+            return;
+        var session = _session;
+        var docPath = await Task.Run(() =>
+        {
+            try { return session.Execute(c => c.GetDocumentPath()); }
+            catch { return null; }
+        });
+        AddInput(PrismInput.FromRunningSkyline(session, docPath));
+        Log($"Input added: {(string.IsNullOrWhiteSpace(docPath) ? "the open (unsaved) document" : docPath)}");
+    }
+
+    /// <summary>Add an input, keeping batch labels unique, and refresh the grid + Run state.</summary>
+    private void AddInput(PrismInput input)
+    {
+        _inputs.Add(input);
+        PrismInput.EnsureUniqueLabels(_inputs);
+        InputsGrid.Items.Refresh();
+        UpdateRunEnabled();
+    }
+
+    private void UpdateRunEnabled()
+    {
+        if (RunButton is not null)
+            RunButton.IsEnabled = !_isRunning && _inputs.Count > 0
+                && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
+    }
+
+    // Offer the documents of every running Skyline instance we can reach. Discovery relies on Skyline having
+    // registered itself in ~/.skyline-mcp/, so an instance may not be listed; a closed-document or
+    // exported-report input always works as a fallback.
+    private async void OnAddOpenDocument(object sender, RoutedEventArgs e)
+    {
+        AddOpenDocButton.IsEnabled = false;
+        try
+        {
+            var launching = _session;
+            var instances = await Task.Run(
+                () => SkylineSession.DiscoverRunning(launching, log: Log));
+            var already = _inputs
+                .Where(i => i.Kind == PrismInputKind.RunningSkyline && !string.IsNullOrWhiteSpace(i.Path))
+                .Select(i => i.Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var candidates = instances
+                .Where(i => string.IsNullOrWhiteSpace(i.DocumentPath) || !already.Contains(i.DocumentPath!))
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                MessageBox.Show(
+                    instances.Count == 0
+                        ? "No running Skyline instance answered.\n\n"
+                          + "Skyline is only discoverable while its JSON-RPC server is running. Use "
+                          + "\"Add Skyline document (.sky)...\" to export a document with SkylineCmd instead."
+                        : "Every running document is already in the list.",
+                    "Add open document", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var picked = PickFromList(
+                "Add open document",
+                "Documents open in running Skyline instances:",
+                candidates.Select(c => c.DisplayName).ToList());
+            if (picked < 0)
+                return;
+            var chosen = candidates[picked];
+            AddInput(PrismInput.FromRunningSkyline(chosen.Session, chosen.DocumentPath));
+            Log($"Input added (open in Skyline): {chosen.DocumentPath ?? chosen.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Log("Could not list running Skyline instances: " + ex.Message);
+            MessageBox.Show("Could not list running Skyline instances: " + ex.Message,
+                "Add open document", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            AddOpenDocButton.IsEnabled = true;
+        }
+    }
+
+    private void OnAddClosedDocument(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select Skyline document(s)",
+            Filter = "Skyline documents (*.sky)|*.sky|All files (*.*)|*.*",
+            Multiselect = true,
+        };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
+        if (dlg.ShowDialog() != true)
+            return;
+
+        foreach (var path in dlg.FileNames)
+        {
+            var input = PrismInput.FromClosedDocument(path);
+            // Read the header now so the user sees replicate counts (and any problem) before running.
+            var info = SkyDocumentInfo.TryRead(path, Log);
+            input.Status = info is null
+                ? "could not read the document header"
+                : $"{info.Replicates.Count} replicate(s)"
+                  + (info.ReplicateAnnotationNames.Count > 0
+                      ? "; annotations: " + string.Join(", ", info.ReplicateAnnotationNames)
+                      : "");
+            AddInput(input);
+            Log($"Input added (closed document): {path} - {input.Status}");
+        }
+    }
+
+    private void OnAddReportFile(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select exported PRISM report(s)",
+            Filter = "PRISM reports (*.parquet;*.csv;*.tsv)|*.parquet;*.csv;*.tsv"
+                     + "|Parquet (*.parquet)|*.parquet|CSV (*.csv)|*.csv|All files (*.*)|*.*",
+            Multiselect = true,
+        };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
+        if (dlg.ShowDialog() != true)
+            return;
+
+        foreach (var path in dlg.FileNames)
+        {
+            // Pick up a metadata CSV sitting next to the report under either naming convention.
+            var dir = Path.GetDirectoryName(path);
+            var stem = Path.GetFileNameWithoutExtension(path);
+            string? metadata = null;
+            if (dir is not null)
+            {
+                metadata = new[] { stem + ".metadata.csv", "Metadata.csv" }
+                    .Select(n => Path.Combine(dir, n))
+                    .FirstOrDefault(File.Exists);
+            }
+            var input = PrismInput.FromReportFile(path, metadata);
+            input.Status = metadata is null ? "no metadata file found" : "metadata: " + Path.GetFileName(metadata);
+            AddInput(input);
+            Log($"Input added (report file): {path}"
+                + (metadata is null ? " (no metadata CSV alongside)" : $" + {metadata}"));
+        }
+    }
+
+    private void OnRemoveInput(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in InputsGrid.SelectedItems.Cast<object>().OfType<PrismInput>().ToList())
+            _inputs.Remove(item);
+        InputsGrid.Items.Refresh();
+        UpdateRunEnabled();
+    }
+
+    /// <summary>Minimal single-choice picker (WPF has no built-in one), returning the index or -1.</summary>
+    private int PickFromList(string title, string prompt, IReadOnlyList<string> items)
+    {
+        var list = new System.Windows.Controls.ListBox { Margin = new Thickness(0, 6, 0, 8) };
+        foreach (var i in items)
+            list.Items.Add(i);
+        list.SelectedIndex = 0;
+
+        var ok = new System.Windows.Controls.Button
+        { Content = "Add", Padding = new Thickness(16, 4, 16, 4), Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+        var cancel = new System.Windows.Controls.Button
+        { Content = "Cancel", Padding = new Thickness(16, 4, 16, 4), IsCancel = true };
+
+        var buttons = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+        };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+
+        var panel = new System.Windows.Controls.DockPanel { Margin = new Thickness(12) };
+        var label = new System.Windows.Controls.TextBlock { Text = prompt, TextWrapping = TextWrapping.Wrap };
+        System.Windows.Controls.DockPanel.SetDock(label, System.Windows.Controls.Dock.Top);
+        System.Windows.Controls.DockPanel.SetDock(buttons, System.Windows.Controls.Dock.Bottom);
+        panel.Children.Add(label);
+        panel.Children.Add(buttons);
+        panel.Children.Add(list);
+
+        var win = new Window
+        {
+            Title = title,
+            Width = 560,
+            Height = 320,
+            Content = panel,
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var result = -1;
+        ok.Click += (_, _) => { result = list.SelectedIndex; win.Close(); };
+        win.ShowDialog();
+        return result;
     }
 
     // Suggest "<document folder>/PRISM-Output" as the output directory. The document path comes from
@@ -146,6 +371,43 @@ public partial class MainWindow : Window
                 LibraryCombo.Items.Add(dlg.FileName);
             LibraryCombo.Text = dlg.FileName;
         }
+    }
+
+    /// <summary>
+    /// Create the Start Menu shortcut that opens PRISM standalone. A Skyline tool zip has no install
+    /// script, so this is the only point at which a shortcut can be made.
+    /// </summary>
+    private void OnCreateShortcut(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var path = StandaloneShortcut.Create();
+            Log("Start Menu shortcut created: " + path);
+            MessageBox.Show(
+                "Created a Start Menu shortcut:" + Environment.NewLine + path + Environment.NewLine
+                + Environment.NewLine
+                + "It opens Skyline-PRISM on its own, without Skyline running." + Environment.NewLine
+                + Environment.NewLine
+                + "Note: Skyline installs its tools inside its own versioned program folder, so a Skyline "
+                + "update moves this program. PRISM re-points the shortcut automatically the next time you "
+                + "start it from Skyline's Tools menu.",
+                "Skyline-PRISM shortcut", MessageBoxButton.OK, MessageBoxImage.Information);
+            UpdateShortcutButton();
+        }
+        catch (Exception ex)
+        {
+            Log("Could not create the shortcut: " + ex.Message);
+            MessageBox.Show("Could not create the shortcut: " + ex.Message,
+                "Skyline-PRISM shortcut", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void UpdateShortcutButton()
+    {
+        if (ShortcutButton is not null)
+            ShortcutButton.Content = StandaloneShortcut.Exists
+                ? "Start Menu shortcut installed"
+                : "Add Start Menu shortcut";
     }
 
     private void OnOpenProvenance(object sender, RoutedEventArgs e)
@@ -317,17 +579,43 @@ public partial class MainWindow : Window
             config.Metadata.BatchColumn = batchColumn;
 
         var outputDir = string.IsNullOrWhiteSpace(OutputDirBox.Text) ? "<output-dir>" : OutputDirBox.Text.Trim();
-        var report = Path.Combine(outputDir, "skyline-reports", "PRISM.parquet");
-        var metadata = Path.Combine(outputDir, "skyline-reports", "Metadata.csv");
+        var reportsDir = Path.Combine(outputDir, "skyline-reports");
         var configPath = Path.Combine(outputDir, "prism-config.yaml");
         var yaml = SerializeConfig(config);
 
-        var command = $"prism run -i \"{report}\" -o \"{outputDir}\" -c \"{configPath}\" -m \"{metadata}\"";
+        // One -i / -m pair per input, in the same order, named after each input's batch label - which is how
+        // the CLI attributes replicates to their source document (see ReplicateMetadata document scoping).
+        var labels = _inputs.Count > 0
+            ? _inputs.Select(i => PrismInput.SanitizeLabel(i.BatchLabel)).ToList()
+            : new List<string> { "PRISM" };
+        var reportArgs = string.Join(" ", labels.Select(l =>
+        {
+            // A pre-exported report is read in place; exported ones land in skyline-reports as parquet (live
+            // Skyline) or CSV (headless SkylineCmd).
+            var input = _inputs.FirstOrDefault(i => PrismInput.SanitizeLabel(i.BatchLabel) == l);
+            if (input?.Kind == PrismInputKind.ReportFile)
+                return $"\"{input.Path}\"";
+            var ext = input?.Kind == PrismInputKind.ClosedDocument ? ".csv" : ".parquet";
+            return $"\"{Path.Combine(reportsDir, l + ext)}\"";
+        }));
+        var metadataArgs = string.Join(" ", labels.Select(l =>
+        {
+            var input = _inputs.FirstOrDefault(i => PrismInput.SanitizeLabel(i.BatchLabel) == l);
+            if (input?.Kind == PrismInputKind.ReportFile)
+                return input.MetadataPath is null ? null : $"\"{input.MetadataPath}\"";
+            return $"\"{Path.Combine(reportsDir, l + ".metadata.csv")}\"";
+        }).Where(s => s is not null));
+
+        var command = $"prism run -i {reportArgs} -o \"{outputDir}\" -c \"{configPath}\""
+                      + (metadataArgs.Length > 0 ? $" -m {metadataArgs}" : "");
         var body =
             "Command-line equivalent of the current GUI settings.\r\n\r\n" +
-            "The tool exports the Skyline report into <output>\\skyline-reports\\ and runs the pipeline. To\r\n" +
-            "reproduce it with the prism CLI: save the config below as prism-config.yaml, then run:\r\n\r\n" +
+            "The tool exports each input into <output>\\skyline-reports\\ (named after its batch label) and\r\n" +
+            "runs the pipeline once over all of them. To reproduce it with the prism CLI: save the config\r\n" +
+            "below as prism-config.yaml, then run:\r\n\r\n" +
             command + "\r\n\r\n" +
+            "The -i and -m lists are positional: metadata file N describes input N. That pairing is what\r\n" +
+            "keeps identically named replicates in different documents from overwriting each other.\r\n\r\n" +
             "# ---------- prism-config.yaml ----------\r\n" + yaml;
 
         ShowCopyableTextWindow("PRISM command line", body, command, yaml);
@@ -398,11 +686,16 @@ public partial class MainWindow : Window
 
     private async void OnRun(object sender, RoutedEventArgs e)
     {
-        if (_session is null)
+        if (_inputs.Count == 0)
         {
-            Log("No Skyline connection. Start this tool from within Skyline.");
+            Log("No inputs. Add a document or an exported report on the Inputs tab.");
+            MainTabs.SelectedItem = InputsTab;
             return;
         }
+
+        // Labels double as exported file stems and as batch labels, so they must be unique before the run.
+        PrismInput.EnsureUniqueLabels(_inputs);
+        InputsGrid.Items.Refresh();
 
         _isRunning = true;
         RunButton.IsEnabled = false;
@@ -418,11 +711,11 @@ public partial class MainWindow : Window
         var config = BuildConfigFromUi();
         if (!string.IsNullOrWhiteSpace(batchColumn))
             config.Metadata.BatchColumn = batchColumn;
-        var session = _session;
+        var inputs = _inputs.ToList(); // snapshot: the grid stays editable while the run proceeds
 
         try
         {
-            await Task.Run(() => RunPipeline(session, outputDir, metadataReport, config));
+            await Task.Run(() => RunPipeline(inputs, outputDir, metadataReport, config));
             // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
             // doing it on the UI thread would freeze the window.
@@ -452,46 +745,102 @@ public partial class MainWindow : Window
         finally
         {
             _isRunning = false;
-            RunButton.IsEnabled = !string.IsNullOrWhiteSpace(OutputDirBox.Text);
+            UpdateRunEnabled();
         }
     }
 
-    // Enable Run only once an output directory is set (and no run is in progress).
+    // Enable Run only once an output directory is set and an input exists (and no run is in progress).
     private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-    {
-        if (RunButton is not null)
-            RunButton.IsEnabled = !_isRunning && !string.IsNullOrWhiteSpace(OutputDirBox.Text);
-    }
+        => UpdateRunEnabled();
 
-    private void RunPipeline(SkylineSession session, string outputDir, string? metadataReport, PrismConfig config)
+    /// <summary>
+    /// Export every input, then run the pipeline once over all of them. Each input is exported under its own
+    /// batch label, and the labels become the merge's Source Document labels - so several Skyline documents
+    /// (one per batch/plate) are processed as a single cohort with ComBat correcting between them.
+    /// Runs on a background thread; <see cref="Log"/> marshals to the UI.
+    /// </summary>
+    private void RunPipeline(
+        IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
 
-        Log("Exporting reports from Skyline...");
-        var driver = new SkylineReportDriver(session, Log);
+        // Derive the digestion enzyme from the source document so FASTA-based parsimony matches the search
+        // that produced the data instead of the config default. Only relevant when a FASTA map is used;
+        // harmless otherwise. The first input that can answer wins.
+        foreach (var input in inputs)
+        {
+            var enzyme = input.TryGetDigestionEnzyme(Log);
+            if (enzyme is null)
+                continue;
+            config.Parsimony.Enzyme = enzyme;
+            break;
+        }
 
-        // Derive the digestion enzyme from the Skyline document so FASTA-based parsimony matches the
-        // document's search settings instead of the CLI default. Only relevant when a FASTA map is
-        // used; harmless otherwise (the pipeline ignores the enzyme for the Skyline-column path).
-        var docEnzyme = driver.GetDigestionEnzyme();
-        if (docEnzyme is not null)
-            config.Parsimony.Enzyme = docEnzyme;
-
-        // Default (no explicit report): the driver reads the "Replicates" document grid dynamically,
-        // capturing all its columns. batchAnnotation ensures the user's batch column is included in the
-        // saved-report fallback (the dynamic grid read already picks up all annotations).
+        // batchAnnotation ensures the user's batch column reaches the generated Replicates report. For a
+        // live document the dynamic grid read already picks up every annotation; for a closed document it is
+        // how the column gets into the .skyr at all.
         var batchAnnotation = metadataReport is null ? config.Metadata.BatchColumn : null;
-        var reports = driver.Export(reportsDir, metadataReport, batchAnnotation);
 
-        Log($"Running PRISM pipeline on the {(reports.InputIsParquet ? "parquet" : "CSV")} report "
-            + $"({Path.GetFileName(reports.InputPath)})...");
+        var reportPaths = new List<string>();
+        var metadataPaths = new List<string>();
+        var missingMetadata = 0;
 
-        var inputs = new List<string> { reports.InputPath };
-        var metadataPaths = reports.ReplicatesCsv is null ? null : new[] { reports.ReplicatesCsv };
-        var result = PrismPipeline.Run(inputs, outputDir, config, metadataPaths, Log);
+        Log($"Preparing {inputs.Count} input(s) into {reportsDir}...");
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            var input = inputs[i];
+            Log($"[{i + 1}/{inputs.Count}] {input.KindLabel}: {input.DisplayName} (batch '{input.BatchLabel}')");
+            SetInputStatus(input, "exporting...");
+            try
+            {
+                var exported = input.Prepare(
+                    reportsDir, metadataReport, batchAnnotation, SkylineCmdPathOverride, Log, CancellationToken.None);
+                reportPaths.Add(exported.InputPath);
+                if (exported.ReplicatesCsv is not null)
+                    metadataPaths.Add(exported.ReplicatesCsv);
+                else
+                    missingMetadata++;
+                var size = File.Exists(exported.InputPath) ? new FileInfo(exported.InputPath).Length : 0;
+                SetInputStatus(input,
+                    $"{(exported.InputIsParquet ? "parquet" : "CSV")}, {size / (1024.0 * 1024.0):N1} MB"
+                    + (exported.ReplicatesCsv is null ? " (no metadata)" : ""));
+            }
+            catch (Exception ex)
+            {
+                SetInputStatus(input, "FAILED: " + ex.Message);
+                throw new InvalidOperationException(
+                    $"Input '{input.DisplayName}' (batch '{input.BatchLabel}') failed: {ex.Message}", ex);
+            }
+        }
+
+        // Metadata is matched to inputs positionally, so a partial set would mis-assign sample types and
+        // batches. Use it only when every input produced one; otherwise fall back to name-based typing.
+        List<string>? metadata = metadataPaths;
+        if (missingMetadata > 0)
+        {
+            Log($"WARNING: {missingMetadata} of {inputs.Count} input(s) produced no replicate metadata. "
+                + "Sample types will be inferred from replicate names for ALL inputs, because per-document "
+                + "metadata must line up 1:1 with the inputs to be attributed correctly.");
+            metadata = null;
+        }
+
+        Log($"Running the PRISM pipeline on {reportPaths.Count} report(s): "
+            + string.Join(", ", reportPaths.Select(Path.GetFileName)));
+        var result = PrismPipeline.Run(reportPaths, outputDir, config, metadata, Log);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
+    }
+
+    /// <summary>Optional explicit SkylineCmd.exe path; null means auto-discover (see SkylineCmdLocator).</summary>
+    private string? SkylineCmdPathOverride { get; set; }
+
+    private void SetInputStatus(PrismInput input, string status)
+    {
+        if (Dispatcher.CheckAccess())
+            input.Status = status;
+        else
+            Dispatcher.BeginInvoke(new Action(() => input.Status = status));
     }
 
     // Cached QC matrices ([features, samples], LOG2) keyed by "view|level" (view in raw/corrected).
@@ -523,7 +872,7 @@ public partial class MainWindow : Window
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
-            LoadReplicatesReport(Path.Combine(outputDir, "skyline-reports", "Metadata.csv"));
+            LoadReplicatesReports(Path.Combine(outputDir, "skyline-reports"));
         }
         catch (Exception ex)
         {
@@ -561,11 +910,39 @@ public partial class MainWindow : Window
         _qcData[key] = (m, sampleCols, meanRt);
     }
 
-    // Parse the exported Replicates report (dynamic annotation columns) into replicate -> column -> value.
-    private void LoadReplicatesReport(string path)
+    /// <summary>
+    /// Load every per-document Replicates report in the export directory ("&lt;label&gt;.metadata.csv", plus
+    /// the legacy single-document "Metadata.csv"). Each file's rows are stored under BOTH the
+    /// document-qualified sample ID ("&lt;replicate&gt;__@__&lt;label&gt;") and the bare replicate name, so a QC
+    /// injection named the same in several documents keeps its own document's annotations in the plots.
+    /// </summary>
+    private void LoadReplicatesReports(string reportsDir)
     {
         _replicateAnn.Clear();
         _groupColumns = new List<string>();
+        if (!Directory.Exists(reportsDir))
+            return;
+
+        var files = Directory.EnumerateFiles(reportsDir, "*.metadata.csv")
+            .Concat(Directory.EnumerateFiles(reportsDir, "Metadata.csv"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file);
+            // "<label>.metadata.csv" -> "<label>"; the legacy "Metadata.csv" has no document label.
+            var label = name.EndsWith(".metadata.csv", StringComparison.OrdinalIgnoreCase)
+                ? name[..^".metadata.csv".Length]
+                : null;
+            LoadReplicatesReport(file, label);
+        }
+    }
+
+    // Parse one exported Replicates report (dynamic annotation columns) into replicate -> column -> value.
+    private void LoadReplicatesReport(string path, string? documentLabel)
+    {
         if (!File.Exists(path))
             return;
         var lines = File.ReadAllLines(path);
@@ -586,7 +963,10 @@ public partial class MainWindow : Window
         for (var i = 0; i < header.Length; i++)
             if (i != repIdx && !string.IsNullOrWhiteSpace(header[i]))
                 cols.Add((header[i].Trim(), i));
-        _groupColumns = cols.Select(c => c.Name).ToList();
+        // Union across documents: a column present in any Replicates report can be grouped by.
+        foreach (var name in cols.Select(c => c.Name))
+            if (!_groupColumns.Contains(name, StringComparer.Ordinal))
+                _groupColumns.Add(name);
 
         for (var r = 1; r < lines.Length; r++)
         {
@@ -601,7 +981,12 @@ public partial class MainWindow : Window
             var map = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (name, idx) in cols)
                 map[name] = idx < f.Length ? f[idx].Trim() : "";
-            _replicateAnn[rep] = map;
+            // Document-qualified key first (this is the merged Sample ID), then the bare replicate name as
+            // a fallback for single-document runs and legacy Metadata.csv exports.
+            if (!string.IsNullOrEmpty(documentLabel))
+                _replicateAnn[rep + "__@__" + documentLabel] = map;
+            if (!_replicateAnn.ContainsKey(rep) || string.IsNullOrEmpty(documentLabel))
+                _replicateAnn[rep] = map;
         }
     }
 
@@ -641,6 +1026,9 @@ public partial class MainWindow : Window
 
     private string SampleAnnotation(string sampleId, string column)
     {
+        // The full sample ID is the document-qualified key; fall back to the bare replicate name.
+        if (_replicateAnn.TryGetValue(sampleId, out var qualified) && qualified.TryGetValue(column, out var qv))
+            return qv;
         if (_replicateAnn.TryGetValue(ReplicateOf(sampleId), out var m) && m.TryGetValue(column, out var v))
             return v;
         // Fallback for the synthetic Sample Type column when no Replicates report is available.

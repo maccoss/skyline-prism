@@ -13,11 +13,44 @@ namespace SkylinePrism.Core.IO;
 /// </summary>
 public sealed class ReplicateMetadata
 {
+    /// <summary>
+    /// The separator DuckDbMerge uses to build "&lt;replicate&gt;__@__&lt;batch&gt;" sample IDs. When several
+    /// documents are merged, the batch part is the source-document label, so the sample ID doubles as the
+    /// document-qualified replicate key.
+    /// </summary>
+    public const string SampleIdSeparator = "__@__";
+
     public Dictionary<string, string> TypeByReplicate { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> BatchByReplicate { get; } = new(StringComparer.Ordinal);
 
-    public bool HasTypes => TypeByReplicate.Count > 0;
-    public bool HasBatches => BatchByReplicate.Count > 0;
+    /// <summary>
+    /// Same annotations keyed by the DOCUMENT-QUALIFIED replicate ("&lt;replicate&gt;__@__&lt;document&gt;"),
+    /// populated when <see cref="TryLoad(IReadOnlyList{string}, Action{string}, string, string, IReadOnlyList{string})"/>
+    /// is given per-file document labels. Reference/QC injections routinely carry the SAME replicate name in
+    /// every plate's document, so the unqualified maps above would silently let the last file win - collapsing
+    /// two documents into one batch and overwriting sample types. These qualified entries take precedence.
+    /// </summary>
+    public Dictionary<string, string> TypeBySampleId { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string> BatchBySampleId { get; } = new(StringComparer.Ordinal);
+
+    public bool HasTypes => TypeByReplicate.Count > 0 || TypeBySampleId.Count > 0;
+    public bool HasBatches => BatchByReplicate.Count > 0 || BatchBySampleId.Count > 0;
+
+    /// <summary>Document-qualified key for a replicate, matching the merged "Sample ID" column.</summary>
+    public static string QualifiedKey(string replicate, string documentLabel)
+        => replicate + SampleIdSeparator + documentLabel;
+
+    /// <summary>Sample type for a merged sample ID: the document-qualified entry wins over the bare replicate.</summary>
+    public string? TypeFor(string sampleId, string replicate)
+        => TypeBySampleId.GetValueOrDefault(sampleId) ?? TypeByReplicate.GetValueOrDefault(replicate);
+
+    /// <summary>Batch for a merged sample ID: the document-qualified entry wins over the bare replicate.</summary>
+    public string? BatchFor(string sampleId, string replicate)
+        => BatchBySampleId.GetValueOrDefault(sampleId) ?? BatchByReplicate.GetValueOrDefault(replicate);
+
+    /// <summary>Whether any batch annotation applies to this sample (qualified or bare).</summary>
+    public bool HasBatchFor(string sampleId, string replicate)
+        => BatchBySampleId.ContainsKey(sampleId) || BatchByReplicate.ContainsKey(replicate);
 
     private static readonly string[] ReplicateCols = { "Replicate", "Replicate Name", "ReplicateName", "ReplicateLocator" };
     private static readonly string[] SampleTypeCols = { "Sample Type", "SampleType" };
@@ -29,19 +62,41 @@ public sealed class ReplicateMetadata
     /// (standard built-in), and the batch/type columns may be named explicitly via
     /// <paramref name="batchColumn"/> / <paramref name="sampleTypeColumn"/> (case-insensitive).
     /// </summary>
-    /// <summary>Load and merge several metadata files (later files win on a duplicate replicate).</summary>
+    /// <summary>
+    /// Load and merge several metadata files. Later files win on a duplicate bare replicate name, but when
+    /// <paramref name="documentLabels"/> supplies a per-file source-document label (the same label
+    /// <see cref="DuckDbMerge"/> uses to build the "Sample ID"), each file's rows are ALSO recorded under the
+    /// document-qualified key, and those take precedence at lookup - so a replicate name reused across
+    /// documents (every plate's "Ref_01") keeps its own document's sample type and batch.
+    /// </summary>
     public static ReplicateMetadata? TryLoad(
         IReadOnlyList<string>? paths, Action<string>? log = null,
-        string? sampleTypeColumn = null, string? batchColumn = null)
+        string? sampleTypeColumn = null, string? batchColumn = null,
+        IReadOnlyList<string>? documentLabels = null)
     {
         if (paths is null || paths.Count == 0)
             return null;
+        if (documentLabels is not null && documentLabels.Count != paths.Count)
+            throw new ArgumentException(
+                "documentLabels must have the same length as paths.", nameof(documentLabels));
+
         ReplicateMetadata? merged = null;
-        foreach (var p in paths)
+        for (var i = 0; i < paths.Count; i++)
         {
-            var md = TryLoad(p, log, sampleTypeColumn, batchColumn);
+            var md = TryLoad(paths[i], log, sampleTypeColumn, batchColumn);
             if (md is null)
                 continue;
+
+            // Qualify this file's rows with its source document, so same-named replicates stay distinct.
+            var label = documentLabels?[i];
+            if (!string.IsNullOrWhiteSpace(label))
+            {
+                foreach (var kv in md.TypeByReplicate)
+                    md.TypeBySampleId[QualifiedKey(kv.Key, label!)] = kv.Value;
+                foreach (var kv in md.BatchByReplicate)
+                    md.BatchBySampleId[QualifiedKey(kv.Key, label!)] = kv.Value;
+            }
+
             if (merged is null)
             {
                 merged = md;
@@ -51,6 +106,10 @@ public sealed class ReplicateMetadata
                 merged.TypeByReplicate[kv.Key] = kv.Value;
             foreach (var kv in md.BatchByReplicate)
                 merged.BatchByReplicate[kv.Key] = kv.Value;
+            foreach (var kv in md.TypeBySampleId)
+                merged.TypeBySampleId[kv.Key] = kv.Value;
+            foreach (var kv in md.BatchBySampleId)
+                merged.BatchBySampleId[kv.Key] = kv.Value;
         }
         return merged;
     }

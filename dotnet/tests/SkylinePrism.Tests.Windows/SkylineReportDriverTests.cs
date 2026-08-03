@@ -136,8 +136,9 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work, metadataReportName: "myreplicates");
 
-        // The available casing wins, and it is what gets exported to Metadata.csv.
-        Assert.Contains(client.Exports, e => e.Report == "MyReplicates" && e.Path.EndsWith("Metadata.csv"));
+        // The available casing wins, and it is what gets exported to the document-labelled metadata CSV.
+        Assert.Contains(client.Exports,
+            e => e.Report == "MyReplicates" && e.Path.EndsWith(SkylineReportDriver.MetadataFileName("PRISM")));
     }
 
     [Fact]
@@ -148,7 +149,8 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work);
 
-        Assert.Contains(client.Exports, e => e.Report == "PRISM-Replicates" && e.Path.EndsWith("Metadata.csv"));
+        Assert.Contains(client.Exports,
+            e => e.Report == "PRISM-Replicates" && e.Path.EndsWith(SkylineReportDriver.MetadataFileName("PRISM")));
     }
 
     [Fact]
@@ -183,9 +185,10 @@ public class SkylineReportDriverTests
         Assert.DoesNotContain("SampleDilutionFactor", client.RequestedSelect!);
         Assert.DoesNotContain("SampleId", client.RequestedSelect!);
 
-        // Metadata.csv is written from the grid, not exported from a saved report.
-        Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith("Metadata.csv"));
-        var csv = File.ReadAllText(Path.Combine(work, "Metadata.csv"));
+        // The metadata CSV is written from the grid, not exported from a saved report.
+        var metadataName = SkylineReportDriver.MetadataFileName("PRISM");
+        Assert.DoesNotContain(client.Exports, e => e.Path.EndsWith(metadataName));
+        var csv = File.ReadAllText(Path.Combine(work, metadataName));
         Assert.StartsWith("ReplicateName,SampleType,Condition", csv);
         Assert.Contains("R1,Standard,\"A, treated\"", csv);
         Assert.Contains("R2,Quality Control,B", csv);
