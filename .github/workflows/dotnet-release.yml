@@ -112,7 +112,9 @@ jobs:
           path: artifacts
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        # v3 only moves the action runtime from Node 20 to Node 24 (same inputs); v2 is Node 20, which
+        # the runners now force onto Node 24 anyway and warn about.
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}

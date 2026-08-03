@@ -73,7 +73,8 @@ public partial class App : Application
     private void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
         => Report("background thread", e.ExceptionObject as Exception);
 
-    private void OnUnobservedTaskException(object sender, UnobservedTaskExceptionEventArgs e)
+    // EventHandler<T> declares a nullable sender, unlike the two non-generic handlers above.
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
         Report("task", e.Exception);
         e.SetObserved();
