@@ -54,6 +54,35 @@
         </StackPanel>
 
         <TabControl Grid.Row="5" x:Name="MainTabs">
+            <TabItem Header="Inputs" x:Name="InputsTab">
+                <DockPanel Margin="8">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
+                                Click="OnAddOpenDocument"
+                                ToolTip="Pick a document from a running Skyline instance (exported over the live connection, as parquet)." />
+                        <Button Content="Add Skyline document (.sky)..." Padding="10,4" Margin="0,0,6,0"
+                                Click="OnAddClosedDocument"
+                                ToolTip="Pick a .sky file that is not open. PRISM exports it headlessly with SkylineCmd (invariant CSV)." />
+                        <Button Content="Add exported report..." Padding="10,4" Margin="0,0,6,0"
+                                Click="OnAddReportFile"
+                                ToolTip="Use a PRISM report you already exported (.parquet / .csv / .tsv). No Skyline required." />
+                        <Button x:Name="RemoveInputButton" Content="Remove" Padding="10,4" Margin="0,0,6,0"
+                                Click="OnRemoveInput" />
+                        <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
+                                   Text="Add one input per batch. Each input's Batch label becomes its Source Document label, so identically named QC/reference replicates stay distinct across documents." />
+                    </StackPanel>
+                    <DataGrid x:Name="InputsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                              CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" RowHeaderWidth="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Source" Binding="{Binding KindLabel}" IsReadOnly="True" Width="140" />
+                            <DataGridTextColumn Header="Document / file" Binding="{Binding DisplayName}" IsReadOnly="True" Width="2*" />
+                            <DataGridTextColumn Header="Batch label" Binding="{Binding BatchLabel, UpdateSourceTrigger=PropertyChanged}" Width="160" />
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
             <TabItem Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14">
@@ -177,6 +206,9 @@
         </TabControl>
 
         <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="ShortcutButton" Content="Add Start Menu shortcut" Padding="12,4" Margin="0,0,8,0"
+                    Click="OnCreateShortcut"
+                    ToolTip="Create a Start Menu shortcut that opens PRISM on its own, without Skyline." />
             <Button x:Name="ShowCommandButton" Content="Show Command Line" Padding="12,4" Margin="0,0,8,0"
                     Click="OnShowCommandLine"
                     ToolTip="Show the prism CLI command + config YAML that reproduces the current GUI settings." />

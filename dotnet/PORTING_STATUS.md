@@ -161,8 +161,29 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       so `SkylineReportDriverTests` cover the parquet-first/CSV-fallback decision, metadata
       report-name resolution, report-list dedup, .blib discovery, and the dynamic report install
       against a fake - no live Skyline needed.
-- [x] Dynamic annotation column (`annotation_<Name>`) for batch
-- [x] WPF app: report/metadata pickers, Settings panel, interactive PCA, QC report
+- [x] Dynamic annotation column for batch — emitted QUOTED (`"annotation_<Name>"`) by
+      `ReplicatesReportBuilder`, shared by the live-RPC and headless paths. The bare form is rejected by
+      Skyline's PropertyPath parser ("Invalid character _") and writes no report, so the requested batch
+      annotation never reached the metadata before this.
+- [x] Multiple inputs per run (`PrismInput`): documents open in the launching Skyline or in any other
+      running instance (`SkylineSession.DiscoverRunning`), CLOSED `.sky` documents exported headlessly
+      via `SkylineCmd` (`HeadlessSkylineExporter` + `SkylineCmdLocator`), and already-exported report
+      files. Each input's editable batch label is the exported file stem, which is what `DuckDbMerge`
+      reads back as its Source Document / Batch. Headless export is invariant CSV — Skyline's command
+      line offers only `--report-format=csv|tsv`; the merge mixes CSV and parquet inputs freely.
+- [x] Closed-document header read (`SkyDocumentInfo`): replicate-targeted annotation names (to shape the
+      generated PRISM-Replicates report), the `<enzyme>` element, and the replicate list — stream-parsed
+      and stopped at `</settings_summary>`, so a 2 GB document reads in ~1 s. Read-only; never writes.
+- [x] Standalone mode: the window no longer requires a Skyline connection, so `SkylinePrism.exe` doubles
+      as a plain PRISM GUI over already-exported reports.
+- [-] Cross-platform GUI (Avalonia/MAUI/Uno) — DECLINED by decision, not deferred. Skyline is Windows-only,
+      so the attached mode can never be portable, and headless/Linux users are served by the `prism` CLI
+      (already shipped for win/linux/osx x64+arm64). `SkylinePrism.App` stays WPF; GUI-only helpers may
+      depend on the Windows-only `SkylinePrism.Skyline` without needing to move to Core. See "Design
+      Decisions to Preserve" in `CLAUDE.md`.
+- [ ] Extract a view-model from `MainWindow` — wanted for TESTABILITY (~1000 lines of code-behind at 0%
+      coverage), explicitly NOT for portability.
+- [x] WPF app: Inputs tab, report/metadata pickers, Settings panel, interactive PCA, QC report
 - [x] Library picker dropdown (.blib files next to the document + Browse), shown for library_assist
 - [x] "Open provenance" - load a prior run's parameters.json and propagate settings into the UI
 - [-] Results explorer (protein/peptide tree + per-feature boxplots) — DEFERRED by decision; a

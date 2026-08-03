@@ -18,8 +18,10 @@ sample CVs before and after each correction.
 PRISM ships two ways to run the same pipeline:
 
 - **`prism` CLI** — a cross-platform command-line tool (Windows, Linux, macOS).
-- **Skyline external tool** — a Windows GUI that drives a running Skyline over JSON-RPC to export the
-  report and run the pipeline, then shows interactive QC plots.
+- **Skyline external tool / PRISM GUI** — a Windows GUI that runs the pipeline and shows interactive QC
+  plots. Launched from Skyline's Tools menu it drives the running document over JSON-RPC; it also runs
+  **standalone** (no Skyline needed) on reports you already exported, and it can combine **several
+  Skyline documents** — open or closed — into one multi-batch run.
 
 > This repository also contains the original **Python** implementation, which remains the reference.
 > See **[README-python.md](README-python.md)** for the `skyline-prism` PyPI package. The C# tools
@@ -110,6 +112,21 @@ Install the **.NET 8 Desktop Runtime** (see the prerequisite above —
 [Releases](https://github.com/maccoss/skyline-prism/releases) (or build it — see below) and install
 it in Skyline via **Tools → Tool Store → Install from file**. The tool appears under the Tools menu
 and connects to the running document.
+
+On the **Inputs** tab you add one input per batch and PRISM runs them as a single cohort, so a study
+split across several Skyline documents does not need each report exported by hand:
+
+- **Add open document** — any running Skyline instance (exported over the live connection, as parquet).
+- **Add Skyline document (.sky)** — a document that is *not* open; PRISM exports it in the background
+  with `SkylineCmd.exe`, which it finds from your Skyline installation (invariant CSV — Skyline's
+  command line has no parquet writer). The document is opened read-only and never saved.
+- **Add exported report** — a `.parquet`/`.csv`/`.tsv` PRISM report you already have.
+
+Each input carries an editable **Batch label** (the document name by default) that becomes its batch in
+the merged data, which keeps identically named reference/QC injections from different plates distinct.
+
+Double-clicking the installed `SkylinePrism.exe` opens the same window in **standalone mode** — a plain
+PRISM GUI with no Skyline running. See [dotnet/README.md](dotnet/README.md) for details.
 
 ## Quick start (CLI)
 

@@ -26,13 +26,16 @@ public sealed class SkylineReportDriver
     }
 
     /// <summary>
-    /// The report inputs exported into <c>workDir</c>. <see cref="InputPath"/> is the single
-    /// PRISM report the pipeline should read (parquet when <see cref="InputIsParquet"/>).
+    /// Export this document's PRISM transition report (+ replicate metadata) into <paramref name="workDir"/>.
     /// </summary>
-    public sealed record ExportedReports(
-        string InputPath, bool InputIsParquet, string? ReplicatesCsv, string? DocumentPath);
-
-    public ExportedReports Export(string workDir, string? metadataReportName = null, string? batchAnnotation = null)
+    /// <param name="documentLabel">
+    /// Base name for the exported files, and the batch / Source Document label the merge derives from the
+    /// file stem. Defaults to "PRISM" (the single-document case); pass the document name when several
+    /// documents are being combined, so their replicates stay distinguishable.
+    /// </param>
+    public ExportedReports Export(
+        string workDir, string? metadataReportName = null, string? batchAnnotation = null,
+        string? documentLabel = null)
     {
         Directory.CreateDirectory(workDir);
 
@@ -42,11 +45,13 @@ public sealed class SkylineReportDriver
         if (version is not null)
             _log($"Skyline version: {version}");
 
+        var label = string.IsNullOrWhiteSpace(documentLabel) ? "PRISM" : documentLabel!;
+
         EnsureReportsInstalled();
 
         // Preferred path: export PRISM directly as parquet. Skyline determines the format
         // from the file extension, the same mechanism that produced the CSV.
-        var prismParquet = Path.Combine(workDir, "PRISM.parquet");
+        var prismParquet = Path.Combine(workDir, label + ".parquet");
         _log("Exporting PRISM report as parquet (this can take a while on large documents)...");
         try
         {
@@ -61,17 +66,24 @@ public sealed class SkylineReportDriver
         {
             _log($"Exported PRISM report (parquet): {prismParquet} "
                  + $"({new FileInfo(prismParquet).Length:N0} bytes)");
-            return new ExportedReports(prismParquet, true, ExportMetadataReport(workDir, metadataReportName, batchAnnotation), docPath);
+            return new ExportedReports(
+                prismParquet, true,
+                ExportMetadataReport(workDir, metadataReportName, batchAnnotation, label), docPath, label);
         }
 
         // Fallback: invariant CSV (older Skyline builds without parquet report export).
         _log("A valid parquet was not produced; falling back to invariant CSV.");
         TryDelete(prismParquet);
-        var prismCsv = Path.Combine(workDir, "PRISM.csv");
+        var prismCsv = Path.Combine(workDir, label + ".csv");
         _session.Execute(c => c.ExportReport("PRISM", prismCsv, "invariant"));
         _log($"Exported PRISM report (invariant CSV): {prismCsv}");
-        return new ExportedReports(prismCsv, false, ExportMetadataReport(workDir, metadataReportName, batchAnnotation), docPath);
+        return new ExportedReports(
+            prismCsv, false,
+            ExportMetadataReport(workDir, metadataReportName, batchAnnotation, label), docPath, label);
     }
+
+    /// <summary>The metadata CSV file name paired with a given transition-report label.</summary>
+    public static string MetadataFileName(string documentLabel) => documentLabel + ".metadata.csv";
 
     /// <summary>
     /// Produce the replicate-metadata CSV. By default we read Skyline's built-in "Replicates" data
@@ -79,9 +91,10 @@ public sealed class SkylineReportDriver
     /// Document Annotation column dynamically, the way the grid displays them. If the caller names a
     /// specific saved report, or the grid read fails, we fall back to exporting a saved report.
     /// </summary>
-    private string? ExportMetadataReport(string workDir, string? requestedName, string? batchAnnotation)
+    private string? ExportMetadataReport(
+        string workDir, string? requestedName, string? batchAnnotation, string documentLabel)
     {
-        var csv = Path.Combine(workDir, "Metadata.csv");
+        var csv = Path.Combine(workDir, MetadataFileName(documentLabel));
 
         // Default: read the Replicates document grid and generate Metadata.csv from it.
         if (string.IsNullOrWhiteSpace(requestedName))
@@ -289,7 +302,8 @@ public sealed class SkylineReportDriver
     /// Install the PRISM-Replicates report. When a batch annotation name is provided, generate
     /// the view on the fly to include that dynamic annotation column (annotation_&lt;Name&gt;),
     /// since Skyline's built-in Replicates view is not exportable via the RPC. Falls back to the
-    /// bundled static report if the dynamic definition is rejected.
+    /// bundled static report if the dynamic definition is rejected. The view XML comes from
+    /// <see cref="ReplicatesReportBuilder"/>, shared with the headless (SkylineCmd) path.
     /// </summary>
     private void InstallReplicatesReport(string? batchAnnotation)
     {
@@ -300,20 +314,10 @@ public sealed class SkylineReportDriver
         }
 
         var ann = batchAnnotation!.Trim();
-        var annColumn = ann.StartsWith("annotation_", StringComparison.OrdinalIgnoreCase) ? ann : "annotation_" + ann;
-        var xml =
-            "<?xml version=\"1.0\"?>\n<views>\n"
-            + "  <view name=\"PRISM-Replicates\" rowsource=\"pwiz.Skyline.Model.Databinding.Entities.Replicate\" uimode=\"proteomic\">\n"
-            + "    <column name=\"\" />\n"
-            + "    <column name=\"SampleType\" />\n"
-            + "    <column name=\"BatchName\" />\n"
-            + $"    <column name=\"{XmlEscape(annColumn)}\" />\n"
-            + "  </view>\n</views>\n";
-
         var tempSkyr = Path.Combine(Path.GetTempPath(), "PRISM-Replicates.skyr");
         try
         {
-            File.WriteAllText(tempSkyr, xml);
+            ReplicatesReportBuilder.WriteSkyr(tempSkyr, new[] { ann });
             _session.Execute(c => c.RunCommandSilent(new[]
             {
                 $"--report-add={tempSkyr}",
@@ -328,9 +332,6 @@ public sealed class SkylineReportDriver
             InstallReport("Skyline-PRISM-Replicates.skyr", "PRISM-Replicates");
         }
     }
-
-    private static string XmlEscape(string s) => s
-        .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 
     private void InstallReport(string fileName, string displayName)
     {
@@ -355,29 +356,7 @@ public sealed class SkylineReportDriver
         }
     }
 
-    /// <summary>A parquet file starts and ends with the 4-byte "PAR1" magic marker.</summary>
-    private static bool IsValidParquet(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-                return false;
-            using var fs = File.OpenRead(path);
-            if (fs.Length < 8)
-                return false;
-            var head = new byte[4];
-            fs.ReadExactly(head);
-            fs.Seek(-4, SeekOrigin.End);
-            var tail = new byte[4];
-            fs.ReadExactly(tail);
-            ReadOnlySpan<byte> magic = "PAR1"u8;
-            return head.AsSpan().SequenceEqual(magic) && tail.AsSpan().SequenceEqual(magic);
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private static bool IsValidParquet(string path) => ParquetMagic.IsValid(path);
 
     private static void TryDelete(string path)
     {
