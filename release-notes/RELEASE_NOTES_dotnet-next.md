@@ -15,6 +15,13 @@ rename to `RELEASE_NOTES_dotnet-v{version}.md` at release time.
 
 ## Bug Fixes
 
+- **The intensity-distribution plot now matches between the HTML report and the tool.** The HTML QC
+  report drew one arbitrary colour per sample - a rainbow carrying no information - while the tool's QC
+  tab coloured the same plot by sample type. The report was in fact being handed the sample types and
+  discarding them; it now colours by type with a legend, like the PCA and RT-lowess plots beside it and
+  like the tool. Type colours are shared, so Skyline's "Standard"/"Quality Control" and PRISM's
+  `reference`/`qc` render identically whichever view you are looking at.
+
 - **Acquisition-time batch estimation now explains itself.** When batches are inferred from gaps between
   acquisition times, the run log records the threshold, the median gap, which of the two rules produced
   it, and the actual gaps that started each batch - matching what the Python implementation already
