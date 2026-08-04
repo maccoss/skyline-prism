@@ -782,36 +782,61 @@ public partial class MainWindow : Window
         // how the column gets into the .skyr at all.
         var batchAnnotation = metadataReport is null ? config.Metadata.BatchColumn : null;
 
-        var reportPaths = new List<string>();
-        var metadataPaths = new List<string>();
-        var missingMetadata = 0;
+        // Results are indexed BY INPUT POSITION, never appended: the pipeline pairs metadata to inputs
+        // positionally, so completion order must not leak into the lists (see the assembly below).
+        var exports = new ExportedReports?[inputs.Count];
 
-        Log($"Preparing {inputs.Count} input(s) into {reportsDir}...");
-        for (var i = 0; i < inputs.Count; i++)
+        var degree = ExportParallelism(inputs);
+        Log($"Preparing {inputs.Count} input(s) into {reportsDir}"
+            + (degree > 1 ? $" ({degree} at a time)..." : "..."));
+
+        var done = 0;
+        try
         {
-            var input = inputs[i];
-            Log($"[{i + 1}/{inputs.Count}] {input.KindLabel}: {input.DisplayName} (batch '{input.BatchLabel}')");
-            SetInputStatus(input, "exporting...");
-            try
+            Parallel.For(0, inputs.Count, new ParallelOptions { MaxDegreeOfParallelism = degree }, i =>
             {
-                var exported = input.Prepare(
-                    reportsDir, metadataReport, batchAnnotation, SkylineCmdPathOverride, Log, CancellationToken.None);
-                reportPaths.Add(exported.InputPath);
-                if (exported.ReplicatesCsv is not null)
-                    metadataPaths.Add(exported.ReplicatesCsv);
-                else
-                    missingMetadata++;
-                var size = File.Exists(exported.InputPath) ? new FileInfo(exported.InputPath).Length : 0;
-                SetInputStatus(input,
-                    $"{(exported.InputIsParquet ? "parquet" : "CSV")}, {size / (1024.0 * 1024.0):N1} MB"
-                    + (exported.ReplicatesCsv is null ? " (no metadata)" : ""));
-            }
-            catch (Exception ex)
-            {
-                SetInputStatus(input, "FAILED: " + ex.Message);
-                throw new InvalidOperationException(
-                    $"Input '{input.DisplayName}' (batch '{input.BatchLabel}') failed: {ex.Message}", ex);
-            }
+                var input = inputs[i];
+                Log($"[{Interlocked.Increment(ref done)}/{inputs.Count}] {input.KindLabel}: "
+                    + $"{input.DisplayName} (batch '{input.BatchLabel}')");
+                SetInputStatus(input, "exporting...");
+                try
+                {
+                    var exported = input.Prepare(
+                        reportsDir, metadataReport, batchAnnotation, SkylineCmdPathOverride, Log,
+                        CancellationToken.None);
+                    exports[i] = exported;
+                    var size = File.Exists(exported.InputPath) ? new FileInfo(exported.InputPath).Length : 0;
+                    SetInputStatus(input,
+                        $"{(exported.InputIsParquet ? "parquet" : "CSV")}, {size / (1024.0 * 1024.0):N1} MB"
+                        + (exported.ReplicatesCsv is null ? " (no metadata)" : ""));
+                }
+                catch (Exception ex)
+                {
+                    SetInputStatus(input, "FAILED: " + ex.Message);
+                    throw new InvalidOperationException(
+                        $"Input '{input.DisplayName}' (batch '{input.BatchLabel}') failed: {ex.Message}", ex);
+                }
+            });
+        }
+        catch (AggregateException ex)
+        {
+            // Parallel.For wraps worker failures; surface the first one so the user sees which INPUT
+            // failed and why, not "One or more errors occurred."
+            throw ex.Flatten().InnerExceptions[0];
+        }
+
+        var reportPaths = new List<string>(inputs.Count);
+        var metadataPaths = new List<string>(inputs.Count);
+        var missingMetadata = 0;
+        foreach (var exported in exports)
+        {
+            if (exported is null)
+                continue; // unreachable: Parallel.For propagates any failure as an AggregateException
+            reportPaths.Add(exported.InputPath);
+            if (exported.ReplicatesCsv is not null)
+                metadataPaths.Add(exported.ReplicatesCsv);
+            else
+                missingMetadata++;
         }
 
         // Metadata is matched to inputs positionally, so a partial set would mis-assign sample types and
@@ -834,6 +859,56 @@ public partial class MainWindow : Window
 
     /// <summary>Optional explicit SkylineCmd.exe path; null means auto-discover (see SkylineCmdLocator).</summary>
     private string? SkylineCmdPathOverride { get; set; }
+
+    /// <summary>
+    /// Peak RAM to assume per concurrent headless export. Measured: a 5 MB .sky with a 116 MB .skyd and 87
+    /// replicates peaked at ~1.26 GB resident, and memory scales linearly with concurrency (3 at once
+    /// peaked at 3.7 GB). 2.5 GB leaves headroom for documents larger than that.
+    /// </summary>
+    private const double GbPerConcurrentExport = 2.5;
+
+    /// <summary>Hard cap on concurrent exports: past this the work is disk-bound, not CPU-bound.</summary>
+    private const int MaxConcurrentExports = 4;
+
+    /// <summary>
+    /// How many inputs to export at once. Exporting several documents in parallel is a large win -
+    /// measured 5.2 s versus ~23 s sequential for three documents - because each export is dominated by
+    /// Skyline's startup and its single-threaded document load, so the machine is mostly idle otherwise.
+    ///
+    /// <para>The binding constraint is MEMORY, not CPU: every headless export is a whole Skyline process
+    /// with the document loaded, so RAM scales linearly with concurrency. The degree is therefore budgeted
+    /// against installed RAM rather than core count, and capped.</para>
+    ///
+    /// <para>Inputs that need no export (an already-exported report file) are excluded from the budget -
+    /// they cost nothing and would otherwise inflate the estimate.</para>
+    /// </summary>
+    private int ExportParallelism(IReadOnlyList<PrismInput> inputs)
+    {
+        var exporting = inputs.Count(i => i.Kind != PrismInputKind.ReportFile);
+        if (exporting <= 1)
+            return 1; // nothing to overlap
+
+        double totalGb;
+        try
+        {
+            totalGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024 * 1024);
+        }
+        catch (Exception)
+        {
+            return 1; // can't size the budget - stay sequential
+        }
+
+        // Spend at most 60% of RAM on exports; the merge that follows sizes itself against RAM too, but it
+        // runs after every export has exited, so the two never overlap.
+        var byMemory = (int)Math.Floor(totalGb * 0.6 / GbPerConcurrentExport);
+        var degree = Math.Max(1, Math.Min(Math.Min(byMemory, MaxConcurrentExports), exporting));
+        if (degree > 1)
+            Log($"Exporting up to {degree} documents at a time "
+                + $"({totalGb:N0} GB RAM, budgeting {GbPerConcurrentExport:N1} GB per export).");
+        else
+            Log($"Exporting one document at a time ({totalGb:N0} GB RAM is not enough to overlap safely).");
+        return degree;
+    }
 
     private void SetInputStatus(PrismInput input, string status)
     {
