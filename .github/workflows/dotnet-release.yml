@@ -19,8 +19,8 @@ jobs:
       run:
         working-directory: dotnet
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 
@@ -74,8 +74,8 @@ jobs:
       run:
         working-directory: dotnet
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 
@@ -109,9 +109,9 @@ jobs:
     steps:
       # Needed for the release notes below - this job used to skip the checkout, which is why earlier
       # releases were published with an empty body.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
