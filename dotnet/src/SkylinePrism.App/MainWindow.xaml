@@ -206,8 +206,15 @@
                         <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
                                   ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
                         <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
-                        <ComboBox x:Name="QcGroupCombo" Width="150" SelectionChanged="OnQcChanged"
-                                  ToolTip="Value in that column to show (All keeps every sample)." />
+                        <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
+                                  ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              Margin="2,1" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
                         <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
                             <ComboBoxItem>PCA</ComboBoxItem>
