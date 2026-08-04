@@ -113,4 +113,46 @@ public class QcGroupFilterTests
     [Fact]
     public void Summarize_HandlesAnEmptyValueList()
         => Assert.Equal("All", QcGroupFilter.Summarize(Array.Empty<string>(), 0));
+
+    // ---- Multi-select is not specific to Sample Type ----
+    // The Group-by list is every column in the Replicates report (Condition, Subject, Plate, Timepoint,
+    // ...), and the value list is built from whichever column is chosen. Nothing in the filter knows or
+    // cares which column it is; only the control-correlation DEFAULT looks for sample types, and it
+    // no-ops elsewhere.
+
+    private static readonly string[] Conditions =
+        { "Treated", "Treated", "Untreated", "Untreated", "Vehicle", "Vehicle" };
+
+    [Fact]
+    public void AnArbitraryAnnotationColumnSupportsTheSameMultiSelect()
+    {
+        var selected = new HashSet<string>(new[] { "Treated", "Vehicle" }, QcGroupFilter.Comparer);
+
+        var idx = QcGroupFilter.Matching(Conditions.Length, i => Conditions[i], selected);
+
+        Assert.Equal(new[] { 0, 1, 4, 5 }, idx);
+        Assert.DoesNotContain(idx, i => Conditions[i] == "Untreated");
+    }
+
+    [Fact]
+    public void AnArbitraryAnnotationColumnStillTreatsEmptyAsNoFilter()
+        => Assert.Equal(
+            Enumerable.Range(0, Conditions.Length),
+            QcGroupFilter.Matching(Conditions.Length, i => Conditions[i],
+                new HashSet<string>(QcGroupFilter.Comparer)));
+
+    [Fact]
+    public void DescribeAndSummarizeAreColumnAgnostic()
+    {
+        Assert.Equal("Treated + Vehicle", QcGroupFilter.Describe(new[] { "Vehicle", "Treated" }));
+        Assert.Equal("Treated, Vehicle", QcGroupFilter.Summarize(new[] { "Treated", "Vehicle" }, 3));
+    }
+
+    [Fact]
+    public void ControlDefaultingLeavesANonSampleTypeColumnAlone()
+    {
+        // Selecting Control correlation while grouped by Condition must not tick anything: there are no
+        // control values to tick, and ticking none would render an empty plot instead of all samples.
+        Assert.Empty(QcGroupFilter.ControlsAmong(Conditions));
+    }
 }
