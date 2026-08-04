@@ -129,7 +129,20 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <TextBlock Text="4. Protein parsimony:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="ParsimonyCheck" Content="group proteins (razor/parsimony)" IsChecked="True" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ParsimonyCheck" Content="group indistinguishable proteins" IsChecked="True"
+                                      VerticalAlignment="Center" Checked="OnParsimonyChanged" Unchecked="OnParsimonyChanged"
+                                      ToolTip="Merge proteins that share the same peptide evidence into one group. Unchecked, every accession is its own group." />
+                        </StackPanel>
+
+                        <StackPanel x:Name="SharedPeptideRow" Orientation="Horizontal" Margin="0,2,0,6">
+                            <TextBlock Text="    Shared peptides:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <ComboBox x:Name="SharedPeptideCombo" Width="160">
+                                <ComboBoxItem>all_groups</ComboBoxItem>
+                                <ComboBoxItem>razor</ComboBoxItem>
+                                <ComboBoxItem>unique_only</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
+                                       Text="How a peptide matching several groups is quantified: count it for every group, assign it to one (razor), or use only proteotypic peptides." />
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -138,8 +151,19 @@
                                 <ComboBoxItem>median_polish</ComboBoxItem>
                                 <ComboBoxItem>sum</ComboBoxItem>
                             </ComboBox>
-                            <TextBlock Text="min peptides:" VerticalAlignment="Center" Margin="20,0,6,0" />
-                            <TextBox x:Name="MinPeptidesBox" Width="46" Text="3" />
+                            <TextBlock Text="sum below:" VerticalAlignment="Center" Margin="20,0,6,0"
+                                       ToolTip="{Binding ElementName=MinPeptidesBox, Path=ToolTip}" />
+                            <TextBox x:Name="MinPeptidesBox" Width="46" Text="3">
+                                <TextBox.ToolTip>
+                                    <TextBlock>
+                                        Groups with fewer than this many quantified peptides are rolled up by a simple<LineBreak />
+                                        SUM instead of the method above (median polish is not meaningful on 1-2 peptides),<LineBreak />
+                                        and are flagged low_confidence in the output.<LineBreak /><LineBreak />
+                                        This is NOT a filter - no protein is dropped for having too few peptides.
+                                    </TextBlock>
+                                </TextBox.ToolTip>
+                            </TextBox>
+                            <TextBlock Text="peptides" VerticalAlignment="Center" Margin="4,0,0,0" Foreground="#888" />
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">

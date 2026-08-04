@@ -80,6 +80,7 @@ public partial class MainWindow : Window
 
         TransitionRollupCombo.SelectedIndex = 0;
         PeptideNormCombo.SelectedIndex = 0;
+        SharedPeptideCombo.SelectedIndex = 0; // all_groups, matching PrismConfig's default
         ProteinRollupCombo.SelectedIndex = 0;
         ProteinNormCombo.SelectedIndex = 0;
         QcViewCombo.SelectedIndex = 0;
@@ -348,6 +349,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnParsimonyChanged(object sender, RoutedEventArgs e) => UpdateSharedPeptideRow();
+
+    /// <summary>
+    /// Shared-peptide handling only means something once proteins are grouped: with parsimony off every
+    /// accession is its own group, so there is nothing for a peptide to be shared between.
+    /// </summary>
+    private void UpdateSharedPeptideRow()
+    {
+        if (SharedPeptideRow is not null)
+            SharedPeptideRow.IsEnabled = ParsimonyCheck?.IsChecked == true;
+    }
+
     private void OnTransitionRollupChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (LibraryRow is not null)
@@ -455,6 +468,8 @@ public partial class MainWindow : Window
         PeptideBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.PeptideLevel;
         ProteinBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.ProteinLevel;
         ParsimonyCheck.IsChecked = c.Parsimony.Enabled;
+        SelectCombo(SharedPeptideCombo, c.Parsimony.SharedPeptideHandling);
+        UpdateSharedPeptideRow();
         SelectCombo(ProteinRollupCombo, c.ProteinRollup.Method);
         MinPeptidesBox.Text = c.ProteinRollup.MinPeptides.ToString();
         SelectCombo(ProteinNormCombo, c.ProteinNormalization.Method);
@@ -500,6 +515,7 @@ public partial class MainWindow : Window
         c.BatchCorrection.ProteinLevel = protBatch;
 
         c.Parsimony.Enabled = ParsimonyCheck.IsChecked == true;
+        c.Parsimony.SharedPeptideHandling = ComboText(SharedPeptideCombo, "all_groups");
 
         c.ProteinRollup.Method = ComboText(ProteinRollupCombo, "median_polish");
         c.ProteinRollup.MinPeptides = ParseInt(MinPeptidesBox.Text, 3);
