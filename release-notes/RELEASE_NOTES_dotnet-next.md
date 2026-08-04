@@ -19,6 +19,21 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **A degraded reference no longer reports "possible overfitting to the reference".** The relative
+  variance reduction (RVR = QC improvement / reference improvement) was forced to `+infinity` whenever the
+  reference did not improve, including when it got *worse*. That tripped the "RVR > 2" branch and warned
+  about overfitting **to** the reference - the opposite of what had happened - and failed the whole
+  validation verdict on a degenerate number. RVR is now undefined in that case: the ratio checks are
+  skipped, the report says so plainly ("Reference CV did not improve, so the QC-vs-reference ratio could
+  not be evaluated - the overfitting check was skipped, not passed"), and the separate, correct
+  "Reference CV increased after normalization" warning still stands. Genuine overfitting and poor
+  generalization are still flagged as before.
+- **The QC report explained why its CV table and its intensity-distribution reduction disagree.** The
+  intensity heading reports the spread of per-sample medians across **all** samples, while each CV row is
+  computed **within** one sample type. A cohort-wide alignment mostly moves the experimental samples onto
+  the controls, so a 98% between-sample reduction can sit next to a ~1% CV change without either being
+  wrong. Both are now labelled with the samples they cover, and the CV section explains the distinction.
+
 ## Performance
 
 ## Breaking Changes

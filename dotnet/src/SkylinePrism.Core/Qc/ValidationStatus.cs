@@ -35,7 +35,14 @@ public sealed record ValidationStatus(
 
         var refImp = refBefore > 0 ? (refBefore - refAfter) / refBefore : 0.0;
         var qcImp = qcBefore > 0 ? (qcBefore - qcAfter) / qcBefore : 0.0;
-        var rvr = refImp > 0 ? qcImp / refImp : double.PositiveInfinity;
+
+        // RVR only means something when the reference actually improved. If it did not - improvement zero
+        // or NEGATIVE - the ratio is undefined, not infinite. Reporting +inf here made the ">2" branch
+        // fire and announce "QC improved much more than reference - possible overfitting to the
+        // reference", which is backwards: the reference got WORSE, which is the opposite of overfitting
+        // to it. It also failed the whole verdict on a degenerate number. NaN keeps the ratio checks from
+        // firing at all, and the situation is reported on its own terms below.
+        var rvr = refImp > 0 ? qcImp / refImp : double.NaN;
 
         var distBefore = PcaCentroidDistance(before, refIdx, qcIdx);
         var distAfter = PcaCentroidDistance(after, refIdx, qcIdx);
@@ -46,14 +53,26 @@ public sealed record ValidationStatus(
             warnings.Add("QC CV increased after normalization.");
         if (refImp < 0)
             warnings.Add("Reference CV increased after normalization.");
-        if (rvr > 2.0)
-            warnings.Add($"QC improved much more than reference (RVR={rvr:0.00}) - possible overfitting to the reference.");
-        if (rvr < 0.5)
-            warnings.Add($"QC improved much less than reference (RVR={rvr:0.00}) - normalization may not generalize.");
+        // The ratio comparisons are meaningless unless the reference improved; see the RVR note above.
+        if (double.IsNaN(rvr))
+        {
+            warnings.Add(
+                "Reference CV did not improve, so the QC-vs-reference ratio (RVR) could not be evaluated - "
+                + "the overfitting check was skipped, not passed.");
+        }
+        else
+        {
+            if (rvr > 2.0)
+                warnings.Add($"QC improved much more than reference (RVR={rvr:0.00}) - possible overfitting to the reference.");
+            if (rvr < 0.5)
+                warnings.Add($"QC improved much less than reference (RVR={rvr:0.00}) - normalization may not generalize.");
+        }
         if (pcaRatio < 0.5)
             warnings.Add($"QC-reference PCA distance decreased by {(1 - pcaRatio) * 100:0.0}% - control samples may be collapsing together.");
 
-        var passed = qcImp > 0 && pcaRatio > 0.5 && rvr < 2.0;
+        // An unevaluable RVR must not silently fail the verdict - the reference-CV warning above already
+        // reports that situation on its own terms.
+        var passed = qcImp > 0 && pcaRatio > 0.5 && (double.IsNaN(rvr) || rvr < 2.0);
 
         return new ValidationStatus(
             refBefore, refAfter, refImp, qcBefore, qcAfter, qcImp, rvr,

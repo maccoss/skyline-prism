@@ -118,7 +118,12 @@ public static class QcReport
         var afterMedRange = MedianRange(corrected.Values);
         var medReduction = beforeMedRange > 0 ? (1.0 - afterMedRange / beforeMedRange) * 100.0 : 0.0;
         sections.Add(new PlotSection(
-            $"{cap} Intensity Distribution: median range {beforeMedRange:0.00} -> {afterMedRange:0.00} ({medReduction:0.0}% reduction)",
+            // Spell out that this spans ALL samples. The CV tables above are computed WITHIN the reference
+            // group and WITHIN the QC group, so a large reduction here does not imply a large CV
+            // improvement there: normalization removes a per-sample offset, and if the controls were
+            // already aligned with each other there is little of it left inside those groups to remove.
+            $"{cap} Intensity Distribution (all samples): median range {beforeMedRange:0.00} -> "
+            + $"{afterMedRange:0.00} log2 ({medReduction:0.0}% reduction between samples)",
             new List<PlotImage>
             {
                 Img("Before normalization", $"{level}_intensity_before",
@@ -235,6 +240,7 @@ td:first-child, th:first-child { text-align: left; }
 .plot-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .plot-item { flex: 1 1 0; min-width: 320px; text-align: center; }
 .plot-item .cap { color: #555; font-size: 13px; margin-top: 2px; }
+.note { color: #555; font-size: 13px; max-width: 900px; margin: 6px 0 12px; line-height: 1.45; }
 .footer { color: #888; font-size: 12px; margin-top: 32px; }
 .status { padding: 10px 16px; border-radius: 6px; font-weight: 700; font-size: 16px; margin: 12px 0; }
 .status-pass { background: #e6f4ea; color: #1a7f37; border: 1px solid #a6d8b6; }
@@ -254,6 +260,15 @@ td:first-child, th:first-child { text-align: left; }
         AppendValidation(sb, validation);
 
         sb.Append("<h2>Summary Metrics (Median CV %)</h2>");
+        // Readers reasonably expect these to track the intensity-distribution reduction below, and they do
+        // not: that figure spans every sample, while each CV row is computed only among samples of that
+        // one type. Aligning a cohort mostly moves the experimental samples onto the controls.
+        sb.Append(
+            "<p class=\"note\">Each row is the median CV <em>within</em> that sample type only "
+            + "(reference vs reference, QC vs QC), on the linear scale. It is not comparable to the "
+            + "between-sample reduction reported for the intensity distribution below, which spans all "
+            + "samples - normalization removes a per-sample offset, so it improves these CVs only to the "
+            + "extent that samples of the same type were offset from <em>each other</em>.</p>");
         sb.Append(CvTable("Peptide-Level CV", pepRef, pepQc));
         sb.Append(CvTable("Protein-Level CV", protRef, protQc));
 
