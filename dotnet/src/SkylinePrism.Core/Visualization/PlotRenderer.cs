@@ -663,8 +663,13 @@ public static class PlotRenderer
 
     /// <summary>
     /// Overlay one Gaussian-KDE density curve per sample of the (features x samples) LOG2 matrix onto
-    /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG and
-    /// the interactive tool. Each sample gets a distinct cycled colour; no legend (there can be many).
+    /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG in the
+    /// HTML report and the interactive tool, which must look the same.
+    ///
+    /// <para>With <paramref name="groupLabels"/> every sample in a group shares a colour (via
+    /// <see cref="GroupColor"/>, so a type keeps its colour in any spelling) and the plot gets a legend.
+    /// Without them each sample gets its own cycled colour and there is no legend - only appropriate when
+    /// there is genuinely no grouping to show.</para>
     /// </summary>
     public static void DrawIntensityDensity(Plot plt, double[,] log2Matrix, IReadOnlyList<string>? groupLabels = null)
     {
@@ -732,12 +737,20 @@ public static class PlotRenderer
             plt.ShowLegend();
     }
 
-    /// <summary>Per-sample LOG2 intensity density curves (the Python "Intensity Distribution" plot).</summary>
+    /// <summary>
+    /// LOG2 intensity density curves, one per sample, coloured by sample type (the Python "Intensity
+    /// Distribution" plot).
+    ///
+    /// <para><paramref name="sampleTypes"/> must be passed through to the draw call: it is what makes the
+    /// HTML report match the tool's interactive plot, and the PCA and RT-lowess plots in this same report,
+    /// all of which colour by group. Dropping it falls back to a per-sample colour cycle - a rainbow that
+    /// carries no information and silently disagrees with every other view of the same data.</para>
+    /// </summary>
     public static byte[] IntensityDistribution(
         double[,] log2Matrix, IReadOnlyList<string> sampleTypes, string title)
     {
         var plt = new Plot();
-        DrawIntensityDensity(plt, log2Matrix);
+        DrawIntensityDensity(plt, log2Matrix, sampleTypes);
         plt.Title(title);
         plt.XLabel("Log2 Abundance");
         plt.YLabel("Density");
