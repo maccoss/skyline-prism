@@ -22,15 +22,17 @@ public static class BatchEstimator
     /// </summary>
     public static Dictionary<string, string> Estimate(
         string mergedParquet, string sampleCol, string acqCol,
-        string method = "auto", int? nBatches = null, double gapIqrMultiplier = 1.5)
+        string method = "auto", int? nBatches = null, double gapIqrMultiplier = 1.5,
+        Action<string>? log = null)
     {
         var rows = ReadSampleTimes(mergedParquet, sampleCol, acqCol);
-        return AssignBatches(rows, method, nBatches, gapIqrMultiplier);
+        return AssignBatches(rows, method, nBatches, gapIqrMultiplier, log);
     }
 
     /// <summary>The pure assignment core (testable): sort by time, then fixed/gap batching.</summary>
     internal static Dictionary<string, string> AssignBatches(
-        List<(string Sample, DateTime Time)> rows, string method, int? nBatches, double gapIqrMultiplier)
+        List<(string Sample, DateTime Time)> rows, string method, int? nBatches, double gapIqrMultiplier,
+        Action<string>? log = null)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         if (rows.Count < 2)
@@ -62,19 +64,52 @@ public static class BatchEstimator
         var q3 = Stats.PercentileLinear(gaps, 75);
         var iqr = q3 - q1;
         var medianGap = Stats.PercentileLinear(gaps, 50);
-        var threshold = Math.Max(q3 + gapIqrMultiplier * iqr, medianGap * 1.1);
+
+        // Two candidate thresholds; the larger wins. The Tukey rule (q3 + k*IQR) is the intended test,
+        // but it degenerates to q3 on evenly spaced runs where IQR ~ 0, so a floor of 1.1x the median gap
+        // was added to keep it above the typical spacing. NOTE: on a CONTINUOUS run that floor is what
+        // binds, and it sits only 10% above the typical spacing - so a single slightly longer gap (a
+        // wash, a blank, a queue pause) starts a new batch. See the warning logged below.
+        var tukey = q3 + gapIqrMultiplier * iqr;
+        var floor = medianGap * 1.1;
+        var threshold = Math.Max(tukey, floor);
 
         var batchNum = 1;
+        var breaks = new List<double>();
         map[rows[0].Sample] = $"batch_{batchNum}";
         for (var i = 1; i < rows.Count; i++)
         {
             if (gaps[i - 1] > threshold)
+            {
                 batchNum++;
+                breaks.Add(gaps[i - 1]);
+            }
             map[rows[i].Sample] = $"batch_{batchNum}";
         }
 
+        if (log is not null && method != "fixed")
+        {
+            log($"  Gap threshold: {threshold:F1} min (median gap {medianGap:F1} min, "
+                + $"IQR rule {tukey:F1} min, floor 1.1x median {floor:F1} min; "
+                + $"{(floor >= tukey ? "the FLOOR is binding" : "the IQR rule is binding")}).");
+            if (breaks.Count > 0)
+                log($"  Gaps that started a new batch: "
+                    + string.Join(", ", breaks.Select(b => $"{b:F1} min")) + ".");
+
+            // The floor binding means the run is evenly spaced - i.e. it looks like ONE continuous
+            // sequence - yet it still split. That is the case most likely to be wrong.
+            if (floor >= tukey && breaks.Count > 0)
+            {
+                log("  WARNING: the batches came from a threshold only 10% above the typical spacing, "
+                    + "which is what happens on a continuously acquired run. If these samples were not "
+                    + "actually run in separate batches, set batch_estimation.method: none (or supply a "
+                    + "real batch annotation) - otherwise ComBat will 'correct' between batches that do "
+                    + "not exist.");
+            }
+        }
+
         if (batchNum <= 1 && method == "auto" && nBatches is > 1)
-            return AssignBatches(rows, "fixed", nBatches, gapIqrMultiplier);
+            return AssignBatches(rows, "fixed", nBatches, gapIqrMultiplier, log);
 
         return batchNum > 1 ? map : new Dictionary<string, string>(StringComparer.Ordinal);
     }
