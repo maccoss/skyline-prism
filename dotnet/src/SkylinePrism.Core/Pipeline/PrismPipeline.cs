@@ -100,7 +100,7 @@ public sealed class PrismPipeline
         {
             var est = BatchEstimator.Estimate(
                 mergedPath, cols.Sample, cols.AcquiredTime, estMethod,
-                config.BatchEstimation.NBatches, config.BatchEstimation.GapIqrMultiplier);
+                config.BatchEstimation.NBatches, config.BatchEstimation.GapIqrMultiplier, report);
             var nEst = est.Values.Distinct().Count();
             if (nEst > 1)
             {
