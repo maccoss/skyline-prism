@@ -1167,25 +1167,101 @@ public partial class MainWindow : Window
         _suppressQcRender = false;
     }
 
+    /// <summary>
+    /// One tickable value in the Group-by value dropdown. Several can be on at once so related groups can
+    /// be compared without the rest - the case that motivated it is the control-correlation heatmap, where
+    /// you want Quality Control AND Standard together but not the unknowns.
+    /// </summary>
+    private sealed class QcGroupValue : System.ComponentModel.INotifyPropertyChanged
+    {
+        private bool _isSelected;
+
+        public required string Name { get; init; }
+
+        /// <summary>Raised on tick/untick so the window can re-render and refresh the summary text.</summary>
+        public Action? Changed { get; init; }
+
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set
+            {
+                if (_isSelected == value)
+                    return;
+                _isSelected = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
+                Changed?.Invoke();
+            }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private List<QcGroupValue> _qcGroupValues = new();
+
+    /// <summary>
+    /// The ticked values, or an empty set meaning "no filter - every sample". Callers compare with
+    /// <see cref="StringComparer.OrdinalIgnoreCase"/> because annotation spellings vary by source.
+    /// </summary>
+    private HashSet<string> SelectedGroupValues()
+    {
+        var set = new HashSet<string>(QcGroupFilter.Comparer);
+        foreach (var v in _qcGroupValues.Where(v => v.IsSelected))
+            set.Add(v.Name);
+        return set;
+    }
+
     private void PopulateValueCombo()
     {
         var column = ComboText(QcGroupByCombo, "");
-        QcGroupCombo.Items.Clear();
-        QcGroupCombo.Items.Add("All");
+        var values = new SortedSet<string>(StringComparer.Ordinal);
         if (!string.IsNullOrEmpty(column) && _qcData.Count > 0)
         {
-            var samples = _qcData.Values.First().Samples;
-            var values = new SortedSet<string>(StringComparer.Ordinal);
-            foreach (var s in samples)
+            foreach (var s in _qcData.Values.First().Samples)
             {
                 var v = SampleAnnotation(s, column);
                 if (!string.IsNullOrEmpty(v))
                     values.Add(v);
             }
-            foreach (var v in values)
-                QcGroupCombo.Items.Add(v);
         }
-        QcGroupCombo.SelectedIndex = 0; // All
+
+        _qcGroupValues = values
+            .Select(v => new QcGroupValue { Name = v, Changed = OnGroupValueToggled })
+            .ToList();
+        QcGroupCombo.ItemsSource = _qcGroupValues;
+        UpdateGroupSummary();
+    }
+
+    private void OnGroupValueToggled()
+    {
+        UpdateGroupSummary();
+        if (!_suppressQcRender)
+            RenderQc();
+    }
+
+    /// <summary>The closed-state text: the dropdown itself shows tick boxes, not a selected item.</summary>
+    private void UpdateGroupSummary()
+    {
+        if (QcGroupCombo is null)
+            return;
+        var selected = _qcGroupValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        QcGroupCombo.Text = QcGroupFilter.Summarize(selected, _qcGroupValues.Count);
+    }
+
+    /// <summary>
+    /// Tick exactly <paramref name="wanted"/> (those that exist), leaving the rest clear. Used to default
+    /// the control-correlation heatmap to the control types.
+    /// </summary>
+    private bool SelectGroupValues(IEnumerable<string> wanted)
+    {
+        var want = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
+        var matched = _qcGroupValues.Where(v => want.Contains(v.Name)).ToList();
+        if (matched.Count == 0)
+            return false;
+        foreach (var v in _qcGroupValues)
+            v.IsSelected = want.Contains(v.Name);
+        UpdateGroupSummary();
+        return true;
     }
 
     private void OnGroupByChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -1236,6 +1312,24 @@ public partial class MainWindow : Window
         }
         QcLevelCombo.IsEnabled = !isRt;       // RT plots: peptide only
         QcViewCombo.IsEnabled = !beforeAfter; // RT-binned CV shows before AND after
+
+        // "Control correlation" is about the CONTROLS: the useful reading is that QC samples correlate
+        // with each other and standards with each other, but the two do not cross. Showing every sample
+        // buries that in the unknowns, and disagrees with the HTML report, which computes this heatmap
+        // over reference+QC only. So default to the control types - but only when nothing is ticked, so
+        // an explicit choice is never overridden.
+        if (kind == "Control correlation" && SelectedGroupValues().Count == 0)
+        {
+            // Only when this column actually has control values - on a Condition annotation there are
+            // none, and ticking nothing would leave an empty plot.
+            var controls = QcGroupFilter.ControlsAmong(_qcGroupValues.Select(v => v.Name));
+            if (controls.Count > 0)
+            {
+                _suppressQcRender = true;
+                SelectGroupValues(controls);
+                _suppressQcRender = false;
+            }
+        }
     }
 
     private void RenderInteractiveQc(string kind, string view, string level)
@@ -1250,21 +1344,21 @@ public partial class MainWindow : Window
             QcPlot.Refresh();
             return;
         }
-        // Optional group filter driven by a Replicates-report column (e.g. "Sample Type" = "Standard").
+        // Optional group filter driven by a Replicates-report column; several values may be ticked.
         var column = ComboText(QcGroupByCombo, "Sample Type");
-        var value = ComboText(QcGroupCombo, "All");
+        var selected = SelectedGroupValues();
         var cols = Enumerable.Range(0, d.Samples.Count).ToList();
         var groupLabel = "all";
-        if (!string.Equals(value, "All", StringComparison.OrdinalIgnoreCase))
+        if (selected.Count > 0)
         {
-            cols = cols.Where(i => string.Equals(SampleAnnotation(d.Samples[i], column), value, StringComparison.OrdinalIgnoreCase)).ToList();
+            cols = cols.Where(i => selected.Contains(SampleAnnotation(d.Samples[i], column))).ToList();
             if (cols.Count < 2)
             {
-                plt.Title($"Fewer than 2 samples with {column} = {value}.");
+                plt.Title($"Fewer than 2 samples with {column} = {GroupLabel()}.");
                 QcPlot.Refresh();
                 return;
             }
-            groupLabel = value;
+            groupLabel = GroupLabel();
         }
         var matrix = cols.Count == d.Samples.Count ? d.FeaturesBySamples : SelectColumns(d.FeaturesBySamples, cols);
         var types = cols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
@@ -1321,14 +1415,13 @@ public partial class MainWindow : Window
     // Column indices (into the given sample list) selected by the Group-by column + value; "All" = every sample.
     private List<int> GroupColumns(IReadOnlyList<string> samples)
     {
-        var value = ComboText(QcGroupCombo, "All");
-        if (string.Equals(value, "All", StringComparison.OrdinalIgnoreCase))
-            return Enumerable.Range(0, samples.Count).ToList();
         var column = ComboText(QcGroupByCombo, "Sample Type");
-        return Enumerable.Range(0, samples.Count)
-            .Where(i => string.Equals(SampleAnnotation(samples[i], column), value, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        return QcGroupFilter.Matching(
+            samples.Count, i => SampleAnnotation(samples[i], column), SelectedGroupValues());
     }
+
+    /// <summary>Human-readable description of the current filter, for plot titles and messages.</summary>
+    private string GroupLabel() => QcGroupFilter.Describe(SelectedGroupValues());
 
     // Control-correlation heatmap + RT plots, computed on the fly for the selected Group. delta-LOWESS
     // made recompute fast enough to do this per selection, which fixed report PNGs could not respect.
@@ -1342,9 +1435,8 @@ public partial class MainWindow : Window
                 return;
             }
             var groupCols = GroupColumns(d.Samples);
-            var value = ComboText(QcGroupCombo, "All");
             var column = ComboText(QcGroupByCombo, "Sample Type");
-            var groupLabel = string.Equals(value, "All", StringComparison.OrdinalIgnoreCase) ? "all samples" : value;
+            var groupLabel = GroupLabel();
             var types = d.Samples.Select(s => _qcTypes.GetValueOrDefault(s, "unknown")).ToList();
             var cap = view == "raw" ? "Raw" : "Corrected";
             double[,] Subset(double[,] m, List<int> c) => c.Count == d.Samples.Count ? m : SelectColumns(m, c);
