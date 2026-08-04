@@ -105,7 +105,7 @@ public sealed class HeadlessSkylineExporter
         if (info is not null)
         {
             annotations.AddRange(info.ReplicateAnnotationNames);
-            _log($"{label}: {info.Replicates.Count} replicate(s); annotations: "
+            _log($"{info.Replicates.Count} replicate(s); annotations: "
                  + (info.ReplicateAnnotationNames.Count > 0
                      ? string.Join(", ", info.ReplicateAnnotationNames)
                      : "(none)"));
@@ -140,11 +140,11 @@ public sealed class HeadlessSkylineExporter
             if (File.Exists(metadataCsv) && new FileInfo(metadataCsv).Length > 0)
             {
                 metadataResult = metadataCsv;
-                _log($"{label}: exported replicate metadata to {metadataCsv}.");
+                _log($"Exported replicate metadata to {metadataCsv}.");
             }
             else
             {
-                _log($"{label}: the replicate metadata report produced no file; "
+                _log($"The replicate metadata report produced no file; "
                      + "sample types will be inferred from replicate names.");
             }
         }
@@ -155,7 +155,7 @@ public sealed class HeadlessSkylineExporter
         catch (Exception ex)
         {
             // Metadata is optional - the pipeline can still run and infer sample types from names.
-            _log($"{label}: replicate metadata export failed ({ex.Message}); "
+            _log($"Replicate metadata export failed ({ex.Message}); "
                  + "sample types will be inferred from replicate names.");
         }
 
@@ -181,7 +181,7 @@ public sealed class HeadlessSkylineExporter
     private (string Path, bool IsParquet) ExportTransitionReport(
         string skyPath, string workDir, string label, string? prismSkyr, CancellationToken cancellationToken)
     {
-        _log($"{label}: exporting the PRISM transition report via {_runner.Description} "
+        _log($"Exporting the PRISM transition report via {_runner.Description} "
              + "(this can take a while on a large document)...");
 
         var parquet = Path.Combine(workDir, label + ".parquet");
@@ -198,12 +198,12 @@ public sealed class HeadlessSkylineExporter
             }
             catch (Exception ex)
             {
-                _log($"{label}: parquet export failed ({ex.Message}); falling back to CSV.");
+                _log($"Parquet export failed ({ex.Message}); falling back to CSV.");
             }
 
             if (ParquetMagic.IsValid(parquet))
             {
-                _log($"{label}: exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
+                _log($"Exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
                 return (parquet, true);
             }
             TryDelete(parquet); // a failed run can leave a stub behind
@@ -215,7 +215,7 @@ public sealed class HeadlessSkylineExporter
             throw new InvalidOperationException(
                 $"Skyline did not produce a PRISM report for {Path.GetFileName(skyPath)}. "
                 + "See the log above for its output.");
-        _log($"{label}: exported {csv} ({new FileInfo(csv).Length:N0} bytes, invariant CSV).");
+        _log($"Exported {csv} ({new FileInfo(csv).Length:N0} bytes, invariant CSV).");
         return (csv, false);
     }
 

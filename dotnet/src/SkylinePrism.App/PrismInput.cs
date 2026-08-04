@@ -128,19 +128,26 @@ public sealed class PrismInput : INotifyPropertyChanged
         cancellationToken.ThrowIfCancellationRequested();
         var label = string.IsNullOrWhiteSpace(BatchLabel) ? SanitizeLabel(DisplayName) : SanitizeLabel(BatchLabel);
 
+        // Every line produced while preparing THIS input is tagged with its document. Inputs are exported
+        // concurrently, and the deepest lines come from Skyline's own console ("Opening file...", "2%"),
+        // which say nothing about which document they belong to - two documents at once produce a stream
+        // of identical-looking pairs. Tagging here rather than inside each exporter covers all three input
+        // kinds, plus the runner output and the Skyline-selection messages, from one place.
+        var scoped = Scoped(log, label);
+
         switch (Kind)
         {
             case PrismInputKind.RunningSkyline:
             {
                 var session = Session
                     ?? throw new InvalidOperationException($"{DisplayName}: no Skyline connection for this input.");
-                var driver = new SkylineReportDriver(session, log);
+                var driver = new SkylineReportDriver(session, scoped);
                 return driver.Export(reportsDir, metadataReportName, batchAnnotation, label);
             }
 
             case PrismInputKind.ClosedDocument:
             {
-                var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, log);
+                var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
                 return exporter.Export(Path, reportsDir, label, batchAnnotation, cancellationToken);
             }
 
@@ -150,12 +157,19 @@ public sealed class PrismInput : INotifyPropertyChanged
                     throw new FileNotFoundException($"Report file not found: {Path}", Path);
                 var isParquet = System.IO.Path.GetExtension(Path)
                     .Equals(".parquet", StringComparison.OrdinalIgnoreCase);
-                log($"{label}: using the existing report {Path}"
+                scoped($"Using the existing report {Path}"
                     + (MetadataPath is not null ? $" with metadata {MetadataPath}" : " (no metadata file)"));
                 return new ExportedReports(Path, isParquet, MetadataPath, null, label);
             }
         }
     }
+
+    /// <summary>
+    /// Prefix every message with <paramref name="label"/> so interleaved output from concurrent exports
+    /// stays attributable. Blank lines are passed through untouched so they still separate sections.
+    /// </summary>
+    public static Action<string> Scoped(Action<string> log, string label) =>
+        message => log(string.IsNullOrWhiteSpace(message) ? message : $"[{label}] {message}");
 
     /// <summary>
     /// The digestion enzyme from this input's document, mapped to a PRISM enzyme name, or null when it is
