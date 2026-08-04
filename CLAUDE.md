@@ -923,6 +923,20 @@ when both tracks reach the same CalVer number. Content structure:
 `## New Features / ## Bug Fixes / ## Performance / ## Breaking Changes` (omit empty sections); past
 tense, lead with user impact, include concrete numbers, reference config keys by name.
 
+> [!IMPORTANT]
+> **The notes file IS the GitHub Release description - write it for that audience.** On the C# track
+> `dotnet-release.yml` publishes `release-notes/RELEASE_NOTES_${tag}.md` verbatim as the Release body, so
+> whatever lands in that file is what users read on the Releases page. Two consequences:
+>
+> - **Rename the draft before tagging.** The workflow resolves the path from the tag and **fails** if the
+>   file is missing - after the artifacts have already built.
+> - It renders as GitHub-flavoured Markdown, so keep headings/links/code fences valid; the leading `#`
+>   title is redundant with the release's own heading but harmless.
+>
+> On the Python track you create the Release by hand (that is what triggers the PyPI upload), so paste
+> the notes in yourself. Backfill an old Release with
+> `gh release edit <tag> --notes-file release-notes/RELEASE_NOTES_<tag>.md`.
+
 ### C# (.NET) release - the primary track
 
 Two version sources MUST stay in lockstep; `dotnet-release.yml` fails the release if either differs
@@ -953,6 +967,13 @@ Steps:
    **Pushing the tag both builds the artifacts AND creates the GitHub Release**
    (`.github/workflows/dotnet-release.yml`). Do NOT hand-create the Release; there is no PyPI upload
    for the C# track.
+
+   The Release **body is the notes file**: the workflow reads
+   `release-notes/RELEASE_NOTES_${tag}.md` (so tag `dotnet-v26.7.2` -> `RELEASE_NOTES_dotnet-v26.7.2.md`)
+   and fails with an explicit message if it is missing. That is why step 1's rename must happen *before*
+   tagging - a tag pushed without its notes file aborts the release job after the artifacts have built.
+   (Releases up to and including v26.7.1 were published with an empty body, before the workflow checked
+   out the repo; they have since been backfilled with `gh release edit --notes-file`.)
 
 Artifacts (7 assets, all **framework-dependent** - the .NET 8 runtime is NOT bundled; users install
 it once):

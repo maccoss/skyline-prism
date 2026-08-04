@@ -109,3 +109,16 @@ notes filenames** so their counters never collide.
 5. Push the tag: `git push origin dotnet-v{version}` — **pushing the tag both builds the artifacts
    and creates the GitHub Release** (via `dotnet-release.yml`). Do **not** hand-create the GitHub
    Release. There is no PyPI step for the C# track.
+
+> [!IMPORTANT]
+> **This file becomes the GitHub Release description.** `dotnet-release.yml` publishes
+> `release-notes/RELEASE_NOTES_${tag}.md` verbatim as the Release body — so write it for the people
+> reading the Releases page, not just for the repo. Step 1's rename therefore has to happen **before**
+> tagging: the workflow resolves the path from the tag and fails with an explicit message if the file is
+> absent, after the artifacts have already built.
+>
+> The Python track is the other way round — you create the Release by hand (that is what triggers the
+> PyPI upload), so paste the notes in yourself.
+>
+> To fix an existing Release:
+> `gh release edit <tag> --notes-file release-notes/RELEASE_NOTES_<tag>.md`

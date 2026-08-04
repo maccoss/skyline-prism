@@ -107,9 +107,27 @@ jobs:
     needs: [tool, cli]
     runs-on: ubuntu-latest
     steps:
+      # Needed for the release notes below - this job used to skip the checkout, which is why earlier
+      # releases were published with an empty body.
+      - uses: actions/checkout@v6
+
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
+
+      # The tag is dotnet-v<version> and the notes are RELEASE_NOTES_dotnet-v<version>.md, so the path
+      # follows from the tag. Fail here with a clear message rather than letting the publish step die on
+      # a missing file, or silently publish an empty release.
+      - name: Locate the release notes
+        run: |
+          NOTES="release-notes/RELEASE_NOTES_${GITHUB_REF_NAME}.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "::error::Expected release notes at $NOTES. Rename the draft (release-notes/RELEASE_NOTES_dotnet-next.md) to match the tag before tagging - see the Release Process in CLAUDE.md."
+            exit 1
+          fi
+          echo "Using release notes: $NOTES ($(wc -l < "$NOTES") lines)"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+        id: notes
 
       - name: Publish GitHub Release
         # v3 only moves the action runtime from Node 20 to Node 24 (same inputs); v2 is Node 20, which
@@ -117,4 +135,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*
+          body_path: ${{ steps.notes.outputs.notes }}
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
