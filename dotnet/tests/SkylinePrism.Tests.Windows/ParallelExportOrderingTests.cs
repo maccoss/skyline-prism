@@ -1,7 +1,6 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -16,73 +15,80 @@ namespace SkylinePrism.Tests.Windows;
 /// be stored BY INDEX and only flattened afterwards. Appending as each finishes would silently shuffle
 /// the pairing: no error, no crash, just every plate's replicates attributed to the wrong document.</para>
 ///
-/// <para>These tests exercise the collect-by-index pattern that <c>MainWindow.RunPipeline</c> uses,
-/// with deliberately inverted completion order.</para>
+/// <para>Completion order is <b>simulated explicitly</b> rather than provoked with sleeps: a CI runner
+/// with few cores can serialise a <c>Parallel.For</c> no matter what degree is requested, so any test
+/// asserting "these finished out of order" is inherently flaky. The invariant under test - index-based
+/// collection survives arbitrary completion order - does not need real concurrency to verify.</para>
 /// </summary>
 public class ParallelExportOrderingTests
 {
-    /// <summary>Runs work with the same shape as the export loop and returns results in input order.</summary>
-    private static string[] CollectByIndex(int count, int degree, Func<int, string> work)
+    /// <summary>An arbitrary, fixed completion order that is not the input order.</summary>
+    private static readonly int[] CompletionOrder = { 3, 0, 5, 1, 4, 2 };
+
+    private const int Count = 6;
+
+    private static string Doc(int i) => $"doc{i}";
+
+    [Fact]
+    public void CollectingByIndex_PreservesInputOrder_ForAnyCompletionOrder()
     {
-        var results = new string?[count];
-        Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = degree },
-            i => results[i] = work(i));
-        return results.Select(r => r!).ToArray();
+        // What RunPipeline does: write into a pre-sized slot, flatten afterwards.
+        var slots = new string?[Count];
+        foreach (var i in CompletionOrder)
+            slots[i] = Doc(i);
+
+        var flattened = slots.Where(s => s is not null).Select(s => s!).ToArray();
+
+        Assert.Equal(Enumerable.Range(0, Count).Select(Doc).ToArray(), flattened);
     }
 
     [Fact]
-    public void ResultsStayInInputOrder_EvenWhenCompletionOrderIsReversed()
+    public void AppendingOnCompletion_MisPairsMetadata()
     {
-        const int n = 6;
-        // Item 0 is slowest, item n-1 fastest: completion order is the exact reverse of input order.
-        var results = CollectByIndex(n, degree: n, i =>
+        // The bug this design avoids: same work, same results, wrong pairing.
+        var appended = new List<string>();
+        foreach (var i in CompletionOrder)
+            appended.Add(Doc(i));
+
+        var inInputOrder = Enumerable.Range(0, Count).Select(Doc).ToArray();
+        Assert.NotEqual(inInputOrder, appended);                              // order is wrong...
+        Assert.Equal(inInputOrder.OrderBy(x => x), appended.OrderBy(x => x)); // ...though the same set
+    }
+
+    [Fact]
+    public void ReportsAndMetadataStayAlignedWithEachOther()
+    {
+        // The pairing that actually matters: report[N] and metadata[N] must describe the same document,
+        // whatever order the exports finished in.
+        var reports = new string?[Count];
+        var metadata = new string?[Count];
+        foreach (var i in CompletionOrder)
         {
-            Thread.Sleep(20 * (n - i));
-            return $"doc{i}";
-        });
+            reports[i] = $"{Doc(i)}.parquet";
+            metadata[i] = $"{Doc(i)}.metadata.csv";
+        }
 
-        Assert.Equal(Enumerable.Range(0, n).Select(i => $"doc{i}").ToArray(), results);
-    }
-
-    [Fact]
-    public void CompletionOrderReallyDoesDiffer_SoTheTestAboveIsMeaningful()
-    {
-        const int n = 6;
-        var completion = new ConcurrentQueue<int>();
-        CollectByIndex(n, degree: n, i =>
+        for (var i = 0; i < Count; i++)
         {
-            Thread.Sleep(20 * (n - i));
-            completion.Enqueue(i);
-            return $"doc{i}";
-        });
-
-        // If everything happened to run sequentially the ordering test would prove nothing.
-        Assert.NotEqual(Enumerable.Range(0, n).ToArray(), completion.ToArray());
+            Assert.Equal(
+                System.IO.Path.GetFileNameWithoutExtension(reports[i]),
+                metadata[i]!.Replace(".metadata.csv", ""));
+        }
     }
 
-    [Fact]
-    public void AppendingOnCompletionWouldMisPairMetadata()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void ResultsStayInInputOrder_UnderRealParallelism(int degree)
     {
-        // Demonstrates the bug this design avoids: the naive "add as each finishes" approach produces a
-        // report/metadata pairing that does not match the inputs.
-        const int n = 5;
-        var appended = new ConcurrentQueue<string>();
-        Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = n }, i =>
-        {
-            Thread.Sleep(20 * (n - i));
-            appended.Enqueue($"doc{i}");
-        });
+        // Exercises the real Parallel.For path. Order preservation holds whether the runner actually
+        // overlaps the work or serialises it, so this is safe on any machine.
+        var slots = new string?[Count];
+        Parallel.For(0, Count, new ParallelOptions { MaxDegreeOfParallelism = degree },
+            i => slots[i] = Doc(i));
 
-        var inOrder = Enumerable.Range(0, n).Select(i => $"doc{i}").ToArray();
-        Assert.NotEqual(inOrder, appended.ToArray());          // append order is wrong...
-        Assert.Equal(inOrder.OrderBy(x => x), appended.OrderBy(x => x)); // ...though the same set
-    }
-
-    [Fact]
-    public void SequentialDegreeStillPreservesOrder()
-    {
-        var results = CollectByIndex(4, degree: 1, i => $"doc{i}");
-        Assert.Equal(new[] { "doc0", "doc1", "doc2", "doc3" }, results);
+        Assert.Equal(Enumerable.Range(0, Count).Select(Doc).ToArray(), slots.Select(s => s!).ToArray());
     }
 
     [Fact]
