@@ -949,8 +949,9 @@ from the tag:
 Steps:
 
 1. Finalize `release-notes/RELEASE_NOTES_dotnet-next.md`; `git mv` it to
-   `RELEASE_NOTES_dotnet-v{version}.md`, update its heading, and create a fresh empty
-   `RELEASE_NOTES_dotnet-next.md`.
+   `RELEASE_NOTES_dotnet-v{version}.md`, update its heading, **delete every section heading with no
+   entries under it** (the draft is seeded with all four, and this file is published verbatim as the
+   GitHub Release body), and create a fresh empty `RELEASE_NOTES_dotnet-next.md`.
 2. Bump the version to `{version}` in **both** `Directory.Build.props` and `info.properties` (they
    must match each other and the tag).
 3. **Run the ship gate** locally:
@@ -996,8 +997,9 @@ Two version sources, **both bumped together** (they have drifted before):
 
 Steps:
 
-1. Finalize `RELEASE_NOTES_next.md`; `git mv` to `RELEASE_NOTES_v{version}.md`, update heading, create
-   a fresh `RELEASE_NOTES_next.md`.
+1. Finalize `RELEASE_NOTES_next.md`; `git mv` to `RELEASE_NOTES_v{version}.md`, update heading,
+   **delete every section heading with no entries under it** (the draft is seeded with all four),
+   create a fresh `RELEASE_NOTES_next.md`.
 2. Bump `pyproject.toml` `version` AND `skyline_prism/__init__.py` `__version__` to `{version}`.
 3. Run `pytest tests/ -v` (all pass).
 4. Merge to `main`, then `git tag v{version}` and `git push origin main --tags`.
