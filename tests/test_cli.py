@@ -5,12 +5,14 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from skyline_prism.cli import (
     _deep_merge,
     find_column,
     load_config,
     load_config_from_provenance,
+    resolve_library_assist_config,
 )
 
 
@@ -124,6 +126,129 @@ protein_rollup:
             assert config["protein_rollup"]["method"] == "topn"
             # Defaults should be preserved
             assert config["batch_correction"]["enabled"] is True
+        finally:
+            config_path.unlink()
+
+
+class TestResolveLibraryAssistConfig:
+    """Tests for library-assisted rollup config resolution across spellings."""
+
+    def test_defaults(self):
+        """Test defaults when nothing is configured."""
+        resolved = resolve_library_assist_config({"method": "library_assist"})
+
+        assert resolved["library_path"] is None
+        assert resolved["min_fragments"] == 3
+        assert resolved["mz_tolerance"] == 0.02
+        assert resolved["outlier_threshold"] == 1.0
+        assert resolved["remove_outliers"] is True
+        assert resolved["fitting_method"] == "median_polish"
+
+    def test_flat_csharp_keys(self):
+        """Test that the C# engine's flat library_* keys are honored."""
+        resolved = resolve_library_assist_config(
+            {
+                "method": "library_assist",
+                "library_path": "lib.blib",
+                "library_min_fragments": 4,
+                "library_mz_tolerance": 0.05,
+                "library_outlier_threshold": 2.0,
+                "library_remove_outliers": False,
+                "library_fitting_method": "least_squares",
+            }
+        )
+
+        assert resolved["library_path"] == "lib.blib"
+        assert resolved["min_fragments"] == 4
+        assert resolved["mz_tolerance"] == 0.05
+        assert resolved["outlier_threshold"] == 2.0
+        assert resolved["remove_outliers"] is False
+        assert resolved["fitting_method"] == "least_squares"
+
+    def test_empty_nested_block_with_flat_keys(self):
+        """Test that a bare 'library_assist:' (YAML None) does not shadow flat keys."""
+        transition_config = yaml.safe_load("""
+method: library_assist
+library_path: lib.blib
+library_outlier_threshold: 1
+library_remove_outliers: true
+library_assist:
+""")
+        assert transition_config["library_assist"] is None
+
+        resolved = resolve_library_assist_config(transition_config)
+
+        assert resolved["library_path"] == "lib.blib"
+        assert resolved["outlier_threshold"] == 1
+        assert resolved["remove_outliers"] is True
+
+    def test_nested_block_wins(self):
+        """Test that the nested block overrides flat keys (matches the C# port)."""
+        resolved = resolve_library_assist_config(
+            {
+                "library_path": "flat.blib",
+                "library_min_fragments": 4,
+                "library_assist": {
+                    "library_path": "nested.blib",
+                    "min_matched_fragments": 6,
+                },
+            }
+        )
+
+        assert resolved["library_path"] == "nested.blib"
+        assert resolved["min_fragments"] == 6
+
+    def test_legacy_aliases(self):
+        """Test that the legacy spectral_library_* aliases still resolve."""
+        resolved = resolve_library_assist_config(
+            {
+                "spectral_library_path": "legacy.blib",
+                "spectral_library_min_fragments": 5,
+                "spectral_library_mz_tolerance": 0.01,
+                "spectral_library_outlier_threshold": 3.0,
+            }
+        )
+
+        assert resolved["library_path"] == "legacy.blib"
+        assert resolved["min_fragments"] == 5
+        assert resolved["mz_tolerance"] == 0.01
+        assert resolved["outlier_threshold"] == 3.0
+
+    def test_flat_wins_over_legacy(self):
+        """Test precedence: nested > flat library_* > legacy spectral_library_*."""
+        resolved = resolve_library_assist_config(
+            {
+                "spectral_library_path": "legacy.blib",
+                "library_path": "flat.blib",
+            }
+        )
+
+        assert resolved["library_path"] == "flat.blib"
+
+    def test_csharp_style_config_has_no_unknown_keys(self):
+        """Test that a C#-flavored transition_rollup block validates cleanly."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("""
+transition_rollup:
+  method: library_assist
+  min_transitions: 3
+  use_ms1: false
+  library_path: lib.blib
+  library_min_fragments: 3
+  library_mz_tolerance: 0.02
+  library_outlier_threshold: 1
+  library_remove_outliers: true
+  library_fitting_method: median_polish
+""")
+            f.flush()
+            config_path = Path(f.name)
+
+        try:
+            config = load_config(config_path)
+            assert config["_unknown_keys"] == []
+            assert resolve_library_assist_config(config["transition_rollup"])["library_path"] == (
+                "lib.blib"
+            )
         finally:
             config_path.unlink()
 

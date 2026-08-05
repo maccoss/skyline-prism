@@ -44,19 +44,19 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | `topn_selection` | `correlation` | `correlation` (needs Shape Correlation) or `intensity` | **Both** |
 | `topn_weighting` | `sqrt` | `sqrt` or `sum` | **Both** |
 | `consensus_regularization` | `0.1` | Inverse-variance shrinkage for `method: consensus` | **C# only** (Python hardcodes) |
-| `library_path` | `null` | Spectral library for `method: library_assist`: **`.blib`** (Skyline) or **`.tsv`** (Carafe/DIA-NN), auto-detected by extension | **Both**² |
-| `library_min_fragments` | `3` | Min matched library fragments for a fit | **Both**² |
-| `library_mz_tolerance` | `0.02` | m/z tolerance (Da) matching transitions to library | **Both**² |
-| `library_outlier_threshold` | `1.0` | Normalized-residual threshold for interference | **Both**² |
-| `library_remove_outliers` | `true` | Iteratively drop interference fragments before scaling | **Both**² |
-| `library_assist:` *(nested)* | — | `library_path`, `min_matched_fragments`, `mz_tolerance`, `outlier_threshold`, `remove_outliers`, `fitting_method`. C# accepts this and folds it onto the flat `library_*` keys. | **Both** |
-| `library_assist.fitting_method` | `median_polish` | `median_polish` only. `least_squares` **aborts** in C#. | Python only (C# errors) |
+| `library_path` | `null` | Spectral library for `method: library_assist`: **`.blib`** (Skyline) or **`.tsv`** (Carafe/DIA-NN), auto-detected by extension | **Both** |
+| `library_min_fragments` | `3` | Min matched library fragments for a fit | **Both** |
+| `library_mz_tolerance` | `0.02` | m/z tolerance (Da) matching transitions to library | **Both** |
+| `library_outlier_threshold` | `1.0` | Normalized-residual threshold for interference | **Both** |
+| `library_remove_outliers` | `true` | Iteratively drop interference fragments before scaling | **Both** |
+| `library_fitting_method` | `median_polish` | `median_polish` or `least_squares`. `least_squares` **aborts** in C#. | **Both** (C# errors on `least_squares`) |
+| `library_assist:` *(nested)* | — | `library_path`, `min_matched_fragments`, `mz_tolerance`, `outlier_threshold`, `remove_outliers`, `fitting_method`. Both engines accept this and fold it onto the flat `library_*` keys (nested wins).² | **Both** |
 | `enabled` | `true` | Toggle the transition stage | **Python only** (C# always runs it) |
 | `method: adaptive` + `adaptive_rollup:` + `learn_adaptive_weights` | — | Learned transition weights (L-BFGS-B) / precursor to QuantUMS | **Python only** — C# **aborts** on `method: adaptive`; the keys warn as unrecognized |
-| `spectral_library_path` / `spectral_library_min_fragments` / `spectral_library_mz_tolerance` | — | Legacy flat aliases | **Python only** (use the C# `library_*` names or the nested block) |
+| `spectral_library_path` / `spectral_library_min_fragments` / `spectral_library_mz_tolerance` / `spectral_library_outlier_threshold` | — | Legacy flat aliases, lowest precedence² | **Python only** (use the flat `library_*` names or the nested block) |
 
 ¹ Runtime default with no config block: **Python `median_polish`, C# `sum`** — always set `method` explicitly. Both templates emit `median_polish`.
-² Python's canonical form is `spectral_library_*` or the nested `library_assist:` block; C# adds flat `library_*` aliases. The rollup algorithm (median-polish with a library prior) is identical — see `dotnet/PORTING_STATUS.md`.
+² Precedence when a setting is given more than once: nested `library_assist:` > flat `library_*` > legacy `spectral_library_*`. An empty `library_assist:` block is treated as absent by both engines. The rollup algorithm (median-polish with a library prior) is identical — see `dotnet/PORTING_STATUS.md`.
 
 ---
 
