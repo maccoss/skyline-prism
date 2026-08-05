@@ -42,8 +42,16 @@ public class SkylineReportDriverTests
         public readonly Dictionary<string, string> SettingsItems = new(StringComparer.Ordinal);
         public readonly Dictionary<string, string[]> SelectedByList = new(StringComparer.Ordinal);
 
+        // A real Skyline can fail these calls outright rather than returning empty - see
+        // GetDigestionEnzyme_ReturnsNull_WhenTheRpcThrows.
+        public bool ThrowOnSettingsListCalls;
+
         public string[] GetSettingsListSelectedItems(string listType)
-            => SelectedByList.TryGetValue(listType, out var s) ? s : Array.Empty<string>();
+        {
+            if (ThrowOnSettingsListCalls)
+                throw new InvalidOperationException("Object reference not set to an instance of an object.");
+            return SelectedByList.TryGetValue(listType, out var s) ? s : Array.Empty<string>();
+        }
 
         public string GetSettingsListItem(string listType, string itemName)
             => SettingsItems.TryGetValue($"{listType}/{itemName}", out var xml) ? xml : "";
@@ -293,6 +301,19 @@ public class SkylineReportDriverTests
     public void GetDigestionEnzyme_ReturnsNull_WhenNoEnzymeSelected()
     {
         var client = new FakeClient(); // no selected "Enzymes" item
+        Assert.Null(new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_ReturnsNull_WhenTheRpcThrows()
+    {
+        // Observed against a live Skyline-daily 26.1.1: on an unsaved/blank document
+        // GetSettingsListSelectedItems("Enzymes") does not return empty - it throws server-side
+        // ("Object reference not set to an instance of an object"). Reading the enzyme is a
+        // best-effort refinement, so the tool has to keep the configured default and carry on
+        // rather than failing the run over it.
+        var client = new FakeClient { ThrowOnSettingsListCalls = true };
+
         Assert.Null(new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
     }
 
