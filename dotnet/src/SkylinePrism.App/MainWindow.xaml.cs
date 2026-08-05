@@ -637,11 +637,10 @@ public partial class MainWindow : Window
         ShowCopyableTextWindow("PRISM command line", body, command, yaml);
     }
 
-    private static string SerializeConfig(PrismConfig config) =>
-        new YamlDotNet.Serialization.SerializerBuilder()
-            .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
-            .Build()
-            .Serialize(config);
+    // ConfigWriter emits only the keys that apply to the selected methods (a plain object dump
+    // spells out all ~60 properties, including the ones the chosen methods ignore). Both the text
+    // shown above and the "Copy config (YAML)" button use this same string.
+    private static string SerializeConfig(PrismConfig config) => ConfigWriter.ToYaml(config);
 
     private void ShowCopyableTextWindow(string title, string body, string command, string yaml)
     {

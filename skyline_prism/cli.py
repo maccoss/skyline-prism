@@ -509,9 +509,17 @@ KNOWN_CONFIG_KEYS = {
         "learn_adaptive_weights",
         "learn_weights",  # Both supported for compatibility
         "adaptive_rollup",  # Nested section
-        "spectral_library_path",  # Path to spectral library for library-assisted method
-        "spectral_library_min_fragments",  # Min fragments for library matching
-        "spectral_library_mz_tolerance",  # m/z tolerance for library matching
+        "spectral_library_path",  # Legacy flat alias for library_path
+        "spectral_library_min_fragments",  # Legacy flat alias for library_min_fragments
+        "spectral_library_mz_tolerance",  # Legacy flat alias for library_mz_tolerance
+        "spectral_library_outlier_threshold",  # Legacy flat alias for library_outlier_threshold
+        # Flat library_* keys: the C# engine's spelling, accepted here so one config runs on both
+        "library_path",
+        "library_min_fragments",
+        "library_mz_tolerance",
+        "library_outlier_threshold",
+        "library_remove_outliers",
+        "library_fitting_method",
         "library_assist",  # Nested section for library-assisted rollup config
     },
     "transition_rollup.adaptive_rollup": {
@@ -700,6 +708,69 @@ def _find_unknown_config_keys(user_config: dict) -> list[str]:
 
     check_section(user_config)
     return unknown_keys
+
+
+# Library-assisted rollup settings, and the three config spellings that set them.
+# Tuple order is (resolved name, legacy flat key, C# flat key, nested library_assist key);
+# later sources win, so nested > flat library_* > legacy spectral_library_*. This matches
+# TransitionRollupSection.ResolveLibraryAssist() in the C# port, where nested also wins.
+_LIBRARY_ASSIST_DEFAULTS = {
+    "library_path": None,
+    "min_fragments": 3,
+    "mz_tolerance": 0.02,
+    "outlier_threshold": 1.0,
+    "remove_outliers": True,
+    "fitting_method": "median_polish",
+}
+
+_LIBRARY_ASSIST_ALIASES = (
+    ("library_path", "spectral_library_path", "library_path", "library_path"),
+    (
+        "min_fragments",
+        "spectral_library_min_fragments",
+        "library_min_fragments",
+        "min_matched_fragments",
+    ),
+    ("mz_tolerance", "spectral_library_mz_tolerance", "library_mz_tolerance", "mz_tolerance"),
+    (
+        "outlier_threshold",
+        "spectral_library_outlier_threshold",
+        "library_outlier_threshold",
+        "outlier_threshold",
+    ),
+    ("remove_outliers", None, "library_remove_outliers", "remove_outliers"),
+    ("fitting_method", None, "library_fitting_method", "fitting_method"),
+)
+
+
+def resolve_library_assist_config(transition_config: dict) -> dict:
+    """Resolve library-assisted rollup settings from any accepted config spelling.
+
+    Three spellings are accepted, in increasing precedence:
+
+    1. legacy flat ``transition_rollup.spectral_library_*``
+    2. flat ``transition_rollup.library_*`` (the C# engine's spelling)
+    3. nested ``transition_rollup.library_assist.*`` (canonical Python form)
+
+    An empty ``library_assist:`` block (YAML ``None``) is treated as absent rather than
+    raising, so a C#-style flat config round-trips through the Python engine.
+
+    Returns a dict with keys ``library_path``, ``min_fragments``, ``mz_tolerance``,
+    ``outlier_threshold``, ``remove_outliers``, ``fitting_method``.
+    """
+    nested = transition_config.get("library_assist") or {}
+    resolved = dict(_LIBRARY_ASSIST_DEFAULTS)
+
+    for name, legacy_key, flat_key, nested_key in _LIBRARY_ASSIST_ALIASES:
+        for source, key in (
+            (transition_config, legacy_key),
+            (transition_config, flat_key),
+            (nested, nested_key),
+        ):
+            if key is not None and source.get(key) is not None:
+                resolved[name] = source[key]
+
+    return resolved
 
 
 def load_config_from_provenance(provenance_path: Path) -> tuple[dict, dict]:
@@ -1541,17 +1612,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if rollup_method == "library-assisted":
         from .spectral_library import SpectralLibraryRollup
 
-        # Support both config formats:
-        # 1. Nested: transition_rollup.library_assist.library_path
-        # 2. Flat: transition_rollup.spectral_library_path
-        lib_assist_config = config["transition_rollup"].get("library_assist", {})
-        spectral_library_path = lib_assist_config.get("library_path") or config[
-            "transition_rollup"
-        ].get("spectral_library_path")
+        # Accepts the nested library_assist block, the flat library_* keys (C# spelling),
+        # and the legacy spectral_library_* aliases - see resolve_library_assist_config().
+        lib_assist_config = resolve_library_assist_config(config["transition_rollup"])
+        spectral_library_path = lib_assist_config["library_path"]
         if not spectral_library_path:
             logger.error(
-                "library-assisted method requires library_path in config. "
-                "Use transition_rollup.library_assist.library_path"
+                "library-assisted method requires library_path in config. Use "
+                "transition_rollup.library_path or transition_rollup.library_assist.library_path"
             )
             return 1
 
@@ -1564,20 +1632,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             logger.error(f"Spectral library not found: {lib_path}")
             return 1
 
-        # Get additional parameters from nested or flat format
-        lib_min_fragments = lib_assist_config.get("min_matched_fragments") or config[
-            "transition_rollup"
-        ].get("spectral_library_min_fragments", 3)
-        lib_mz_tolerance = lib_assist_config.get("mz_tolerance") or config["transition_rollup"].get(
-            "spectral_library_mz_tolerance", 0.02
-        )
-        lib_outlier_threshold = lib_assist_config.get("outlier_threshold") or config[
-            "transition_rollup"
-        ].get("spectral_library_outlier_threshold", 1.0)
+        lib_min_fragments = lib_assist_config["min_fragments"]
+        lib_mz_tolerance = lib_assist_config["mz_tolerance"]
+        lib_outlier_threshold = lib_assist_config["outlier_threshold"]
         # Whether to remove outliers (default True, set False for debugging)
-        lib_remove_outliers = lib_assist_config.get("remove_outliers", True)
+        lib_remove_outliers = lib_assist_config["remove_outliers"]
         # Fitting method: "median_polish" (default, recommended) or "least_squares"
-        lib_fitting_method = lib_assist_config.get("fitting_method", "median_polish")
+        lib_fitting_method = lib_assist_config["fitting_method"]
         if lib_fitting_method not in ("median_polish", "least_squares"):
             logger.warning(
                 f"Unknown fitting_method '{lib_fitting_method}', using 'median_polish'"
@@ -3249,6 +3310,9 @@ transition_rollup:
   # Compares observed fragment ratios to library and removes outliers iteratively.
   # Only HIGH residuals are outliers (signal > expected = interference).
   # Low or negative residuals are valid - they indicate low abundance, not interference.
+  # The flat spelling used by the C# engine (library_path, library_mz_tolerance,
+  # library_min_fragments, library_fitting_method, library_outlier_threshold,
+  # library_remove_outliers) is also accepted here; this nested block wins if both are set.
   library_assist:
     library_path: null          # <<< EDIT REQUIRED: "/path/to/your/library.blib" or ".tsv"
     mz_tolerance: 0.02          # m/z tolerance for matching fragments (Da)
@@ -3555,9 +3619,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
     method1 = meta1.get("config", {}).get("transition_rollup", {}).get("method", "method1")
     method2 = meta2.get("config", {}).get("transition_rollup", {}).get("method", "method2")
 
-    # Get library path from run2 (the library_assist run)
-    lib_config = meta2.get("config", {}).get("transition_rollup", {}).get("library_assist", {})
-    library_path = lib_config.get("library_path")
+    # Get library settings from run2 (the library_assist run). Run2's recorded config may use
+    # the flat library_* keys, the nested block, or the legacy aliases.
+    lib_settings = resolve_library_assist_config(
+        meta2.get("config", {}).get("transition_rollup", {})
+    )
+    library_path = lib_settings["library_path"]
+    lib_config = {
+        "library_path": library_path,
+        "min_matched_fragments": lib_settings["min_fragments"],
+        "mz_tolerance": lib_settings["mz_tolerance"],
+        "outlier_threshold": lib_settings["outlier_threshold"],
+        "remove_outliers": lib_settings["remove_outliers"],
+        "fitting_method": lib_settings["fitting_method"],
+    }
 
     if not library_path:
         logger.error("Run2 must have a library_assist configuration with library_path")
