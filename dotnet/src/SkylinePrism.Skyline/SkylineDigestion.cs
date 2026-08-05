@@ -10,9 +10,15 @@ namespace SkylinePrism.Skyline;
 /// Maps a Skyline document's digestion enzyme (Peptide Settings &gt; Digestion) to the enzyme name
 /// PRISM's FASTA-mapping terminus check understands (parsimony.enzyme). Skyline exposes the active
 /// enzyme over JSON-RPC as an XML element, e.g.:
-/// <code>&lt;enzyme name="Trypsin" cut="KR" no_cut="P" sense="C" /&gt;</code>
+/// <code>&lt;Enzyme name="Trypsin" cut="KR" no_cut="P" sense="C" /&gt;</code>
 /// where <c>cut</c> is the cleavage residues, <c>no_cut</c> the blocking residues, and <c>sense</c>
 /// the side (<c>C</c> = cleave C-terminal / after, <c>N</c> = N-terminal / before).
+/// <para>
+/// Element casing differs by source: <c>GetSettingsListItem("Enzymes", ...)</c> returns PascalCase
+/// <c>&lt;Enzyme&gt;</c>, while the same enzyme inside a saved <c>.sky</c> document is lowercase
+/// <c>&lt;enzyme&gt;</c>. Names are therefore matched case-insensitively - a case-sensitive check here
+/// silently rejected every live-document enzyme and reported it as having no PRISM equivalent.
+/// </para>
 /// </summary>
 public static class SkylineDigestion
 {
@@ -37,19 +43,26 @@ public static class SkylineDigestion
             return null;
         }
 
-        var enzyme = root.Name.LocalName == "enzyme"
-            ? root
-            : root.Descendants().FirstOrDefault(e => e.Name.LocalName == "enzyme");
+        var enzyme = IsEnzyme(root) ? root : root.Descendants().FirstOrDefault(IsEnzyme);
         if (enzyme is null)
             return null;
 
-        var cut = (string?)enzyme.Attribute("cut");
+        var cut = Attr(enzyme, "cut");
         if (string.IsNullOrEmpty(cut))
             return null; // dual-terminal (cut_c/cut_n) or unspecified - fall back to the config default
 
-        var noCut = (string?)enzyme.Attribute("no_cut") ?? "";
-        var sense = (string?)enzyme.Attribute("sense") ?? "C";
-        return new EnzymeRule(cut, noCut, sense);
+        var noCut = Attr(enzyme, "no_cut") ?? "";
+        var sense = Attr(enzyme, "sense") ?? "C";
+        return new EnzymeRule(cut!, noCut, sense);
+
+        static bool IsEnzyme(XElement e) =>
+            string.Equals(e.Name.LocalName, "enzyme", StringComparison.OrdinalIgnoreCase);
+
+        // Attributes are matched case-insensitively for the same reason as the element name: the
+        // live-RPC and .sky-file spellings of the same enzyme do not agree on casing.
+        static string? Attr(XElement e, string name) => e.Attributes()
+            .FirstOrDefault(a => string.Equals(a.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))
+            ?.Value;
     }
 
     /// <summary>

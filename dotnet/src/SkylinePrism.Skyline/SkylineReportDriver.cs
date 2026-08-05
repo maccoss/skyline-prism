@@ -263,9 +263,20 @@ public sealed class SkylineReportDriver
         if (string.IsNullOrWhiteSpace(xml))
             return null;
 
-        var prism = SkylineDigestion.PrismEnzymeFromXml(xml);
+        // Report the two failure modes separately: an unreadable definition is a PRISM-side problem
+        // worth reporting as such, while a readable rule with no equivalent is a genuine limitation.
+        var rule = SkylineDigestion.ParseEnzymeXml(xml);
+        if (rule is null)
+        {
+            _log($"Could not read a cleavage rule from the document enzyme '{name}'; "
+                + "using the configured default enzyme.");
+            return null;
+        }
+
+        var prism = SkylineDigestion.MapToPrismEnzyme(rule.Value);
         if (prism is null)
-            _log($"Document enzyme '{name}' has no PRISM equivalent; using the configured default enzyme.");
+            _log($"Document enzyme '{name}' (cut={rule.Value.Cut}, no_cut={rule.Value.NoCut}, "
+                + $"sense={rule.Value.Sense}) has no PRISM equivalent; using the configured default enzyme.");
         else
             _log($"Document digestion enzyme: {name} -> PRISM enzyme '{prism}'.");
         return prism;
