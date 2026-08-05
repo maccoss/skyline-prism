@@ -42,7 +42,3 @@ QC verdict that could report overfitting when the reference had in fact degraded
   computed **within** one sample type. A cohort-wide alignment mostly moves the experimental samples onto
   the controls, so a 98% between-sample reduction can sit next to a ~1% CV change without either being
   wrong. Both are now labelled with the samples they cover, and the CV section explains the distinction.
-
-## Performance
-
-## Breaking Changes
