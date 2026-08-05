@@ -26,6 +26,29 @@ public class SkylineDigestionTests
     public void PrismEnzymeFromXml_ReturnsNull_WhenUnmappable(string xml)
         => Assert.Null(SkylineDigestion.PrismEnzymeFromXml(xml));
 
+    [Theory]
+    // What GetSettingsListItem("Enzymes", ...) actually returns for a live document: PascalCase
+    // <Enzyme>, where the same enzyme in a saved .sky file is lowercase <enzyme>. A case-sensitive
+    // element check rejected every live-document enzyme and reported "no PRISM equivalent".
+    [InlineData("<Enzyme name=\"Trypsin\" cut=\"KR\" no_cut=\"P\" sense=\"C\" />", "trypsin")]
+    [InlineData("<Enzyme name=\"Trypsin/P\" cut=\"KR\" no_cut=\"\" sense=\"C\" />", "trypsin/p")]
+    [InlineData("<ENZYME name=\"LysC\" cut=\"K\" no_cut=\"P\" sense=\"C\" />", "lysc")]
+    [InlineData("<Enzyme name=\"Trypsin\" Cut=\"KR\" No_Cut=\"P\" Sense=\"C\" />", "trypsin")]
+    public void PrismEnzymeFromXml_IsCaseInsensitive(string xml, string expected)
+        => Assert.Equal(expected, SkylineDigestion.PrismEnzymeFromXml(xml));
+
+    [Fact]
+    public void ParseEnzymeXml_ReadsPascalCaseRpcResponse()
+    {
+        // Verbatim response from Skyline for a Trypsin document (enzyme display name "Trypsin [KR | P]").
+        var rule = SkylineDigestion.ParseEnzymeXml(
+            "<Enzyme name=\"Trypsin\" cut=\"KR\" no_cut=\"P\" sense=\"C\" />");
+        Assert.NotNull(rule);
+        Assert.Equal("KR", rule!.Value.Cut);
+        Assert.Equal("P", rule.Value.NoCut);
+        Assert.Equal("C", rule.Value.Sense);
+    }
+
     [Fact]
     public void ParseEnzymeXml_ReadsCutNoCutSense()
     {
