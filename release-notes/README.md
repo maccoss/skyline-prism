@@ -63,6 +63,14 @@ One-sentence summary of the release.
 
 Sections can be omitted if empty. For major releases with many changes, subsections within each category are fine. For patch releases, a flat list is sufficient.
 
+> [!IMPORTANT]
+> **Delete the empty headings when you rename the draft.** Both rolling drafts (`RELEASE_NOTES_next.md`
+> and `RELEASE_NOTES_dotnet-next.md`) are seeded with all four headings so entries have somewhere to go
+> during development — which means a renamed draft *always* arrives carrying the ones nobody filled in.
+> Removing them is a step of the release, not something the draft gets right on its own. It matters most
+> on the C# track, where the file is published verbatim as the GitHub Release description and empty
+> headings are visible to everyone reading the Releases page.
+
 ### Style
 
 - Write in past tense ("Added", "Fixed", "Removed")
@@ -89,7 +97,8 @@ notes filenames** so their counters never collide.
 
 1. Finalize `RELEASE_NOTES_next.md` on the development branch
 2. Rename it: `git mv release-notes/RELEASE_NOTES_next.md release-notes/RELEASE_NOTES_v{version}.md`
-3. Update the title heading inside the file to match the version
+3. Update the title heading inside the file to match the version, and **delete every section heading
+   with no entries under it** — the draft is seeded with all four
 4. Create a fresh empty `RELEASE_NOTES_next.md` for the following release
 5. Update `version` in `pyproject.toml` **and** `__version__` in `skyline_prism/__init__.py` to match
 6. Commit the version bump and renames
@@ -99,8 +108,10 @@ notes filenames** so their counters never collide.
 
 ## C# (.NET) Release Process
 
-1. Finalize `RELEASE_NOTES_dotnet-next.md`; rename to `RELEASE_NOTES_dotnet-v{version}.md` and update
-   its heading; create a fresh empty `RELEASE_NOTES_dotnet-next.md`
+1. Finalize `RELEASE_NOTES_dotnet-next.md`; rename to `RELEASE_NOTES_dotnet-v{version}.md`, update its
+   heading, and **delete every section heading with no entries under it** (the draft is seeded with all
+   four, and this file is published verbatim as the Release body); create a fresh empty
+   `RELEASE_NOTES_dotnet-next.md`
 2. Bump the version in **both** `dotnet/Directory.Build.props` (`<Version>`) and
    `dotnet/src/SkylinePrism.App/tool-inf/info.properties` (`Version =`) to `{version}` — they must
    match, and `dotnet-release.yml` fails the release if either differs from the tag
