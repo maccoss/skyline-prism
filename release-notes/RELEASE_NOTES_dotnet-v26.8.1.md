@@ -15,7 +15,3 @@ instead of reporting that every enzyme - Trypsin included - has no PRISM equival
   prints the cut/no_cut/sense it read. Results were not affected: the enzyme only feeds the terminus
   check in FASTA-based parsimony, and the Skyline tool does not set a FASTA path - but a `Trypsin/P`
   document driving the CLI with a FASTA would have silently fallen back to `trypsin`.
-
-## Performance
-
-## Breaking Changes

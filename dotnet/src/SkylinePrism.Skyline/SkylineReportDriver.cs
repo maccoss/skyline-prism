@@ -263,13 +263,15 @@ public sealed class SkylineReportDriver
         if (string.IsNullOrWhiteSpace(xml))
             return null;
 
-        // Report the two failure modes separately: an unreadable definition is a PRISM-side problem
-        // worth reporting as such, while a readable rule with no equivalent is a genuine limitation.
+        // Report the two failure modes separately. ParseEnzymeXml returns null both for an
+        // unreadable definition AND for a dual-terminal one (cut_c/cut_n, e.g. TrypChymo), which is
+        // a legitimate enzyme PRISM simply cannot express - so word this for both cases rather than
+        // claiming a parse failure.
         var rule = SkylineDigestion.ParseEnzymeXml(xml);
         if (rule is null)
         {
-            _log($"Could not read a cleavage rule from the document enzyme '{name}'; "
-                + "using the configured default enzyme.");
+            _log($"Document enzyme '{name}' does not define a single-terminus cleavage rule "
+                + "(dual-terminal or unreadable definition); using the configured default enzyme.");
             return null;
         }
 
