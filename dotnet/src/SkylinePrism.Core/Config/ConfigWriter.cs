@@ -7,7 +7,7 @@ namespace SkylinePrism.Core.Config;
 /// <summary>
 /// Writes a <see cref="PrismConfig"/> back out as the SMALLEST YAML that reproduces it.
 /// <para>
-/// A plain object dump emits every property of every section - roughly 60 keys, most of which do
+/// A plain object dump emits every property of every section - roughly 95 keys, most of which do
 /// not apply to the selected methods (topn_* while the method is library_assist, the ibaq block
 /// while the protein rollup is median_polish, rt_lowess tuning while normalization is median).
 /// That is noise, and worse, it reads as though those knobs are in play. This writer emits:
@@ -22,7 +22,8 @@ namespace SkylinePrism.Core.Config;
 /// even where C# implements only one choice - the config is meant to be handed to the CLI, and the
 /// Python engine offers choices C# does not (<c>library_fitting_method</c> is median_polish-only
 /// here but median_polish OR least_squares there). Eliding them would leave the reader unable to
-/// tell which algorithm produced the numbers. Only numeric and boolean tuning values are elided.
+/// tell which algorithm produced the numbers. Everything else still follows the rules above: a
+/// defaulted value is elided whether it is a number, a flag, a string, or a whole section.
 /// </para>
 /// <para>
 /// Omitted keys fall back to exactly these defaults when the config is re-read, so the emitted
