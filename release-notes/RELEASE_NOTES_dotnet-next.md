@@ -18,6 +18,13 @@ as the GitHub Release description and fails if it is missing.
   config that omitted the key left the reader unable to tell which fit produced the numbers. Numeric
   and boolean tuning values are still elided at their defaults; a typical config grew from 31 keys to
   34, against ~95 for a full object dump.
+- **The batch column is written where both engines read it.** The emitted config put it under
+  `metadata:`, a section only the C# engine knows, so a config copied to the Python CLI warned that
+  `metadata` was unrecognized and then auto-detected the batch column instead of using the chosen one.
+  It is now written under `data:`, which C# reads first (`Data.BatchColumn ?? Metadata.BatchColumn`)
+  and Python reads exclusively - same behavior on C#, correct behavior on Python. The only keys the
+  emitted config still carries that Python does not implement are `batch_correction.peptide_level` and
+  `batch_correction.protein_level`, both recorded as C#-only in `docs/parameters.md`.
 
 ## Performance
 

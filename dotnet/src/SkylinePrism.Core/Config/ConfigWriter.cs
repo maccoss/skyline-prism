@@ -44,8 +44,7 @@ public static class ConfigWriter
         var def = new PrismConfig();
         var root = new Dictionary<string, object?>();
 
-        AddSection(root, "data", Data(config.Data));
-        AddSection(root, "metadata", Metadata(config.Metadata));
+        AddSection(root, "data", Data(config.Data, config.Metadata));
         root["transition_rollup"] = TransitionRollup(config.TransitionRollup);
         root["global_normalization"] = GlobalNormalization(config.GlobalNormalization, def.GlobalNormalization);
         root["sample_outlier_detection"] = OutlierDetection(config.SampleOutlierDetection, def.SampleOutlierDetection);
@@ -69,7 +68,8 @@ public static class ConfigWriter
         return Header + new SerializerBuilder().Build().Serialize(root);
     }
 
-    private static Dictionary<string, object?> Data(PrismConfig.DataSection d)
+    private static Dictionary<string, object?> Data(
+        PrismConfig.DataSection d, PrismConfig.MetadataSection m)
     {
         var s = new Dictionary<string, object?>();
         AddIfSet(s, "abundance_column", d.AbundanceColumn);
@@ -81,16 +81,12 @@ public static class ConfigWriter
         AddIfSet(s, "transition_column", d.TransitionColumn);
         AddIfSet(s, "precursor_column", d.PrecursorColumn);
         AddIfSet(s, "fragment_column", d.FragmentColumn);
-        AddIfSet(s, "batch_column", d.BatchColumn);
-        AddIfSet(s, "sample_type_column", d.SampleTypeColumn);
-        return s;
-    }
-
-    private static Dictionary<string, object?> Metadata(PrismConfig.MetadataSection m)
-    {
-        var s = new Dictionary<string, object?>();
-        AddIfSet(s, "batch_column", m.BatchColumn);
-        AddIfSet(s, "sample_type_column", m.SampleTypeColumn);
+        // The batch / sample-type columns are written under data:, which BOTH engines read - C#
+        // prefers data.* and falls back to metadata.* (PrismPipeline: Data.BatchColumn ??
+        // Metadata.BatchColumn), while the Python engine knows only data.*. Emitting the C#-only
+        // metadata: section instead would make every tool-authored config warn on the Python CLI.
+        AddIfSet(s, "batch_column", d.BatchColumn ?? m.BatchColumn);
+        AddIfSet(s, "sample_type_column", d.SampleTypeColumn ?? m.SampleTypeColumn);
         return s;
     }
 

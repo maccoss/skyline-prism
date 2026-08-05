@@ -249,9 +249,14 @@ public class SkylineReportDriverTests
     [Fact]
     public void GetDigestionEnzyme_MapsTrypsinFromDocument()
     {
+        // Verbatim from a running Skyline: the selected item is the DISPLAY name
+        // ("Trypsin [KR | P]", i.e. "name [cut | no_cut]") and the item XML comes back PascalCase.
+        // This fake previously used "Trypsin" with lowercase <enzyme>, which is the .sky FILE
+        // spelling - so the test passed while every live document failed. Keep it as observed.
         var client = new FakeClient();
-        client.SelectedByList["Enzymes"] = new[] { "Trypsin" };
-        client.SettingsItems["Enzymes/Trypsin"] = "<enzyme name=\"Trypsin\" cut=\"KR\" no_cut=\"P\" sense=\"C\" />";
+        client.SelectedByList["Enzymes"] = new[] { "Trypsin [KR | P]" };
+        client.SettingsItems["Enzymes/Trypsin [KR | P]"] =
+            "<Enzyme name=\"Trypsin\" cut=\"KR\" no_cut=\"P\" sense=\"C\" />";
 
         var enzyme = new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme();
 
@@ -261,13 +266,27 @@ public class SkylineReportDriverTests
     [Fact]
     public void GetDigestionEnzyme_DistinguishesTrypsinP()
     {
+        // PascalCase as the RPC returns it; the display-name form is only pinned verbatim in the
+        // Trypsin test above, which is the one that was observed against a live document.
         var client = new FakeClient();
         client.SelectedByList["Enzymes"] = new[] { "Trypsin/P" };
-        client.SettingsItems["Enzymes/Trypsin/P"] = "<enzyme name=\"Trypsin/P\" cut=\"KR\" no_cut=\"\" sense=\"C\" />";
+        client.SettingsItems["Enzymes/Trypsin/P"] = "<Enzyme name=\"Trypsin/P\" cut=\"KR\" no_cut=\"\" sense=\"C\" />";
 
         var enzyme = new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme();
 
         Assert.Equal("trypsin/p", enzyme);
+    }
+
+    [Fact]
+    public void GetDigestionEnzyme_ReadsTheSkyFileSpelling()
+    {
+        // The other source of enzyme XML is a saved .sky document, which uses lowercase <enzyme>.
+        // Both spellings have to work; pinning them separately keeps either from regressing alone.
+        var client = new FakeClient();
+        client.SelectedByList["Enzymes"] = new[] { "LysC" };
+        client.SettingsItems["Enzymes/LysC"] = "<enzyme name=\"LysC\" cut=\"K\" no_cut=\"P\" sense=\"C\" />";
+
+        Assert.Equal("lysc", new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
     }
 
     [Fact]

@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Linq;
 using SkylinePrism.Core.Config;
 using Xunit;
 using YamlDotNet.Serialization;
@@ -13,11 +16,22 @@ namespace SkylinePrism.Tests.Config;
 public class ConfigWriterTests
 {
     // Full property-by-property dump, used to prove the minimal YAML round-trips without loss.
-    private static string FullDump(PrismConfig c) =>
-        new SerializerBuilder()
+    // The batch / sample-type columns are folded into data: first, because the writer deliberately
+    // emits them there (both engines read data.*, only C# reads metadata.*) and the pipeline
+    // resolves Data.BatchColumn ?? Metadata.BatchColumn. A value arriving back under data: instead
+    // of metadata: is therefore a representational change, not a lost setting. Folding BOTH sides
+    // normalizes that away while still failing if the writer actually dropped the value.
+    private static string FullDump(PrismConfig c)
+    {
+        c.Data.BatchColumn ??= c.Metadata.BatchColumn;
+        c.Data.SampleTypeColumn ??= c.Metadata.SampleTypeColumn;
+        c.Metadata.BatchColumn = null;
+        c.Metadata.SampleTypeColumn = null;
+        return new SerializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .Build()
             .Serialize(c);
+    }
 
     private static PrismConfig LibraryAssistConfig()
     {
@@ -259,6 +273,29 @@ public class ConfigWriterTests
         var reparsed = PrismConfig.Parse(ConfigWriter.ToYaml(c));
 
         Assert.Equal(FullDump(c), FullDump(reparsed));
+    }
+
+    [Fact]
+    public void EmittedYaml_MatchesTheCrossEngineFixture()
+    {
+        // Golden file, checked from BOTH sides: this test pins that the fixture still reflects what
+        // ConfigWriter emits, and tests/test_cli.py pins that the Python engine loads that same file
+        // with no unrecognized keys. Neither side alone is enough - C#'s own FindUnknownKeys cannot
+        // notice a key that only the Python schema is missing, which is exactly the failure that
+        // made a tool-authored config unusable with the CLI in the first place.
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "config", "emitted-library-assist.yaml");
+        Assert.True(File.Exists(path), $"fixture missing: {path}");
+
+        var c = new PrismConfig();
+        c.TransitionRollup.Method = "library_assist";
+        c.TransitionRollup.LibraryPath = "spectra.blib";
+        c.SampleOutlierDetection.Action = "exclude";
+        c.QcReport.SavePlots = false;
+        c.Metadata.BatchColumn = "Plate";
+
+        Assert.Equal(
+            File.ReadAllText(path).Replace("\r\n", "\n").TrimEnd(),
+            ConfigWriter.ToYaml(c).Replace("\r\n", "\n").TrimEnd());
     }
 
     [Fact]

@@ -214,6 +214,35 @@ library_assist:
         assert resolved["mz_tolerance"] == 0.01
         assert resolved["outlier_threshold"] == 3.0
 
+    def test_explicit_zero_is_not_replaced_by_the_default(self):
+        """Test that a value of 0 is honored rather than treated as unset.
+
+        The old resolution chain used `config.get(key) or default`, so a deliberate
+        `library_outlier_threshold: 0` (flag every positive residual as interference) silently
+        became 1.0. Zero is a meaningful setting here, not an absent one.
+        """
+        resolved = resolve_library_assist_config(
+            {
+                "library_path": "lib.blib",
+                "library_outlier_threshold": 0,
+                "library_mz_tolerance": 0.0,
+                "library_min_fragments": 0,
+            }
+        )
+
+        assert resolved["outlier_threshold"] == 0
+        assert resolved["mz_tolerance"] == 0.0
+        assert resolved["min_fragments"] == 0
+
+    def test_explicit_false_is_not_replaced_by_the_default(self):
+        """Test that remove_outliers: false survives (same truthiness trap as zero)."""
+        assert (
+            resolve_library_assist_config(
+                {"library_path": "lib.blib", "library_remove_outliers": False}
+            )["remove_outliers"]
+            is False
+        )
+
     def test_flat_wins_over_legacy(self):
         """Test precedence: nested > flat library_* > legacy spectral_library_*."""
         resolved = resolve_library_assist_config(
@@ -224,6 +253,45 @@ library_assist:
         )
 
         assert resolved["library_path"] == "flat.blib"
+
+    def test_config_emitted_by_the_csharp_tool_loads_here(self):
+        """Test that a config produced by the Skyline tool runs on the Python engine.
+
+        The fixture is the verbatim output of the C# ConfigWriter (pinned on that side by
+        ConfigWriterTests.EmittedYaml_MatchesTheCrossEngineFixture). Checking it here is what
+        catches a key the C# engine emits but the Python schema does not know - C#'s own
+        validation cannot see that, and it is the failure that made a tool-authored config
+        unusable with the Python CLI.
+        """
+        fixture = (
+            Path(__file__).resolve().parent.parent
+            / "dotnet"
+            / "tests"
+            / "fixtures"
+            / "config"
+            / "emitted-library-assist.yaml"
+        )
+        if not fixture.exists():
+            pytest.skip(f"C# fixture not present: {fixture}")
+
+        config = load_config(fixture)
+
+        # The only keys Python may legitimately not recognize are the ones docs/parameters.md
+        # records as C#-only. Anything else means a key was added on the C# side without a
+        # decision about the Python side - port it, or record it here and in parameters.md.
+        csharp_only = {"batch_correction.peptide_level", "batch_correction.protein_level"}
+        assert set(config["_unknown_keys"]) <= csharp_only, (
+            f"unexpected keys unknown to the Python engine: "
+            f"{sorted(set(config['_unknown_keys']) - csharp_only)}"
+        )
+
+        resolved = resolve_library_assist_config(config["transition_rollup"])
+        assert resolved["library_path"] == "spectra.blib"
+        assert resolved["min_fragments"] == 3
+        assert resolved["mz_tolerance"] == 0.02
+        assert resolved["outlier_threshold"] == 1
+        assert resolved["remove_outliers"] is True
+        assert resolved["fitting_method"] == "median_polish"
 
     def test_csharp_style_config_has_no_unknown_keys(self):
         """Test that a C#-flavored transition_rollup block validates cleanly."""

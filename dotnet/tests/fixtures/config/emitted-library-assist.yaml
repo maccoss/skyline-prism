@@ -1,0 +1,37 @@
+# PRISM configuration - only the settings that apply to the selected methods.
+# Anything not listed uses its built-in default; run 'prism config-template' for the
+# fully annotated template with every available option.
+data:
+  batch_column: Plate
+transition_rollup:
+  method: library_assist
+  min_transitions: 3
+  use_ms1: false
+  library_path: spectra.blib
+  library_min_fragments: 3
+  library_mz_tolerance: 0.02
+  library_outlier_threshold: 1
+  library_remove_outliers: true
+  library_fitting_method: median_polish
+global_normalization:
+  method: rt_lowess
+sample_outlier_detection:
+  enabled: true
+  action: exclude
+  method: iqr
+batch_correction:
+  enabled: true
+  peptide_level: true
+  protein_level: true
+  method: combat
+parsimony:
+  enabled: true
+  shared_peptide_handling: all_groups
+protein_rollup:
+  method: median_polish
+  min_peptides: 3
+protein_normalization:
+  method: median
+qc_report:
+  enabled: true
+  save_plots: false
