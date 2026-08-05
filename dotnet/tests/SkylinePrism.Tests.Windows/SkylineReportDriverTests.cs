@@ -48,8 +48,12 @@ public class SkylineReportDriverTests
 
         public string[] GetSettingsListSelectedItems(string listType)
         {
+            // The real type: SkylineJsonToolClient surfaces a server-side failure as JsonRpcException
+            // (which derives from InvalidOperationException). -32603 is the JSON-RPC internal-error
+            // code; the message is the one observed from a live document.
             if (ThrowOnSettingsListCalls)
-                throw new InvalidOperationException("Object reference not set to an instance of an object.");
+                throw new SkylineTool.JsonRpcException(
+                    -32603, "Object reference not set to an instance of an object.");
             return SelectedByList.TryGetValue(listType, out var s) ? s : Array.Empty<string>();
         }
 
