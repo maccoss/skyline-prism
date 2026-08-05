@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Linq;
 using SkylinePrism.Core.Config;
 using Xunit;
 using YamlDotNet.Serialization;
@@ -13,11 +16,22 @@ namespace SkylinePrism.Tests.Config;
 public class ConfigWriterTests
 {
     // Full property-by-property dump, used to prove the minimal YAML round-trips without loss.
-    private static string FullDump(PrismConfig c) =>
-        new SerializerBuilder()
+    // The batch / sample-type columns are folded into data: first, because the writer deliberately
+    // emits them there (both engines read data.*, only C# reads metadata.*) and the pipeline
+    // resolves Data.BatchColumn ?? Metadata.BatchColumn. A value arriving back under data: instead
+    // of metadata: is therefore a representational change, not a lost setting. Folding BOTH sides
+    // normalizes that away while still failing if the writer actually dropped the value.
+    private static string FullDump(PrismConfig c)
+    {
+        c.Data.BatchColumn ??= c.Metadata.BatchColumn;
+        c.Data.SampleTypeColumn ??= c.Metadata.SampleTypeColumn;
+        c.Metadata.BatchColumn = null;
+        c.Metadata.SampleTypeColumn = null;
+        return new SerializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .Build()
             .Serialize(c);
+    }
 
     private static PrismConfig LibraryAssistConfig()
     {
@@ -42,6 +56,9 @@ public class ConfigWriterTests
         Assert.Contains("library_mz_tolerance: 0.02", yaml);
         Assert.Contains("library_outlier_threshold: 1", yaml);
         Assert.Contains("library_remove_outliers: true", yaml);
+        // Named even at its default: C# fits median_polish only, but Python also offers
+        // least_squares, so a config carried to the CLI has to say which fit set the sample scale.
+        Assert.Contains("library_fitting_method: median_polish", yaml);
 
         // Absent: other methods' parameters, and blocks that do not apply.
         Assert.DoesNotContain("topn_count", yaml);
@@ -50,8 +67,27 @@ public class ConfigWriterTests
         Assert.DoesNotContain("consensus_regularization", yaml);
         Assert.DoesNotContain("ibaq", yaml);
         Assert.DoesNotContain("min_peptide_length", yaml);
-        // least_squares is the only alternative and it aborts in C#, so the default is not spelled out.
-        Assert.DoesNotContain("library_fitting_method", yaml);
+    }
+
+    [Fact]
+    public void AlgorithmNamingKeys_AreWrittenEvenAtTheirDefault()
+    {
+        // Which algorithm ran must be answerable from the file alone; only numeric/boolean tuning
+        // values are elided at their defaults.
+        var yaml = ConfigWriter.ToYaml(LibraryAssistConfig());
+
+        Assert.Contains("method: library_assist", yaml);
+        Assert.Contains("library_fitting_method: median_polish", yaml);
+        Assert.Contains("method: combat", yaml);          // batch_correction
+        Assert.Contains("method: iqr", yaml);             // sample_outlier_detection
+        Assert.Contains("method: median_polish", yaml);   // protein_rollup
+        Assert.Contains("method: rt_lowess", yaml);       // global_normalization
+        Assert.Contains("method: median", yaml);          // protein_normalization
+
+        // ...but their tuning knobs stay out while they sit at the default.
+        Assert.DoesNotContain("iqr_multiplier", yaml);
+        Assert.DoesNotContain("auto_revert", yaml);
+        Assert.DoesNotContain("n_grid_points", yaml);
     }
 
     [Fact]
@@ -240,6 +276,29 @@ public class ConfigWriterTests
     }
 
     [Fact]
+    public void EmittedYaml_MatchesTheCrossEngineFixture()
+    {
+        // Golden file, checked from BOTH sides: this test pins that the fixture still reflects what
+        // ConfigWriter emits, and tests/test_cli.py pins that the Python engine loads that same file
+        // with no unrecognized keys. Neither side alone is enough - C#'s own FindUnknownKeys cannot
+        // notice a key that only the Python schema is missing, which is exactly the failure that
+        // made a tool-authored config unusable with the CLI in the first place.
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "config", "emitted-library-assist.yaml");
+        Assert.True(File.Exists(path), $"fixture missing: {path}");
+
+        var c = new PrismConfig();
+        c.TransitionRollup.Method = "library_assist";
+        c.TransitionRollup.LibraryPath = "spectra.blib";
+        c.SampleOutlierDetection.Action = "exclude";
+        c.QcReport.SavePlots = false;
+        c.Metadata.BatchColumn = "Plate";
+
+        Assert.Equal(
+            File.ReadAllText(path).Replace("\r\n", "\n").TrimEnd(),
+            ConfigWriter.ToYaml(c).Replace("\r\n", "\n").TrimEnd());
+    }
+
+    [Fact]
     public void EmittedYaml_UsesOnlyKeysTheSchemaKnows()
     {
         // Same guard as ConfigTemplate: a key here that FindUnknownKeys rejects would warn on every
@@ -258,9 +317,9 @@ public class ConfigWriterTests
         var yaml = ConfigWriter.ToYaml(LibraryAssistConfig());
         PrismConfig.Parse(yaml).Validate(); // must not throw
 
-        // A plain object dump of PrismConfig is ~60 keys; the point of the writer is that a typical
-        // run fits on a screen. Canary, not an exact count.
+        // A plain object dump of PrismConfig is ~95 keys; the point of the writer is that a typical
+        // run fits on a screen. Canary against regressing to a full dump, not an exact count.
         var keyLines = yaml.Split('\n').Count(l => l.Contains(':') && !l.TrimStart().StartsWith('#'));
-        Assert.InRange(keyLines, 1, 30);
+        Assert.InRange(keyLines, 1, 40);
     }
 }
