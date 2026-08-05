@@ -18,6 +18,13 @@ namespace SkylinePrism.Core.Config;
 ///   <item>everything else only when it differs from the built-in default.</item>
 /// </list>
 /// <para>
+/// Keys that NAME an algorithm are always written for an active section, even at their default and
+/// even where C# implements only one choice - the config is meant to be handed to the CLI, and the
+/// Python engine offers choices C# does not (<c>library_fitting_method</c> is median_polish-only
+/// here but median_polish OR least_squares there). Eliding them would leave the reader unable to
+/// tell which algorithm produced the numbers. Only numeric and boolean tuning values are elided.
+/// </para>
+/// <para>
 /// Omitted keys fall back to exactly these defaults when the config is re-read, so the emitted
 /// YAML is behaviorally identical to the config it came from (asserted by ConfigWriterTests).
 /// Values the selected methods ignore are dropped rather than preserved - a stale library_path
@@ -39,7 +46,7 @@ public static class ConfigWriter
 
         AddSection(root, "data", Data(config.Data));
         AddSection(root, "metadata", Metadata(config.Metadata));
-        root["transition_rollup"] = TransitionRollup(config.TransitionRollup, def.TransitionRollup);
+        root["transition_rollup"] = TransitionRollup(config.TransitionRollup);
         root["global_normalization"] = GlobalNormalization(config.GlobalNormalization, def.GlobalNormalization);
         root["sample_outlier_detection"] = OutlierDetection(config.SampleOutlierDetection, def.SampleOutlierDetection);
         root["batch_correction"] = BatchCorrection(config.BatchCorrection, def.BatchCorrection);
@@ -87,8 +94,7 @@ public static class ConfigWriter
         return s;
     }
 
-    private static Dictionary<string, object?> TransitionRollup(
-        PrismConfig.TransitionRollupSection tr, PrismConfig.TransitionRollupSection def)
+    private static Dictionary<string, object?> TransitionRollup(PrismConfig.TransitionRollupSection tr)
     {
         var s = new Dictionary<string, object?>
         {
@@ -113,8 +119,9 @@ public static class ConfigWriter
                 s["library_mz_tolerance"] = tr.LibraryMzTolerance;
                 s["library_outlier_threshold"] = tr.LibraryOutlierThreshold;
                 s["library_remove_outliers"] = tr.LibraryRemoveOutliers;
-                // median_polish is the only fitting method C# implements; least_squares aborts.
-                AddIfChanged(s, "library_fitting_method", tr.LibraryFittingMethod, def.LibraryFittingMethod);
+                // Always written: C# implements only median_polish (least_squares aborts), but Python
+                // implements both, so the config has to say which fit produced the sample scale.
+                s["library_fitting_method"] = tr.LibraryFittingMethod;
                 break;
         }
         return s;
@@ -142,7 +149,7 @@ public static class ConfigWriter
             return s;
 
         s["action"] = od.Action;
-        AddIfChanged(s, "method", od.Method, def.Method);
+        s["method"] = od.Method;
         if (od.Method?.ToLowerInvariant() == "iqr")
             AddIfChanged(s, "iqr_multiplier", od.IqrMultiplier, def.IqrMultiplier);
         else
@@ -159,7 +166,7 @@ public static class ConfigWriter
 
         s["peptide_level"] = bc.PeptideLevel;
         s["protein_level"] = bc.ProteinLevel;
-        AddIfChanged(s, "method", bc.Method, def.Method);
+        s["method"] = bc.Method;
         if (bc.ReferenceAnchored)
         {
             s["reference_anchored"] = true;

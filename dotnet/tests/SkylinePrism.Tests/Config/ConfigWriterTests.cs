@@ -42,6 +42,9 @@ public class ConfigWriterTests
         Assert.Contains("library_mz_tolerance: 0.02", yaml);
         Assert.Contains("library_outlier_threshold: 1", yaml);
         Assert.Contains("library_remove_outliers: true", yaml);
+        // Named even at its default: C# fits median_polish only, but Python also offers
+        // least_squares, so a config carried to the CLI has to say which fit set the sample scale.
+        Assert.Contains("library_fitting_method: median_polish", yaml);
 
         // Absent: other methods' parameters, and blocks that do not apply.
         Assert.DoesNotContain("topn_count", yaml);
@@ -50,8 +53,27 @@ public class ConfigWriterTests
         Assert.DoesNotContain("consensus_regularization", yaml);
         Assert.DoesNotContain("ibaq", yaml);
         Assert.DoesNotContain("min_peptide_length", yaml);
-        // least_squares is the only alternative and it aborts in C#, so the default is not spelled out.
-        Assert.DoesNotContain("library_fitting_method", yaml);
+    }
+
+    [Fact]
+    public void AlgorithmNamingKeys_AreWrittenEvenAtTheirDefault()
+    {
+        // Which algorithm ran must be answerable from the file alone; only numeric/boolean tuning
+        // values are elided at their defaults.
+        var yaml = ConfigWriter.ToYaml(LibraryAssistConfig());
+
+        Assert.Contains("method: library_assist", yaml);
+        Assert.Contains("library_fitting_method: median_polish", yaml);
+        Assert.Contains("method: combat", yaml);          // batch_correction
+        Assert.Contains("method: iqr", yaml);             // sample_outlier_detection
+        Assert.Contains("method: median_polish", yaml);   // protein_rollup
+        Assert.Contains("method: rt_lowess", yaml);       // global_normalization
+        Assert.Contains("method: median", yaml);          // protein_normalization
+
+        // ...but their tuning knobs stay out while they sit at the default.
+        Assert.DoesNotContain("iqr_multiplier", yaml);
+        Assert.DoesNotContain("auto_revert", yaml);
+        Assert.DoesNotContain("n_grid_points", yaml);
     }
 
     [Fact]
@@ -258,9 +280,9 @@ public class ConfigWriterTests
         var yaml = ConfigWriter.ToYaml(LibraryAssistConfig());
         PrismConfig.Parse(yaml).Validate(); // must not throw
 
-        // A plain object dump of PrismConfig is ~60 keys; the point of the writer is that a typical
-        // run fits on a screen. Canary, not an exact count.
+        // A plain object dump of PrismConfig is ~95 keys; the point of the writer is that a typical
+        // run fits on a screen. Canary against regressing to a full dump, not an exact count.
         var keyLines = yaml.Split('\n').Count(l => l.Contains(':') && !l.TrimStart().StartsWith('#'));
-        Assert.InRange(keyLines, 1, 30);
+        Assert.InRange(keyLines, 1, 40);
     }
 }
