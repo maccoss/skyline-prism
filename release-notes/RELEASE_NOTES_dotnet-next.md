@@ -16,6 +16,14 @@ as the GitHub Release description and fails if it is missing.
   heatmap over reference + QC only. Previously the tool included every sample, which is not a control
   correlation. An explicit selection is never overridden, and columns with no control values (a Condition
   annotation, say) are left alone rather than filtered to nothing.
+- **The config shown by "Show command line" lists only the settings in play.** Both the displayed text
+  and the "Copy config (YAML)" button used to dump every property of every section - about 95 keys for
+  a run that uses 31 of them - so parameters belonging to other methods read as though they were in
+  effect: `topn_*` under `library_assist`, the `ibaq` block under `median_polish`, `rt_lowess` tuning
+  under `method: median`. The config now carries the method choices, the tuning keys for the selected
+  method, and anything that differs from the built-in default; everything omitted falls back to that
+  same default, so the copied config still reproduces the run exactly. It also no longer emits the
+  empty `library_assist:` key, which the Python engine could not read.
 
 ## Bug Fixes
 
