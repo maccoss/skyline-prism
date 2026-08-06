@@ -108,6 +108,14 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **The Dynamic Range tab no longer comes up blank at protein level.** Its list of protein metadata
+  columns had drifted from what the pipeline writes - it was missing `leading_description`,
+  `n_unique_peptides` and `low_confidence`, and listed a `confidence` and a `quant_method` that are
+  never written. Those three columns were therefore treated as replicates, and parsing a protein
+  description as an abundance threw, leaving an empty replicate drop-down and no plot. The column
+  list now comes from the writer (`ProteinRollup.MetadataColumns`) instead of being repeated, so the
+  QC report and the tab cannot disagree about it again.
+
 - **ComBat no longer destroys the whole matrix when a single value is missing.** Standard ComBat
   used NaN-propagating means and variances where R's `sva::ComBat` (the implementation PRISM is
   based on) uses NaN-aware ones. Because the empirical-Bayes priors are means taken *across*

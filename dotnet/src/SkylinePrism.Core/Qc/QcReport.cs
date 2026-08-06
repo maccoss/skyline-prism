@@ -8,6 +8,7 @@ using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Visualization;
+using SkylinePrism.Core.Rollup;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -21,11 +22,8 @@ public static class QcReport
 {
     private const string PepMetaN = "n_transitions";
     private const string PepMetaRt = "mean_rt";
-    private static readonly string[] ProtMeta =
-    {
-        "protein_group", "leading_protein", "leading_name", "leading_uniprot_id",
-        "leading_gene_name", "leading_description", "n_peptides", "n_unique_peptides", "low_confidence",
-    };
+    // From the writer, not repeated here - see ProteinRollup.MetadataColumns.
+    private static readonly string[] ProtMeta = ProteinRollup.MetadataColumns;
 
     // PRISM app icon as a 32x32 PNG data-URI favicon, so the self-contained report shows the
     // prism logo on the browser tab. Regenerate from images/skyline-prism-icon.png (pad to square,

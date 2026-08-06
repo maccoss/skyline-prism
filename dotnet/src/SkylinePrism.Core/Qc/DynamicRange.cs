@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Rollup;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -58,12 +59,14 @@ public sealed record AbundanceEntry(
 /// </remarks>
 public static class DynamicRange
 {
-    /// <summary>Non-sample columns of the corrected matrices, by level (everything else is a replicate).</summary>
-    public static readonly string[] ProteinMetadataColumns =
-    {
-        "protein_group", "leading_protein", "leading_name", "leading_uniprot_id", "leading_gene_name",
-        "n_peptides", "confidence", "quant_method",
-    };
+    /// <summary>
+    /// Non-sample columns of the protein matrices. Taken from the writer rather than repeated. The copy that used to live here had drifted: it
+    /// was missing <c>leading_description</c>, <c>n_unique_peptides</c> and <c>low_confidence</c>
+    /// (it listed a <c>confidence</c> and a <c>quant_method</c> that are never written), so those
+    /// three were read as replicates - and parsing a protein description as an abundance threw,
+    /// leaving the tab blank with an empty replicate list.
+    /// </summary>
+    public static readonly string[] ProteinMetadataColumns = ProteinRollup.MetadataColumns;
 
     public static readonly string[] PeptideMetadataColumns =
     {
