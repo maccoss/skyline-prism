@@ -157,6 +157,15 @@ as the GitHub Release description and fails if it is missing.
 
 ## Performance
 
+- **The merge no longer spills its sort onto a network drive.** DuckDB's scratch directory was always
+  placed beside the output, and PRISM output routinely lives on a mapped drive - the Skyline tool
+  defaults to a folder beside the document. A large sort then wrote gigabytes of spill over SMB,
+  which is slow enough to look like a hang and fails outright on some servers. The scratch directory
+  now stays beside the output only when that is a local disk, and falls back to the machine's own
+  temp directory for a network or UNC path. Stage 1 logs which directory it chose, and
+  `PRISM_TEMP_DIR` overrides it when the automatic choice picks badly (a small system drive, say).
+  The directory is also cleaned up after a failed merge now, rather than only after a successful one.
+
 - **Peptide normalization and ComBat (Stage 2b/2c) no longer hold the peptide x sample matrix in
   memory.** This stage was the pipeline's memory wall - Stage 1 (merge) and Stage 2 (transition
   rollup) already streamed, so a cohort of ~100 Skyline documents ran out of memory here and nowhere
