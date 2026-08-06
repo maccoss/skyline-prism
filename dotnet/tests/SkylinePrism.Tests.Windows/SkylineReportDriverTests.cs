@@ -38,6 +38,23 @@ public class SkylineReportDriverTests
         public string[] GetSettingsListNames(string listType, string? groupName)
             => ReportsByGroup.TryGetValue(groupName ?? "", out var l) ? l.ToArray() : Array.Empty<string>();
 
+        // Document-tree navigation, used by the Dynamic Range plot's click-to-select.
+        public readonly List<string> SelectedElements = new();
+        public readonly Dictionary<string, List<(string Name, string Locator)>> LocationsByLevel = new();
+        public bool ThrowOnSelect;
+
+        public void SetSelectedElement(string elementLocator)
+        {
+            if (ThrowOnSelect)
+                throw new SkylineTool.JsonRpcException(-32603, "no such element");
+            SelectedElements.Add(elementLocator);
+        }
+
+        public IReadOnlyList<(string Name, string Locator)> GetLocations(string level)
+            => LocationsByLevel.TryGetValue(level, out var l)
+                ? l
+                : (IReadOnlyList<(string, string)>)Array.Empty<(string, string)>();
+
         // Settings-list items keyed by "<listType>/<itemName>"; SelectedByList holds the active items.
         public readonly Dictionary<string, string> SettingsItems = new(StringComparer.Ordinal);
         public readonly Dictionary<string, string[]> SelectedByList = new(StringComparer.Ordinal);
@@ -330,5 +347,60 @@ public class SkylineReportDriverTests
 
         // M (methionine) has no PRISM enzyme equivalent -> null so the caller keeps the config default.
         Assert.Null(new SkylineReportDriver(new FakeExecutor(client)).GetDigestionEnzyme());
+    }
+
+    [Fact]
+    public void GetLocatorMap_IndexesProteinsUnderEveryUsableIdentifier()
+    {
+        // The Dynamic Range plot is keyed on the PRISM matrices' identifiers, which are not always
+        // Skyline's display name - so a protein must be findable by name, accession or bare entry name.
+        var client = new FakeClient();
+        client.LocationsByLevel["group"] = new List<(string, string)>
+        {
+            ("sp|P02768|ALBU_HUMAN", "MoleculeGroup:/sp|P02768|ALBU_HUMAN"),
+        };
+
+        var map = new SkylineReportDriver(new FakeExecutor(client)).GetLocatorMap("group");
+
+        const string expected = "MoleculeGroup:/sp|P02768|ALBU_HUMAN";
+        Assert.Equal(expected, map["sp|P02768|ALBU_HUMAN"]);
+        Assert.Equal(expected, map["P02768"]);
+        Assert.Equal(expected, map["ALBU_HUMAN"]);
+    }
+
+    [Fact]
+    public void GetLocatorMap_DisambiguatesASharedPeptideByItsProtein()
+    {
+        // The same sequence under two proteins: the bare sequence can only resolve to one of them, so
+        // "<protein>/<peptide>" is indexed too and is what the plot looks up first.
+        var client = new FakeClient();
+        client.LocationsByLevel["molecule"] = new List<(string, string)>
+        {
+            ("SHAREDPEPTIDEK", "Molecule:/sp|P68871|HBB_HUMAN/SHAREDPEPTIDEK"),
+            ("SHAREDPEPTIDEK", "Molecule:/sp|Q9Y6K9|NEMO_HUMAN/SHAREDPEPTIDEK"),
+        };
+
+        var map = new SkylineReportDriver(new FakeExecutor(client)).GetLocatorMap("molecule");
+
+        Assert.Equal("Molecule:/sp|P68871|HBB_HUMAN/SHAREDPEPTIDEK",
+            map["sp|P68871|HBB_HUMAN/SHAREDPEPTIDEK"]);
+        Assert.Equal("Molecule:/sp|Q9Y6K9|NEMO_HUMAN/SHAREDPEPTIDEK",
+            map["sp|Q9Y6K9|NEMO_HUMAN/SHAREDPEPTIDEK"]);
+        // The ambiguous bare key keeps the FIRST element rather than silently taking the last.
+        Assert.Equal("Molecule:/sp|P68871|HBB_HUMAN/SHAREDPEPTIDEK", map["SHAREDPEPTIDEK"]);
+    }
+
+    [Fact]
+    public void SelectElement_ReportsFailureInsteadOfThrowing()
+    {
+        var client = new FakeClient();
+        var driver = new SkylineReportDriver(new FakeExecutor(client));
+
+        Assert.True(driver.SelectElement("MoleculeGroup:/sp|P02768|ALBU_HUMAN"));
+        Assert.Equal(new[] { "MoleculeGroup:/sp|P02768|ALBU_HUMAN" }, client.SelectedElements);
+
+        // A click on something the document no longer has must not take the tool down.
+        client.ThrowOnSelect = true;
+        Assert.False(driver.SelectElement("MoleculeGroup:/gone"));
     }
 }

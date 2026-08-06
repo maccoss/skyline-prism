@@ -114,6 +114,31 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Before/after plots: intensity distribution, PCA, comparative CV (reference + QC)
 - [x] Interactive QC tabs in the tool (PCA / CV / intensity, peptide+protein) with a raw↔corrected
       view toggle — `MainWindow` QC Plots tab
+- [x] Dynamic Range tab in the tool: log10 abundance vs rank over the corrected matrices (Skyline's
+      Relative Abundance shape), protein/peptide switch, replicate subset averaging (linear mean, then
+      log10), click-to-select in the Skyline tree via `SetSelectedElement` + cached `GetLocations`
+      locators, user-defined coloured protein lists (`ProteinListSet`, per-user JSON) and right-click
+      label modes — `DynamicRange` + `PlotRenderer.DrawDynamicRange`. C#-only (no Python equivalent)
+- [x] Spectrum density tab in the tool: precursors detected per DIA spectrum as an (isolation window x
+      RT) map, per run, with a selectable colormap — `PrecursorDensity` +
+      `PlotRenderer.DrawPrecursorDensity`. C#-only by design: the Python engine has no equivalent (this
+      is a port of Skyline-Cadenza's m/z x RT heatmap, reading the merged PRISM report instead of a
+      DIA-NN report)
+- [x] Real DIA isolation windows for that map — `IsolationScheme` (parses both Skyline XML spellings) +
+      `IsolationSchemeCatalog` (persisted to `isolation_schemes.xml` per run). Read from the document
+      when it defines a scheme; for `Results only` documents Skyline keeps the windows only inside the
+      raw files (no `.sky` entry, and `ChromatogramExtractionWidth` is the product-ion window, not the
+      isolation window), so `SkylineIsolationImporter` has Skyline import them from a data file
+      (`--full-scan-isolation-scheme=<data file>` against a throwaway `--new` document — never the user's).
+      Saved schemes are the manual fallback, and precursors outside the chosen scheme are counted+warned
+- [x] Scheduled acquisitions (PRM / MTM / dynamic DIA) — `IsolationWindow` carries an optional RT firing interval
+      (Cadenza's `Slot` model: m/z range x RT range), so membership requires the peak to elute while the
+      window fired, unscheduled time renders as "not acquired" rather than zero, and the RT axis spans the
+      schedule. Windows come from the instrument's inclusion list (`ThermoInclusionList`, the columns
+      Cadenza's `ThermoCsvWriter` writes) since Skyline's importer needs a repeating cycle and a schedule
+      has none. Dynamic DIA (PMC10517878) is the same model with a cycle of windows per segment, so the
+      display rasterizer picks its source window per CELL, not per m/z row — a per-row choice renders one
+      segment and blanks the others
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
 - [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, RVR overfitting,
       PCA QC-reference distance collapse) — `ValidationStatus`

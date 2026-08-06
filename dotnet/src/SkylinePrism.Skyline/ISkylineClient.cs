@@ -32,6 +32,20 @@ public interface ISkylineClient
 
     /// <summary>Read a per-replicate report (one row per replicate) for the given columns; null if unavailable.</summary>
     ReportRows? GetReplicateReport(IReadOnlyList<string> selectColumns);
+
+    /// <summary>
+    /// Select an element in Skyline's document tree by ElementLocator, e.g.
+    /// <c>MoleculeGroup:/sp|P02768|ALBU_HUMAN</c> or <c>Molecule:/&lt;protein&gt;/&lt;peptide&gt;</c>.
+    /// This is what makes a plot point clickable: picking a protein here navigates the user's document.
+    /// </summary>
+    void SetSelectedElement(string elementLocator);
+
+    /// <summary>
+    /// Every element at a tree level ("group" = proteins, "molecule" = peptides) as (name, locator).
+    /// Read once and cached, so a click maps a plotted protein to the locator Skyline itself uses rather
+    /// than one built by string surgery.
+    /// </summary>
+    IReadOnlyList<(string Name, string Locator)> GetLocations(string level);
 }
 
 /// <summary>

@@ -744,6 +744,8 @@ public partial class MainWindow : Window
             _lastReportPath = reportPath;
             OpenReportButton.IsEnabled = reportExists;
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
+            InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
+            InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             MainTabs.SelectedItem = QcTab; // land on the plots when the run finishes
@@ -766,7 +768,12 @@ public partial class MainWindow : Window
 
     // Enable Run only once an output directory is set and an input exists (and no run is in progress).
     private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-        => UpdateRunEnabled();
+    {
+        UpdateRunEnabled();
+        // Both plot tabs read their inputs from this directory.
+        InvalidateDensity();
+        InvalidateDynamicRange();
+    }
 
     /// <summary>
     /// Export every input, then run the pipeline once over all of them. Each input is exported under its own
@@ -864,6 +871,15 @@ public partial class MainWindow : Window
                 + "metadata must line up 1:1 with the inputs to be attributed correctly.");
             metadata = null;
         }
+
+        // Capture what each input knows about DIA isolation windows and save it beside the outputs, so the
+        // Spectrum density tab can bin on the real windows later - including when this output directory is
+        // reopened with no Skyline running.
+        var isolationCatalog = new IsolationSchemeCatalog();
+        foreach (var input in inputs)
+            input.CollectIsolationSchemes(isolationCatalog, Log, SkylineCmdPathOverride, CancellationToken.None);
+        if (!isolationCatalog.IsEmpty)
+            isolationCatalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
 
         Log($"Running the PRISM pipeline on {reportPaths.Count} report(s): "
             + string.Join(", ", reportPaths.Select(Path.GetFileName)));
@@ -1598,7 +1614,7 @@ public partial class MainWindow : Window
             // Standardized colours (same across all plots): known sample types get their fixed colour,
             // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled colour.
             markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
-            markers.MarkerSize = 11;
+            markers.MarkerSize = 15; // sized to match the figure-scale axis text
             markers.LegendText = label;
         }
         plt.ShowLegend();

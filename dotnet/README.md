@@ -116,6 +116,137 @@ view through `ReplicatesReportBuilder`, which **quotes** annotation columns (`"a
 Skyline parses `column/@name` as a databinding property path, where the `annotation_` prefix's
 underscore is illegal unquoted and aborts the export with *"Invalid character _"*.
 
+### Dynamic Range tab
+
+Log10 abundance against abundance rank - Skyline's Relative Abundance shape - over the **corrected**
+matrices only (`corrected_proteins.parquet` / `corrected_peptides.parquet`), since the point is the
+dynamic range of the result the user will actually analyse. Abundances are averaged across the selected
+replicates on the **linear** scale and only then log-transformed (a mean of logs is a geometric mean, not
+the plotted quantity), and a row with no measurement in the selection is dropped rather than plotted at
+zero. Ticking a different replicate set **re-ranks**, because the ordering depends on what is averaged.
+
+**Click-to-select.** Clicking a point calls `SetSelectedElement` with that element's locator, navigating
+the user's Skyline document tree - at peptide level the **peptide** node, so its chromatograms come up.
+Locators are read from Skyline (`GetLocations`, cached per level) rather than built by string surgery, so
+protein naming and modified sequences stay Skyline's problem; `SkylineReportDriver.LocatorKeys` indexes
+each element under its display name, the locator's trailing segment, `<protein>/<peptide>`, and the
+`sp|…|…` components, because the plot is keyed on the PRISM matrices' identifiers. In standalone mode the
+click just reports what was hit.
+
+⚠️ **PRISM's parsimony is not Skyline's grouping.** PRISM groups proteins itself (optionally FASTA- and
+enzyme-aware), so a peptide's PRISM group need not correspond to a protein node in the document. Peptide
+selection therefore tries `<protein>/<peptide>` for each of the peptide's PRISM groups **in order**, then
+falls back to the first occurrence of that sequence in the document tree - and the status line says when
+the fallback decided it, rather than silently selecting a protein the plot did not mean. The status line
+also lists **every** group a shared peptide belongs to, since membership is a fact about the peptide while
+which group quantifies it is a `parsimony.shared_peptide_handling` decision.
+
+**Protein lists** (`ProteinListSet`) highlight curated sets in their own colours, toggled on and off.
+They are stored **per user** at `%LOCALAPPDATA%\SkylinePrism\protein-lists.json`, not per project, so the
+same lists follow the user everywhere; `ProteinListWindow` edits a clone and only commits on OK. Matching
+is deliberately forgiving - curated lists arrive keyed on whatever identifier their source used - so a
+member matches against accession, gene name and protein name, with `sp|`/`tr|` prefixes, `_HUMAN` suffixes
+and `-2` isoform numbers all tolerated. List order is priority when a protein appears in two.
+
+Labels (gene name, falling back to accession; the sequence at peptide level) are toggled from the plot's
+right-click menu: none, the Skyline selection, or whole lists - the same place Skyline puts its plot
+options. Each label sits off the curve with a **leader line** back to its point, flipping to the left near
+the right edge, because a label centred on its point buries the very point it names.
+
+### Spectrum density tab
+
+How many peptide precursors were detected in each DIA spectrum of a run: retention time across,
+precursor m/z up, colour = precursors per cell. Each map row is one **real isolation window**, so a cell
+is a spectrum and its value is how many precursors that spectrum had to resolve. A precursor contributes
+a count to every window containing its m/z (more than one only for a staggered/overlapping scheme, where
+it genuinely was fragmented twice), for every RT bin its integrated peak `[Start Time, End Time]` spans.
+The **max q-value** control (`Detection Q Value`) decides what counts as detected; hovering reads out the
+window and count under the cursor.
+
+**Where the windows come from.** This is the awkward part, and worth knowing:
+
+| Document's Full-Scan isolation scheme | What PRISM does |
+|---|---|
+| An explicit scheme (`SWATH (25 m/z)`, a VW scheme, a custom one) | Its `<isolation_window start= end=/>` list is read straight from the `.sky` and used. Exact, automatic, and the picker is locked - there is nothing to choose. |
+| `Results only` (**the normal setting for a DIA analysis document**) | Skyline reads the windows from the raw files at import and persists them **nowhere** - not in the `.sky`, and not in any report column (`ChromatogramExtractionWidth` is the product-ion extraction width, not the isolation window). So PRISM has Skyline read them back out of a data file - see below. |
+| Data files unreachable / no Skyline installed | Falls back to the user's saved Skyline isolation schemes, if any were captured; failing that, a uniform m/z grid labelled `uniform N Th bins (approximate)` so a cell is never mistaken for a spectrum. |
+
+**Reading the windows out of a raw file.** PRISM cannot open vendor formats, but Skyline can, and its
+`--full-scan-isolation-scheme` flag accepts *a data file path* in place of a scheme name - the
+command-line form of Transition Settings > Full-Scan > Isolation scheme > Add > *Import from a data file*.
+`SkylineIsolationImporter` uses it against a **throwaway `--new` document** in a temp directory, parses
+the `<isolation_scheme>` out of it, and deletes it; the user's own document is never opened or modified.
+Measured: 167 windows read from a 5.2 GB Thermo `.raw` on a network share in ~10 s (Skyline reads scan
+headers, not the whole file). Recorded data-file paths go stale when data is archived or moved, so a path
+that no longer resolves is retried beside the document before giving up.
+
+This matters more than "one bin width vs another" suggests: those 167 windows are 3.0014 Th wide and
+start at **400.4319**, because the edges are deliberately placed in the peptide *forbidden zones* (widths
+an integer multiple of ~1.0005 m/z, the averagine spacing). A uniform 3 Th grid starting at 400 would be
+offset ~14% of a window and would cut through precursor clusters the scheme was designed to keep intact.
+
+Because the windows have to be known *later*, when the tab may be opened on an old output directory with
+no Skyline running, a run writes what it learned to `isolation_schemes.xml` in the output directory: each
+input's resolved scheme (imported or document-declared), plus every isolation scheme saved in the attached
+Skyline (`GetSettingsListNames`/`GetSettingsListItem` on `IsolationSchemeList`) as a manual fallback.
+
+Picking the wrong scheme is visible rather than silent: precursors that fall outside every window are
+counted (never clamped into the nearest one) and the status line warns with the percentage.
+
+**Timing: this all happens when the user clicks Run PRISM**, before the pipeline starts - deliberately, as
+that is when the raw data is most likely still where the document says it is. The windows are resolved once
+and written to the output directory; nothing later depends on the data files still being reachable.
+
+### Scheduled acquisitions (PRM / MTM / dynamic DIA)
+
+Skyline's importer looks for a *repeating* isolation cycle, so it works only for DIA; on anything else it
+fails with `No repeating isolation scheme found in <file>`. PRISM reads
+`transition_full_scan/@acquisition_method` first and skips the import (and the ~10 s Skyline launch) for
+PRM/DDA/SureQuant, recording the method in `isolation_schemes.xml`.
+
+Targeted methods are not just "DIA without a scheme" - a window fires only during its scheduled interval.
+PRISM models that the way [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza) does with its
+`Slot`: **an isolation window is an m/z range crossed with an RT range**. `IsolationWindow.RtStart/RtStop`
+are `NaN` for DIA (a cycle repeats all gradient long) and carry the firing interval for a scheduled slot.
+That distinction is load-bearing:
+
+- A precursor is credited to a window only if the peak eluted **while that window was firing**
+  (`IndicesCovering`, not `IndicesContaining`). Two targets sharing an m/z but scheduled 20 min apart go to
+  their own slots instead of both.
+- Cells outside a slot's interval render as **not acquired** (NaN, drawn as a gap), so a `0` always means
+  *acquired and nothing detected* - the slot that fired and found nothing, which is the thing worth seeing.
+- The RT axis spans the **schedule**, not just the detections, so slots that produced nothing still appear.
+- MTM slots legitimately count several co-eluting precursors; PRM slots count one. Window width is drawn to
+  scale, so multiplexed slots are visibly wider.
+
+**Dynamic DIA** ([Pino/Searle et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC10517878/)) is the same
+model with a whole *cycle* per segment instead of one slot: 8 x 8 m/z windows whose m/z positions shift
+along the gradient to track where peptides are eluting, covering ~300 m/z at any instant. Several windows
+therefore share each firing interval, and - the property that distinguishes it from both static DIA and
+PRM - **the same m/z is covered by different windows at different times**. Consequences that are handled:
+a precursor is credited to the cycle that was running when it eluted, a peak straddling a segment boundary
+counts in both cycles (it really was fragmented twice), and m/z the cycle has already marched past renders
+as never-acquired rather than as an empty spectrum. That last one required choosing the source window
+**per cell rather than per m/z row** when rasterizing; a per-row choice shows one segment and blanks the
+rest.
+
+**Where the schedule comes from: the Thermo inclusion list** that was loaded onto the instrument - for a
+scheduled run, that CSV *is* the isolation scheme, and the only complete record of it (Skyline's importer
+needs a repeating cycle, which a schedule by definition does not have). `ThermoInclusionList` reads the
+columns Cadenza's `ThermoCsvWriter` emits (`m/z`, `t start (min)`, `t stop (min)`,
+`Isolation Window (m/z)`; one row per slot or per dynamic-DIA window), tolerating header spelling/spacing
+variants. Load it from the Spectrum density tab's scheme drop-down (**Load inclusion list (PRM/MTM)…**);
+it is added to the run's `isolation_schemes.xml`, so it is offered again next time without re-browsing.
+
+The map itself is built from `merged_data.parquet` - which the pipeline leaves in place and re-uses as
+its merge cache - so the tab works both right after a run and when the output box is simply pointed at a
+previous run's directory. Computation lives in `PrecursorDensity` / `IsolationScheme` (Core) and drawing
+in `PlotRenderer.DrawPrecursorDensity`; `MainWindow.Density.cs` is only the wiring. Real schemes are not
+obliged to be uniform, gapless or non-overlapping, so the map keeps explicit `[Low, High)` rows and
+rasterizes onto a uniform grid at draw time (heatmap cells must be equal-height). This is a port of the
+m/z x RT heatmap in [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza), fed by the PRISM
+report instead of a DIA-NN report, and has no Python-engine equivalent.
+
 ## Package the Skyline external tool
 
 Use the ship gate, which tests -> packages -> launch-verifies (always test before shipping):

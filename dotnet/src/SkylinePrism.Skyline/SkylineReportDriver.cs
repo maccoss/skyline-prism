@@ -284,6 +284,99 @@ public sealed class SkylineReportDriver
         return prism;
     }
 
+    /// <summary>
+    /// Name -&gt; ElementLocator for a document tree level ("group" = proteins, "molecule" = peptides), for
+    /// navigating to a plotted point. Locators come from Skyline rather than being built by string
+    /// surgery, so protein naming, modifications and duplicate sequences are Skyline's problem, not ours.
+    /// Keys are indexed under several forms (see <see cref="LocatorKeys"/>) because the plot is keyed on
+    /// the PRISM matrices' identifiers, not on Skyline's display names.
+    /// </summary>
+    public Dictionary<string, string> GetLocatorMap(string level)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var entries = Try(() => _session.Execute(c => c.GetLocations(level)));
+        if (entries is null)
+            return map;
+
+        foreach (var (name, locator) in entries)
+        {
+            foreach (var key in LocatorKeys(name, locator))
+            {
+                // First writer wins: an earlier element keeps an ambiguous key (e.g. a peptide sequence
+                // shared by two proteins) rather than the last one silently taking it.
+                if (!string.IsNullOrWhiteSpace(key))
+                    map.TryAdd(key, locator);
+            }
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// The forms a tree element can be looked up by: its display name, the locator's own trailing segment
+    /// (what Skyline considers the element's identity), and for a FASTA-style name its accession.
+    /// </summary>
+    internal static IEnumerable<string> LocatorKeys(string name, string locator)
+    {
+        yield return name;
+
+        var slash = locator.LastIndexOf('/');
+        if (slash >= 0 && slash + 1 < locator.Length)
+        {
+            yield return locator[(slash + 1)..];
+
+            // "<protein>/<peptide>" as well as the bare peptide: a peptide shared between protein groups
+            // appears once per group, and the bare sequence would resolve to whichever came first.
+            var parent = locator.LastIndexOf('/', slash - 1 < 0 ? 0 : slash - 1);
+            if (parent >= 0 && parent < slash)
+                yield return locator[(parent + 1)..];
+        }
+
+        foreach (var part in (name ?? "").Split('|', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var p = part.Trim();
+            if (p.Length > 0 && p is not "sp" and not "tr")
+                yield return p;
+        }
+    }
+
+    /// <summary>Select an element in the document tree. Returns false when Skyline refuses or is gone.</summary>
+    public bool SelectElement(string elementLocator)
+    {
+        try
+        {
+            _session.Execute(c => c.SetSelectedElement(elementLocator));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log($"Could not select {elementLocator} in Skyline: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Every isolation scheme saved in this Skyline (Settings &gt; Transition Settings &gt; Full-Scan), as
+    /// raw XML. This is the acquisition's real window layout, and the only source of it for a document
+    /// whose scheme is "Results only" - Skyline reads those windows from the data files at import and
+    /// stores them neither in the .sky nor in any report column, so the user has to say which of their
+    /// saved schemes the run was acquired with. Empty when the RPC is unavailable.
+    /// </summary>
+    public List<string> GetIsolationSchemeXml()
+    {
+        var names = Try(() => _session.Execute(c => c.GetSettingsListNames("IsolationSchemeList", null)));
+        if (names is null)
+            return new List<string>();
+
+        var result = new List<string>();
+        foreach (var name in names.Where(n => !string.IsNullOrWhiteSpace(n)))
+        {
+            var xml = Try(() => _session.Execute(c => c.GetSettingsListItem("IsolationSchemeList", name)));
+            if (!string.IsNullOrWhiteSpace(xml))
+                result.Add(xml!);
+        }
+        return result;
+    }
+
     private List<string> GetAvailableReportNames()
     {
         var names = new List<string>();

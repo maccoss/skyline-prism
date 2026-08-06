@@ -53,6 +53,13 @@ public sealed class HeadlessSkylineExporter
     public string RunnerDescription => _runner.Description;
 
     /// <summary>
+    /// The resolved way to drive Skyline. Exposed so other headless jobs can reuse the same discovery
+    /// (Skyline app first, SkylineCmd fallback) instead of repeating it - e.g.
+    /// <see cref="SkylineIsolationImporter"/>, which reads DIA isolation windows out of a raw data file.
+    /// </summary>
+    public ISkylineCommandRunner Runner => _runner;
+
+    /// <summary>
     /// Pick the best available way to drive Skyline, or throw a message the UI can show verbatim.
     /// Prefers the installed Skyline application (parquet-capable) over SkylineCmd.
     /// </summary>

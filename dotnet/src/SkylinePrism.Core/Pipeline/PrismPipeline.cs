@@ -266,6 +266,15 @@ public sealed class PrismPipeline
                 : $"  ComBat: reference-anchored requested but no '{refType}' samples found; using standard ComBat.");
         }
 
+        // Parsimony is computed HERE, before the peptide output is written, because that output carries
+        // the protein groups each peptide belongs to (so the peptide and protein tables can be joined,
+        // and a peptide can be navigated to in Skyline). Its banner and CSV stay at Stage 3 below, where
+        // the grouping is reported; only the computation moved.
+        var groups = ParsimonyEngine.Run(
+            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
+            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
+        var peptideGroups = PeptideGroupIndex(groups);
+
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
@@ -279,7 +288,12 @@ public sealed class PrismPipeline
             referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt",
             rtLowessFrac: config.GlobalNormalization.RtLowess.Frac,
             rtLowessGridPoints: config.GlobalNormalization.RtLowess.NGridPoints,
-            autoRevert: config.BatchCorrection.AutoRevert);
+            autoRevert: config.BatchCorrection.AutoRevert,
+            // Stamped onto the CORRECTED peptide output only (see NormalizeAndCorrect): the internal
+            // log2 file feeds the protein rollup and the QC report, whose readers treat any undeclared
+            // column as a sample.
+            derivedMeta: PeptideGroupColumns(peptideGroups),
+            derivedKeyColumn: cols.Peptide);
         report($"  Wrote {nPeptides:N0} corrected peptides.");
 
         // Stage 3: parsimony.
@@ -289,11 +303,12 @@ public sealed class PrismPipeline
         if (!string.IsNullOrWhiteSpace(config.Parsimony.FastaPath))
             report($"  FASTA-based parsimony map: {config.Parsimony.FastaPath} "
                 + $"(enzyme={config.Parsimony.Enzyme}, specificity={config.Parsimony.EnzymeSpecificity})");
-        var groups = ParsimonyEngine.Run(
-            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
-            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
         report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
+        var shared = peptideGroups.Count(kv => kv.Value.Count > 1);
+        if (shared > 0)
+            report($"  {shared:N0} peptide(s) map to more than one group; corrected_peptides lists all of "
+                + $"them, '{PeptideGroupSeparator}'-separated.");
 
         // Stage 4: peptide -> protein.
         report("============================================================");
@@ -396,6 +411,54 @@ public sealed class PrismPipeline
     /// ComBat, then write the LOG2 "internal" parquet (if a path is given) and the LINEAR
     /// corrected output. Returns the number of features written.
     /// </summary>
+    /// <summary>
+    /// Separator between the protein groups of a shared peptide in the corrected peptide output. A
+    /// peptide that maps to several groups lists them all rather than being arbitrarily assigned to one -
+    /// which group "owns" it is a quantification decision (parsimony.shared_peptide_handling), not a fact
+    /// about the peptide.
+    /// </summary>
+    public const string PeptideGroupSeparator = ";";
+
+    /// <summary>Peptide -> every protein group that peptide maps to, in group order.</summary>
+    private static Dictionary<string, List<ProteinGroup>> PeptideGroupIndex(IReadOnlyList<ProteinGroup> groups)
+    {
+        var index = new Dictionary<string, List<ProteinGroup>>(StringComparer.Ordinal);
+        foreach (var group in groups)
+        {
+            // AllMappedPeptides, not Peptides: the question here is "which groups contain this peptide",
+            // which includes the shared ones parsimony did not assign to this group.
+            foreach (var peptide in group.AllMappedPeptides)
+            {
+                if (!index.TryGetValue(peptide, out var list))
+                    index[peptide] = list = new List<ProteinGroup>();
+                if (!list.Contains(group))
+                    list.Add(group);
+            }
+        }
+        return index;
+    }
+
+    /// <summary>
+    /// The protein-group columns stamped onto corrected_peptides: the group IDs (join key to
+    /// corrected_proteins) and the leading protein/name (what identifies the protein in Skyline).
+    /// </summary>
+    private static IReadOnlyList<(string Name, Func<string, string> Value)> PeptideGroupColumns(
+        IReadOnlyDictionary<string, List<ProteinGroup>> peptideGroups)
+    {
+        string Join(string peptide, Func<ProteinGroup, string> field) =>
+            peptideGroups.TryGetValue(peptide, out var list)
+                ? string.Join(PeptideGroupSeparator, list.Select(field))
+                : "";
+
+        return new (string, Func<string, string>)[]
+        {
+            ("protein_group", p => Join(p, g => g.GroupId)),
+            ("leading_protein", p => Join(p, g => g.LeadingProtein)),
+            ("leading_name", p => Join(p, g => g.LeadingName)),
+            ("leading_gene_name", p => Join(p, g => g.LeadingGeneName)),
+        };
+    }
+
     private static int NormalizeAndCorrect(
         string wideParquet,
         IReadOnlyList<(string Name, MetaType Type)> metaSpec,
@@ -413,7 +476,9 @@ public sealed class PrismPipeline
         string? rtColumn = null,
         double rtLowessFrac = 0.3,
         int rtLowessGridPoints = 100,
-        bool autoRevert = false)
+        bool autoRevert = false,
+        IReadOnlyList<(string Name, Func<string, string> Value)>? derivedMeta = null,
+        string? derivedKeyColumn = null)
     {
         var table = ParquetTable.Load(wideParquet);
         var nAll = table.RowCount;
@@ -548,6 +613,21 @@ public sealed class PrismPipeline
             }
         }
 
+        // Columns computed from another stage rather than read from this file - the peptide output's
+        // protein groups, which parsimony knows and the peptide rollup does not. These go on the
+        // CORRECTED (published) output ONLY: the internal log2 file is a pipeline intermediate whose
+        // readers treat every non-declared column as a sample, and a string column there is read as an
+        // abundance and throws.
+        var correctedMetaCols = metaCols;
+        if (derivedMeta is { Count: > 0 } && derivedKeyColumn is not null && table.HasColumn(derivedKeyColumn))
+        {
+            var keys = table.GetString(derivedKeyColumn);
+            correctedMetaCols = new List<ParquetWideWriter.MetaColumn>(metaCols);
+            foreach (var (name, value) in derivedMeta)
+                correctedMetaCols.Add(ParquetWideWriter.Strings(
+                    name, keep.Select(i => value(keys[i] ?? "")).ToArray()));
+        }
+
         // LOG2 "internal" output only when requested (peptide stage). Scoped so the transpose is
         // freed before the linear transpose is allocated (peak = corrected + one column set).
         if (internalLog2Path is not null)
@@ -572,9 +652,9 @@ public sealed class PrismPipeline
         }
 
         if (correctedLinearPath.EndsWith(".parquet", StringComparison.OrdinalIgnoreCase))
-            ParquetWideWriter.Write(correctedLinearPath, metaCols, samples, linearCols, n);
+            ParquetWideWriter.Write(correctedLinearPath, correctedMetaCols, samples, linearCols, n);
         else
-            WriteDelimited(correctedLinearPath, metaCols, samples, linearCols, n);
+            WriteDelimited(correctedLinearPath, correctedMetaCols, samples, linearCols, n);
 
         return n;
     }

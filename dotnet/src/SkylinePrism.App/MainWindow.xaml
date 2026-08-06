@@ -53,7 +53,7 @@
             <Button x:Name="RunButton" Content="Run PRISM" Padding="22,4" FontWeight="Bold" Click="OnRun" />
         </StackPanel>
 
-        <TabControl Grid.Row="5" x:Name="MainTabs">
+        <TabControl Grid.Row="5" x:Name="MainTabs" SelectionChanged="OnMainTabChanged">
             <TabItem Header="Inputs" x:Name="InputsTab">
                 <DockPanel Margin="8">
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
@@ -232,6 +232,82 @@
                         <sp:WpfPlot x:Name="QcPlot" />
                         <Image x:Name="QcImage" Visibility="Collapsed" Stretch="Uniform" Margin="4" />
                     </Grid>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="Spectrum density" x:Name="DensityTab">
+                <DockPanel>
+                    <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                        <TextBlock Text="Run:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="DensitySampleCombo" Width="230" SelectionChanged="OnDensitySampleChanged"
+                                  ToolTip="Which acquisition to map. Every run in the merged report is listed." />
+                        <TextBlock Text="Isolation scheme:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="DensitySchemeCombo" Width="200" SelectionChanged="OnDensitySchemeChanged"
+                                  ToolTip="The acquisition's real isolation windows - one map row per window, so one cell is one DIA spectrum. Taken from the document when it defines a scheme; otherwise pick the scheme the data was acquired with." />
+                        <TextBox x:Name="DensityMzBinBox" Width="46" Text="8.0" VerticalAlignment="Center"
+                                 Margin="4,0,0,0" Visibility="Collapsed"
+                                 LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
+                                 ToolTip="Width of one uniform m/z bin, in Th. Only used by the approximate fallback - its edges are arbitrary and will not line up with the real windows." />
+                        <TextBlock Text="RT bin (min):" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <TextBox x:Name="DensityRtBinBox" Width="46" Text="0.1" VerticalAlignment="Center"
+                                 LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
+                                 ToolTip="Width of one RT column, in minutes - roughly the cycle time of the method." />
+                        <TextBlock Text="Max q-value:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <TextBox x:Name="DensityQValueBox" Width="52" Text="0.01" VerticalAlignment="Center"
+                                 LostFocus="OnDensityQValueChanged" KeyDown="OnDensityQValueKeyDown"
+                                 ToolTip="Detection q-value cutoff: only precursors at or below it count as detected. Blank counts every integrated peak." />
+                        <TextBlock Text="Colors:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="DensityColormapCombo" Width="110" SelectedIndex="0"
+                                  SelectionChanged="OnDensityColormapChanged">
+                            <ComboBoxItem>Viridis</ComboBoxItem>
+                            <ComboBoxItem>Turbo</ComboBoxItem>
+                            <ComboBoxItem>Magma</ComboBoxItem>
+                            <ComboBoxItem>Inferno</ComboBoxItem>
+                            <ComboBoxItem>Plasma</ComboBoxItem>
+                            <ComboBoxItem>Thermal</ComboBoxItem>
+                            <ComboBoxItem>Grayscale</ComboBoxItem>
+                        </ComboBox>
+                        <Button x:Name="DensityRefreshButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
+                                Click="OnDensityReload"
+                                ToolTip="Re-read merged_data.parquet from the output directory above." />
+                        <TextBlock x:Name="DensityStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Foreground="#888" TextWrapping="Wrap" />
+                        <TextBlock x:Name="DensityHoverText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Foreground="#1a3c6e" TextWrapping="Wrap" />
+                    </WrapPanel>
+                    <sp:WpfPlot x:Name="DensityPlot" MouseMove="OnDensityPlotMouseMove" />
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="Dynamic Range" x:Name="DynamicRangeTab">
+                <DockPanel>
+                    <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                        <TextBlock Text="Level:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="RangeLevelCombo" Width="90" SelectedIndex="0"
+                                  SelectionChanged="OnRangeLevelChanged"
+                                  ToolTip="Which corrected PRISM matrix to rank: corrected_proteins.parquet or corrected_peptides.parquet.">
+                            <ComboBoxItem>Protein</ComboBoxItem>
+                            <ComboBoxItem>Peptide</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="Replicates:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="RangeSampleCombo" Width="210" IsEditable="True" IsReadOnly="True"
+                                  ToolTip="Which replicates to average. Tick none for All.">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              Margin="2,1" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
+                                Click="OnManageProteinLists"
+                                ToolTip="Define named protein lists with colours - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
+                        <Button Content="Reload" Padding="10,2" Margin="8,0,0,0" Click="OnRangeReload"
+                                ToolTip="Re-read the corrected matrices from the output directory above." />
+                        <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"
+                                   Text="Click a point to select it in Skyline; right-click for labels." />
+                        <TextBlock x:Name="RangeStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Foreground="#888" TextWrapping="Wrap" />
+                    </WrapPanel>
+                    <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
                 </DockPanel>
             </TabItem>
         </TabControl>

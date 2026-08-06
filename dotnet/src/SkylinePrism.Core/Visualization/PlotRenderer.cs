@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ScottPlot;
+using SkylinePrism.Core.Qc;
 
 namespace SkylinePrism.Core.Visualization;
 
@@ -15,8 +16,43 @@ namespace SkylinePrism.Core.Visualization;
 /// </summary>
 public static class PlotRenderer
 {
-    private const int Width = 700;
-    private const int Height = 500;
+    // Canvas for the static QC-report PNGs. Sized so the (deliberately large) fonts below stay in
+    // proportion and the image is still crisp when dropped into a figure or slide.
+    private const int Width = 1100;
+    private const int Height = 780;
+
+    /// <summary>
+    /// Font family used by every plot. Pinned rather than left to the backend's default because the
+    /// default resolves per machine (whatever SkiaSharp finds first), which is why the same plot came out
+    /// with visibly different text on different computers. First installed family wins; the last entry is
+    /// the backend default, so this always resolves to something.
+    /// </summary>
+    public static readonly string PlotFontName = FirstInstalledFont(
+        "Segoe UI",        // Windows 10/11
+        "Helvetica",       // macOS
+        "DejaVu Sans",     // most Linux distributions
+        "Liberation Sans", // RHEL/Fedora family
+        "Arial");
+
+    private static string FirstInstalledFont(params string[] candidates)
+    {
+        foreach (var name in candidates)
+        {
+            try
+            {
+                // Skia hands back a substitute rather than null for an unknown family, so compare the
+                // family it actually resolved to - otherwise every candidate would "exist".
+                var typeface = Fonts.GetTypeface(name, false, false);
+                if (string.Equals(typeface?.FamilyName, name, StringComparison.OrdinalIgnoreCase))
+                    return name;
+            }
+            catch (Exception)
+            {
+                // A backend without font enumeration must not stop a plot from rendering.
+            }
+        }
+        return Fonts.Default;
+    }
 
     public static readonly IReadOnlyDictionary<string, string> TypeColors = new Dictionary<string, string>
     {
@@ -36,25 +72,171 @@ public static class PlotRenderer
         Color.FromHex("#b2182b"), Color.FromHex("#67001f"),
     };
 
-    // Bold, large axis/legend styling shared by every QC plot (static PNGs and the interactive tool):
-    // big titles/labels, thick left+bottom axes only (top+right hidden). Line thickness is per-plot.
-    public static void StyleQcPlot(Plot plt)
+    /// <summary>
+    /// Axis/legend styling shared by every QC plot (static PNGs and the interactive tool): thick left +
+    /// bottom axes only (top + right hidden), a pinned font family, and text sized for figures and slides.
+    /// </summary>
+    /// <remarks>
+    /// These plots are routinely saved or copied straight into a paper or a talk, where the axis labels
+    /// have to survive being scaled down to a journal column or projected across a room - so the text is
+    /// deliberately large relative to the plot rather than dashboard-sized. Scale everything together with
+    /// <paramref name="fontScale"/> instead of changing individual sizes.
+    /// </remarks>
+    public static void StyleQcPlot(Plot plt, double fontScale = 1.0)
     {
-        plt.Axes.Title.Label.FontSize = 22;
-        plt.Axes.Title.Label.Bold = true;
-        plt.Axes.Left.Label.FontSize = 18;
-        plt.Axes.Bottom.Label.FontSize = 18;
-        plt.Axes.Left.TickLabelStyle.FontSize = 14;
-        plt.Axes.Bottom.TickLabelStyle.FontSize = 14;
-        plt.Legend.FontSize = 16;
+        float Pt(double points) => (float)(points * fontScale);
 
-        // Only the left + bottom axes, thick; hide the top + right frame lines.
-        plt.Axes.Left.FrameLineStyle.Width = 3;
-        plt.Axes.Bottom.FrameLineStyle.Width = 3;
+        plt.Axes.Title.Label.FontName = PlotFontName;
+        plt.Axes.Left.Label.FontName = PlotFontName;
+        plt.Axes.Bottom.Label.FontName = PlotFontName;
+        plt.Axes.Left.TickLabelStyle.FontName = PlotFontName;
+        plt.Axes.Bottom.TickLabelStyle.FontName = PlotFontName;
+        plt.Legend.FontName = PlotFontName;
+
+        plt.Axes.Title.Label.FontSize = Pt(28);
+        plt.Axes.Title.Label.Bold = true;
+        plt.Axes.Left.Label.FontSize = Pt(30);
+        plt.Axes.Bottom.Label.FontSize = Pt(30);
+        plt.Axes.Left.Label.Bold = true;
+        plt.Axes.Bottom.Label.Bold = true;
+        plt.Axes.Left.TickLabelStyle.FontSize = Pt(24);
+        plt.Axes.Bottom.TickLabelStyle.FontSize = Pt(24);
+        plt.Legend.FontSize = Pt(22);
+
+        // Only the left + bottom axes, thick enough to stay visible when the figure is scaled down;
+        // hide the top + right frame lines.
+        plt.Axes.Left.FrameLineStyle.Width = 4;
+        plt.Axes.Bottom.FrameLineStyle.Width = 4;
         plt.Axes.Right.FrameLineStyle.Width = 0;
         plt.Axes.Top.FrameLineStyle.Width = 0;
-        plt.Axes.Left.MajorTickStyle.Width = 2;
-        plt.Axes.Bottom.MajorTickStyle.Width = 2;
+        plt.Axes.Left.MajorTickStyle.Width = 3;
+        plt.Axes.Bottom.MajorTickStyle.Width = 3;
+        plt.Axes.Left.MajorTickStyle.Length = 8;
+        plt.Axes.Bottom.MajorTickStyle.Length = 8;
+    }
+
+    /// <summary>
+    /// The precursor-density map: retention time across, precursor m/z up, colour = how many peptide
+    /// precursors were eluting in that isolation window at that time (one cell = one DIA spectrum).
+    /// </summary>
+    /// <remarks>
+    /// Sized for figures and slides, not for a dense QC dashboard: this plot is meant to be saved or
+    /// copied straight out of the tool into a paper/presentation, where the QC-report font sizes are
+    /// unreadable once the image is scaled down to a column or projected. Scale every font together with
+    /// <paramref name="fontScale"/> rather than tweaking sizes individually.
+    /// </remarks>
+    public static void DrawPrecursorDensity(
+        Plot plt, PrecursorDensityMap map, IColormap? colormap = null, string? title = null,
+        double fontScale = 1.0)
+    {
+        // Publication-scale baselines (points at the default plot size), all scaled by fontScale.
+        float Pt(double points) => (float)(points * fontScale);
+
+        if (map.IsEmpty)
+        {
+            plt.Title(title ?? "No precursors to map");
+            StyleQcPlot(plt, fontScale);
+            return;
+        }
+
+        // Real isolation windows are not obliged to be equal-height, but a heatmap's cells are - so the
+        // map rasterizes itself onto a uniform display grid that preserves the true m/z extents (row 0
+        // at the top, matching ScottPlot's orientation).
+        var heat = plt.Add.Heatmap(map.ToDisplayGrid());
+        heat.Colormap = colormap ?? new ScottPlot.Colormaps.Viridis();
+        heat.NaNCellColor = Colors.Transparent; // m/z not covered by any window: a gap, not a zero
+        heat.Extent = new CoordinateRect(
+            left: map.RtLow, right: map.RtHigh, bottom: map.MzLow, top: map.MzHigh);
+
+        plt.XLabel("Retention time (min)");
+        plt.YLabel("Precursor m/z");
+        StyleQcPlot(plt, fontScale);
+
+        // The colour bar IS this plot's legend - it carries the number the reader cares about, so it gets
+        // the same treatment as the axes (StyleQcPlot does not reach panels, so size it here).
+        var bar = plt.Add.ColorBar(heat);
+        bar.Label = "Precursors per spectrum";
+        bar.LabelStyle.FontName = PlotFontName;
+        bar.LabelStyle.FontSize = Pt(28);
+        bar.LabelStyle.Bold = true;
+        bar.Axis.TickLabelStyle.FontName = PlotFontName;
+        bar.Axis.TickLabelStyle.FontSize = Pt(24);
+
+        if (title is not null)
+        {
+            // Run names are long and ScottPlot does not wrap titles, so shrink rather than clip.
+            plt.Title(title);
+            plt.Axes.Title.Label.FontSize = title.Length > 45 ? Pt(20) : Pt(26);
+        }
+        plt.Axes.SetLimits(map.RtLow, map.RtHigh, map.MzLow, map.MzHigh);
+    }
+
+    /// <summary>
+    /// PNG of <see cref="DrawPrecursorDensity"/>, for headless use. Defaults to a figure-sized canvas
+    /// (the fonts are scaled for that size, so a much smaller canvas will look crowded).
+    /// </summary>
+    public static byte[] PrecursorDensityPng(
+        PrecursorDensityMap map, IColormap? colormap = null, string? title = null,
+        int width = 1400, int height = 900, double fontScale = 1.0)
+    {
+        var plt = new Plot();
+        DrawPrecursorDensity(plt, map, colormap, title, fontScale);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
+    }
+
+    /// <summary>
+    /// Dynamic range: log10 abundance against abundance rank - Skyline's Relative Abundance shape. Points
+    /// not claimed by a protein list are drawn first in grey so the highlighted lists sit on top of them.
+    /// </summary>
+    /// <param name="highlights">
+    /// Ordered groups drawn over the background, each with its own colour and legend entry.
+    /// </param>
+    public static void DrawDynamicRange(
+        Plot plt,
+        IReadOnlyList<AbundanceEntry> background,
+        IReadOnlyList<(string Label, string ColorHex, IReadOnlyList<AbundanceEntry> Entries)> highlights,
+        string yLabel = "Log10 abundance",
+        string xLabel = "Rank",
+        double fontScale = 1.0)
+    {
+        if (background.Count > 0)
+        {
+            var dots = plt.Add.ScatterPoints(
+                background.Select(e => (double)e.Rank).ToArray(),
+                background.Select(e => e.Log10Abundance).ToArray());
+            dots.Color = Color.FromHex("#9e9e9e").WithAlpha(0.55);
+            dots.MarkerSize = 6;
+        }
+
+        foreach (var (label, colorHex, entries) in highlights)
+        {
+            if (entries.Count == 0)
+                continue;
+            var marks = plt.Add.ScatterPoints(
+                entries.Select(e => (double)e.Rank).ToArray(),
+                entries.Select(e => e.Log10Abundance).ToArray());
+            marks.Color = Color.FromHex(colorHex);
+            marks.MarkerSize = 13;
+            marks.LegendText = $"{label} ({entries.Count})";
+        }
+
+        plt.XLabel(xLabel);
+        plt.YLabel(yLabel);
+        StyleQcPlot(plt, fontScale);
+        if (highlights.Any(h => h.Entries.Count > 0))
+            plt.ShowLegend(Alignment.UpperRight);
+    }
+
+    /// <summary>PNG of <see cref="DrawDynamicRange"/>, for headless use.</summary>
+    public static byte[] DynamicRangePng(
+        IReadOnlyList<AbundanceEntry> background,
+        IReadOnlyList<(string Label, string ColorHex, IReadOnlyList<AbundanceEntry> Entries)> highlights,
+        string yLabel = "Log10 abundance", string xLabel = "Rank",
+        int width = 1400, int height = 900)
+    {
+        var plt = new Plot();
+        DrawDynamicRange(plt, background, highlights, yLabel, xLabel);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
     /// <summary>Histogram of per-feature CVs with a median line, for one sample-type group.</summary>
@@ -159,7 +341,7 @@ public static class PlotRenderer
         {
             var markers = plt.Add.Markers(lists.X.ToArray(), lists.Y.ToArray());
             markers.Color = Color.FromHex(TypeColors.GetValueOrDefault(type, "#7f7f7f"));
-            markers.MarkerSize = 11;
+            markers.MarkerSize = 15; // sized to match the figure-scale axis text
             markers.LegendText = type;
         }
         plt.ShowLegend();

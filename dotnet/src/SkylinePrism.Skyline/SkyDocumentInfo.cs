@@ -48,13 +48,95 @@ public sealed class SkyDocumentInfo
     /// <summary>Raw <c>&lt;enzyme .../&gt;</c> element, in the same shape the settings-list RPC returns.</summary>
     public string? EnzymeXml { get; private init; }
 
+    /// <summary>
+    /// Full-Scan acquisition method - <c>DIA</c>, <c>PRM</c>, <c>DDA</c>, <c>SureQuant</c>, <c>None</c> -
+    /// or null when the document has no full-scan settings (e.g. SRM). Only DIA has the repeating
+    /// isolation cycle that <c>SkylineIsolationImporter</c> can read out of a data file.
+    /// </summary>
+    public string? AcquisitionMethod { get; private init; }
+
+    /// <summary>True when the document was acquired by DIA (case-insensitive).</summary>
+    public bool IsDia =>
+        string.Equals(AcquisitionMethod, "DIA", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The document enzyme mapped to a PRISM <c>parsimony.enzyme</c> name, or null if unmappable.</summary>
     public string? PrismEnzyme => SkylineDigestion.PrismEnzymeFromXml(EnzymeXml);
+
+    private string? _isolationSchemeXml;
+    private bool _isolationSchemeRead;
+
+    /// <summary>
+    /// Raw <c>&lt;isolation_scheme&gt;</c> element (with its windows) from Transition Settings &gt;
+    /// Full-Scan, or null when the document has none. Note that a DIA analysis document normally carries
+    /// only <c>&lt;isolation_scheme name="Results only" /&gt;</c> - named, but with no windows, because
+    /// Skyline reads them from the data files at import and never writes them here.
+    /// <para>Read lazily with its own pass (see <see cref="ReadIsolationSchemeXml"/>) rather than during
+    /// <see cref="Read"/>: capturing an element WITH ITS CHILDREN consumes the reader past that element,
+    /// which the main loop's advance-on-every-iteration structure cannot absorb safely.</para>
+    /// </summary>
+    public string? IsolationSchemeXml
+    {
+        get
+        {
+            if (!_isolationSchemeRead)
+            {
+                _isolationSchemeRead = true;
+                _isolationSchemeXml = ReadIsolationSchemeXml(DocumentPath);
+            }
+            return _isolationSchemeXml;
+        }
+    }
+
+    /// <summary>
+    /// Read just the <c>&lt;isolation_scheme&gt;</c> element from a .sky, or null if it has none. Stops at
+    /// <c>&lt;/transition_settings&gt;</c>, so it reads only the head of the file. Never throws: an
+    /// unreadable or non-Skyline file simply yields null.
+    /// </summary>
+    public static string? ReadIsolationSchemeXml(string skyPath)
+    {
+        if (string.IsNullOrWhiteSpace(skyPath) || !File.Exists(skyPath))
+            return null;
+        try
+        {
+            var settings = new XmlReaderSettings
+            {
+                IgnoreComments = true,
+                IgnoreWhitespace = true,
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+            };
+            using var stream = new FileStream(
+                skyPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = XmlReader.Create(stream, settings);
+            while (reader.Read())
+            {
+                if (reader.NodeType == XmlNodeType.EndElement
+                    && (reader.LocalName == "transition_settings" || reader.LocalName == "settings_summary"))
+                {
+                    return null; // passed the full-scan settings without finding one
+                }
+                if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "isolation_scheme")
+                    return reader.ReadOuterXml();
+            }
+        }
+        catch (Exception ex) when (ex is IOException or XmlException or UnauthorizedAccessException)
+        {
+            // Best-effort: the isolation scheme is a nicety, never a reason to fail an input.
+        }
+        return null;
+    }
 
     /// <summary>Names of annotations whose <c>targets</c> include <c>replicate</c> (Document Annotations).</summary>
     public IReadOnlyList<string> ReplicateAnnotationNames { get; private init; } = Array.Empty<string>();
 
     public IReadOnlyList<SkyReplicate> Replicates { get; private init; } = Array.Empty<SkyReplicate>();
+
+    /// <summary>
+    /// Raw data files this document imported, in document order, as recorded at import time (they may
+    /// since have moved - see <c>SkylineIsolationImporter.ResolveDataFile</c>). Needed because the DIA
+    /// isolation windows of a "Results only" document exist only inside these files.
+    /// </summary>
+    public IReadOnlyList<string> SampleFilePaths { get; private init; } = Array.Empty<string>();
 
     /// <summary>Display name used as the batch label for this document (the .sky file stem).</summary>
     public string Name => Path.GetFileNameWithoutExtension(DocumentPath);
@@ -69,8 +151,10 @@ public sealed class SkyDocumentInfo
             throw new FileNotFoundException($"Skyline document not found: {skyPath}", skyPath);
 
         string? formatVersion = null, softwareVersion = null, documentGuid = null, enzymeXml = null;
+        string? acquisitionMethod = null;
         var annotationNames = new List<string>();
         var replicates = new List<SkyReplicate>();
+        var sampleFilePaths = new List<string>();
         var sawRoot = false;
 
         var settings = new XmlReaderSettings
@@ -103,6 +187,12 @@ public sealed class SkyDocumentInfo
                     documentGuid = reader.GetAttribute("document_guid");
                     break;
 
+                case "transition_full_scan":
+                    // Attribute-only read, so it is safe in this advance-every-iteration loop (unlike the
+                    // <isolation_scheme> child element - see ReadIsolationSchemeXml).
+                    acquisitionMethod ??= reader.GetAttribute("acquisition_method");
+                    break;
+
                 case "enzyme":
                     // Re-emit as a standalone element so SkylineDigestion parses it exactly as it parses
                     // the XML returned by GetSettingsListItem("Enzymes", name).
@@ -123,7 +213,7 @@ public sealed class SkyDocumentInfo
                     break;
 
                 case "replicate":
-                    replicates.Add(ReadReplicate(reader));
+                    replicates.Add(ReadReplicate(reader, sampleFilePaths));
                     break;
 
                 case "protein":
@@ -145,8 +235,10 @@ public sealed class SkyDocumentInfo
             SoftwareVersion = softwareVersion,
             DocumentGuid = documentGuid,
             EnzymeXml = enzymeXml,
+            AcquisitionMethod = acquisitionMethod,
             ReplicateAnnotationNames = annotationNames,
             Replicates = replicates,
+            SampleFilePaths = sampleFilePaths,
         };
     }
 
@@ -188,9 +280,10 @@ public sealed class SkyDocumentInfo
     private static string XmlEscapeAttr(string s) => s
         .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 
-    // Reads one <replicate> element, collecting its annotation VALUES. Positioned on <replicate>;
-    // leaves the reader on </replicate> (or on the element itself when it is empty).
-    private static SkyReplicate ReadReplicate(XmlReader reader)
+    // Reads one <replicate> element, collecting its annotation VALUES and appending any <sample_file>
+    // paths to sampleFilePaths. Positioned on <replicate>; leaves the reader on </replicate> (or on the
+    // element itself when it is empty).
+    private static SkyReplicate ReadReplicate(XmlReader reader, List<string> sampleFilePaths)
     {
         var name = reader.GetAttribute("name") ?? "";
         var sampleType = reader.GetAttribute("sample_type") ?? "";
@@ -207,6 +300,15 @@ public sealed class SkyDocumentInfo
                 && reader.LocalName == "replicate")
             {
                 break; // leave the reader ON </replicate> so the caller's Read() lands on the next node
+            }
+
+            if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "sample_file")
+            {
+                var filePath = reader.GetAttribute("file_path");
+                if (!string.IsNullOrWhiteSpace(filePath))
+                    sampleFilePaths.Add(filePath!);
+                // Fall through to the plain Read() below: <sample_file> children (instrument info) are
+                // not needed, and letting the loop walk them keeps the reader's position predictable.
             }
 
             if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "annotation")

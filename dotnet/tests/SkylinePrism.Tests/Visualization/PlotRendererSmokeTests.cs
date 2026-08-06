@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Visualization;
 using Xunit;
 
@@ -18,6 +20,60 @@ public class PlotRendererSmokeTests
         Assert.Equal(0x50, png[1]);
         Assert.Equal(0x4E, png[2]);
         Assert.Equal(0x47, png[3]);
+    }
+
+    [Fact]
+    public void PrecursorDensity_Renders()
+    {
+        // A tiny cohort of co-eluting precursors across a 400-460 m/z span.
+        var precursors = new System.Collections.Generic.List<DetectedPrecursor>();
+        for (var i = 0; i < 200; i++)
+            precursors.Add(new DetectedPrecursor(400 + i % 60, 5 + i % 20 * 0.5, 5.4 + i % 20 * 0.5));
+        var map = PrecursorDensity.Bin(precursors, mzBinTh: 4.0, rtBinMin: 0.1);
+
+        AssertPng(PlotRenderer.PrecursorDensityPng(map, title: "Precursors per DIA spectrum"));
+        // Every colormap offered in the tool's dropdown must render.
+        foreach (var cmap in new ScottPlot.IColormap[]
+                 {
+                     new ScottPlot.Colormaps.Viridis(), new ScottPlot.Colormaps.Turbo(),
+                     new ScottPlot.Colormaps.Magma(), new ScottPlot.Colormaps.Inferno(),
+                     new ScottPlot.Colormaps.Plasma(), new ScottPlot.Colormaps.Thermal(),
+                     new ScottPlot.Colormaps.GrayscaleReversed(),
+                 })
+        {
+            AssertPng(PlotRenderer.PrecursorDensityPng(map, cmap));
+        }
+    }
+
+    [Fact]
+    public void DynamicRange_Renders()
+    {
+        var entries = new System.Collections.Generic.List<AbundanceEntry>();
+        for (var i = 0; i < 500; i++)
+        {
+            var log10 = 10 - 5.0 * i / 500;
+            entries.Add(new AbundanceEntry(
+                $"sp|P{i:D5}|G{i}_HUMAN", $"GEN{i}", $"P{i:D5}", $"GEN{i}", $"sp|P{i:D5}|G{i}_HUMAN",
+                System.Math.Pow(10, log10), log10, i + 1, 3));
+        }
+        var highlight = entries.Take(10).ToList();
+
+        AssertPng(PlotRenderer.DynamicRangePng(
+            entries.Skip(10).ToList(),
+            new[] { ("EV markers", "#1f77b4", (System.Collections.Generic.IReadOnlyList<AbundanceEntry>)highlight) }));
+
+        // No lists defined: just the background curve, and no legend to draw.
+        AssertPng(PlotRenderer.DynamicRangePng(
+            entries,
+            System.Array.Empty<(string, string, System.Collections.Generic.IReadOnlyList<AbundanceEntry>)>()));
+    }
+
+    [Fact]
+    public void PrecursorDensity_EmptyMapRendersAMessage()
+    {
+        // The tool draws this when a run has no detections at the chosen q-value; it must not throw.
+        AssertPng(PlotRenderer.PrecursorDensityPng(
+            PrecursorDensity.Bin(Array.Empty<DetectedPrecursor>()), title: "No detected precursors"));
     }
 
     [Fact]
