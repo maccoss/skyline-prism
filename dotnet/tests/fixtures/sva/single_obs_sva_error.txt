@@ -1,0 +1,6 @@
+BiocParallel errors
+  1 remote errors, element index: 1
+  2 unevaluated and other errors
+  first remote error:
+Error in while (change > conv) {: missing value where TRUE/FALSE needed
+

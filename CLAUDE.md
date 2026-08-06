@@ -65,6 +65,33 @@ The pipeline automatically handles transforms:
 
 When using functions directly via Python API, check docstrings for scale requirements.
 
+### Data Density (CRITICAL - PRISM input is normally COMPLETE)
+
+> [!IMPORTANT]
+> **Skyline exports have no missing values.** Skyline integrates *imputed peak boundaries* for every
+> replicate, so every transition has an area in every run - even where there is no real signal. The
+> peptide x sample matrix that reaches Stage 2b/2c is therefore **dense**, and NaN is the rare
+> exception, not the norm.
+
+Do not design or justify an algorithm on the assumption that missing values are common. When
+choosing between two behaviours, **the dense case is the one that matters**; the sparse case must be
+*supported*, not optimized for. (This was got backwards once: a ComBat change was justified as
+"matches the reference implementation on data with missing values - which is all real proteomics
+data". The opposite is true.)
+
+Supporting evidence in the repo: the `mini` golden fixtures contain 0 nulls and 0 NaNs; `#N/A`
+tokens in a real export are imputed at the **transition** level (`tests/.../MissingValueTests.cs`);
+`TransitionRollup` emits NaN for a peptide x sample cell only when that peptide had *no* transition
+with data at all in that run.
+
+Missing values do still occur, and must keep working:
+
+- **Merging documents with different target lists.** PRISM takes a LIST of Skyline documents (one
+  per plate/batch). A peptide present in one document but absent from another is NaN for every
+  replicate of the second - which is also the "feature absent from a whole batch" case that
+  `sva::ComBat` cannot express at all (it dies with a singular design).
+- Peptides filtered out of one run but not another, and genuinely unintegrated data.
+
 ### CV Calculation (CRITICAL)
 
 **CVs must ALWAYS be calculated on LINEAR scale data, NEVER on log-transformed data.**
