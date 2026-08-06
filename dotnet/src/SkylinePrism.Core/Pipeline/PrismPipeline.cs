@@ -274,6 +274,9 @@ public sealed class PrismPipeline
             mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
             config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
         var peptideGroups = PeptideGroupIndex(groups);
+        // Counted now so the index itself can be dropped as soon as the peptide output is written,
+        // rather than staying alive through the protein rollup for the sake of one number.
+        var sharedPeptides = peptideGroups.Count(kv => kv.Value.Count > 1);
 
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
@@ -295,6 +298,9 @@ public sealed class PrismPipeline
             derivedMeta: PeptideGroupColumns(peptideGroups),
             derivedKeyColumn: cols.Peptide);
         report($"  Wrote {nPeptides:N0} corrected peptides.");
+        // Done with the index; the protein rollup that follows is the other memory-heavy stage, so let
+        // this go rather than holding it alongside another full matrix.
+        peptideGroups = null!;
 
         // Stage 3: parsimony.
         report("============================================================");
@@ -305,10 +311,9 @@ public sealed class PrismPipeline
                 + $"(enzyme={config.Parsimony.Enzyme}, specificity={config.Parsimony.EnzymeSpecificity})");
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
         report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
-        var shared = peptideGroups.Count(kv => kv.Value.Count > 1);
-        if (shared > 0)
-            report($"  {shared:N0} peptide(s) map to more than one group; corrected_peptides lists all of "
-                + $"them, '{PeptideGroupSeparator}'-separated.");
+        if (sharedPeptides > 0)
+            report($"  {sharedPeptides:N0} peptide(s) map to more than one group; corrected_peptides lists "
+                + $"all of them, '{PeptideGroupSeparator}'-separated.");
 
         // Stage 4: peptide -> protein.
         report("============================================================");
