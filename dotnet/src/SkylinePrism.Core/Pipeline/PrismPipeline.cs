@@ -497,6 +497,14 @@ public sealed class PrismPipeline
                 matrixAll[i, j] = col[i] ?? double.NaN;
         }
 
+        // The sample columns have been copied into matrixAll and are never read again - only meta columns
+        // and the RT column are taken from the table below. Release them now: on a large cohort they are
+        // the single biggest live allocation here (double?[] at 16 bytes/cell, twice the matrix), and
+        // holding them through normalization + ComBat roughly doubles this stage's peak for nothing.
+        table.ReleaseColumns(samples.Where(s => !metaSpec.Any(
+            m => string.Equals(m.Name, s, StringComparison.Ordinal))
+            && !string.Equals(s, rtColumn, StringComparison.Ordinal)));
+
         // Drop all-NaN rows.
         var keep = new List<int>(nAll);
         for (var i = 0; i < nAll; i++)

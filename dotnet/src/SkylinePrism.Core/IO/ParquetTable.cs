@@ -30,6 +30,22 @@ public sealed class ParquetTable
 
     public bool HasColumn(string name) => _columns.ContainsKey(name);
 
+    /// <summary>
+    /// Drop columns that are no longer needed so their arrays can be collected, without releasing the
+    /// whole table. The wide matrices are the memory wall of the pipeline: a corrected-peptide stage on a
+    /// large cohort holds the loaded sample columns AND the working matrices at the same time, and the
+    /// loaded columns are the bigger of the two (parquet nullable columns arrive as double?[], 16 bytes
+    /// per cell against the matrix's 8). Once the values have been copied into the working matrix nothing
+    /// reads them again.
+    /// <para><see cref="ColumnNames"/> is left untouched, so it still describes the file that was read.
+    /// Reading a released column throws <see cref="KeyNotFoundException"/>, same as an absent one.</para>
+    /// </summary>
+    public void ReleaseColumns(IEnumerable<string> names)
+    {
+        foreach (var name in names)
+            _columns.Remove(name);
+    }
+
     public static ParquetTable Load(string path)
         => LoadAsync(path).GetAwaiter().GetResult();
 
