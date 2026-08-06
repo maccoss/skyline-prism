@@ -9,7 +9,7 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 > (`docs/skyline-external-tools.md`). PRISM is one of the example tools it draws from.
 >
 > **Read it from the local clone before touching anything under `dotnet/src/SkylinePrism.{Skyline,App}/`:**
-> `C:\Users\macco\Documents\GitHub\uw-maccosslab\skyline-external-tools-ai`
+> `D:\GitHub-Repo\uw-maccosslab\skyline-external-tools-ai`
 > (on Linux/macOS, a sibling clone of the same repo). Start with `CRITICAL-RULES.md` (the hard-won
 > gotchas: transform `args[0]`, connect-per-call, `PipeTransmissionMode.Message`, invariant culture,
 > `.blib` `Pooling=False`, the launch-verify ship gate), then `TOC.md` -> `docs/skyline-external-tools.md`
@@ -619,7 +619,7 @@ and reads document settings — from a **running** Skyline over JSON-RPC, or fro
 `SkylineCmd`. The authoritative how-to is the
 field guide in **[uw-maccosslab/skyline-external-tools-ai](https://github.com/uw-maccosslab/skyline-external-tools-ai)**
 (`docs/skyline-external-tools.md`), cloned locally at
-`C:\Users\macco\Documents\GitHub\uw-maccosslab\skyline-external-tools-ai` — read it before extending the
+`D:\GitHub-Repo\uw-maccosslab\skyline-external-tools-ai` — read it before extending the
 tool's Skyline integration. Key points (mirrored in the code under `dotnet/src/SkylinePrism.Skyline/`):
 
 - **Transport:** JSON-RPC 2.0 over a **named pipe**. Skyline passes the pipe name as `args[0]`
