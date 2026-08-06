@@ -11,6 +11,7 @@ using SkylinePrism.Core.Normalization;
 using SkylinePrism.Core.Parsimony;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Rollup;
+using System.Threading;
 
 namespace SkylinePrism.Core.Pipeline;
 
@@ -25,10 +26,17 @@ public sealed class PrismPipeline
     public sealed record Result(
         int NPeptides, int NProteins, int NSamples, IReadOnlyList<string> Batches);
 
+    /// <summary>
+    /// Run the pipeline. <paramref name="cancellationToken"/> is honoured at every stage boundary and
+    /// inside the long-running stages (the merge query, the transition rollup's producer, and the
+    /// row-group loops of Stage 2b/2c), so a Stop takes effect in seconds rather than at the end of
+    /// whatever stage happens to be running. Outputs written before the stop are left in place - they
+    /// are intermediates of an incomplete run, not results.
+    /// </summary>
     public static Result Run(
         IReadOnlyList<string> inputs, string outputDir, PrismConfig config,
         IReadOnlyList<string>? metadataPaths = null, Action<string>? log = null,
-        bool forceReprocess = false)
+        bool forceReprocess = false, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(outputDir);
         var report = log ?? (_ => { });
@@ -50,7 +58,9 @@ public sealed class PrismPipeline
         }
         else
         {
-            merge = DuckDbMerge.MergeAndSort(inputs, mergedPath, replicateColumn: config.Data.SampleColumn);
+            merge = DuckDbMerge.MergeAndSort(
+                inputs, mergedPath, replicateColumn: config.Data.SampleColumn,
+                cancellationToken: cancellationToken);
             SourceFingerprint.Write(cachePath,
                 new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
             report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
@@ -139,6 +149,7 @@ public sealed class PrismPipeline
 
         // Stage 2: transition -> peptide.
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 2: Transition -> peptide rollup ({config.TransitionRollup.Method})");
         report("============================================================");
         var peptidesRollupPath = Path.Combine(outputDir, "peptides_rollup.parquet");
@@ -176,7 +187,8 @@ public sealed class PrismPipeline
             : Math.Min(config.Processing.NWorkers, Environment.ProcessorCount);
         report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
             + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
-        var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
+        var t2 = TransitionRollup.Run(
+            mergedPath, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
             report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
@@ -281,6 +293,7 @@ public sealed class PrismPipeline
         // rather than staying alive through the protein rollup for the sake of one number.
         var sharedPeptides = peptideGroups.Count(kv => kv.Value.Count > 1);
 
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
@@ -313,6 +326,7 @@ public sealed class PrismPipeline
             DerivedMeta = PeptideGroupColumns(peptideGroups),
             DerivedKeyColumn = cols.Peptide,
             PathReport = path => report($"  Path: {path}."),
+            CancellationToken = cancellationToken,
         });
         report($"  Wrote {nPeptides:N0} corrected peptides.");
         // Done with the index; the protein rollup that follows is the other memory-heavy stage, so let
@@ -334,6 +348,7 @@ public sealed class PrismPipeline
 
         // Stage 4: peptide -> protein.
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 4: Peptide -> protein rollup ({config.ProteinRollup.Method})");
         report("============================================================");
         var proteinsRawPath = Path.Combine(outputDir, "proteins_raw.parquet");
@@ -407,9 +422,11 @@ public sealed class PrismPipeline
             ReferenceMask = refMask,
             AutoRevert = config.BatchCorrection.AutoRevert,
             PathReport = path => report($"  Path: {path}."),
+            CancellationToken = cancellationToken,
         });
 
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report("Stage 5: Output generation");
         report("============================================================");
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);

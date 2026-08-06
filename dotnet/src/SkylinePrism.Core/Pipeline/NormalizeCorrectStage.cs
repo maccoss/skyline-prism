@@ -8,6 +8,7 @@ using SkylinePrism.Core.BatchCorrection;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Normalization;
 using SkylinePrism.Core.Qc;
+using System.Threading;
 
 namespace SkylinePrism.Core.Pipeline;
 
@@ -78,6 +79,9 @@ internal sealed record NormalizeCorrectRequest
     /// produce the same one.
     /// </summary>
     public Action<string>? PathReport { get; init; }
+
+    /// <summary>Checked once per row group, so a Stop lands within a row group rather than a stage.</summary>
+    public CancellationToken CancellationToken { get; init; }
 }
 
 /// <summary>

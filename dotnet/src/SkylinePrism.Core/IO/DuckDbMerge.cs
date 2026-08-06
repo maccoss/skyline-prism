@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using DuckDB.NET.Data;
 
 namespace SkylinePrism.Core.IO;
@@ -99,7 +100,8 @@ public static class DuckDbMerge
         string? sortColumn = null,
         IReadOnlyList<string>? batchNames = null,
         int sortBufferMb = 0,
-        string? replicateColumn = null)
+        string? replicateColumn = null,
+        CancellationToken cancellationToken = default)
     {
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
@@ -172,7 +174,7 @@ public static class DuckDbMerge
             Exec(conn, $"SET threads={Environment.ProcessorCount}");
 
             // Stage A: union -> unsorted intermediate (snappy).
-            Exec(conn, $@"
+            Exec(conn, cancellationToken, $@"
                 COPY (
                     {unionQuery}
                 ) TO '{unsortedEsc}' (
@@ -181,7 +183,7 @@ public static class DuckDbMerge
                 )");
 
             // Stage B: single-source ORDER BY -> zstd output.
-            Exec(conn, $@"
+            Exec(conn, cancellationToken, $@"
                 COPY (
                     SELECT * FROM read_parquet('{unsortedEsc}')
                     ORDER BY ""{sortColumn}""
@@ -269,11 +271,35 @@ public static class DuckDbMerge
         return line.Split(delimiter).Select(s => s.Trim()).ToList();
     }
 
-    private static void Exec(DuckDBConnection conn, string sql)
+    /// <summary>
+    /// Run one statement, interruptible. The merge's two COPY statements are the longest single
+    /// operations in the pipeline - many minutes on a large cohort - so a Stop that only took effect
+    /// between them would not feel like a stop at all. DuckDB's own interrupt is what makes the
+    /// in-flight query abandon its work.
+    /// </summary>
+    private static void Exec(DuckDBConnection conn, string sql) => Exec(conn, default, sql);
+
+    /// <inheritdoc cref="Exec(DuckDBConnection, string)"/>
+    private static void Exec(DuckDBConnection conn, CancellationToken cancellationToken, string sql)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        using var registration = cancellationToken.Register(() =>
+        {
+            try { cmd.Cancel(); }
+            catch (Exception) { /* already finished, or a backend without interrupt support */ }
+        });
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // The interrupt surfaces as an ordinary query error; report it as the cancellation it is.
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
     }
 
     private static string SqlEscape(string path) => path.Replace("'", "''");

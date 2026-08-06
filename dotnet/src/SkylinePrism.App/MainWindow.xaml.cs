@@ -730,7 +730,10 @@ public partial class MainWindow : Window
 
         try
         {
-            await Task.Run(() => RunPipeline(inputs, outputDir, metadataReport, config));
+            _runCancellation = new CancellationTokenSource();
+            StopButton.IsEnabled = true;
+            var token = _runCancellation.Token;
+            await Task.Run(() => RunPipeline(inputs, outputDir, metadataReport, config, token), token);
             // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
             // doing it on the UI thread would freeze the window.
@@ -750,6 +753,12 @@ public partial class MainWindow : Window
             Log("Done.");
             MainTabs.SelectedItem = QcTab; // land on the plots when the run finishes
         }
+        catch (Exception ex) when (IsCancellation(ex))
+        {
+            // Cancelling is a normal outcome, not a failure: no dialog, no stack trace.
+            Log("STOPPED: the run was cancelled. Partial files in the output directory are "
+                + "intermediates of an incomplete run - re-run to rebuild them.");
+        }
         catch (Exception ex)
         {
             Log("ERROR: " + ex.Message);
@@ -762,9 +771,69 @@ public partial class MainWindow : Window
         finally
         {
             _isRunning = false;
+            _runCancellation?.Dispose();
+            _runCancellation = null;
+            StopButton.IsEnabled = false;
             UpdateRunEnabled();
         }
     }
+
+    /// <summary>Cancellation arrives in several shapes depending on which stage was interrupted.</summary>
+    private static bool IsCancellation(Exception ex) => ex switch
+    {
+        OperationCanceledException => true,
+        AggregateException agg => agg.InnerExceptions.Count > 0
+                                  && agg.InnerExceptions.All(IsCancellation),
+        _ => false,
+    };
+
+    /// <summary>
+    /// Cancels the running pipeline. What that can and cannot reach is worth being precise about:
+    /// the PRISM pipeline and any headless Skyline we launched stop within seconds, but a report
+    /// export already handed to a RUNNING Skyline is Skyline's work, in Skyline's process, and there
+    /// is no RPC to recall it - it will finish writing its file. Saying so here beats leaving the
+    /// user watching a file grow after pressing Stop.
+    /// </summary>
+    private void OnStop(object sender, RoutedEventArgs e)
+    {
+        if (_runCancellation is null || _runCancellation.IsCancellationRequested)
+            return;
+
+        StopButton.IsEnabled = false;
+        Log("Stopping...");
+        if (_inputs.Any(i => i.Kind == PrismInputKind.RunningSkyline))
+            Log("  NOTE: a report export already running inside Skyline cannot be recalled - Skyline "
+                + "will finish writing that file. PRISM will not use it.");
+        _runCancellation.Cancel();
+    }
+
+    /// <summary>
+    /// Closing the window must not leave the run going. It previously did: the pipeline ran on a
+    /// background thread with nothing watching the window, so closing PRISM left the export running
+    /// and the file still growing.
+    /// </summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (_isRunning)
+        {
+            var answer = MessageBox.Show(
+                "A PRISM run is in progress. Close anyway and stop it?"
+                + Environment.NewLine + Environment.NewLine
+                + "A report export already running inside Skyline cannot be recalled and will finish "
+                + "writing its file.",
+                "PRISM is running", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+            _runCancellation?.Cancel();
+        }
+        base.OnClosing(e);
+    }
+
+    /// <summary>Non-null only while a run is in progress; the Stop button's handle on it.</summary>
+    private CancellationTokenSource? _runCancellation;
 
     // Enable Run only once an output directory is set and an input exists (and no run is in progress).
     private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -782,7 +851,8 @@ public partial class MainWindow : Window
     /// Runs on a background thread; <see cref="Log"/> marshals to the UI.
     /// </summary>
     private void RunPipeline(
-        IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config)
+        IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config,
+        CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
@@ -825,7 +895,7 @@ public partial class MainWindow : Window
                 {
                     var exported = input.Prepare(
                         reportsDir, metadataReport, batchAnnotation, SkylineCmdPathOverride, Log,
-                        CancellationToken.None);
+                        cancellationToken);
                     exports[i] = exported;
                     var size = File.Exists(exported.InputPath) ? new FileInfo(exported.InputPath).Length : 0;
                     SetInputStatus(input,
@@ -877,13 +947,14 @@ public partial class MainWindow : Window
         // reopened with no Skyline running.
         var isolationCatalog = new IsolationSchemeCatalog();
         foreach (var input in inputs)
-            input.CollectIsolationSchemes(isolationCatalog, Log, SkylineCmdPathOverride, CancellationToken.None);
+            input.CollectIsolationSchemes(isolationCatalog, Log, SkylineCmdPathOverride, cancellationToken);
         if (!isolationCatalog.IsEmpty)
             isolationCatalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
 
         Log($"Running the PRISM pipeline on {reportPaths.Count} report(s): "
             + string.Join(", ", reportPaths.Select(Path.GetFileName)));
-        var result = PrismPipeline.Run(reportPaths, outputDir, config, metadata, Log);
+        var result = PrismPipeline.Run(
+            reportPaths, outputDir, config, metadata, Log, cancellationToken: cancellationToken);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
     }

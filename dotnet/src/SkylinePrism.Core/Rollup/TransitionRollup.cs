@@ -33,7 +33,8 @@ public sealed class TransitionRollup
         SkylineColumns cols,
         TransitionRollupConfig cfg,
         string outputPath,
-        IReadOnlyList<string>? samples = null)
+        IReadOnlyList<string>? samples = null,
+        CancellationToken cancellationToken = default)
     {
         samples ??= MergedParquetReader.GetSortedSamples(mergedParquet, cols.Sample);
         var sampleIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -94,6 +95,7 @@ public sealed class TransitionRollup
                 foreach (var block in MergedParquetReader.StreamPeptideBlocks(
                     mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var r = Process(block);
                     if (r is null)
                         nFiltered++;
@@ -103,7 +105,8 @@ public sealed class TransitionRollup
             }
             else
             {
-                RunParallel(mergedParquet, cols, isLibrary, topNCorr, dop, Process, sink, ref nFiltered);
+                RunParallel(mergedParquet, cols, isLibrary, topNCorr, dop, Process, sink,
+                    ref nFiltered, cancellationToken);
             }
 
             sink.FlushAll();
@@ -118,7 +121,8 @@ public sealed class TransitionRollup
 
     private static void RunParallel(
         string mergedParquet, SkylineColumns cols, bool isLibrary, bool topNCorr, int dop,
-        Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink, ref int nFiltered)
+        Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink, ref int nFiltered,
+        CancellationToken cancellationToken)
     {
         // Single producer -> bounded queue -> N consumers -> single writer (this thread). The
         // bounded capacities cap the number of in-flight peptides so RAM stays flat.
@@ -133,7 +137,12 @@ public sealed class TransitionRollup
             {
                 foreach (var b in MergedParquetReader.StreamPeptideBlocks(
                     mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
+                {
+                    // Stopping the producer drains the queue and ends the consumers, so one check here
+                    // stops the whole stage rather than needing one per worker.
+                    cancellationToken.ThrowIfCancellationRequested();
                     inputQ.Add(b);
+                }
             }
             catch (Exception ex) { Interlocked.CompareExchange(ref error, ex, null); }
             finally { inputQ.CompleteAdding(); }

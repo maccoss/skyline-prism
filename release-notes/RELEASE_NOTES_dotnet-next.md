@@ -106,6 +106,24 @@ as the GitHub Release description and fails if it is missing.
   large cohort has no room for more. The HTML reports now lead their CSS font stack with the family
   the plots actually resolved to, so the page text matches the axis labels in the images it embeds.
 
+## New Features
+
+- **A Stop button.** The tool had no way to abandon a run, and closing the window did not help: the
+  pipeline ran on a background thread with nothing watching the window, so PRISM disappeared while
+  the export carried on writing. Stop now cancels the pipeline and kills any headless Skyline PRISM
+  launched, and closing the window while a run is in progress asks first and then stops it.
+
+  Cancellation is checked inside the long stages, not just between them - the merge query is
+  interrupted through DuckDB, and the transition rollup and Stage 2b/2c check per peptide block and
+  per row group - so Stop takes effect in seconds rather than at the end of whatever stage happened
+  to be running. Files already written are left in place; they are intermediates of an incomplete
+  run and the next run rebuilds them.
+
+  One limit, stated in the button's tooltip and in the log when you press it: **a report export
+  already running inside a live Skyline cannot be recalled.** That work belongs to Skyline's
+  process and there is no RPC to stop it, so Skyline finishes writing that file - PRISM just stops
+  waiting for it and does not use it.
+
 ## Bug Fixes
 
 - **The Dynamic Range tab no longer comes up blank at protein level.** Its list of protein metadata

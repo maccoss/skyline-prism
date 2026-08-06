@@ -7,6 +7,7 @@ using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Normalization;
 using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Qc;
+using System.Threading;
 
 namespace SkylinePrism.Core.Pipeline;
 
@@ -103,7 +104,7 @@ internal static class StreamingNormalizeCorrect
             var (grandMean, pooled) = batching.RowMeanAndPooledVar(normalized);
             grandMeans.Add(grandMean);
             varPooled.Add(pooled);
-        });
+        }, r.CancellationToken);
 
         var beforeRefCv = CvMetrics.MedianOfCvs(beforeRefCvs);
         var beforeQcCv = CvMetrics.MedianOfCvs(beforeQcCvs);
@@ -133,7 +134,8 @@ internal static class StreamingNormalizeCorrect
 
             // Pass 2: the per-(batch, feature) sufficient statistics of the standardized data.
             var stats = Accumulate(
-                reader, samples, factors, rtColumn, batching, activeOfKept, grandMeanArray, stdPooled, active);
+                reader, samples, factors, rtColumn, batching, activeOfKept, grandMeanArray, stdPooled,
+                active, r.CancellationToken);
             (gammaStar, deltaStar, var unestimableScales) = StreamingComBat.Estimate(stats);
             NormalizeCorrectStage.ReportComBatDiagnostics(r.Report, zeroVar.Count - active, unestimableScales);
 
@@ -143,7 +145,7 @@ internal static class StreamingNormalizeCorrect
                 // the uncorrected values - so it has to be settled before anything is written.
                 decision = Evaluate(
                     reader, samples, factors, rtColumn, batching, activeOfKept, grandMeanArray,
-                    stdPooled, gammaStar, deltaStar, r.QcIdx, r.RefIdx);
+                    stdPooled, gammaStar, deltaStar, r.QcIdx, r.RefIdx, r.CancellationToken);
                 if (decision.OverfittingWarning is not null)
                     r.Report($"  WARNING: ComBat {decision.OverfittingWarning}");
                 if (decision.Revert)
@@ -188,7 +190,8 @@ internal static class StreamingNormalizeCorrect
     /// </summary>
     private static int ForEachRow(
         ParquetColumnReader reader, IReadOnlyList<string> samples, NormalizationFactors factors,
-        string? rtColumn, Action<double[], double[]> action)
+        string? rtColumn, Action<double[], double[]> action,
+        CancellationToken cancellationToken = default)
     {
         var nS = samples.Count;
         var raw = new double[nS];
@@ -197,6 +200,7 @@ internal static class StreamingNormalizeCorrect
 
         for (var rg = 0; rg < reader.RowGroupCount; rg++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var group = reader.OpenRowGroup(rg);
             var columns = ReadSampleColumns(group, samples);
             var rt = rtColumn is not null ? group.ReadDoubles(rtColumn) : null;
@@ -226,7 +230,7 @@ internal static class StreamingNormalizeCorrect
     private static ComBatSufficientStats Accumulate(
         ParquetColumnReader reader, IReadOnlyList<string> samples, NormalizationFactors factors,
         string? rtColumn, Batching batching, int[] activeOfKept,
-        double[] grandMean, double[] stdPooled, int nActive)
+        double[] grandMean, double[] stdPooled, int nActive, CancellationToken cancellationToken)
     {
         var nBatch = batching.Batches.Count;
         var gammaHat = new double[nBatch][];
@@ -257,7 +261,7 @@ internal static class StreamingNormalizeCorrect
                 gammaHat[b][a] = mean;
                 sumSq[b][a] = ss;
             }
-        });
+        }, cancellationToken);
 
         return new ComBatSufficientStats
         {
@@ -276,7 +280,7 @@ internal static class StreamingNormalizeCorrect
         ParquetColumnReader reader, IReadOnlyList<string> samples, NormalizationFactors factors,
         string? rtColumn, Batching batching, int[] activeOfKept,
         double[] grandMean, double[] stdPooled, double[][] gammaStar, double[][] deltaStar,
-        IReadOnlyList<int> qcIdx, IReadOnlyList<int> refIdx)
+        IReadOnlyList<int> qcIdx, IReadOnlyList<int> refIdx, CancellationToken cancellationToken)
     {
         var hasQc = qcIdx.Count >= 2;
         var hasRef = refIdx.Count >= 2;
@@ -299,7 +303,7 @@ internal static class StreamingNormalizeCorrect
                 if (CvMetrics.TryFeatureCv(normalized, refIdx, out var b)) refBefore.Add(b);
                 if (CvMetrics.TryFeatureCv(corrected, refIdx, out var a)) refAfter.Add(a);
             }
-        });
+        }, cancellationToken);
 
         return BatchCorrectionEvaluator.Decide(
             CvMetrics.MedianOfCvs(qcBefore), CvMetrics.MedianOfCvs(qcAfter),
@@ -343,6 +347,9 @@ internal static class StreamingNormalizeCorrect
 
         for (var rg = 0; rg < reader.RowGroupCount; rg++)
         {
+            // Stopping mid-write leaves a partial parquet, which is fine: it is an intermediate of a
+            // run that did not finish, and the next run overwrites it.
+            r.CancellationToken.ThrowIfCancellationRequested();
             using var group = reader.OpenRowGroup(rg);
             var columns = ReadSampleColumns(group, samples);
             var rt = rtColumn is not null ? group.ReadDoubles(rtColumn) : null;

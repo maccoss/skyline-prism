@@ -51,6 +51,9 @@
                     Click="OnOpenProvenance"
                     ToolTip="Load settings from a previous run's parameters.json into the Settings tab." />
             <Button x:Name="RunButton" Content="Run PRISM" Padding="22,4" FontWeight="Bold" Click="OnRun" />
+            <Button x:Name="StopButton" Content="Stop" Padding="18,4" Margin="8,0,0,0"
+                    IsEnabled="False" Click="OnStop"
+                    ToolTip="Stop the running pipeline. A report export already running inside Skyline cannot be recalled and will finish writing its file." />
         </StackPanel>
 
         <TabControl Grid.Row="5" x:Name="MainTabs" SelectionChanged="OnMainTabChanged">
