@@ -301,8 +301,7 @@ public partial class MainWindow
         leader.MarkerSize = 0;
 
         var text = plt.Add.Text(entry.Label, labelX, labelY);
-        text.LabelFontSize = 16;
-        text.LabelBold = true;
+        PlotRenderer.StyleTextLabel(text, 16, bold: true);
         text.LabelFontColor = color;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.75);
         text.LabelBorderColor = color.WithAlpha(0.4);

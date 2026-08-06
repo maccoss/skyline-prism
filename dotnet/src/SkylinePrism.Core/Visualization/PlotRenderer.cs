@@ -34,6 +34,26 @@ public static class PlotRenderer
         "Liberation Sans", // RHEL/Fedora family
         "Arial");
 
+    /// <summary>
+    /// CSS <c>font-family</c> stack for the HTML reports. The family the plots actually resolved to
+    /// comes FIRST, so the report's own text matches the text inside the plot images it embeds -
+    /// otherwise the page renders in whatever the browser picks and the headings sit in a visibly
+    /// different typeface from the axis labels right below them. The rest is the same candidate list
+    /// <see cref="PlotFontName"/> searches, for the case where a browser cannot use the resolved one.
+    /// </summary>
+    public static string HtmlFontStack
+    {
+        get
+        {
+            var families = new List<string> { PlotFontName }
+                .Concat(new[] { "Segoe UI", "Helvetica", "DejaVu Sans", "Liberation Sans", "Arial" })
+                .Select(f => f.Replace("'", ""))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(f => $"'{f}'");
+            return string.Join(", ", families) + ", sans-serif";
+        }
+    }
+
     private static string FirstInstalledFont(params string[] candidates)
     {
         foreach (var name in candidates)
@@ -103,6 +123,10 @@ public static class PlotRenderer
         plt.Axes.Bottom.TickLabelStyle.FontSize = Pt(24);
         plt.Legend.FontSize = Pt(22);
 
+        // Anything added to the plot AFTER this call carries the backend's default font unless it is
+        // routed through StyleColorBar / StyleTextLabel - ScottPlot styles those per item, and
+        // StyleQcPlot cannot reach them.
+
         // Only the left + bottom axes, thick enough to stay visible when the figure is scaled down;
         // hide the top + right frame lines.
         plt.Axes.Left.FrameLineStyle.Width = 4;
@@ -113,6 +137,36 @@ public static class PlotRenderer
         plt.Axes.Bottom.MajorTickStyle.Width = 3;
         plt.Axes.Left.MajorTickStyle.Length = 8;
         plt.Axes.Bottom.MajorTickStyle.Length = 8;
+    }
+
+    /// <summary>
+    /// Style a colour bar to match the axes. A colour bar is a plot item, not part of the axis
+    /// system, so <see cref="StyleQcPlot"/> does not reach it and it would otherwise render in the
+    /// backend's default family next to axes that do not.
+    /// </summary>
+    public static void StyleColorBar(
+        ScottPlot.Panels.ColorBar bar, string? label = null, double fontScale = 1.0)
+    {
+        if (label is not null)
+            bar.Label = label;
+        bar.LabelStyle.FontName = PlotFontName;
+        bar.LabelStyle.FontSize = (float)(28 * fontScale);
+        bar.LabelStyle.Bold = true;
+        bar.Axis.TickLabelStyle.FontName = PlotFontName;
+        bar.Axis.TickLabelStyle.FontSize = (float)(24 * fontScale);
+    }
+
+    /// <summary>
+    /// Style a text annotation to match the axes. Same reason as <see cref="StyleColorBar"/>: text
+    /// added to a plot carries its own font, so every call site has to opt in or the annotation ends
+    /// up in a different typeface from the labels around it.
+    /// </summary>
+    public static void StyleTextLabel(
+        ScottPlot.Plottables.Text text, double fontSize, bool bold = false)
+    {
+        text.LabelFontName = PlotFontName;
+        text.LabelFontSize = (float)fontSize;
+        text.LabelBold = bold;
     }
 
     /// <summary>
@@ -153,14 +207,8 @@ public static class PlotRenderer
         StyleQcPlot(plt, fontScale);
 
         // The colour bar IS this plot's legend - it carries the number the reader cares about, so it gets
-        // the same treatment as the axes (StyleQcPlot does not reach panels, so size it here).
-        var bar = plt.Add.ColorBar(heat);
-        bar.Label = "Precursors per spectrum";
-        bar.LabelStyle.FontName = PlotFontName;
-        bar.LabelStyle.FontSize = Pt(28);
-        bar.LabelStyle.Bold = true;
-        bar.Axis.TickLabelStyle.FontName = PlotFontName;
-        bar.Axis.TickLabelStyle.FontSize = Pt(24);
+        // the same treatment as the axes.
+        StyleColorBar(plt.Add.ColorBar(heat), "Precursors per spectrum", fontScale);
 
         if (title is not null)
         {
@@ -357,7 +405,22 @@ public static class PlotRenderer
     /// tighten the controls" diagnostic (Pearson over features present in both samples).
     /// </summary>
     public static byte[] CorrelationHeatmap(
-        double[,] featuresBySamples, IReadOnlyList<int> cols, string title, IReadOnlyList<string>? colTypes = null)
+        double[,] featuresBySamples, IReadOnlyList<int> cols, string title,
+        IReadOnlyList<string>? colTypes = null)
+    {
+        var plt = new Plot();
+        DrawCorrelationHeatmap(plt, featuresBySamples, cols, title, colTypes);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>
+    /// <see cref="CorrelationHeatmap"/> onto a caller-supplied plot. Split out so the styling is
+    /// inspectable by tests - this plot is dense enough to need its own tick sizes, which is exactly
+    /// how it drifted into a different font family from every other plot in the report.
+    /// </summary>
+    public static void DrawCorrelationHeatmap(
+        Plot plt, double[,] featuresBySamples, IReadOnlyList<int> cols, string title,
+        IReadOnlyList<string>? colTypes = null)
     {
         var n = cols.Count;
         var corr = new double[n, n];
@@ -384,12 +447,13 @@ public static class PlotRenderer
 
         // ScottPlot draws array row 0 at the TOP (matplotlib/Python orientation), so pass rc directly:
         // the 1.0 diagonal runs top-left -> bottom-right. Cell rc[i,j] centre is (j+0.5, n-0.5-i).
-        var plt = new Plot();
         var hm = plt.Add.Heatmap(rc);
         hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdBuReversed);
         hm.ManualRange = new ScottPlot.Range(vmin, 1.0);
         hm.Position = new ScottPlot.CoordinateRect(0, n, 0, n);
-        plt.Add.ColorBar(hm);
+        // The colour bar carries only ~15 labels however many samples there are, so it does not have
+        // to shrink with the grid - keep it near the size the other plots' tick labels use.
+        StyleColorBar(plt.Add.ColorBar(hm), fontScale: HeatmapColorBarScale);
 
         // Cell value annotations (skip when too many samples to stay readable, like seaborn annot<=15).
         if (n <= 15)
@@ -400,7 +464,7 @@ public static class PlotRenderer
                         continue;
                     var t = plt.Add.Text(rc[i, j].ToString("0.00"), j + 0.5, (n - 1 - i) + 0.5);
                     t.LabelAlignment = Alignment.MiddleCenter;
-                    t.LabelFontSize = 13;
+                    StyleTextLabel(t, 13);
                     // white text on the dark (low/high) ends, dark text near the white middle.
                     var mid = (vmin + 1.0) / 2.0;
                     t.LabelFontColor = Math.Abs(rc[i, j] - mid) > (1.0 - vmin) * 0.28 ? Colors.White : Colors.Black;
@@ -417,24 +481,38 @@ public static class PlotRenderer
         plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, yLabels);
 
         plt.Title(title);
-        // A heatmap needs no axis frame or tick marks - the cells are the grid. Big bold title, labels
-        // centred on the cells (y-labels centred on rows; x-labels rotated, right-aligned so they read
-        // up into their column). Keeps the labels but drops the L-shaped axis lines.
-        plt.Axes.Title.Label.FontSize = 22;
-        plt.Axes.Title.Label.Bold = true;
+
+        // Same font family and title treatment as every other plot in the report; only the things a
+        // dense grid genuinely needs differently are overridden below. Going through StyleQcPlot is
+        // what keeps the family shared - setting sizes here and nothing else is how this plot ended
+        // up in the backend's default typeface while its neighbours were in Segoe UI.
+        StyleQcPlot(plt);
+
+        // A heatmap needs no axis frame or tick marks - the cells are the grid. Labels are centred on
+        // the cells (y-labels on rows; x-labels rotated, right-aligned so they read up into their
+        // column). Keeps the labels but drops the L-shaped axis lines.
         plt.Axes.Left.FrameLineStyle.Width = 0;
         plt.Axes.Bottom.FrameLineStyle.Width = 0;
         plt.Axes.Right.FrameLineStyle.Width = 0;
         plt.Axes.Top.FrameLineStyle.Width = 0;
         plt.Axes.Left.MajorTickStyle.Length = 0;
         plt.Axes.Bottom.MajorTickStyle.Length = 0;
+
+        // One tick label per sample, up to ~30 of them: these have to be small to fit, which is the
+        // one place this plot cannot follow the shared sizes.
         plt.Axes.Left.TickLabelStyle.FontSize = 13;
         plt.Axes.Bottom.TickLabelStyle.FontSize = 13;
         plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
         plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
         plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
-        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
+
+    /// <summary>
+    /// The correlation heatmap's colour bar, relative to the shared sizes. Smaller than the other
+    /// plots because it sits beside a dense grid, but nowhere near as small as that grid's own tick
+    /// labels have to be - the bar's label count does not grow with the cohort.
+    /// </summary>
+    private const double HeatmapColorBarScale = 0.7;
 
     // Short per-sample labels grouped by type: Ref_001, QC_001, Exp_001 (falls back to S_001).
     private static List<string> TypeLabels(int[] order, IReadOnlyList<string>? colTypes)
@@ -917,6 +995,11 @@ public static class PlotRenderer
         }
         if (groupColors is not null)
             plt.ShowLegend();
+
+        // Self-style, like the other Draw* methods. Callers style again afterwards (it is idempotent)
+        // but must not have to: a draw method that leaves its legend in the backend's default font is
+        // how the report ends up with two typefaces in it.
+        StyleQcPlot(plt);
     }
 
     /// <summary>

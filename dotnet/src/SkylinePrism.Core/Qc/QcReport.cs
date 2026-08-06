@@ -221,9 +221,11 @@ public static class QcReport
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>PRISM QC Report</title>\n");
         sb.Append(FaviconLinkTag);
+        // The plot font, resolved, so the page text matches the axis labels in the images below it.
+        sb.Append("<style>\nbody { font-family: ")
+          .Append(PlotRenderer.HtmlFontStack)
+          .Append("; color: #222; margin: 0; padding: 24px; }\n");
         sb.Append("""
-<style>
-body { font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #222; margin: 0; padding: 24px; }
 .container { max-width: 1400px; margin: 0 auto; }
 h1 { color: #1a3c6e; }
 h2 { color: #1a3c6e; border-bottom: 2px solid #dfe6ef; padding-bottom: 4px; margin-top: 32px; }

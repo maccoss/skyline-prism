@@ -1534,8 +1534,7 @@ public partial class MainWindow : Window
         _pcaHoverMarker = marker;
 
         var text = plt.Add.Text(" ", seed.X, seed.Y);
-        text.LabelFontSize = 14;
-        text.LabelBold = true;
+        PlotRenderer.StyleTextLabel(text, 14, bold: true);
         text.LabelFontColor = Colors.Black;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.85);
         text.LabelAlignment = Alignment.LowerLeft;

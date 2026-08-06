@@ -97,6 +97,14 @@ as the GitHub Release description and fails if it is missing.
   Helvetica, DejaVu Sans, Liberation Sans, Arial that is installed) instead of taking whatever the
   rendering backend happened to resolve first, which is why the same plot rendered with different-looking
   text on different computers.
+- **Consistent fonts across plots, and with the report around them.** The control-correlation heatmap
+  set its own font sizes and never went through the shared styling, so it rendered with a small
+  title and its own typeface next to plots using neither; its colour bar and per-cell numbers were
+  unstyled entirely, as were the Dynamic Range point labels and the PCA hover label. All of them now
+  share one family and the same title treatment, and the heatmap's colour bar is legible instead of
+  shrinking with the grid. Its per-sample tick labels stay small - there is one per sample, and a
+  large cohort has no room for more. The HTML reports now lead their CSS font stack with the family
+  the plots actually resolved to, so the page text matches the axis labels in the images it embeds.
 
 ## Bug Fixes
 
