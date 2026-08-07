@@ -46,7 +46,7 @@ These are the main files you will use for downstream analysis.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `Peptide Modified Sequence Unimod Ids` | string | Peptide sequence with modifications in Unimod format, e.g., `PEPTIDEC(unimod:4)K` |
+| *(the peptide column)* | string | Peptide sequence with modifications, e.g. `PEPTIDEC(unimod:4)K`. **Its NAME varies — see below.** |
 | `n_transitions` | int64 | Number of transitions used in rollup |
 | `mean_rt` | double | Mean retention time (minutes) |
 | `protein_group` | string | Protein group(s) this peptide maps to — the join key to `corrected_proteins.parquet` (C# engine only) |
@@ -64,6 +64,19 @@ These are the main files you will use for downstream analysis.
 > engine only; the Python engine's `corrected_peptides` has no grouping columns. The intermediate
 > `peptides_log2_internal.parquet` deliberately does **not** carry them — its readers treat every
 > undeclared column as a sample.
+
+> [!IMPORTANT]
+> **The peptide column keeps the name it had in the Skyline export.** PRISM detects it per document
+> from a preference list (`Peptide Modified Sequence Unimod Ids`, `Peptide Modified Sequence`,
+> `Modified Sequence`, `Peptide Sequence`, `Peptide`, ...) and carries that name through to the
+> output, so it is **not** a fixed header you can hard-code.
+>
+> To find the sample columns reliably, do not subtract a list of expected metadata names — that list
+> cannot be complete. Take the columns whose **type is numeric** and subtract only the numeric
+> metadata (`n_transitions`, `mean_rt`); every text column is metadata by construction. PRISM's own
+> readers had this wrong twice, most recently failing with
+> `The input string 'AAAAAGAGLK' was not in a correct format` when a peptide sequence was read as an
+> abundance.
 
 **Sample column naming**: Sample columns follow the format `<replicate_name>__@__<source_document>` to ensure uniqueness when the same replicate appears in multiple batches.
 
