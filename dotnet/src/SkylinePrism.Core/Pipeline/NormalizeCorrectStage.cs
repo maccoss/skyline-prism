@@ -214,7 +214,8 @@ internal static class NormalizeCorrectStage
         {
             var diagnostics = new ComBatDiagnostics();
             var combatOut = r.ReferenceAnchored && r.ReferenceMask is not null && r.ReferenceMask.Any(m => m)
-                ? ReferenceAnchoredComBat.Run(normalized, r.BatchLabels, r.ReferenceMask)
+                ? ReferenceAnchoredComBat.Run(
+                    normalized, r.BatchLabels, r.ReferenceMask, diagnostics: diagnostics)
                 : ComBat.Run(normalized, r.BatchLabels, diagnostics: diagnostics);
             ReportComBatDiagnostics(report, diagnostics.HeldOutFeatures, diagnostics.UnestimableScales);
 
