@@ -179,6 +179,7 @@ invariant/parquet export (`PeptideModifiedSequenceUnimodIds`) and the English/CS
 |-----|---------|-------------|--------------|
 | `n_workers` | `0` | `0` = all cores, `1` = serial, `N` = cap at N | **Both** |
 | `peptide_batch_size` | C# `2000`, Python `1000` | Peptides buffered per streamed row group (performance only) | **Both** (default differs; no numeric effect) |
+| `merge_memory_mb` | `0` | Ceiling on DuckDB's buffer pool during the Stage 1 merge, in MB. `0` = engine default. Beyond the ceiling the sort spills to scratch, so a smaller value is slower, never wrong (performance only) | **Both** (`0` differs: C# sizes it from **free** memory, Python uses a fixed 8192) |
 
 ---
 

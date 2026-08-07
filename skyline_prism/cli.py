@@ -497,6 +497,7 @@ KNOWN_CONFIG_KEYS = {
     "processing": {
         "n_workers",
         "peptide_batch_size",
+        "merge_memory_mb",
     },
     "transition_rollup": {
         "enabled",
@@ -1228,11 +1229,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"Merging and sorting {len(all_report_files)} Skyline reports "
             f"({file_type_summary}) (streaming)..."
         )
+        # 0 (the template default) means "engine default", so fall through to the
+        # signature default rather than passing a zero memory limit to DuckDB.
+        merge_memory_mb = config.get("processing", {}).get("merge_memory_mb", 0)
+        merge_kwargs = {"sort_buffer_mb": merge_memory_mb} if merge_memory_mb else {}
         merged_path, samples_by_batch, total_rows = merge_and_sort_streaming(
             all_report_files,
             merged_parquet_path,
             sort_column=None,  # Auto-detect peptide column
             batch_names=batch_names,
+            **merge_kwargs,
         )
         n_transitions = total_rows
         is_pre_sorted = True  # Flag for rollup to skip sorting
@@ -3257,6 +3263,12 @@ processing:
 
   # Peptides per batch (larger = faster but more memory)
   peptide_batch_size: 1000
+
+  # Ceiling on DuckDB's buffer pool during the Stage 1 merge/sort, in MB.
+  #   0 = engine default (Python: 8192; the C# engine sizes it from free memory)
+  # Work beyond the ceiling spills to the sort scratch directory, so a smaller
+  # value is slower, never wrong.
+  merge_memory_mb: 0
 
 # =============================================================================
 # Transition to Peptide Rollup

@@ -238,6 +238,7 @@ public static class ConfigWriter
         var s = new Dictionary<string, object?>();
         AddIfChanged(s, "n_workers", p.NWorkers, def.NWorkers);
         AddIfChanged(s, "peptide_batch_size", p.PeptideBatchSize, def.PeptideBatchSize);
+        AddIfChanged(s, "merge_memory_mb", p.MergeMemoryMb, def.MergeMemoryMb);
         return s;
     }
 
