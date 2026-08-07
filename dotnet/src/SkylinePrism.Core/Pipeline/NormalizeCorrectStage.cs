@@ -56,6 +56,14 @@ internal sealed record NormalizeCorrectRequest
     /// <summary>Per-sample reference flag for reference-anchored ComBat.</summary>
     public IReadOnlyList<bool>? ReferenceMask { get; init; }
 
+    /// <summary>
+    /// What reference-anchored ComBat does with a batch that has no reference samples: "fallback"
+    /// (correct it on its own center, location only), "skip" (leave it untouched), or "error".
+    /// Held here rather than defaulted at each call site so the in-memory and streaming paths cannot
+    /// end up using different policies.
+    /// </summary>
+    public string NoReferenceBatch { get; init; } = "fallback";
+
     /// <summary>Meta column holding retention time, used only by rt_lowess.</summary>
     public string? RtColumn { get; init; }
 
@@ -215,7 +223,8 @@ internal static class NormalizeCorrectStage
             var diagnostics = new ComBatDiagnostics();
             var combatOut = r.ReferenceAnchored && r.ReferenceMask is not null && r.ReferenceMask.Any(m => m)
                 ? ReferenceAnchoredComBat.Run(
-                    normalized, r.BatchLabels, r.ReferenceMask, diagnostics: diagnostics)
+                    normalized, r.BatchLabels, r.ReferenceMask,
+                    noReferenceBatch: r.NoReferenceBatch, diagnostics: diagnostics)
                 : ComBat.Run(normalized, r.BatchLabels, diagnostics: diagnostics);
             ReportComBatDiagnostics(report, diagnostics.HeldOutFeatures, diagnostics.UnestimableScales);
 

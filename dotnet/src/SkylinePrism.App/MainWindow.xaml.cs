@@ -467,6 +467,7 @@ public partial class MainWindow : Window
         ExcludeOutliersCheck.IsChecked = c.SampleOutlierDetection.Action == "exclude";
         PeptideBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.PeptideLevel;
         ProteinBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.ProteinLevel;
+        ReferenceAnchoredCheck.IsChecked = c.BatchCorrection.ReferenceAnchored;
         ParsimonyCheck.IsChecked = c.Parsimony.Enabled;
         SelectCombo(SharedPeptideCombo, c.Parsimony.SharedPeptideHandling);
         UpdateSharedPeptideRow();
@@ -513,6 +514,9 @@ public partial class MainWindow : Window
         c.BatchCorrection.Enabled = pepBatch || protBatch;
         c.BatchCorrection.PeptideLevel = pepBatch;
         c.BatchCorrection.ProteinLevel = protBatch;
+        // reference_type stays at its default "reference", which is what Skyline's "Standard" sample
+        // type maps to (ReplicateMetadata.MapSampleType) - so the checkbox's wording is literal.
+        c.BatchCorrection.ReferenceAnchored = ReferenceAnchoredCheck.IsChecked == true;
 
         c.Parsimony.Enabled = ParsimonyCheck.IsChecked == true;
         c.Parsimony.SharedPeptideHandling = ComboText(SharedPeptideCombo, "all_groups");

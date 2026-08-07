@@ -104,19 +104,10 @@ public static class ComBat
         var (uniqueBatches, batches, batchOfSample) = SortedBatches(batchLabels);
         ValidateBatchSizes(uniqueBatches, batches);
 
-        // Standard ComBat is the core with the fit set equal to the apply set: every sample in a
-        // batch both estimates that batch's effect and receives it.
-        return ComBatCore.Run(data, new ComBatPlan
-        {
-            Apply = batches,
-            Fit = batches,
-            BatchOfSample = batchOfSample,
-            LocationOnly = new bool[batches.Length],
-            PooledScale = PooledScaleRule.ResidualVariance,
-            ResidualDdof = varPooledDdof,
-            MeanOnly = meanOnly,
-            ParPrior = parPrior,
-        }, diagnostics);
+        return ComBatCore.Run(
+            data,
+            ComBatPlan.Standard(batches, batchOfSample, meanOnly, parPrior, varPooledDdof),
+            diagnostics);
     }
 
     /// <summary>

@@ -71,6 +71,120 @@ internal sealed class ComBatPlan
     public bool ParPrior { get; init; } = true;
 
     public int BatchCount => Apply.Count;
+
+    /// <summary>Batch indices whose effect is actually estimated (a non-empty fit set).</summary>
+    public IEnumerable<int> Fitted
+    {
+        get
+        {
+            for (var i = 0; i < BatchCount; i++)
+                if (Fit[i].Count > 0)
+                    yield return i;
+        }
+    }
+
+    /// <summary>Total fit-set size, the denominator of the centre's weights.</summary>
+    public int TotalFit
+    {
+        get
+        {
+            var n = 0;
+            foreach (var i in Fitted)
+                n += Fit[i].Count;
+            return n;
+        }
+    }
+
+    /// <summary>
+    /// Degrees of freedom for <see cref="PooledScaleRule.PooledWithinBatch"/>: <c>sum(n_i - 1)</c>
+    /// over the batches with replicates to pool. NOMINAL, not per-feature-observed, so every feature
+    /// gets the same denominator and their scales stay comparable. Zero means no fit set has
+    /// replicates at all, and the caller falls back to a homoscedastic scale.
+    /// </summary>
+    public int PooledWithinBatchDf
+    {
+        get
+        {
+            var df = 0;
+            foreach (var i in Fitted)
+                if (!LocationOnly[i] && Fit[i].Count >= 2)
+                    df += Fit[i].Count - 1;
+            return df;
+        }
+    }
+
+    /// <summary>
+    /// Standard ComBat: every sample in a batch both estimates that batch's effect and receives it.
+    /// </summary>
+    public static ComBatPlan Standard(
+        IReadOnlyList<List<int>> batches, int[] batchOfSample,
+        bool meanOnly = false, bool parPrior = true, int residualDdof = ComBat.VarPooledDdof)
+        => new()
+        {
+            Apply = batches,
+            Fit = batches,
+            BatchOfSample = batchOfSample,
+            LocationOnly = new bool[batches.Count],
+            PooledScale = PooledScaleRule.ResidualVariance,
+            ResidualDdof = residualDdof,
+            MeanOnly = meanOnly,
+            ParPrior = parPrior,
+        };
+
+    /// <summary>
+    /// Reference-anchored ComBat: each batch's effect comes from its REFERENCE samples and is applied
+    /// to all of them. Shared by the in-memory and streaming paths so they cannot end up fitting
+    /// different columns.
+    /// </summary>
+    public static ComBatPlan ReferenceAnchored(
+        IReadOnlyList<List<int>> batches, int[] batchOfSample, IReadOnlyList<bool> referenceMask,
+        string noReferenceBatch, bool parPrior = true)
+    {
+        var nBatch = batches.Count;
+        var references = new List<int>[nBatch];
+        for (var i = 0; i < nBatch; i++)
+            references[i] = batches[i].Where(s => referenceMask[s]).ToList();
+
+        if (noReferenceBatch == "error" && references.Any(r => r.Count == 0))
+            throw new ArgumentException(
+                "Some batches have no reference samples; cannot reference-anchor. "
+                + "Set noReferenceBatch='fallback'/'skip' or provide references in every batch.");
+
+        var fit = new List<int>[nBatch];
+        var locationOnly = new bool[nBatch];
+        for (var i = 0; i < nBatch; i++)
+        {
+            if (references[i].Count > 0)
+            {
+                fit[i] = references[i];
+                // One reference is a level, not a spread: correct where it sits, do not rescale.
+                locationOnly[i] = references[i].Count < 2;
+            }
+            else if (noReferenceBatch == "fallback")
+            {
+                // No anchor: fall back to the batch's own centre. Its spread is biological, so this
+                // is a location correction only - the "assume comparable biology" assumption that
+                // reference anchoring exists to avoid, taken deliberately and only for this batch.
+                fit[i] = batches[i];
+                locationOnly[i] = true;
+            }
+            else
+            {
+                fit[i] = new List<int>(); // "skip": left exactly as it came in
+            }
+        }
+
+        return new ComBatPlan
+        {
+            Apply = batches,
+            Fit = fit,
+            BatchOfSample = batchOfSample,
+            LocationOnly = locationOnly,
+            PooledScale = PooledScaleRule.PooledWithinBatch,
+            MeanOnly = false,
+            ParPrior = parPrior,
+        };
+    }
 }
 
 /// <summary>
@@ -101,10 +215,7 @@ internal static class ComBatCore
 
         // Batches with an empty fit set are passengers: not corrected, and - crucially - not allowed
         // to veto a feature in the screening below.
-        var fitted = new List<int>(nBatch);
-        for (var i = 0; i < nBatch; i++)
-            if (plan.Fit[i].Count > 0)
-                fitted.Add(i);
+        var fitted = plan.Fitted.ToList();
 
         // ---- hold out what the data does not determine ----
         var heldOut = new bool[nFeatures];
@@ -126,9 +237,7 @@ internal static class ComBatCore
 
         // ---- per-batch fit means, and the center they are measured against ----
         var bHat = new double[nBatch, nf];
-        var totalFit = 0;
-        foreach (var i in fitted)
-            totalFit += plan.Fit[i].Count;
+        var totalFit = plan.TotalFit;
 
         for (var i = 0; i < nBatch; i++)
         {
@@ -309,7 +418,7 @@ internal static class ComBatCore
         }
 
         // Pooled within-batch: sum of squares about each batch's own fit mean, over sum(n_i - 1).
-        var df = 0;
+        var df = plan.PooledWithinBatchDf;
         foreach (var i in fitted)
         {
             if (plan.LocationOnly[i] || plan.Fit[i].Count < 2)
@@ -325,11 +434,6 @@ internal static class ComBatCore
                     varPooled[f] += r * r;
                 }
             }
-
-            // Nominal, not per-feature-observed: one scalar df for the whole matrix, so a feature
-            // missing from one replicate does not silently get a different denominator from its
-            // neighbours (which would make the scales incomparable across features).
-            df += plan.Fit[i].Count - 1;
         }
 
         if (df > 0)

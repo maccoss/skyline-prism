@@ -76,7 +76,8 @@ public class NormalizeCorrectParityTests
             // Which implementation this case is meant to exercise. Asserted, not assumed: without it
             // a streaming path that quietly stopped being eligible would leave every case below
             // comparing the in-memory implementation to itself, and still be green.
-            var expectStreaming = norm != "quantile" && !(combat && referenceAnchored);
+            // Reference-anchored is streamed now, so the only exclusion left here is quantile.
+            var expectStreaming = norm != "quantile";
             Assert.Equal(expectStreaming, StreamingNormalizeCorrect.CanHandle(requestB));
 
             var rowsB = NormalizeCorrectStage.Run(requestB);
@@ -107,20 +108,27 @@ public class NormalizeCorrectParityTests
     /// <see cref="EntirelyDroppedRowGroup_MatchesInMemory"/> - all of them.
     /// </summary>
     [Theory]
-    [InlineData("median", true, false)]
-    [InlineData("median", true, true)]
-    [InlineData("median", false, true)]
-    [InlineData("rt_lowess", true, true)]
-    [InlineData("vsn", true, true)]
-    [InlineData("none", true, true)]
-    public void MultipleRowGroups_MatchesInMemory(string norm, bool combat, bool dropRows)
+    [InlineData("median", true, false, false)]
+    [InlineData("median", true, true, false)]
+    [InlineData("median", false, true, false)]
+    [InlineData("rt_lowess", true, true, false)]
+    [InlineData("vsn", true, true, false)]
+    [InlineData("none", true, true, false)]
+    // Reference-anchored carries per-feature state across row-group boundaries too, and its fit sets
+    // are a subset of each batch - so a boundary bug there would not show in the standard cases.
+    [InlineData("median", true, false, true)]
+    [InlineData("median", true, true, true)]
+    [InlineData("rt_lowess", true, true, true)]
+    public void MultipleRowGroups_MatchesInMemory(
+        string norm, bool combat, bool dropRows, bool referenceAnchored)
     {
         var root = NewTempDir();
         try
         {
             var cohort = SyntheticCohort.Write(
                 Path.Combine(root, "in"), allNanEvery: dropRows ? 7 : 0, rowGroupRows: 7);
-            AssertBothPathsAgree(root, cohort, norm, combat, autoRevert: false, expectDense: true);
+            AssertBothPathsAgree(root, cohort, norm, combat, autoRevert: false, expectDense: true,
+                referenceAnchored: referenceAnchored);
         }
         finally
         {
@@ -336,16 +344,17 @@ public class NormalizeCorrectParityTests
     /// every cell of both outputs.
     /// </summary>
     private static void AssertBothPathsAgree(
-        string root, SyntheticCohort cohort, string norm, bool combat, bool autoRevert, bool expectDense)
+        string root, SyntheticCohort cohort, string norm, bool combat, bool autoRevert, bool expectDense,
+        bool referenceAnchored = false)
     {
         var (rowsA, reportA) = RunStage(
             NormalizeCorrectStage.RunInMemory, cohort, Path.Combine(root, "in-memory"),
-            norm, combat, referenceAnchored: false, autoRevert: autoRevert);
+            norm, combat, referenceAnchored, autoRevert);
 
         var reportB = new List<string>();
         var requestB = BuildRequest(
             cohort, Path.Combine(root, "dispatched"), norm, combat,
-            referenceAnchored: false, autoRevert: autoRevert, report: reportB);
+            referenceAnchored, autoRevert: autoRevert, report: reportB);
         Assert.True(StreamingNormalizeCorrect.CanHandle(requestB));
         var rowsB = NormalizeCorrectStage.Run(requestB);
 

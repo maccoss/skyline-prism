@@ -52,52 +52,13 @@ public static class ReferenceAnchoredComBat
                 "Reference-anchored ComBat requires at least one reference sample.");
 
         var (_, batches, batchOfSample) = ComBat.SortedBatches(batchLabels);
-        var nBatch = batches.Length;
-        if (nBatch < 2)
+        if (batches.Length < 2)
             return (double[,])data.Clone();
 
-        var references = new List<int>[nBatch];
-        for (var i = 0; i < nBatch; i++)
-            references[i] = batches[i].Where(s => referenceMask[s]).ToList();
-
-        if (noReferenceBatch == "error" && references.Any(r => r.Count == 0))
-            throw new ArgumentException(
-                "Some batches have no reference samples; cannot reference-anchor. "
-                + "Set noReferenceBatch='fallback'/'skip' or provide references in every batch.");
-
-        var fit = new List<int>[nBatch];
-        var locationOnly = new bool[nBatch];
-        for (var i = 0; i < nBatch; i++)
-        {
-            if (references[i].Count > 0)
-            {
-                fit[i] = references[i];
-                // One reference is a level, not a spread: correct where it sits, do not rescale.
-                locationOnly[i] = references[i].Count < 2;
-            }
-            else if (noReferenceBatch == "fallback")
-            {
-                // No anchor: fall back to the batch's own center. Its spread is biological, so this
-                // is a location correction only - the "assume comparable biology" assumption that
-                // reference anchoring exists to avoid, taken deliberately and only for this batch.
-                fit[i] = batches[i];
-                locationOnly[i] = true;
-            }
-            else
-            {
-                fit[i] = new List<int>(); // "skip": left exactly as it came in
-            }
-        }
-
-        return ComBatCore.Run(data, new ComBatPlan
-        {
-            Apply = batches,
-            Fit = fit,
-            BatchOfSample = batchOfSample,
-            LocationOnly = locationOnly,
-            PooledScale = PooledScaleRule.PooledWithinBatch,
-            MeanOnly = false,
-            ParPrior = parPrior,
-        }, diagnostics);
+        return ComBatCore.Run(
+            data,
+            ComBatPlan.ReferenceAnchored(
+                batches, batchOfSample, referenceMask, noReferenceBatch, parPrior),
+            diagnostics);
     }
 }

@@ -1268,6 +1268,13 @@ def rollup_transitions_sorted(
             f"  Filtered: {n_filtered:,} peptides with < {config.min_transitions} transitions"
         )
 
+    # Release the reader before touching the file it is reading. On Windows an open handle makes
+    # unlink fail outright with "[WinError 32] The process cannot access the file because it is
+    # being used by another process" - so the temp file survived, the delete raised, and the
+    # caller's TemporaryDirectory could not be cleaned up either. POSIX unlinks an open file
+    # happily, which is why this only ever showed on Windows.
+    pf.close()
+
     # Clean up temp sorted file (only if we created it, not if input was pre-sorted)
     if not pre_sorted:
         sorted_path.unlink(missing_ok=True)

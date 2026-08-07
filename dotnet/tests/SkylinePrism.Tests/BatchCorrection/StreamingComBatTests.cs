@@ -62,7 +62,7 @@ public class StreamingComBatTests
 
         var (actualGamma, actualDelta, unestimable) = StreamingComBat.Estimate(new ComBatSufficientStats
         {
-            Batches = batches,
+            Plan = ComBatPlan.Standard(batches, BatchOfSample(batches, nSamples)),
             NFeatures = nf,
             GrandMean = new double[nf],
             StdPooled = Enumerable.Repeat(1.0, nf).ToArray(),
@@ -125,6 +125,16 @@ public class StreamingComBatTests
     }
 
     // gammaHat / deltaHat / sumSq exactly as ComBat._fit_batch_effects computes them.
+    /// <summary>Batch index per sample, from the per-batch index lists.</summary>
+    private static int[] BatchOfSample(IReadOnlyList<List<int>> batches, int nSamples)
+    {
+        var of = new int[nSamples];
+        for (var i = 0; i < batches.Count; i++)
+            foreach (var s in batches[i])
+                of[s] = i;
+        return of;
+    }
+
     private static (double[][] GammaHat, double[][] DeltaHat, double[][] SumSq) Summarize(
         double[,] sData, List<List<int>> batches, int nf)
     {
