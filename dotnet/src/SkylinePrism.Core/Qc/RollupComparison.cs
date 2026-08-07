@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Numerics;
+using SkylinePrism.Core.Visualization;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -139,7 +140,8 @@ public static class RollupComparison
     {
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>PRISM Rollup Comparison</title><style>");
-        sb.Append("body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#222;margin:24px;}");
+        // The plot font, resolved, so the page text matches the plots it sits alongside.
+        sb.Append($"body{{font-family:{PlotRenderer.HtmlFontStack};color:#222;margin:24px;}}");
         sb.Append("h1,h2{color:#1a3c6e;} table{border-collapse:collapse;margin:8px 0;} ");
         sb.Append("th,td{border:1px solid #cfd8e3;padding:6px 12px;text-align:right;} th{background:#eaf0f7;} ");
         sb.Append("td:first-child,th:first-child{text-align:left;} .better{color:#1a7f37;} .worse{color:#b42318;}");

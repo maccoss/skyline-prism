@@ -8,6 +8,7 @@ using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Visualization;
+using SkylinePrism.Core.Rollup;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -21,11 +22,8 @@ public static class QcReport
 {
     private const string PepMetaN = "n_transitions";
     private const string PepMetaRt = "mean_rt";
-    private static readonly string[] ProtMeta =
-    {
-        "protein_group", "leading_protein", "leading_name", "leading_uniprot_id",
-        "leading_gene_name", "leading_description", "n_peptides", "n_unique_peptides", "low_confidence",
-    };
+    // From the writer, not repeated here - see ProteinRollup.MetadataColumns.
+    private static readonly string[] ProtMeta = ProteinRollup.MetadataColumns;
 
     // PRISM app icon as a 32x32 PNG data-URI favicon, so the self-contained report shows the
     // prism logo on the browser tab. Regenerate from images/skyline-prism-icon.png (pad to square,
@@ -221,9 +219,11 @@ public static class QcReport
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>PRISM QC Report</title>\n");
         sb.Append(FaviconLinkTag);
+        // The plot font, resolved, so the page text matches the axis labels in the images below it.
+        sb.Append("<style>\nbody { font-family: ")
+          .Append(PlotRenderer.HtmlFontStack)
+          .Append("; color: #222; margin: 0; padding: 24px; }\n");
         sb.Append("""
-<style>
-body { font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #222; margin: 0; padding: 24px; }
 .container { max-width: 1400px; margin: 0 auto; }
 h1 { color: #1a3c6e; }
 h2 { color: #1a3c6e; border-bottom: 2px solid #dfe6ef; padding-bottom: 4px; margin-top: 32px; }

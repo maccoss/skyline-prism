@@ -31,37 +31,51 @@ public static class BatchCorrectionEvaluator
         double worsenTolerance = 1.1,
         double maxOverfittingRatio = 2.0)
     {
+        var hasQc = qcIdx.Count >= 2;
+        var hasRef = refIdx.Count >= 2;
+        return Decide(
+            qcBefore: hasQc ? CvMetrics.MedianCv(preCombat, qcIdx) : double.NaN,
+            qcAfter: hasQc ? CvMetrics.MedianCv(postCombat, qcIdx) : double.NaN,
+            refBefore: hasRef ? CvMetrics.MedianCv(preCombat, refIdx) : double.NaN,
+            refAfter: hasRef ? CvMetrics.MedianCv(postCombat, refIdx) : double.NaN,
+            hasQc, hasRef, worsenTolerance, maxOverfittingRatio);
+    }
+
+    /// <summary>
+    /// The decision itself, from the four median CVs. Split out so a streaming caller - which
+    /// accumulates those CVs a row at a time and never holds either matrix - reaches the decision
+    /// through exactly this code rather than a second copy of the thresholds.
+    /// </summary>
+    public static BatchRevertDecision Decide(
+        double qcBefore, double qcAfter,
+        double refBefore, double refAfter,
+        bool hasQc, bool hasRef,
+        double worsenTolerance = 1.1,
+        double maxOverfittingRatio = 2.0)
+    {
         // Primary control for the revert decision: QC (independent) preferred, else reference.
-        IReadOnlyList<int> control;
+        double before, after;
         string name;
-        if (qcIdx.Count >= 2)
+        if (hasQc)
         {
-            control = qcIdx;
-            name = "QC";
+            (before, after, name) = (qcBefore, qcAfter, "QC");
         }
-        else if (refIdx.Count >= 2)
+        else if (hasRef)
         {
-            control = refIdx;
-            name = "reference";
+            (before, after, name) = (refBefore, refAfter, "reference");
         }
         else
         {
             return new BatchRevertDecision(false, "", double.NaN, double.NaN, null);
         }
 
-        var before = CvMetrics.MedianCv(preCombat, control);
-        var after = CvMetrics.MedianCv(postCombat, control);
         var revert = !double.IsNaN(before) && !double.IsNaN(after) && before > 0
                      && after > before * worsenTolerance;
 
         // Overfitting flag (warning only): reference CV improves much more than QC CV.
         string? overfit = null;
-        if (qcIdx.Count >= 2 && refIdx.Count >= 2)
+        if (hasQc && hasRef)
         {
-            var refBefore = CvMetrics.MedianCv(preCombat, refIdx);
-            var refAfter = CvMetrics.MedianCv(postCombat, refIdx);
-            var qcBefore = CvMetrics.MedianCv(preCombat, qcIdx);
-            var qcAfter = CvMetrics.MedianCv(postCombat, qcIdx);
             var refImp = refBefore > 0 ? (refBefore - refAfter) / refBefore : 0;
             var qcImp = qcBefore > 0 ? (qcBefore - qcAfter) / qcBefore : 0;
             if (qcImp > 0 && refImp / qcImp > maxOverfittingRatio)

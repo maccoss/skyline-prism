@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using SkylinePrism.Core.Qc;
 using SkylinePrism.Skyline;
 
 namespace SkylinePrism.App;
@@ -194,6 +195,119 @@ public sealed class PrismInput : INotifyPropertyChanged
             log($"({DisplayName}: could not read the digestion enzyme: {ex.Message})");
             return null;
         }
+    }
+
+    /// <summary>
+    /// What this input can tell us about DIA isolation windows, for the Spectrum density map: the
+    /// document's own isolation scheme (usually "Results only", i.e. named but window-less) plus, when a
+    /// live Skyline is attached, every isolation scheme saved in it - the layouts the acquisition could
+    /// have used. Best-effort: any failure just contributes nothing.
+    /// </summary>
+    public void CollectIsolationSchemes(
+        IsolationSchemeCatalog catalog, Action<string> log, string? skylineCmdPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        var label = SanitizeLabel(BatchLabel);
+        try
+        {
+            // The document's declared scheme. An OPEN document is read from its saved .sky (the scheme
+            // lives in Full-Scan settings, which the RPC exposes no selected-item accessor for); an
+            // unsaved document simply has no path to read.
+            var documentPath = Kind == PrismInputKind.ReportFile ? null : Path;
+            var documentXml = string.IsNullOrWhiteSpace(documentPath)
+                ? null
+                : SkyDocumentInfo.ReadIsolationSchemeXml(documentPath!);
+            var documentScheme = IsolationScheme.Parse(documentXml);
+            if (documentScheme is { HasWindows: true })
+            {
+                catalog.AddDocumentScheme(label, documentScheme);
+                // Record the acquisition method here too - the explicit-scheme branch skips the data-file
+                // import, which is where it would otherwise be read.
+                if (!string.IsNullOrWhiteSpace(documentPath) && File.Exists(documentPath))
+                    catalog.SetAcquisition(label, SkyDocumentInfo.TryRead(documentPath!, _ => { })?.AcquisitionMethod);
+                log($"Isolation scheme from the document: {documentScheme.Name} ({documentScheme.Describe()}).");
+            }
+            else
+            {
+                // "Results only" (the normal DIA analysis setting): the document names a scheme but stores
+                // no windows, because Skyline reads them from the data files at import. So have Skyline
+                // read them back out of one of those files - the same thing Transition Settings >
+                // Isolation scheme > Add > Import from a data file does, run against a throwaway document
+                // so the user's own is never modified.
+                if (documentScheme is not null)
+                    log($"Document isolation scheme is '{documentScheme.Name}' - it stores no windows.");
+                var imported = ImportIsolationSchemeFromData(
+                    documentPath, skylineCmdPath, log, cancellationToken, catalog, label);
+                if (imported is not null)
+                    catalog.AddDocumentScheme(label, imported);
+                else if (documentScheme is not null)
+                    catalog.AddDocumentScheme(label, documentScheme); // record the name for the UI to explain
+            }
+
+            if (Kind == PrismInputKind.RunningSkyline && Session is not null)
+            {
+                var count = 0;
+                foreach (var xml in new SkylineReportDriver(Session, log).GetIsolationSchemeXml())
+                {
+                    var scheme = IsolationScheme.Parse(xml);
+                    if (scheme is { HasWindows: true })
+                    {
+                        catalog.AddLibraryScheme(scheme);
+                        count++;
+                    }
+                }
+                if (count > 0)
+                    log($"Read {count} saved isolation scheme(s) from Skyline for the density map.");
+            }
+        }
+        catch (Exception ex)
+        {
+            log($"({DisplayName}: could not read isolation schemes: {ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Have Skyline read the acquisition's real isolation windows out of one of the document's raw data
+    /// files. Null when there is no reachable data file or no installed Skyline to read it with - the
+    /// tool then falls back to asking the user which saved scheme to use.
+    /// </summary>
+    private static IsolationScheme? ImportIsolationSchemeFromData(
+        string? documentPath, string? skylineCmdPath, Action<string> log, CancellationToken cancellationToken,
+        IsolationSchemeCatalog? catalog = null, string? batchLabel = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
+            return null;
+
+        var info = SkyDocumentInfo.TryRead(documentPath!, log);
+        if (info is null)
+            return null;
+        if (catalog is not null && batchLabel is not null)
+            catalog.SetAcquisition(batchLabel, info.AcquisitionMethod);
+
+        // Only DIA has the REPEATING isolation cycle Skyline's importer looks for; on anything else it
+        // fails with "No repeating isolation scheme found in <file>". Scheduled methods (PRM, and the
+        // multiplexed targeted variants) acquire different windows at different retention times, so there
+        // is no cycle to find. Skip the ~10 s Skyline launch instead of provoking that error.
+        if (info.AcquisitionMethod is not null && !info.IsDia)
+        {
+            log($"Acquisition method is {info.AcquisitionMethod}, not DIA - isolation windows cannot be "
+                + "read from the data files (Skyline can only import a repeating DIA cycle).");
+            return null;
+        }
+        if (info.SampleFilePaths.Count == 0)
+            return null;
+
+        var dataFile = SkylineIsolationImporter.ResolveDataFile(info.SampleFilePaths, documentPath);
+        if (dataFile is null)
+        {
+            log("None of this document's raw data files could be found, so its DIA isolation windows "
+                + "cannot be read. The Spectrum density tab will ask which saved scheme to use.");
+            return null;
+        }
+
+        var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, _ => { });
+        return SkylineIsolationImporter.ImportFromDataFile(
+            dataFile, exporter.Runner, log, cancellationToken);
     }
 
     /// <summary>

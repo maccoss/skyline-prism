@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using DuckDB.NET.Data;
 
 namespace SkylinePrism.Core.IO;
@@ -44,7 +45,54 @@ public static class DuckDbMerge
         "Batch", "Source Document", "Sample ID",
     };
 
-    public sealed record MergeResult(string OutputPath, string SortColumn, long TotalRows);
+    public sealed record MergeResult(
+        string OutputPath, string SortColumn, long TotalRows, string TempDirectory = "");
+
+    /// <summary>
+    /// Override for DuckDB's spill directory. Set it when the automatic choice picks badly - the
+    /// merge writes gigabytes of spill here on a large cohort, so it wants a fast local disk with
+    /// room, not a quota'd or synced one.
+    /// </summary>
+    public const string TempDirEnvVar = "PRISM_TEMP_DIR";
+
+    /// <summary>
+    /// Where DuckDB spills the sort. Beside the output when that is a local disk (same volume, so
+    /// nothing crosses a filesystem and cleanup is obvious), but NOT when the output is on a network
+    /// share: PRISM output routinely lives on a mapped drive, and spilling a multi-gigabyte sort over
+    /// SMB is slow enough to look like a hang - and fails outright on some servers. In that case fall
+    /// back to the machine's own temp directory.
+    /// </summary>
+    internal static string ResolveTempDirectory(string outputPath)
+    {
+        var overridden = Environment.GetEnvironmentVariable(TempDirEnvVar);
+        if (!string.IsNullOrWhiteSpace(overridden))
+            return Path.Combine(overridden, "prism-duckdb");
+
+        var beside = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(outputPath))!, ".duckdb_temp");
+        return IsNetworkPath(beside)
+            ? Path.Combine(Path.GetTempPath(), "prism-duckdb")
+            : beside;
+    }
+
+    /// <summary>UNC path, or a drive the OS reports as a network mount.</summary>
+    private static bool IsNetworkPath(string path)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            if (full.StartsWith(@"\\", StringComparison.Ordinal))
+                return true;
+            var root = Path.GetPathRoot(full);
+            return !string.IsNullOrEmpty(root)
+                   && new DriveInfo(root).DriveType == DriveType.Network;
+        }
+        catch (Exception)
+        {
+            // Unknown/unreachable volume: keep the old behaviour rather than refuse to merge.
+            return false;
+        }
+    }
 
     public static MergeResult MergeAndSort(
         IReadOnlyList<string> reportPaths,
@@ -52,7 +100,8 @@ public static class DuckDbMerge
         string? sortColumn = null,
         IReadOnlyList<string>? batchNames = null,
         int sortBufferMb = 0,
-        string? replicateColumn = null)
+        string? replicateColumn = null,
+        CancellationToken cancellationToken = default)
     {
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
@@ -105,54 +154,58 @@ public static class DuckDbMerge
         }
         var unionQuery = string.Join(" UNION ALL ", unionParts);
 
-        var tempDir = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(outputPath))!, ".duckdb_temp");
+        var tempDir = ResolveTempDirectory(outputPath);
         Directory.CreateDirectory(tempDir);
 
         var unsortedPath = Path.ChangeExtension(outputPath, ".unsorted.parquet");
         var outputEsc = SqlEscape(Path.GetFullPath(outputPath));
         var unsortedEsc = SqlEscape(Path.GetFullPath(unsortedPath));
 
-        using var conn = new DuckDBConnection("Data Source=:memory:");
-        conn.Open();
-        // Use all cores; the 75%-of-RAM budget above is sized so all threads' read buffers fit, and the
-        // sort spills to temp_directory beyond it.
-        Exec(conn, $"SET memory_limit='{sortBufferMb}MB'");
-        Exec(conn, $"SET temp_directory='{SqlEscape(tempDir)}'");
-        Exec(conn, "SET preserve_insertion_order=false");
-        Exec(conn, $"SET threads={Environment.ProcessorCount}");
-
-        // Stage A: union -> unsorted intermediate (snappy).
-        Exec(conn, $@"
-            COPY (
-                {unionQuery}
-            ) TO '{unsortedEsc}' (
-                FORMAT PARQUET,
-                COMPRESSION SNAPPY
-            )");
-
-        // Stage B: single-source ORDER BY -> zstd output.
-        Exec(conn, $@"
-            COPY (
-                SELECT * FROM read_parquet('{unsortedEsc}')
-                ORDER BY ""{sortColumn}""
-            ) TO '{outputEsc}' (
-                FORMAT PARQUET,
-                COMPRESSION ZSTD,
-                ROW_GROUP_SIZE 1000000
-            )");
-
         long totalRows;
-        using (var cmd = conn.CreateCommand())
+        try
         {
+            using var conn = new DuckDBConnection("Data Source=:memory:");
+            conn.Open();
+            // Use all cores; the 75%-of-RAM budget above is sized so all threads' read buffers fit, and
+            // the sort spills to temp_directory beyond it.
+            Exec(conn, $"SET memory_limit='{sortBufferMb}MB'");
+            Exec(conn, $"SET temp_directory='{SqlEscape(tempDir)}'");
+            Exec(conn, "SET preserve_insertion_order=false");
+            Exec(conn, $"SET threads={Environment.ProcessorCount}");
+
+            // Stage A: union -> unsorted intermediate (snappy).
+            Exec(conn, cancellationToken, $@"
+                COPY (
+                    {unionQuery}
+                ) TO '{unsortedEsc}' (
+                    FORMAT PARQUET,
+                    COMPRESSION SNAPPY
+                )");
+
+            // Stage B: single-source ORDER BY -> zstd output.
+            Exec(conn, cancellationToken, $@"
+                COPY (
+                    SELECT * FROM read_parquet('{unsortedEsc}')
+                    ORDER BY ""{sortColumn}""
+                ) TO '{outputEsc}' (
+                    FORMAT PARQUET,
+                    COMPRESSION ZSTD,
+                    ROW_GROUP_SIZE 1000000
+                )");
+
+            using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT COUNT(*) FROM read_parquet('{outputEsc}')";
             totalRows = Convert.ToInt64(cmd.ExecuteScalar());
         }
+        finally
+        {
+            // In a finally because the spill directory may now live outside the output directory,
+            // where a failed run would otherwise leave gigabytes behind with nothing pointing at it.
+            try { File.Delete(unsortedPath); } catch (IOException) { }
+            try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
+        }
 
-        try { File.Delete(unsortedPath); } catch (IOException) { }
-        try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
-
-        return new MergeResult(Path.GetFullPath(outputPath), sortColumn, totalRows);
+        return new MergeResult(Path.GetFullPath(outputPath), sortColumn, totalRows, tempDir);
     }
 
     private static string BuildFileSelect(
@@ -218,11 +271,35 @@ public static class DuckDbMerge
         return line.Split(delimiter).Select(s => s.Trim()).ToList();
     }
 
-    private static void Exec(DuckDBConnection conn, string sql)
+    /// <summary>
+    /// Run one statement, interruptible. The merge's two COPY statements are the longest single
+    /// operations in the pipeline - many minutes on a large cohort - so a Stop that only took effect
+    /// between them would not feel like a stop at all. DuckDB's own interrupt is what makes the
+    /// in-flight query abandon its work.
+    /// </summary>
+    private static void Exec(DuckDBConnection conn, string sql) => Exec(conn, default, sql);
+
+    /// <inheritdoc cref="Exec(DuckDBConnection, string)"/>
+    private static void Exec(DuckDBConnection conn, CancellationToken cancellationToken, string sql)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        using var registration = cancellationToken.Register(() =>
+        {
+            try { cmd.Cancel(); }
+            catch (Exception) { /* already finished, or a backend without interrupt support */ }
+        });
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // The interrupt surfaces as an ordinary query error; report it as the cancellation it is.
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
     }
 
     private static string SqlEscape(string path) => path.Replace("'", "''");

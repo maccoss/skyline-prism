@@ -19,30 +19,53 @@ public static class CvMetrics
     {
         var nFeatures = log2Matrix.GetLength(0);
         var cvs = new List<double>(nFeatures);
-        var linear = new List<double>(sampleIndices.Count);
+        var row = new double[log2Matrix.GetLength(1)];
 
         for (var f = 0; f < nFeatures; f++)
         {
-            // CV over the feature's NON-NaN samples (pandas std/mean skipna), not all-or-nothing:
-            // features with some missing values are common and must still count.
-            linear.Clear();
-            for (var k = 0; k < sampleIndices.Count; k++)
-            {
-                var v = log2Matrix[f, sampleIndices[k]];
-                if (!double.IsNaN(v))
-                    linear.Add(Math.Pow(2.0, v));
-            }
-            if (linear.Count < 2)
-                continue;
-
-            var arr = linear.ToArray();
-            var mean = Stats.Mean(arr);
-            var std = Math.Sqrt(Stats.Var(arr, ddof: 1));
-            cvs.Add(std / mean * 100.0);
+            for (var s = 0; s < row.Length; s++)
+                row[s] = log2Matrix[f, s];
+            if (TryFeatureCv(row, sampleIndices, out var cv))
+                cvs.Add(cv);
         }
 
-        return cvs.Count == 0 ? double.NaN : Stats.NanMedian(cvs.ToArray());
+        return MedianOfCvs(cvs);
     }
+
+    /// <summary>
+    /// One feature's CV (%) over the given sample columns, from that feature's LOG2 row alone.
+    /// Returns false for a feature the median must skip (fewer than 2 of the selected samples
+    /// present). Row-local by construction, so a streaming caller that never holds the matrix can
+    /// accumulate exactly the same set of CVs <see cref="MedianCv"/> would.
+    /// </summary>
+    public static bool TryFeatureCv(
+        ReadOnlySpan<double> log2Row, IReadOnlyList<int> sampleIndices, out double cv)
+    {
+        // CV over the feature's NON-NaN samples (pandas std/mean skipna), not all-or-nothing:
+        // features with some missing values are common and must still count.
+        var linear = new List<double>(sampleIndices.Count);
+        for (var k = 0; k < sampleIndices.Count; k++)
+        {
+            var v = log2Row[sampleIndices[k]];
+            if (!double.IsNaN(v))
+                linear.Add(Math.Pow(2.0, v));
+        }
+        if (linear.Count < 2)
+        {
+            cv = double.NaN;
+            return false;
+        }
+
+        var arr = linear.ToArray();
+        var mean = Stats.Mean(arr);
+        var std = Math.Sqrt(Stats.Var(arr, ddof: 1));
+        cv = std / mean * 100.0;
+        return true;
+    }
+
+    /// <summary>Median of the per-feature CVs collected by <see cref="TryFeatureCv"/>.</summary>
+    public static double MedianOfCvs(IReadOnlyList<double> cvs)
+        => cvs.Count == 0 ? double.NaN : Stats.NanMedian(cvs.ToArray());
 
     /// <summary>Per-feature CV (%) over the given sample columns (linear scale). NaN-free features only.</summary>
     public static double[] PerFeatureCvs(double[,] log2Matrix, IReadOnlyList<int> sampleIndices)

@@ -5,13 +5,13 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using DuckDB.NET.Data;
-using SkylinePrism.Core.BatchCorrection;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Normalization;
 using SkylinePrism.Core.Parsimony;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Rollup;
+using System.Threading;
 
 namespace SkylinePrism.Core.Pipeline;
 
@@ -26,10 +26,17 @@ public sealed class PrismPipeline
     public sealed record Result(
         int NPeptides, int NProteins, int NSamples, IReadOnlyList<string> Batches);
 
+    /// <summary>
+    /// Run the pipeline. <paramref name="cancellationToken"/> is honoured at every stage boundary and
+    /// inside the long-running stages (the merge query, the transition rollup's producer, and the
+    /// row-group loops of Stage 2b/2c), so a Stop takes effect in seconds rather than at the end of
+    /// whatever stage happens to be running. Outputs written before the stop are left in place - they
+    /// are intermediates of an incomplete run, not results.
+    /// </summary>
     public static Result Run(
         IReadOnlyList<string> inputs, string outputDir, PrismConfig config,
         IReadOnlyList<string>? metadataPaths = null, Action<string>? log = null,
-        bool forceReprocess = false)
+        bool forceReprocess = false, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(outputDir);
         var report = log ?? (_ => { });
@@ -51,10 +58,16 @@ public sealed class PrismPipeline
         }
         else
         {
-            merge = DuckDbMerge.MergeAndSort(inputs, mergedPath, replicateColumn: config.Data.SampleColumn);
+            merge = DuckDbMerge.MergeAndSort(
+                inputs, mergedPath, replicateColumn: config.Data.SampleColumn,
+                cancellationToken: cancellationToken);
             SourceFingerprint.Write(cachePath,
                 new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
             report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
+            // The sort can spill many GB here. Worth naming: it is the first thing to look at when the
+            // merge is slow or fills a disk, and it is not always beside the output.
+            report($"  Sort scratch: {merge.TempDirectory} "
+                + $"(override with the {DuckDbMerge.TempDirEnvVar} environment variable).");
         }
 
         // Schema-only read: never materialize the (potentially huge, 200-report) merged table
@@ -136,6 +149,7 @@ public sealed class PrismPipeline
 
         // Stage 2: transition -> peptide.
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 2: Transition -> peptide rollup ({config.TransitionRollup.Method})");
         report("============================================================");
         var peptidesRollupPath = Path.Combine(outputDir, "peptides_rollup.parquet");
@@ -173,7 +187,8 @@ public sealed class PrismPipeline
             : Math.Min(config.Processing.NWorkers, Environment.ProcessorCount);
         report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
             + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
-        var t2 = TransitionRollup.Run(mergedPath, cols, transitionCfg, peptidesRollupPath, samples);
+        var t2 = TransitionRollup.Run(
+            mergedPath, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
             report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
@@ -266,21 +281,57 @@ public sealed class PrismPipeline
                 : $"  ComBat: reference-anchored requested but no '{refType}' samples found; using standard ComBat.");
         }
 
+        // Parsimony is computed HERE, before the peptide output is written, because that output carries
+        // the protein groups each peptide belongs to (so the peptide and protein tables can be joined,
+        // and a peptide can be navigated to in Skyline). Its banner and CSV stay at Stage 3 below, where
+        // the grouping is reported; only the computation moved.
+        var groups = ParsimonyEngine.Run(
+            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
+            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
+        var peptideGroups = PeptideGroupIndex(groups);
+        // Counted now so the index itself can be dropped as soon as the peptide output is written,
+        // rather than staying alive through the protein rollup for the sake of one number.
+        var sharedPeptides = peptideGroups.Count(kv => kv.Value.Count > 1);
+
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 2b: Peptide normalization ({config.GlobalNormalization.Method})"
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
         var correctedPepPath = Path.Combine(outputDir, "corrected_peptides." + config.Output.Format);
-        var nPeptides = NormalizeAndCorrect(
-            peptidesRollupPath,
-            new[] { (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double) },
-            samples, batchLabels, peptideCombat, config.GlobalNormalization.Method,
-            internalPath, correctedPepPath,
-            report, refIdx, qcIdx,
-            referenceAnchored: referenceAnchored, referenceMask: refMask, rtColumn: "mean_rt",
-            rtLowessFrac: config.GlobalNormalization.RtLowess.Frac,
-            rtLowessGridPoints: config.GlobalNormalization.RtLowess.NGridPoints,
-            autoRevert: config.BatchCorrection.AutoRevert);
+        var nPeptides = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
+        {
+            WideParquet = peptidesRollupPath,
+            MetaSpec = new[]
+            {
+                (cols.Peptide, MetaType.Str), ("n_transitions", MetaType.Long), ("mean_rt", MetaType.Double),
+            },
+            Samples = samples,
+            BatchLabels = batchLabels,
+            CombatEnabled = peptideCombat,
+            NormMethod = config.GlobalNormalization.Method,
+            InternalLog2Path = internalPath,
+            CorrectedLinearPath = correctedPepPath,
+            Report = report,
+            RefIdx = refIdx,
+            QcIdx = qcIdx,
+            ReferenceAnchored = referenceAnchored,
+            ReferenceMask = refMask,
+            RtColumn = "mean_rt",
+            RtLowessFrac = config.GlobalNormalization.RtLowess.Frac,
+            RtLowessGridPoints = config.GlobalNormalization.RtLowess.NGridPoints,
+            AutoRevert = config.BatchCorrection.AutoRevert,
+            // Stamped onto the CORRECTED peptide output only (see NormalizeCorrectStage): the internal
+            // log2 file feeds the protein rollup and the QC report, whose readers treat any undeclared
+            // column as a sample.
+            DerivedMeta = PeptideGroupColumns(peptideGroups),
+            DerivedKeyColumn = cols.Peptide,
+            PathReport = path => report($"  Path: {path}."),
+            CancellationToken = cancellationToken,
+        });
         report($"  Wrote {nPeptides:N0} corrected peptides.");
+        // Done with the index; the protein rollup that follows is the other memory-heavy stage, so let
+        // this go rather than holding it alongside another full matrix.
+        peptideGroups = null!;
 
         // Stage 3: parsimony.
         report("============================================================");
@@ -289,14 +340,15 @@ public sealed class PrismPipeline
         if (!string.IsNullOrWhiteSpace(config.Parsimony.FastaPath))
             report($"  FASTA-based parsimony map: {config.Parsimony.FastaPath} "
                 + $"(enzyme={config.Parsimony.Enzyme}, specificity={config.Parsimony.EnzymeSpecificity})");
-        var groups = ParsimonyEngine.Run(
-            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
-            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
         ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
         report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
+        if (sharedPeptides > 0)
+            report($"  {sharedPeptides:N0} peptide(s) map to more than one group; corrected_peptides lists "
+                + $"all of them, '{PeptideGroupSeparator}'-separated.");
 
         // Stage 4: peptide -> protein.
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report($"Stage 4: Peptide -> protein rollup ({config.ProteinRollup.Method})");
         report("============================================================");
         var proteinsRawPath = Path.Combine(outputDir, "proteins_raw.parquet");
@@ -353,14 +405,28 @@ public sealed class PrismPipeline
             ("leading_description", MetaType.Str), ("n_peptides", MetaType.Long),
             ("n_unique_peptides", MetaType.Long), ("low_confidence", MetaType.Bool),
         };
-        var nProteins = NormalizeAndCorrect(
-            proteinsRawPath, proteinMeta, samples, batchLabels, proteinCombat,
-            config.ProteinNormalization.Method, internalLog2Path: null, correctedLinearPath: correctedProtPath,
-            report: report, refIdx: refIdx, qcIdx: qcIdx,
-            referenceAnchored: referenceAnchored, referenceMask: refMask,
-            autoRevert: config.BatchCorrection.AutoRevert);
+        var nProteins = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
+        {
+            WideParquet = proteinsRawPath,
+            MetaSpec = proteinMeta,
+            Samples = samples,
+            BatchLabels = batchLabels,
+            CombatEnabled = proteinCombat,
+            NormMethod = config.ProteinNormalization.Method,
+            InternalLog2Path = null,
+            CorrectedLinearPath = correctedProtPath,
+            Report = report,
+            RefIdx = refIdx,
+            QcIdx = qcIdx,
+            ReferenceAnchored = referenceAnchored,
+            ReferenceMask = refMask,
+            AutoRevert = config.BatchCorrection.AutoRevert,
+            PathReport = path => report($"  Path: {path}."),
+            CancellationToken = cancellationToken,
+        });
 
         report("============================================================");
+        cancellationToken.ThrowIfCancellationRequested();
         report("Stage 5: Output generation");
         report("============================================================");
         WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
@@ -389,194 +455,52 @@ public sealed class PrismPipeline
         return new Result(nPeptides, nProteins, samples.Count, batches);
     }
 
-    private enum MetaType { Str, Long, Double, Bool }
+    /// <summary>
+    /// Separator between the protein groups of a shared peptide in the corrected peptide output. A
+    /// peptide that maps to several groups lists them all rather than being arbitrarily assigned to one -
+    /// which group "owns" it is a quantification decision (parsimony.shared_peptide_handling), not a fact
+    /// about the peptide.
+    /// </summary>
+    public const string PeptideGroupSeparator = ";";
+
+    /// <summary>Peptide -> every protein group that peptide maps to, in group order.</summary>
+    private static Dictionary<string, List<ProteinGroup>> PeptideGroupIndex(IReadOnlyList<ProteinGroup> groups)
+    {
+        var index = new Dictionary<string, List<ProteinGroup>>(StringComparer.Ordinal);
+        foreach (var group in groups)
+        {
+            // AllMappedPeptides, not Peptides: the question here is "which groups contain this peptide",
+            // which includes the shared ones parsimony did not assign to this group.
+            foreach (var peptide in group.AllMappedPeptides)
+            {
+                if (!index.TryGetValue(peptide, out var list))
+                    index[peptide] = list = new List<ProteinGroup>();
+                if (!list.Contains(group))
+                    list.Add(group);
+            }
+        }
+        return index;
+    }
 
     /// <summary>
-    /// Load a wide LOG2 parquet, drop all-NaN feature rows, median-normalize, optionally
-    /// ComBat, then write the LOG2 "internal" parquet (if a path is given) and the LINEAR
-    /// corrected output. Returns the number of features written.
+    /// The protein-group columns stamped onto corrected_peptides: the group IDs (join key to
+    /// corrected_proteins) and the leading protein/name (what identifies the protein in Skyline).
     /// </summary>
-    private static int NormalizeAndCorrect(
-        string wideParquet,
-        IReadOnlyList<(string Name, MetaType Type)> metaSpec,
-        IReadOnlyList<string> samples,
-        IReadOnlyList<string> batchLabels,
-        bool combatEnabled,
-        string normMethod,
-        string? internalLog2Path,
-        string correctedLinearPath,
-        Action<string> report,
-        IReadOnlyList<int> refIdx,
-        IReadOnlyList<int> qcIdx,
-        bool referenceAnchored = false,
-        IReadOnlyList<bool>? referenceMask = null,
-        string? rtColumn = null,
-        double rtLowessFrac = 0.3,
-        int rtLowessGridPoints = 100,
-        bool autoRevert = false)
+    private static IReadOnlyList<(string Name, Func<string, string> Value)> PeptideGroupColumns(
+        IReadOnlyDictionary<string, List<ProteinGroup>> peptideGroups)
     {
-        var table = ParquetTable.Load(wideParquet);
-        var nAll = table.RowCount;
+        string Join(string peptide, Func<ProteinGroup, string> field) =>
+            peptideGroups.TryGetValue(peptide, out var list)
+                ? string.Join(PeptideGroupSeparator, list.Select(field))
+                : "";
 
-        // Read matrix + meta.
-        var matrixAll = new double[nAll, samples.Count];
-        for (var j = 0; j < samples.Count; j++)
+        return new (string, Func<string, string>)[]
         {
-            var col = table.GetDouble(samples[j]);
-            for (var i = 0; i < nAll; i++)
-                matrixAll[i, j] = col[i] ?? double.NaN;
-        }
-
-        // Drop all-NaN rows.
-        var keep = new List<int>(nAll);
-        for (var i = 0; i < nAll; i++)
-        {
-            var any = false;
-            for (var j = 0; j < samples.Count && !any; j++)
-                any = !double.IsNaN(matrixAll[i, j]);
-            if (any)
-                keep.Add(i);
-        }
-
-        // Reuse matrixAll when nothing was dropped (the dense case) instead of copying it.
-        var n = keep.Count;
-        double[,] matrix;
-        if (n == nAll)
-        {
-            matrix = matrixAll;
-        }
-        else
-        {
-            matrix = new double[n, samples.Count];
-            for (var r = 0; r < n; r++)
-                for (var j = 0; j < samples.Count; j++)
-                    matrix[r, j] = matrixAll[keep[r], j];
-        }
-        matrixAll = null!; // free the [nAll] copy (or clear the alias) - dead from here
-
-        // Control-sample median CV (linear scale) BEFORE normalization/correction (matrix is freed below).
-        var beforeRefCv = refIdx.Count >= 2 ? CvMetrics.MedianCv(matrix, refIdx) : double.NaN;
-        var beforeQcCv = qcIdx.Count >= 2 ? CvMetrics.MedianCv(matrix, qcIdx) : double.NaN;
-
-        double[]? rtKept = null;
-        if (normMethod is "rt_lowess" && rtColumn is not null && table.HasColumn(rtColumn))
-        {
-            var rtAll = table.GetDouble(rtColumn);
-            rtKept = new double[n];
-            for (var r = 0; r < n; r++)
-                rtKept[r] = rtAll[keep[r]] ?? double.NaN;
-        }
-
-        var normalized = rtKept is not null
-            ? Normalizer.RtLowessNormalize(matrix, rtKept, rtLowessFrac, rtLowessGridPoints)
-            : normMethod switch
-            {
-                "quantile" => Normalizer.QuantileNormalize(matrix),
-                "vsn" => Normalizer.VsnNormalize(matrix),
-                "none" => matrix,
-                _ => Normalizer.MedianNormalize(matrix),
-            };
-        if (!ReferenceEquals(normalized, matrix))
-            matrix = null!; // dead once a distinct normalized matrix exists
-
-        double[,] corrected;
-        if (!combatEnabled)
-        {
-            corrected = normalized;
-        }
-        else
-        {
-            var combatOut = referenceAnchored && referenceMask is not null && referenceMask.Any(m => m)
-                ? ReferenceAnchoredComBat.Run(normalized, batchLabels, referenceMask)
-                : ComBat.Run(normalized, batchLabels);
-
-            // Safety net (opt-in): if ComBat worsened the control CV by >10%, revert to the uncorrected
-            // (post-normalization) data; separately warn on reference/QC overfitting.
-            if (autoRevert)
-            {
-                var eval = BatchCorrectionEvaluator.Evaluate(normalized, combatOut, qcIdx, refIdx);
-                if (eval.OverfittingWarning is not null)
-                    report($"  WARNING: ComBat {eval.OverfittingWarning}");
-                if (eval.Revert)
-                {
-                    report($"  ComBat REVERTED: {eval.ControlName} CV worsened "
-                        + $"{eval.ControlCvBefore:F1}% -> {eval.ControlCvAfter:F1}% (>10%); keeping uncorrected data.");
-                    corrected = normalized;
-                }
-                else
-                {
-                    corrected = combatOut;
-                }
-            }
-            else
-            {
-                corrected = combatOut;
-            }
-        }
-        if (!ReferenceEquals(corrected, normalized))
-            normalized = null!; // dead after correction
-
-        // Median control-sample CV before vs after normalization + batch correction (linear scale).
-        // Only a type with >= 2 samples is meaningful; skip the other (or both if no controls).
-        if (refIdx.Count >= 2)
-            report($"  Reference CV (median): {beforeRefCv:F1}% -> {CvMetrics.MedianCv(corrected, refIdx):F1}% (before -> after)");
-        if (qcIdx.Count >= 2)
-            report($"  QC CV (median): {beforeQcCv:F1}% -> {CvMetrics.MedianCv(corrected, qcIdx):F1}% (before -> after)");
-
-        // Meta columns (filtered to kept rows).
-        var metaCols = new List<ParquetWideWriter.MetaColumn>();
-        foreach (var (name, type) in metaSpec)
-        {
-            switch (type)
-            {
-                case MetaType.Str:
-                    var sv = table.GetString(name);
-                    metaCols.Add(ParquetWideWriter.Strings(name, keep.Select(i => sv[i] ?? "").ToArray()));
-                    break;
-                case MetaType.Long:
-                    var lv = table.GetLong(name);
-                    metaCols.Add(ParquetWideWriter.Longs(name, keep.Select(i => lv[i]).ToArray()));
-                    break;
-                case MetaType.Double:
-                    var dv = table.GetDouble(name);
-                    metaCols.Add(ParquetWideWriter.Doubles(name, keep.Select(i => dv[i] ?? double.NaN).ToArray()));
-                    break;
-                case MetaType.Bool:
-                    var bv = table.GetBool(name);
-                    metaCols.Add(ParquetWideWriter.Bools(name, keep.Select(i => bv[i]).ToArray()));
-                    break;
-            }
-        }
-
-        // LOG2 "internal" output only when requested (peptide stage). Scoped so the transpose is
-        // freed before the linear transpose is allocated (peak = corrected + one column set).
-        if (internalLog2Path is not null)
-        {
-            var log2Cols = new double[samples.Count][];
-            for (var j = 0; j < samples.Count; j++)
-            {
-                log2Cols[j] = new double[n];
-                for (var r = 0; r < n; r++)
-                    log2Cols[j][r] = corrected[r, j];
-            }
-            ParquetWideWriter.Write(internalLog2Path, metaCols, samples, log2Cols, n);
-        }
-
-        // Corrected output is LINEAR (2^log2).
-        var linearCols = new double[samples.Count][];
-        for (var j = 0; j < samples.Count; j++)
-        {
-            linearCols[j] = new double[n];
-            for (var r = 0; r < n; r++)
-                linearCols[j][r] = Math.Pow(2.0, corrected[r, j]);
-        }
-
-        if (correctedLinearPath.EndsWith(".parquet", StringComparison.OrdinalIgnoreCase))
-            ParquetWideWriter.Write(correctedLinearPath, metaCols, samples, linearCols, n);
-        else
-            WriteDelimited(correctedLinearPath, metaCols, samples, linearCols, n);
-
-        return n;
+            ("protein_group", p => Join(p, g => g.GroupId)),
+            ("leading_protein", p => Join(p, g => g.LeadingProtein)),
+            ("leading_name", p => Join(p, g => g.LeadingName)),
+            ("leading_gene_name", p => Join(p, g => g.LeadingGeneName)),
+        };
     }
 
     private static Dictionary<string, string> GetBatchMap(string mergedPath, SkylineColumns cols)
@@ -633,26 +557,6 @@ public sealed class PrismPipeline
         const string sep = "__@__";
         var idx = sampleId.IndexOf(sep, StringComparison.Ordinal);
         return idx >= 0 ? sampleId[..idx] : sampleId;
-    }
-
-    private static void WriteDelimited(
-        string path, IReadOnlyList<ParquetWideWriter.MetaColumn> meta,
-        IReadOnlyList<string> samples, IReadOnlyList<double[]> sampleCols, int n)
-    {
-        var delim = path.EndsWith(".tsv", StringComparison.OrdinalIgnoreCase) ? '\t' : ',';
-        var sb = new StringBuilder();
-        var headers = meta.Select(m => m.Name).Concat(samples);
-        sb.Append(string.Join(delim, headers)).Append('\n');
-        for (var r = 0; r < n; r++)
-        {
-            var fields = new List<string>();
-            foreach (var m in meta)
-                fields.Add(Convert.ToString(m.Values.GetValue(r), CultureInfo.InvariantCulture) ?? "");
-            for (var j = 0; j < samples.Count; j++)
-                fields.Add(sampleCols[j][r].ToString("R", CultureInfo.InvariantCulture));
-            sb.Append(string.Join(delim, fields)).Append('\n');
-        }
-        File.WriteAllText(path, sb.ToString());
     }
 
     private static string Csv(string s) =>

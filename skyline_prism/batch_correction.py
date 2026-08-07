@@ -13,6 +13,7 @@ References:
 """
 
 import logging
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -163,6 +164,65 @@ def _make_design_matrix(
     return design, batches, n_batch, ref_idx
 
 
+def _spread_is_resolvable(variance: np.ndarray, mean: np.ndarray) -> np.ndarray:
+    """Whether a within-batch variance is a scale estimate or just floating-point rounding.
+
+    Testing ``variance == 0`` exactly - which is what sva and every previous version of this code
+    did - is knife-edge. The same 82 replicates gave a within-batch variance of exactly 0.0 here
+    and 7.99e-31 in the C# port, which flipped the feature between "no scale to estimate" and "a
+    scale of 8e-31"; the two engines then produced answers 3% apart. The floor sits far above
+    accumulated rounding (~1e-15 relative) and far below any real measurement (a standardized
+    variance of 1e-6 is values agreeing to a part in a thousand), so nothing genuine is caught.
+
+    Args:
+        variance: Per-feature within-batch variance (ddof=1); NaN allowed.
+        mean: The corresponding per-feature batch mean, used as the magnitude reference.
+
+    Returns:
+        Boolean array, True where the spread is a real estimate.
+
+    """
+    relative_floor = 1e-12
+    scale = np.maximum(np.abs(mean), 1.0)
+    with np.errstate(invalid="ignore"):
+        resolvable: np.ndarray = np.isfinite(variance) & (
+            np.sqrt(np.abs(variance)) > relative_floor * scale
+        )
+    return resolvable
+
+
+def _beta_na(y: np.ndarray, design: np.ndarray) -> np.ndarray:
+    """Least-squares fit using only the samples where ``y`` was observed.
+
+    Ports sva's ``Beta.NA``. ComBat must not let a missing value escape its own feature: the
+    priors are means taken ACROSS features, so a NaN reaching them turns the whole batch's
+    output into NaN. Fitting on the observed rows keeps it local.
+
+    Args:
+        y: One feature's values across samples; may contain NaN.
+        design: Design matrix (samples x coefficients).
+
+    Returns:
+        Coefficient vector.
+
+    """
+    mask = ~np.isnan(y)
+    X = design[mask]
+    return np.linalg.solve(X.T @ X, X.T @ y[mask])
+
+
+def _fit_coefficients(data: np.ndarray, design: np.ndarray) -> np.ndarray:
+    """Solve the design for every feature, ignoring missing values.
+
+    With no missing values this is the single matrix solve (identical results, much faster);
+    with missing values it drops to sva's per-feature ``Beta.NA``.
+    """
+    if not np.isnan(data).any():
+        coefficients: np.ndarray = np.linalg.solve(design.T @ design, design.T @ data.T)
+        return coefficients
+    return np.column_stack([_beta_na(data[g, :], design) for g in range(data.shape[0])])
+
+
 def _calculate_mean_var(
     data: np.ndarray,
     design: np.ndarray,
@@ -188,11 +248,8 @@ def _calculate_mean_var(
     n_features, n_samples = data.shape
     n_batches = [len(b) for b in batches]
 
-    # Solve for B_hat: (X'X)^-1 X'Y
-    # B_hat = solve(design.T @ design, design.T @ data.T)
-    XtX = design.T @ design
-    XtY = design.T @ data.T
-    B_hat = np.linalg.solve(XtX, XtY)
+    # Solve for B_hat: (X'X)^-1 X'Y, per feature where values are missing (sva's Beta.NA).
+    B_hat = _fit_coefficients(data, design)
 
     # Calculate grand mean
     if ref_idx is not None:
@@ -208,15 +265,29 @@ def _calculate_mean_var(
     predicted = design @ B_hat
     residuals = data.T - predicted
 
-    if ref_idx is not None:
-        # Use only reference batch for variance estimation
-        ref_residuals = residuals[batches[ref_idx], :]
-        var_pooled = np.var(ref_residuals, axis=0, ddof=1)
-    else:
-        var_pooled = np.var(residuals, axis=0, ddof=1)
+    # nanvar so a missing value does not spread, with ddof=0 to match what sva::ComBat computes on
+    # a DENSE input - the normal case for PRISM, since Skyline integrates imputed peak boundaries
+    # for every replicate (see "Data Density" in CLAUDE.md).
+    #
+    # sva itself switches here: sum(residual^2)/n when the input is dense, rowVars(na.rm=TRUE)
+    # (ddof=1) when it is not. PRISM deliberately does NOT switch, so it matches sva on dense input
+    # and differs by ~0.3% on input with missing values. Following sva's switch would mean one
+    # peptide missing from one document shifts every corrected value in the cohort by ~0.3%.
+    # Keep in lockstep with ComBat.VarPooledDdof in the C# port.
+    var_pooled_ddof = 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN / <2 observations -> NaN
+        if ref_idx is not None:
+            # Use only reference batch for variance estimation
+            ref_residuals = residuals[batches[ref_idx], :]
+            var_pooled = np.nanvar(ref_residuals, axis=0, ddof=var_pooled_ddof)
+        else:
+            var_pooled = np.nanvar(residuals, axis=0, ddof=var_pooled_ddof)
 
     # Handle zero variance
-    var_pooled[var_pooled == 0] = np.median(var_pooled[var_pooled > 0])
+    positive = var_pooled[var_pooled > 0]
+    if positive.size > 0:
+        var_pooled[~(var_pooled > 0)] = np.median(positive)
 
     return B_hat, grand_mean, var_pooled
 
@@ -266,7 +337,7 @@ def _fit_batch_effects(
     batches: list[np.ndarray],
     n_batch: int,
     mean_only: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Estimate batch effect parameters (gamma_hat and delta_hat).
 
     Args:
@@ -286,29 +357,37 @@ def _fit_batch_effects(
     # Get batch portion of design matrix
     batch_design = design[:, :n_batch]
 
-    # Solve for gamma_hat (additive effects)
-    XtX = batch_design.T @ batch_design
-    XtY = batch_design.T @ s_data.T
-    gamma_hat = np.linalg.solve(XtX, XtY)  # n_batch x n_features
+    # Solve for gamma_hat (additive effects), ignoring missing values
+    gamma_hat = _fit_coefficients(s_data, batch_design)  # n_batch x n_features
 
-    # Estimate delta_hat (variance/scale effects)
-    if mean_only:
-        delta_hat = np.ones((n_batch, n_features))
-    else:
-        delta_hat = np.zeros((n_batch, n_features))
+    # Per-(batch, feature) observation count: sva's per-row `n <- rowSums(!is.na(sdat))`.
+    counts = np.zeros((n_batch, n_features), dtype=int)
+    for i, batch_idx in enumerate(batches):
+        counts[i, :] = np.sum(~np.isnan(s_data[:, batch_idx]), axis=1)
+
+    # Estimate delta_hat (variance/scale effects), and record which ones the data supports.
+    # Fewer than 2 observations, or no spread among them, means there is no scale to estimate:
+    # 1.0 is a placeholder meaning "do not rescale", NOT an estimate, so it is flagged and kept
+    # out of the prior - feeding it in would bias the shrinkage of every feature in the batch.
+    delta_hat = np.ones((n_batch, n_features))
+    estimable = np.zeros((n_batch, n_features), dtype=bool)
+    if not mean_only:
         for i, batch_idx in enumerate(batches):
-            batch_data = s_data[:, batch_idx]
-            delta_hat[i, :] = np.var(batch_data, axis=1, ddof=1)
-        # Handle zero variance
-        delta_hat[delta_hat == 0] = 1.0
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                v = np.nanvar(s_data[:, batch_idx], axis=1, ddof=1)
+            ok = (counts[i, :] >= 2) & _spread_is_resolvable(v, gamma_hat[i, :])
+            delta_hat[i, ok] = v[ok]
+            estimable[i, :] = ok
 
-    return gamma_hat, delta_hat
+    return gamma_hat, delta_hat, counts, estimable
 
 
 def _compute_priors(
     gamma_hat: np.ndarray,
     delta_hat: np.ndarray,
     mean_only: bool = False,
+    estimable: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute empirical Bayes priors for batch effect parameters.
 
@@ -318,6 +397,8 @@ def _compute_priors(
         gamma_hat: Additive batch effects (n_batch x n_features)
         delta_hat: Multiplicative batch effects (n_batch x n_features)
         mean_only: If True, skip variance prior estimation
+        estimable: Boolean mask of the (batch, feature) scales the data supports; the rest hold a
+            placeholder 1.0 and are excluded from the prior. None means treat all as estimable.
 
     Returns:
         gamma_bar: Prior mean for gamma (n_batch,)
@@ -341,10 +422,10 @@ def _compute_priors(
         b_prior = np.zeros(n_batch)
 
         for i in range(n_batch):
-            # Method of moments for inverse gamma
-            delta_i = delta_hat[i, :]
-            m = np.mean(delta_i)
-            v = np.var(delta_i, ddof=1)
+            # Method of moments for inverse gamma, over the deltas the data actually supports.
+            delta_i = delta_hat[i, estimable[i, :]] if estimable is not None else delta_hat[i, :]
+            m = np.mean(delta_i) if delta_i.size > 0 else np.nan
+            v = np.var(delta_i, ddof=1) if delta_i.size > 1 else np.nan
 
             if v > 0 and m > 0:
                 # a = (m^2 / v) + 2
@@ -361,7 +442,7 @@ def _compute_priors(
 def _postmean(
     g_hat: np.ndarray,
     g_bar: float,
-    n: int,
+    n: int | np.ndarray,
     d_star: np.ndarray,
     t2: float,
 ) -> np.ndarray:
@@ -383,7 +464,7 @@ def _postmean(
 
 def _postvar(
     sum_sq: np.ndarray,
-    n: int,
+    n: int | np.ndarray,
     a: float,
     b: float,
 ) -> np.ndarray:
@@ -412,6 +493,8 @@ def _it_sol(
     b: float,
     conv: float = 0.0001,
     max_iter: int = 100,
+    counts: np.ndarray | None = None,
+    estimable: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Iterative solution for parametric empirical Bayes.
 
@@ -433,7 +516,9 @@ def _it_sol(
         delta_star: EB-adjusted delta
 
     """
-    n = s_data_batch.shape[1]
+    # Per-FEATURE observation count, as sva's `n <- rowSums(!is.na(sdat))`. With nothing missing
+    # this is the batch size for every feature, i.e. the scalar this used to be.
+    n = counts if counts is not None else np.full(s_data_batch.shape[0], s_data_batch.shape[1])
     g_old = g_hat.copy()
     d_old = d_hat.copy()
 
@@ -442,10 +527,13 @@ def _it_sol(
         g_new = _postmean(g_hat, g_bar, n, d_old, t2)
 
         # Update delta
-        # Sum of squared residuals after removing gamma effect
+        # Sum of squared residuals after removing gamma effect (missing values skipped)
         residuals = s_data_batch - g_new.reshape(-1, 1)
-        sum_sq = np.sum(residuals**2, axis=1)
+        sum_sq = np.nansum(residuals**2, axis=1)
         d_new = _postvar(sum_sq, n, a, b)
+        if estimable is not None:
+            # No spread to estimate from -> leave this (batch, feature) unscaled.
+            d_new = np.where(estimable, d_new, 1.0)
 
         # Check convergence
         g_change = np.max(np.abs(g_new - g_old) / (np.abs(g_old) + 1e-10))
@@ -630,19 +718,30 @@ def combat(
     n_features, n_samples = data_array.shape
     logger.info(f"ComBat: Processing {n_features} features and {n_samples} samples")
 
-    # Handle genes with zero variance
-    row_vars = np.var(data_array, axis=1)
-    zero_var_mask = row_vars == 0
-    if np.any(zero_var_mask):
-        n_zero = np.sum(zero_var_mask)
-        logger.warning(f"Found {n_zero} features with zero variance; these will not be adjusted.")
-        # Keep original data for zero-variance features
-        data_orig_zero = data_array[zero_var_mask, :].copy()
-        data_array = data_array[~zero_var_mask, :]
-
     # Build design matrix
     design, batches, n_batch, ref_idx = _make_design_matrix(batch, covar_mod, ref_batch)
     logger.info(f"Found {n_batch} batches")
+
+    # Hold out features ComBat cannot estimate anything for: no variance at all, or no
+    # observation in some batch (that batch's effect on them is then undefined). They are
+    # returned untouched, as sva returns its zero-variance rows.
+    observed = ~np.isnan(data_array)
+    in_every_batch = np.all(
+        np.stack([observed[:, bi].any(axis=1) for bi in batches], axis=0), axis=0
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows
+        row_vars = np.nanvar(data_array, axis=1)
+    zero_var_mask = ~(in_every_batch & np.isfinite(row_vars) & (row_vars != 0))
+    if np.any(zero_var_mask):
+        n_zero = int(np.sum(zero_var_mask))
+        logger.warning(
+            f"ComBat: {n_zero} feature(s) held out (no variance, or absent from a batch); "
+            "passed through uncorrected."
+        )
+        # Keep original data for held-out features
+        data_orig_zero = data_array[zero_var_mask, :].copy()
+        data_array = data_array[~zero_var_mask, :]
 
     n_batches = [len(b) for b in batches]
 
@@ -663,10 +762,19 @@ def combat(
 
     # Fit batch effects
     logger.info("Fitting L/S model and finding priors")
-    gamma_hat, delta_hat = _fit_batch_effects(s_data, design, batches, n_batch, mean_only)
+    gamma_hat, delta_hat, counts, estimable = _fit_batch_effects(
+        s_data, design, batches, n_batch, mean_only
+    )
+    if not mean_only:
+        n_unestimable = int(np.sum(~estimable))
+        if n_unestimable > 0:
+            logger.info(
+                f"ComBat: {n_unestimable} (batch, feature) scale(s) not estimable "
+                "(< 2 observations, or no spread); location corrected only."
+            )
 
     # Compute priors
-    gamma_bar, t2, a_prior, b_prior = _compute_priors(gamma_hat, delta_hat, mean_only)
+    gamma_bar, t2, a_prior, b_prior = _compute_priors(gamma_hat, delta_hat, mean_only, estimable)
 
     # EB estimation
     gamma_star = np.zeros_like(gamma_hat)
@@ -692,6 +800,8 @@ def combat(
                     t2[i],
                     a_prior[i],
                     b_prior[i],
+                    counts=counts[i, :],
+                    estimable=estimable[i, :],
                 )
     else:
         logger.info("Finding non-parametric adjustments")
@@ -807,9 +917,7 @@ def combat_reference_anchored(
         raise ValueError("Data must be a 2D matrix (features x samples)")
     n_features, n_samples = data_array.shape
     if len(batch) != n_samples:
-        raise ValueError(
-            f"Batch length ({len(batch)}) must match number of samples ({n_samples})"
-        )
+        raise ValueError(f"Batch length ({len(batch)}) must match number of samples ({n_samples})")
     if len(reference_mask) != n_samples:
         raise ValueError(
             f"reference_mask length ({len(reference_mask)}) must match "
@@ -864,15 +972,11 @@ def combat_reference_anchored(
 
     # Per-batch sample / reference index lists
     batch_indices = [np.where(batch == b)[0] for b in unique_batches]
-    batch_ref_indices = [
-        np.where((batch == b) & reference_mask)[0] for b in unique_batches
-    ]
+    batch_ref_indices = [np.where((batch == b) & reference_mask)[0] for b in unique_batches]
     n_ref_per_batch = np.array([len(r) for r in batch_ref_indices], dtype=int)
 
     if np.any(n_ref_per_batch == 0):
-        missing = [
-            unique_batches[i] for i in range(n_batch) if n_ref_per_batch[i] == 0
-        ]
+        missing = [unique_batches[i] for i in range(n_batch) if n_ref_per_batch[i] == 0]
         if no_reference_batch == "error":
             raise ValueError(
                 f"Batches {missing} have no reference samples; cannot reference-anchor. "

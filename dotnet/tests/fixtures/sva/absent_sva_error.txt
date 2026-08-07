@@ -1,0 +1,1 @@
+Lapack routine dgesv: system is exactly singular: U[3,3] = 0

@@ -37,6 +37,24 @@ public sealed class ProteinRollup
     private static readonly string[] MetaCols =
         { "n_transitions", "mean_rt" };
 
+    /// <summary>
+    /// The metadata columns of the protein matrices (<c>proteins_raw</c> and, carried through Stage
+    /// 4b/4c, <c>corrected_proteins</c>), in output order.
+    /// <para>
+    /// This is the single source of truth on purpose. Every reader of those files identifies
+    /// replicates as "every column that is not one of these", so a name missing from the list is
+    /// silently treated as a replicate and its text parsed as an abundance - which is exactly how
+    /// the Dynamic Range tab came to throw on <c>leading_description</c> and render blank. Add a
+    /// column to the writer below and it appears here automatically; anything else that enumerates
+    /// these columns must reference this array rather than repeat it.
+    /// </para>
+    /// </summary>
+    public static readonly string[] MetadataColumns =
+    {
+        "protein_group", "leading_protein", "leading_name", "leading_uniprot_id", "leading_gene_name",
+        "leading_description", "n_peptides", "n_unique_peptides", "low_confidence",
+    };
+
     public sealed record Result(int NProteins, int NSkipped, IReadOnlyList<string> Samples);
 
     public static Result Run(
@@ -160,15 +178,15 @@ public sealed class ProteinRollup
 
         var metaColumns = new List<ParquetWideWriter.MetaColumn>
         {
-            ParquetWideWriter.Strings("protein_group", groupId),
-            ParquetWideWriter.Strings("leading_protein", leadingProtein),
-            ParquetWideWriter.Strings("leading_name", leadingName),
-            ParquetWideWriter.Strings("leading_uniprot_id", leadingUniprot),
-            ParquetWideWriter.Strings("leading_gene_name", leadingGene),
-            ParquetWideWriter.Strings("leading_description", leadingDesc),
-            ParquetWideWriter.Longs("n_peptides", nPeptides),
-            ParquetWideWriter.Longs("n_unique_peptides", nUnique),
-            ParquetWideWriter.Bools("low_confidence", lowConf),
+            ParquetWideWriter.Strings(MetadataColumns[0], groupId),
+            ParquetWideWriter.Strings(MetadataColumns[1], leadingProtein),
+            ParquetWideWriter.Strings(MetadataColumns[2], leadingName),
+            ParquetWideWriter.Strings(MetadataColumns[3], leadingUniprot),
+            ParquetWideWriter.Strings(MetadataColumns[4], leadingGene),
+            ParquetWideWriter.Strings(MetadataColumns[5], leadingDesc),
+            ParquetWideWriter.Longs(MetadataColumns[6], nPeptides),
+            ParquetWideWriter.Longs(MetadataColumns[7], nUnique),
+            ParquetWideWriter.Bools(MetadataColumns[8], lowConf),
         };
         ParquetWideWriter.Write(outputPath, metaColumns, samples, sampleColumns, n);
     }

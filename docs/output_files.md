@@ -49,7 +49,21 @@ These are the main files you will use for downstream analysis.
 | `Peptide Modified Sequence Unimod Ids` | string | Peptide sequence with modifications in Unimod format, e.g., `PEPTIDEC(unimod:4)K` |
 | `n_transitions` | int64 | Number of transitions used in rollup |
 | `mean_rt` | double | Mean retention time (minutes) |
+| `protein_group` | string | Protein group(s) this peptide maps to — the join key to `corrected_proteins.parquet` (C# engine only) |
+| `leading_protein` | string | Leading accession(s) of those groups (C# engine only) |
+| `leading_name` | string | Leading protein name(s) of those groups (C# engine only) |
+| `leading_gene_name` | string | Leading gene name(s) of those groups (C# engine only) |
 | `<sample_id>` | double | One column per sample containing peptide abundance (LINEAR scale) |
+
+> [!NOTE]
+> **Shared peptides list every group they map to**, `;`-separated and index-aligned across the four
+> grouping columns — e.g. `protein_group = "PG0002;PG0007"` with
+> `leading_name = "sp|P68871|HBB_HUMAN;sp|Q9Y6K9|NEMO_HUMAN"`. Which group *quantifies* a shared peptide
+> is a separate decision (`parsimony.shared_peptide_handling`); these columns record membership, not
+> assignment, so a consumer must split on `;` rather than assuming one group per row. Written by the C#
+> engine only; the Python engine's `corrected_peptides` has no grouping columns. The intermediate
+> `peptides_log2_internal.parquet` deliberately does **not** carry them — its readers treat every
+> undeclared column as a sample.
 
 **Sample column naming**: Sample columns follow the format `<replicate_name>__@__<source_document>` to ensure uniqueness when the same replicate appears in multiple batches.
 

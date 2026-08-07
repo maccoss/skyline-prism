@@ -167,6 +167,19 @@ public sealed class SkylineSession : ISkylineExecutor
                    ?? Array.Empty<string>();
         }
 
+        public void SetSelectedElement(string elementLocator) => _c.SetSelectedElement(elementLocator, null);
+
+        public IReadOnlyList<(string Name, string Locator)> GetLocations(string level)
+        {
+            var entries = _c.GetLocations(level, null);
+            if (entries is null)
+                return Array.Empty<(string, string)>();
+            return entries
+                .Where(e => !string.IsNullOrWhiteSpace(e?.Locator))
+                .Select(e => (e.Name ?? string.Empty, e.Locator))
+                .ToList();
+        }
+
         public ReportRows? GetReplicateReport(IReadOnlyList<string> selectColumns)
         {
             var def = new ReportDefinition

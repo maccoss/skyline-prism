@@ -30,6 +30,22 @@ public sealed class ParquetTable
 
     public bool HasColumn(string name) => _columns.ContainsKey(name);
 
+    /// <summary>
+    /// Drop columns that are no longer needed so their arrays can be collected, without releasing the
+    /// whole table. The wide matrices are the memory wall of the pipeline: a corrected-peptide stage on a
+    /// large cohort holds the loaded sample columns AND the working matrices at the same time, and the
+    /// loaded columns are the bigger of the two (parquet nullable columns arrive as double?[], 16 bytes
+    /// per cell against the matrix's 8). Once the values have been copied into the working matrix nothing
+    /// reads them again.
+    /// <para><see cref="ColumnNames"/> is left untouched, so it still describes the file that was read.
+    /// Reading a released column throws <see cref="KeyNotFoundException"/>, same as an absent one.</para>
+    /// </summary>
+    public void ReleaseColumns(IEnumerable<string> names)
+    {
+        foreach (var name in names)
+            _columns.Remove(name);
+    }
+
     public static ParquetTable Load(string path)
         => LoadAsync(path).GetAwaiter().GetResult();
 
@@ -103,30 +119,47 @@ public sealed class ParquetTable
         var arr = Column(name);
         var result = new double?[arr.Length];
         for (var i = 0; i < arr.Length; i++)
-        {
-            var v = arr.GetValue(i);
-            result[i] = v switch
-            {
-                null => (double?)null,
-                double d => d,
-                float f => f,
-                long l => l,
-                int n => n,
-                short s => s,
-                decimal m => (double)m,
-                _ => Convert.ToDouble(v),
-            };
-        }
+            result[i] = CoerceDouble(arr.GetValue(i));
         return result;
     }
+
+    /// <summary>
+    /// The scalar coercions the Get* accessors apply, exposed so a streaming reader that never
+    /// materializes a <see cref="ParquetTable"/> converts metadata cells identically - a meta column
+    /// that differs between the two paths shows up as a corrupt output file, not a rounding error.
+    /// </summary>
+    internal static double? CoerceDouble(object? v) => v switch
+    {
+        null => (double?)null,
+        double d => d,
+        float f => f,
+        long l => l,
+        int n => n,
+        short s => s,
+        decimal m => (double)m,
+        _ => Convert.ToDouble(v),
+    };
+
+    internal static long CoerceLong(object? v)
+    {
+        var d = CoerceDouble(v);
+        return d.HasValue ? (long)d.Value : 0L;
+    }
+
+    internal static bool CoerceBool(object? v) => v switch
+    {
+        null => false,
+        bool b => b,
+        _ => Convert.ToBoolean(v),
+    };
 
     /// <summary>Column coerced to long[] (nulls -&gt; 0), from any integer/float source.</summary>
     public long[] GetLong(string name)
     {
-        var d = GetDouble(name);
-        var result = new long[d.Length];
-        for (var i = 0; i < d.Length; i++)
-            result[i] = d[i].HasValue ? (long)d[i]!.Value : 0L;
+        var arr = Column(name);
+        var result = new long[arr.Length];
+        for (var i = 0; i < arr.Length; i++)
+            result[i] = CoerceLong(arr.GetValue(i));
         return result;
     }
 
@@ -136,15 +169,7 @@ public sealed class ParquetTable
         var arr = Column(name);
         var result = new bool[arr.Length];
         for (var i = 0; i < arr.Length; i++)
-        {
-            var v = arr.GetValue(i);
-            result[i] = v switch
-            {
-                null => false,
-                bool b => b,
-                _ => Convert.ToBoolean(v),
-            };
-        }
+            result[i] = CoerceBool(arr.GetValue(i));
         return result;
     }
 
