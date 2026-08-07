@@ -6,6 +6,18 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **Reference-anchored ComBat is now a tick box in the Skyline tool**: *"Anchor ComBat on the Standard
+  samples"* on the Settings tab. It estimates each batch's effect from the replicates whose Skyline
+  Sample Type is **Standard** - identical material run in every batch - instead of from the
+  across-batch average. Differences in that material are purely technical, so no biology is removed
+  and the batches need not contain comparable samples, which is the better choice when plates differ
+  in what they hold (different case/control ratios, say). Nothing to configure beyond marking those
+  injections `Standard` in Skyline.
+
+  A batch with no Standard replicates is corrected on its own average, location only, and says so in
+  the log; a batch with exactly one gets a location correction but no rescaling, since one reference
+  is a level, not a spread.
+
 - **`processing.merge_memory_mb`** caps DuckDB's buffer pool during the Stage 1 merge. `0` (the
   default) sizes it from the machine. Work beyond the cap spills to the sort scratch directory, so a
   smaller value is slower, never wrong.
@@ -40,6 +52,11 @@ as the GitHub Release description and fails if it is missing.
   was no reason to open. The per-list tick now turns labels on by itself; the plot's right-click menu
   keeps "Label all protein lists" and "No labels" as bulk switches over the same setting.
 
+- **Six Python tests failed on Windows** (`test_chunked_processing.py`). The peptide rollup left its
+  parquet reader open across the delete of the file it was reading, which POSIX allows and Windows
+  does not - so the temp file could not be removed, the delete raised, and the caller's temporary
+  directory could not be cleaned up either.
+
 - **ComBat's reference-anchored path now uses the same estimator as the standard path**, so the fixes
   released in 26.9.0 apply to it as well. It previously had its own implementation, which invented a
   placeholder scale of `1.0` where the data supported none and fed that into the empirical-Bayes prior
@@ -56,6 +73,19 @@ as the GitHub Release description and fails if it is missing.
   this method, so the two engines could have drifted apart on it indefinitely.
 
 ## Performance
+
+- **Reference-anchored ComBat no longer forces Stage 2b/2c back into memory.** It was the last
+  configuration that fell back to the in-memory implementation - the pipeline's memory wall - so a
+  large cohort could not use it. It streams now, bounded by the input's row-group size rather than by
+  the number of samples (measured elsewhere at 102 MB against 798 MB on a 20,000-peptide x
+  600-sample cohort). Only `quantile` normalization and a CSV/TSV `output.format` still fall back,
+  and the log says which implementation ran.
+
+  Results are unchanged: the same-process regression suite compares the streaming and in-memory
+  implementations cell by cell at 1e-12, and its reference-anchored cases previously asserted that
+  streaming was *ineligible* - so they were comparing the in-memory path with itself. They now
+  compare the two implementations for real, across every normalization method, auto-revert on and
+  off, dropped all-NaN rows and multi-row-group inputs.
 
 - **The Stage 1 merge now budgets memory from FREE memory rather than total RAM.** DuckDB runs
   in-process and its buffer pool is native memory the .NET GC cannot see, so a limit written against
