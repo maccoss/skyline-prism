@@ -1311,7 +1311,8 @@ class PRISMResultWidget(QWidget):
                 # 1. If we are explicitly coloring by "sample_type", use standard palette
                 # 2. If coloring by other metadata (e.g. "Batch"):
                 #    - If value exists: Color by that value
-                #    - If value missing (e.g. Treatment not defined for QC): Fallback to sample_type color
+                #    - If value missing (e.g. Treatment not defined for QC): fall back to
+                #      the sample_type color
 
                 label = val
                 color = "#7f7f7f"  # default gray
@@ -1552,6 +1553,7 @@ class PRISMViewer(QMainWindow):
     """Main viewer window wrapper for PRISM analysis results (standalone)."""
 
     def __init__(self, output_dir: Path | str, parent: QWidget | None = None) -> None:
+        """Open the viewer on an existing PRISM output directory."""
         super().__init__(parent)
         self.setWindowTitle("PRISM Viewer")
         self.setMinimumSize(1200, 800)

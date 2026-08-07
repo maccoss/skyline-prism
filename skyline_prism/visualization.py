@@ -1045,7 +1045,8 @@ def plot_comparative_cv(
 
         fig.suptitle(
             f"CV Distribution Comparison - {control_type.capitalize()} Samples\n"
-            f"Median CV: {median_before:.1f}% → {median_after:.1f}% ({improvement:.1f}% improvement)",
+            f"Median CV: {median_before:.1f}% → {median_after:.1f}% "
+            f"({improvement:.1f}% improvement)",
             fontsize=14,
             fontweight="bold",
         )
@@ -1493,10 +1494,12 @@ def plot_rt_correction_comparison(
     # Log summary
     logger.info("RT Correction QC Summary:")
     logger.info(
-        f"  Reference MAD: {ref_mad_before:.3f} -> {ref_mad_after:.3f} ({ref_mad_improvement:+.1f}%)"
+        f"  Reference MAD: {ref_mad_before:.3f} -> {ref_mad_after:.3f} "
+        f"({ref_mad_improvement:+.1f}%)"
     )
     logger.info(
-        f"  Reference RT bias: {ref_bias_before:.3f} -> {ref_bias_after:.3f} ({ref_bias_improvement:+.1f}%)"
+        f"  Reference RT bias: {ref_bias_before:.3f} -> {ref_bias_after:.3f} "
+        f"({ref_bias_improvement:+.1f}%)"
     )
     logger.info(f"  QC MAD: {qc_mad_before:.3f} -> {qc_mad_after:.3f} ({qc_mad_improvement:+.1f}%)")
     logger.info(

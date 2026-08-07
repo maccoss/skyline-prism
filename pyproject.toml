@@ -80,8 +80,25 @@ target-version = ["py39", "py310", "py311", "py312"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "D", "UP"]
-ignore = ["D100", "D104"]
+ignore = [
+    "D100",  # module docstring not required
+    "D104",  # package docstring not required
+    # Docstring style: pydocstyle ships mutually exclusive pairs and ruff warns on every run until
+    # one of each is silenced. These pick the convention the codebase already uses.
+    "D203",  # no blank line before a class docstring (conflicts with D211, which we keep)
+    "D213",  # summary on the first line, not the second (conflicts with D212, which we keep)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves through their names and assertions; requiring a docstring on every
+# helper and fixture adds noise without adding information.
+"tests/*" = ["D101", "D102", "D103", "D105", "D107"]
+# Holds verbatim UniProt FASTA records. A header line cannot be wrapped and remain valid FASTA,
+# and shortening it would stop it testing what real headers look like.
+"tests/test_fasta.py" = ["D101", "D102", "D103", "D105", "D107", "E501"]
 
 [tool.mypy]
 python_version = "3.10"

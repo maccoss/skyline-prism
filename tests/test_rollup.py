@@ -140,10 +140,11 @@ class TestTukeyMedianPolish:
         assert abs(diff - 1.0) < 0.1
 
     def test_tukey_normalization_at_convergence(self):
-        """At convergence, median(row_effects) and median(col_effects - overall)
-        must both be zero. This is the Tukey-1977 normalization that makes the
-        (overall, row_effects, col_effects) decomposition unique, and is what
-        R's stats::medpolish enforces.
+        """Leave both effect vectors median-centered at convergence.
+
+        median(row_effects) and median(col_effects - overall) must both be zero. This is
+        the Tukey-1977 normalization that makes the (overall, row_effects, col_effects)
+        decomposition unique, and is what R's stats::medpolish enforces.
 
         Without this property, the partition between overall, row_effects, and
         col_effects is ambiguous (any constant can shift between them), and
@@ -174,10 +175,11 @@ class TestTukeyMedianPolish:
         assert abs(np.nanmedian(centered_col)) < 1e-9
 
     def test_matches_r_medpolish_reference(self):
-        """Compares against the canonical R stats::medpolish output for a
-        known matrix. With both row_effects and col_effects re-centered to
-        median 0 each iteration (Tukey 1977 normalization), tukey_median_polish
-        produces the same overall and per-sample col_effects as R.
+        """Match the canonical R stats::medpolish output for a known matrix.
+
+        With both row_effects and col_effects re-centered to median 0 each iteration
+        (Tukey 1977 normalization), tukey_median_polish produces the same overall and
+        per-sample col_effects as R.
 
         > x <- matrix(c(15.77,16.84,17.16,
         >              13.46,14.92,15.36,
@@ -211,11 +213,11 @@ class TestTukeyMedianPolish:
         assert abs(result.overall - 16.054) < 0.02
 
     def test_within_protein_fold_changes_match_r(self):
-        """Sample-vs-sample log2 fold changes within one protein are invariant
-        to the decomposition partition (Tukey's normalization fixes that
-        partition, but fold changes between two columns of col_effects depend
-        only on the SUM overall + col_effects, which is what every PRISM
-        downstream consumer uses).
+        """Keep sample-vs-sample fold changes invariant to the decomposition partition.
+
+        Tukey's normalization fixes that partition, but fold changes between two columns
+        of col_effects depend only on the SUM overall + col_effects, which is what every
+        PRISM downstream consumer uses.
 
         This test is the practical invariant for proteomics: differential
         expression analyses depend only on between-sample comparisons within
@@ -243,9 +245,10 @@ class TestTukeyMedianPolish:
         np.testing.assert_allclose(ce[2] - ce[1], 0.361, atol=0.02)
 
     def test_decomposition_reconstructs_input_at_convergence(self):
-        """After convergence, the additive model must reconstruct the input:
-        X[i,j] == row_effects[i] + col_effects[j] + residuals[i,j],
-        where col_effects already includes overall (PRISM stores it that way).
+        """Reconstruct the input exactly from the converged decomposition.
+
+        X[i,j] == row_effects[i] + col_effects[j] + residuals[i,j], where col_effects
+        already includes overall (PRISM stores it that way).
 
         This is a structural correctness check: the decomposition should
         always be a valid additive model regardless of the recentering choice,
@@ -269,10 +272,10 @@ class TestTukeyMedianPolish:
         np.testing.assert_allclose(data.values, recon, atol=1e-9)
 
     def test_handles_nan_values_in_matrix(self):
-        """Real proteomics matrices have missing observations (NaN). The
-        recentering pass uses np.nanmedian which must produce a valid
-        decomposition even when some entries are NaN, and the reconstruction
-        should still be exact at the non-NaN positions.
+        """Produce a valid decomposition when some observations are missing.
+
+        Real proteomics matrices contain NaN. The recentering pass uses np.nanmedian,
+        and the reconstruction should still be exact at the non-NaN positions.
         """
         data = pd.DataFrame(
             {

@@ -975,7 +975,7 @@ def rollup_transitions_sorted(
     n_filtered = 0
     last_logged_count = 0
 
-    FLUSH_THRESHOLD = 2000  # peptides per flush
+    FLUSH_THRESHOLD = 2000  # noqa: N806 - a constant; upper case by convention
 
     # Pre-define output schemas so the parquet writers stay consistent across
     # flushes even when individual peptides are missing samples.

@@ -240,7 +240,8 @@ def validate_correction(
         )
     if rvr < 0.5:
         warnings.append(
-            f"QC improved much less than reference (RVR={rvr:.2f}) - normalization may not generalize"
+            f"QC improved much less than reference (RVR={rvr:.2f}) - "
+            "normalization may not generalize"
         )
 
     # Calculate PCA distances
@@ -515,6 +516,34 @@ def generate_qc_report(
         """
 
     # Generate the HTML report
+    # Hoisted out of the template below: before Python 3.12 an f-string replacement cannot span
+    # lines, so a long conditional inside {...} has nowhere to wrap to.
+    ref_cv_class = (
+        "improvement-positive" if metrics.reference_cv_improvement > 0 else "improvement-negative"
+    )
+    qc_cv_class = (
+        "improvement-positive" if metrics.qc_cv_improvement > 0 else "improvement-negative"
+    )
+    pca_verdict = (
+        "Good - samples remain distinct"
+        if metrics.pca_distance_ratio > 0.5
+        else "WARNING - Samples may be collapsing"
+    )
+    warnings_html = (
+        "".join(f'<div class="warning">⚠️ {w}</div>' for w in metrics.warnings)
+        if metrics.warnings
+        else '<p style="color: #28a745;">✓ No warnings</p>'
+    )
+    no_plots_html = (
+        '<p style="color: #888;">No plots generated '
+        "(data not provided or matplotlib unavailable)</p>"
+    )
+    steps_html = (
+        "".join(f"<li>{step}</li>" for step in normalization_log)
+        if normalization_log
+        else "<li>No processing steps recorded</li>"
+    )
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -541,7 +570,8 @@ def generate_qc_report(
         th {{ background: #f0f0f0; font-weight: 600; }}
         tr:nth-child(even) {{ background: #f9f9f9; }}
         .plot-section {{ margin: 20px 0; text-align: center; }}
-        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
+        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd;
+                            border-radius: 4px; }}
         .timestamp {{ color: #888; font-size: 0.9em; margin-top: 30px; padding-top: 20px;
                      border-top: 1px solid #ddd; }}
         ol {{ line-height: 1.8; }}
@@ -571,7 +601,7 @@ def generate_qc_report(
                 <td><strong>Reference</strong> (calibration)</td>
                 <td>{metrics.reference_cv_before:.3f}</td>
                 <td>{metrics.reference_cv_after:.3f}</td>
-                <td class="{"improvement-positive" if metrics.reference_cv_improvement > 0 else "improvement-negative"}">
+                <td class="{ref_cv_class}">
                     {metrics.reference_cv_improvement * 100:+.1f}%
                 </td>
             </tr>
@@ -579,7 +609,7 @@ def generate_qc_report(
                 <td><strong>QC</strong> (validation)</td>
                 <td>{metrics.qc_cv_before:.3f}</td>
                 <td>{metrics.qc_cv_after:.3f}</td>
-                <td class="{"improvement-positive" if metrics.qc_cv_improvement > 0 else "improvement-negative"}">
+                <td class="{qc_cv_class}">
                     {metrics.qc_cv_improvement * 100:+.1f}%
                 </td>
             </tr>
@@ -588,7 +618,8 @@ def generate_qc_report(
         <div class="metric">
             <span class="metric-name">Relative Variance Reduction (RVR):</span>
             <span class="metric-value">{metrics.relative_variance_reduction:.2f}</span>
-            <br><small style="color: #666;">Target: ~1.0 | &gt;&gt;1 suggests overfitting | &lt;&lt;1 suggests poor generalization</small>
+            <br><small style="color: #666;">Target: ~1.0 | &gt;&gt;1 suggests overfitting
+            | &lt;&lt;1 suggests poor generalization</small>
         </div>
 
         <h2>PCA Metrics</h2>
@@ -611,19 +642,19 @@ def generate_qc_report(
             <tr>
                 <td>Distance Ratio</td>
                 <td><strong>{metrics.pca_distance_ratio:.2f}</strong></td>
-                <td>{"Good - samples remain distinct" if metrics.pca_distance_ratio > 0.5 else "WARNING - Samples may be collapsing"}</td>
+                <td>{pca_verdict}</td>
             </tr>
         </table>
 
         <h2>Warnings</h2>
-        {"".join(f'<div class="warning">⚠️ {w}</div>' for w in metrics.warnings) if metrics.warnings else '<p style="color: #28a745;">✓ No warnings</p>'}
+        {warnings_html}
 
         <h2>QC Plots</h2>
-        {plots_html if plots_html else '<p style="color: #888;">No plots generated (data not provided or matplotlib unavailable)</p>'}
+        {plots_html if plots_html else no_plots_html}
 
         <h2>Processing Steps</h2>
         <ol>
-            {"".join(f"<li>{step}</li>" for step in normalization_log) if normalization_log else "<li>No processing steps recorded</li>"}
+            {steps_html}
         </ol>
 
         <div class="timestamp">
@@ -729,6 +760,9 @@ def generate_comprehensive_qc_report(
         rt_lowess_result: Optional RTLowessResult from RT-lowess normalization
         sample_batches: Optional dict mapping sample name to batch for batch coloring
         pipeline_metadata: Optional dict with source files, processing params, etc.
+        batch_source: How batch labels were resolved ("source documents", "metadata", or
+            "acquisition time estimation"), reported so a reader can tell which of the three
+            priorities actually drove the correction.
 
     Returns:
         Dict mapping plot names to file paths (if save_plots=True)
@@ -1393,14 +1427,17 @@ def generate_comprehensive_qc_report(
                 Show samples used for Reference and QC median CV computations
             </summary>
             <div style="margin-top: 8px; padding-left: 16px;">
-                <p style="margin: 6px 0;"><strong>Reference samples (n={len(_ref_samples_list)}):</strong></p>
+                <p style="margin: 6px 0;">
+                <strong>Reference samples (n={len(_ref_samples_list)}):</strong></p>
                 {_samples_html(_ref_samples_list)}
-                <p style="margin: 6px 0;"><strong>QC samples (n={len(_qc_samples_list)}):</strong></p>
+                <p style="margin: 6px 0;">
+                <strong>QC samples (n={len(_qc_samples_list)}):</strong></p>
                 {_samples_html(_qc_samples_list)}
                 <p style="margin: 8px 0 4px 0; color: #555; font-size: 0.9em;">
                     Sample types come from the <code>Sample Type</code> column of the
                     input metadata (Skyline values <code>Standard</code> &rarr; reference,
-                    <code>Quality Control</code> &rarr; QC, <code>Unknown</code> &rarr; experimental).
+                    <code>Quality Control</code> &rarr; QC,
+                    <code>Unknown</code> &rarr; experimental).
                     Configuration <code>sample_annotations.reference_pattern</code> and
                     <code>qc_pattern</code> are used only when no metadata file is provided.
                 </p>
@@ -1449,6 +1486,12 @@ def generate_comprehensive_qc_report(
             else:
                 params_html += f"<li><strong>{section}:</strong> {params}</li>"
 
+        params_block = (
+            "<h4 style='margin-bottom: 5px;'>Processing Parameters:</h4>"
+            "<ul style='margin: 5px 0;'>" + params_html + "</ul>"
+            if params_html
+            else ""
+        )
         metadata_html = f"""
         <div class="summary-box" style="background: #fff8e1; border-color: #ffe082;">
             <h3 style="margin-top: 0; color: #f57c00;">Analysis Information</h3>
@@ -1466,17 +1509,26 @@ def generate_comprehensive_qc_report(
                     <td style="border: none;">{computer_name}</td>
                 </tr>
                 <tr style="border: none;">
-                    <td style="border: none; vertical-align: top;"><strong>Source Files:</strong></td>
+                    <td style="border: none; vertical-align: top;">
+                    <strong>Source Files:</strong></td>
                     <td style="border: none;">{source_files_html}</td>
                 </tr>
             </table>
-            {"<h4 style='margin-bottom: 5px;'>Processing Parameters:</h4><ul style='margin: 5px 0;'>" + params_html + "</ul>" if params_html else ""}
+            {params_block}
         </div>
         """
 
     # =========================================================================
     # Generate the HTML report
     # =========================================================================
+    # Hoisted for the same reason as the first report's block above.
+    n_experimental = len([c for c in sample_cols if sample_types.get(c) == "experimental"])
+    method_steps_html = (
+        "".join(f"<li>{step}</li>" for step in method_log)
+        if method_log
+        else "<li>No processing steps recorded</li>"
+    )
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1494,7 +1546,8 @@ def generate_comprehensive_qc_report(
         th {{ background: #f0f0f0; font-weight: 600; }}
         tr:nth-child(even) {{ background: #f9f9f9; }}
         .plot-section {{ margin: 30px 0; text-align: center; }}
-        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
+        .plot-section img {{ max-width: 100%; height: auto; border: 1px solid #ddd;
+                            border-radius: 4px; }}
         .timestamp {{ color: #888; font-size: 0.9em; margin-top: 30px; padding-top: 20px;
                      border-top: 1px solid #ddd; }}
         ol {{ line-height: 1.8; }}
@@ -1520,7 +1573,7 @@ def generate_comprehensive_qc_report(
                     <td><strong>Total Samples:</strong></td>
                     <td>{len(sample_cols)}</td>
                     <td style="padding-left: 30px;"><strong>Experimental:</strong></td>
-                    <td>{len([c for c in sample_cols if sample_types.get(c) == "experimental"])}</td>
+                    <td>{n_experimental}</td>
                     <td style="padding-left: 30px;"><strong>Reference Samples:</strong></td>
                     <td>{len([c for c in sample_cols if sample_types.get(c) == "reference"])}</td>
                     <td style="padding-left: 30px;"><strong>QC Samples:</strong></td>
@@ -1544,7 +1597,7 @@ def generate_comprehensive_qc_report(
         <div class="summary-box" style="background: #f0fff0; border-color: #90ee90;">
             <h3 style="margin-top: 0; color: #228b22;">Processing Summary</h3>
             <ol style="margin: 10px 0; padding-left: 20px;">
-                {"".join(f"<li>{step}</li>" for step in method_log) if method_log else "<li>No processing steps recorded</li>"}
+                {method_steps_html}
             </ol>
         </div>
 

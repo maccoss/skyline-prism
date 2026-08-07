@@ -207,7 +207,7 @@ def _beta_na(y: np.ndarray, design: np.ndarray) -> np.ndarray:
 
     """
     mask = ~np.isnan(y)
-    X = design[mask]
+    X = design[mask]  # noqa: N806 - sva/ComBat notation: X is the design matrix
     return np.linalg.solve(X.T @ X, X.T @ y[mask])
 
 
@@ -249,7 +249,7 @@ def _calculate_mean_var(
     n_batches = [len(b) for b in batches]
 
     # Solve for B_hat: (X'X)^-1 X'Y, per feature where values are missing (sva's Beta.NA).
-    B_hat = _fit_coefficients(data, design)
+    B_hat = _fit_coefficients(data, design)  # noqa: N806 - sva's B.hat, kept comparable
 
     # Calculate grand mean
     if ref_idx is not None:
@@ -295,7 +295,7 @@ def _calculate_mean_var(
 def _standardize_data(
     data: np.ndarray,
     design: np.ndarray,
-    B_hat: np.ndarray,
+    B_hat: np.ndarray,  # noqa: N803 - sva's B.hat, kept comparable
     grand_mean: np.ndarray,
     var_pooled: np.ndarray,
     n_batch: int,
@@ -496,7 +496,7 @@ def _it_sol(
     counts: np.ndarray | None = None,
     estimable: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Iterative solution for parametric empirical Bayes.
+    """Solve iteratively for the parametric empirical-Bayes estimates.
 
     Iterates between updating gamma and delta estimates until convergence.
 
@@ -510,6 +510,11 @@ def _it_sol(
         b: Prior rate for delta
         conv: Convergence threshold
         max_iter: Maximum iterations
+        counts: Per-(batch, feature) count of OBSERVED values, sva's
+            ``n <- rowSums(!is.na(sdat))``. None means "every feature was seen in every
+            sample of the batch", i.e. the scalar batch size.
+        estimable: Per-feature mask of the scales the data supports. Where False the scale
+            is left at 1.0 (not rescaled) instead of being estimated from too few points.
 
     Returns:
         gamma_star: EB-adjusted gamma
@@ -751,7 +756,7 @@ def combat(
         mean_only = True
 
     # Calculate mean and variance
-    B_hat, grand_mean, var_pooled = _calculate_mean_var(
+    B_hat, grand_mean, var_pooled = _calculate_mean_var(  # noqa: N806 - sva's B.hat
         data_array, design, batches, n_batch, ref_idx
     )
 

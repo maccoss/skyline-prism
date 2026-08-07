@@ -613,7 +613,8 @@ class TestLoadSampleMetadataFiles:
         assert set(result["batch"].unique()) == {"batch1_metadata", "batch2_metadata"}
         # Sample IDs should be unique
         # (Though implicit sample_id creation happens later in generate_sample_metadata,
-        # load_sample_metadata just loads the DF. The merge correctness is validated here by row count.)
+        # load_sample_metadata just loads the DF. The merge correctness is validated here
+        # by row count.)
 
     def test_merge_three_files(self, tmp_path):
         """Test merging three metadata files."""
@@ -767,7 +768,9 @@ class TestDuplicateColumnPrevention:
         df_with_metadata = pd.DataFrame(
             {
                 "Protein": ["P1", "P1", "P2", "P2"],
-                "Peptide Modified Sequence Unimod Ids": ["PEPTIDEK", "PEPTIDEK", "ANOTHERK", "ANOTHERK"],
+                "Peptide Modified Sequence Unimod Ids": [
+                    "PEPTIDEK", "PEPTIDEK", "ANOTHERK", "ANOTHERK",
+                ],
                 "Precursor Charge": [2, 2, 2, 2],
                 "Fragment Ion": ["y5", "y6", "y5", "y6"],
                 "Product Charge": [1, 1, 1, 1],
@@ -776,8 +779,13 @@ class TestDuplicateColumnPrevention:
                 "Replicate Name": ["Sample1", "Sample1", "Sample2", "Sample2"],
                 # Metadata columns that already exist from previous run
                 "Batch": ["Plate1", "Plate1", "Plate1", "Plate1"],
-                "Source Document": ["original_file", "original_file", "original_file", "original_file"],
-                "Sample ID": ["Sample1__@__Plate1", "Sample1__@__Plate1", "Sample2__@__Plate1", "Sample2__@__Plate1"],
+                "Source Document": [
+                    "original_file", "original_file", "original_file", "original_file",
+                ],
+                "Sample ID": [
+                    "Sample1__@__Plate1", "Sample1__@__Plate1",
+                    "Sample2__@__Plate1", "Sample2__@__Plate1",
+                ],
             }
         )
 

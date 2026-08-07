@@ -33,6 +33,11 @@ class PRISMMainWindow(QMainWindow):
         has_batch_column: bool = True,
         parent: QWidget | None = None,
     ) -> None:
+        """Build the window.
+
+        The Config tab is pre-filled from any paths supplied on the command line, so a
+        launch from Skyline lands ready to run.
+        """
         super().__init__(parent)
         self.setWindowTitle("Skyline-PRISM")
         self.resize(1200, 800)
@@ -89,7 +94,8 @@ class PRISMMainWindow(QMainWindow):
 
         # Prepare arguments for 'prism run'
         # We need to construct the CLI command.
-        # Since we are running from source or installed package, we use 'prism' or sys.executable + -m skyline_prism
+        # Since we are running from source or installed package, we use 'prism' or
+        # sys.executable + -m skyline_prism
 
         args = ["run"]
 
@@ -178,6 +184,7 @@ class PRISMMainWindow(QMainWindow):
 
 
 def main():
+    """Run the PRISM GUI as a standalone application."""
     app = QApplication(sys.argv)
     window = PRISMMainWindow()
     window.show()

@@ -554,7 +554,8 @@ class TestBatchCorrectionEvaluation:
 
         # Pool CV should not get dramatically worse
         assert evaluation.qc_cv_after <= evaluation.qc_cv_before * 1.5, (
-            f"Pool CV increased too much: {evaluation.qc_cv_before:.3f} -> {evaluation.qc_cv_after:.3f}"
+            f"Pool CV increased too much: {evaluation.qc_cv_before:.3f} -> "
+            f"{evaluation.qc_cv_after:.3f}"
         )
 
     def test_combat_with_reference_samples(self, evaluation_data):
@@ -827,8 +828,9 @@ class TestReferenceAnchoredComBat:
     """Tests for reference-anchored ComBat (single-point calibration + EB)."""
 
     def test_additive_offset_removed_references_align(self):
-        """Pure per-batch additive offsets captured by clean references are
-        removed; reference samples align across batches afterward.
+        """Remove a pure per-batch additive offset seen in clean references.
+
+        Reference samples align across batches afterward.
         """
         n_feat = 60
         mu = np.linspace(12, 18, n_feat)
@@ -845,8 +847,9 @@ class TestReferenceAnchoredComBat:
         assert after < 0.15 * before
 
     def test_biological_signal_preserved(self):
-        """Experimental biological deviation (relative to reference) survives
-        correction; only the batch offset is removed.
+        """Preserve experimental biology, removing only the batch offset.
+
+        The deviation of each experimental sample from its own batch's reference survives.
         """
         n_feat = 60
         mu = np.full(n_feat, 15.0)
@@ -870,9 +873,10 @@ class TestReferenceAnchoredComBat:
         np.testing.assert_allclose(before_contrast, after_contrast, atol=0.2)
 
     def test_output_is_absolute_scale_not_ratio(self):
-        """With zero offsets, output stays on the absolute log2 scale and the
-        corrected reference mean ~ alpha (the reference level), NOT ~0 (which is
-        what a ratio-to-reference would produce).
+        """Return absolute log2 abundance, not a ratio to the reference.
+
+        With zero offsets the corrected reference mean is ~alpha (the reference level),
+        NOT ~0, which is what a ratio-to-reference would produce.
         """
         n_feat = 40
         mu = np.linspace(10, 20, n_feat)
@@ -898,9 +902,9 @@ class TestReferenceAnchoredComBat:
         assert abs((corrected.max() - corrected.min()) - (data_in.max() - data_in.min())) < 2.0
 
     def test_noisy_feature_shrunk_toward_consensus(self):
-        """A feature with a spurious single-reference delta in one batch is
-        pulled toward the batch consensus (EB shrinkage), so its applied shift
-        is smaller than the naive single-point delta.
+        """Shrink a spurious single-reference delta toward the batch consensus.
+
+        The applied shift is smaller than the naive single-point delta.
         """
         n_feat = 80
         mu = np.full(n_feat, 15.0)
@@ -926,8 +930,9 @@ class TestReferenceAnchoredComBat:
         assert abs(applied_shift[0] - consensus) < abs(naive_delta_f0 - consensus)
 
     def test_no_reference_batch_fallback_warns(self, caplog):
-        """A batch with zero references is corrected by grand-mean fallback and
-        a warning is emitted; reference batches still align.
+        """Fall back to grand-mean estimation for a batch with no references.
+
+        A warning is emitted, and the batches that do have references still align.
         """
         import logging
 
@@ -945,7 +950,9 @@ class TestReferenceAnchoredComBat:
             seed=5,
         )
         with caplog.at_level(logging.WARNING):
-            corrected = combat_reference_anchored(data_in, batch, ref_mask, no_reference_batch="fallback")
+            corrected = combat_reference_anchored(
+                data_in, batch, ref_mask, no_reference_batch="fallback"
+            )
 
         assert any("no reference samples" in r.message.lower() for r in caplog.records)
         # Reference batches A and B still align after correction
@@ -966,9 +973,10 @@ class TestReferenceAnchoredComBat:
             combat_reference_anchored(data_in, batch, ref_mask, no_reference_batch="error")
 
     def test_eb_shrinkage_reduces_noisy_delta_dispersion(self):
-        """Empirical-Bayes shrinkage pulls noisy per-feature reference deltas
-        toward the batch consensus, so the applied per-feature shifts are LESS
-        dispersed than the raw (un-shrunk) single-point deltas.
+        """Shrink noisy per-feature reference deltas toward the batch consensus.
+
+        The applied per-feature shifts are LESS dispersed than the raw, un-shrunk
+        single-point deltas.
         """
         n_feat = 200
         rng = np.random.default_rng(11)
@@ -996,8 +1004,10 @@ class TestReferenceAnchoredComBat:
         assert applied_shift.std() < raw_delta_b.std()
 
     def test_scale_harmonized_when_replicates_available(self):
-        """With >=2 references per batch and unequal reference dispersion, the
-        noisier batch's spread is harmonized toward the other batch.
+        """Harmonize dispersion when the batches' references differ in spread.
+
+        With >= 2 references per batch, the noisier batch's spread is pulled toward
+        the other batch's.
         """
         n_feat = 80
         mu = np.full(n_feat, 15.0)

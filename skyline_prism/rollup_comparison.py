@@ -272,7 +272,6 @@ def fit_library_single_sample(
     common_idx = observed.index.intersection(library.index)
     obs = observed.loc[common_idx].astype(float)
     lib = library.loc[common_idx].astype(float)
-    mz = mz_values.loc[common_idx] if mz_values is not None else None
 
     # Step 0: Raw transitions
     steps.append(
@@ -515,7 +514,9 @@ def compare_library_vs_sum(
         transition_data["_peptide_key"] = transition_data[peptide_col].astype(str)
 
     peptide_keys = transition_data["_peptide_key"].unique()
-    logger.info(f"Comparing rollup methods for {len(peptide_keys)} peptides across {len(samples)} samples")
+    logger.info(
+        f"Comparing rollup methods for {len(peptide_keys)} peptides across {len(samples)} samples"
+    )
 
     n_with_library = 0
     n_processed = 0
@@ -528,7 +529,11 @@ def compare_library_vs_sum(
 
         # Extract peptide sequence and charge
         peptide = pep_data[peptide_col].iloc[0]
-        charge = int(pep_data[precursor_charge_col].iloc[0]) if precursor_charge_col in pep_data.columns else 2
+        charge = (
+            int(pep_data[precursor_charge_col].iloc[0])
+            if precursor_charge_col in pep_data.columns
+            else 2
+        )
 
         # Get library spectrum using correct API
         lib_spectrum = library.get_spectrum(peptide, charge)
@@ -570,7 +575,8 @@ def compare_library_vs_sum(
                 lib_series[annotation] = intensity
 
         # For BLIB files, use fragments_by_mz to match by product m/z
-        if lib_series.empty and hasattr(lib_spectrum, 'fragments_by_mz') and lib_spectrum.fragments_by_mz:
+        has_mz_index = hasattr(lib_spectrum, 'fragments_by_mz') and lib_spectrum.fragments_by_mz
+        if lib_series.empty and has_mz_index:
             # Match each observed transition by its product m/z
             mz_tolerance = 0.02  # Da tolerance for matching
             for frag_annotation, product_mz in mz_values.items():
@@ -660,7 +666,9 @@ def compare_library_vs_sum(
         n_processed += 1
 
     logger.info(f"  Found library spectra for {n_with_library} peptides, processed {n_processed}")
-    logger.info(f"  Filter counts: no_replicates={n_no_replicates}, empty_lib_series={n_empty_lib_series}")
+    logger.info(
+        f"  Filter counts: no_replicates={n_no_replicates}, empty_lib_series={n_empty_lib_series}"
+    )
 
     # Rank peptides and get top N
     top_peptides = rank_peptides(peptide_results, ranking_criterion, top_n)

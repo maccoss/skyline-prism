@@ -30,7 +30,6 @@ try:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import to_rgba
 
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -114,7 +113,7 @@ def plot_transition_bar(
             edge_colors.append("black")
 
     # Plot bars
-    bars = ax.bar(
+    ax.bar(
         x,
         intensities.values,
         color=bar_colors,
@@ -140,7 +139,9 @@ def plot_transition_bar(
 
     # Format x-axis with m/z values
     ax.set_xticks(x)
-    ax.set_xticklabels([f"{mz:.0f}" for mz in mz_values.values], rotation=45, ha="right", fontsize=7)
+    ax.set_xticklabels(
+        [f"{mz:.0f}" for mz in mz_values.values], rotation=45, ha="right", fontsize=7
+    )
     ax.set_xlabel("m/z", fontsize=8)
     ax.set_ylabel("Intensity", fontsize=8)
     ax.set_title(title, fontsize=9)
@@ -552,9 +553,15 @@ def create_peptide_plot_grid(
             lib_step = next((s for s in steps if s.step_name == "library_scaled"), None)
             if lib_step:
                 short_name = _get_short_sample_name(sample)
-                title = f"{short_name} (R²={lib_step.r_squared:.2f})" if lib_step.r_squared else short_name
+                title = (
+                    f"{short_name} (R²={lib_step.r_squared:.2f})"
+                    if lib_step.r_squared
+                    else short_name
+                )
                 # Get colors for this step's transitions
-                step_colors = [color_map.get(t, "#888888") for t in lib_step.transition_intensities.index]
+                step_colors = [
+                    color_map.get(t, "#888888") for t in lib_step.transition_intensities.index
+                ]
                 fig = plot_transition_bar(
                     intensities=lib_step.transition_intensities,
                     mz_values=library_mz,
@@ -598,8 +605,15 @@ def create_peptide_plot_grid(
                     if outlier_step.step_name == "outliers_reverted":
                         title = f"{short_name} (Reverted)"
                     else:
-                        title = f"{short_name} (R²={outlier_step.r_squared:.2f})" if outlier_step.r_squared else short_name
-                    step_colors = [color_map.get(t, "#888888") for t in outlier_step.transition_intensities.index]
+                        title = (
+                            f"{short_name} (R²={outlier_step.r_squared:.2f})"
+                            if outlier_step.r_squared
+                            else short_name
+                        )
+                    step_colors = [
+                        color_map.get(t, "#888888")
+                        for t in outlier_step.transition_intensities.index
+                    ]
                     fig = plot_transition_bar(
                         intensities=outlier_step.transition_intensities,
                         mz_values=library_mz,
@@ -700,22 +714,45 @@ def generate_rollup_comparison_report(
     html_parts.append('<table class="config-table">')
     html_parts.append("<tr><th>Setting</th><th>Value</th></tr>")
     html_parts.append("<tr><td>Comparison</td><td>library_assist vs sum</td></tr>")
-    html_parts.append(f"<tr><td>Sample Type</td><td>{result.sample_type} ({len(result.samples)} replicates)</td></tr>")
+    html_parts.append(
+        f"<tr><td>Sample Type</td><td>{result.sample_type} ({len(result.samples)} replicates)</td>"
+        f"</tr>"
+    )
     html_parts.append(f"<tr><td>Spectral Library</td><td>{result.library_path}</td></tr>")
     html_parts.append(f"<tr><td>Ranking Criterion</td><td>{result.ranking_criterion}</td></tr>")
-    html_parts.append(f"<tr><td>Normalization Applied</td><td>{'Yes' if result.normalization_applied else 'No'}</td></tr>")
-    html_parts.append(f"<tr><td>Batch Correction Applied</td><td>{'Yes' if result.batch_correction_applied else 'No'}</td></tr>")
+    html_parts.append(
+        f"<tr><td>Normalization Applied</td>"
+        f"<td>{'Yes' if result.normalization_applied else 'No'}</td></tr>"
+    )
+    html_parts.append(
+        f"<tr><td>Batch Correction Applied</td>"
+        f"<td>{'Yes' if result.batch_correction_applied else 'No'}</td></tr>"
+    )
     html_parts.append("</table>")
 
     # Summary section
     html_parts.append("<h2>Overall Performance Summary</h2>")
     html_parts.append('<table class="summary-table">')
-    html_parts.append("<tr><th>Method</th><th>Median CV</th><th># Peptides</th><th>Improved</th><th>Worsened</th></tr>")
+    html_parts.append(
+        "<tr><th>Method</th><th>Median CV</th><th># Peptides</th><th>Improved</th><th>Worsened</th>"
+        "</tr>"
+    )
 
-    sum_cv_pct = f"{result.summary.sum_median_cv * 100:.1f}%" if not np.isnan(result.summary.sum_median_cv) else "N/A"
-    lib_cv_pct = f"{result.summary.library_median_cv * 100:.1f}%" if not np.isnan(result.summary.library_median_cv) else "N/A"
+    sum_cv_pct = (
+        f"{result.summary.sum_median_cv * 100:.1f}%"
+        if not np.isnan(result.summary.sum_median_cv)
+        else "N/A"
+    )
+    lib_cv_pct = (
+        f"{result.summary.library_median_cv * 100:.1f}%"
+        if not np.isnan(result.summary.library_median_cv)
+        else "N/A"
+    )
 
-    html_parts.append(f"<tr><td>sum</td><td>{sum_cv_pct}</td><td>{result.summary.n_peptides_total}</td><td>-</td><td>-</td></tr>")
+    html_parts.append(
+        f"<tr><td>sum</td><td>{sum_cv_pct}</td><td>{result.summary.n_peptides_total}</td><td>-</td>"
+        f"<td>-</td></tr>"
+    )
     html_parts.append(
         f"<tr><td>library_assist</td><td>{lib_cv_pct}</td><td>{result.summary.n_peptides_total}</td>"
         f'<td class="improved">{result.summary.n_peptides_improved}</td>'
@@ -728,18 +765,28 @@ def generate_rollup_comparison_report(
         improvement_pct = result.summary.median_improvement * 100
         improvement_class = "improved" if improvement_pct > 0 else "worsened"
         html_parts.append(
-            f'<p>Median CV improvement: <span class="{improvement_class}">{improvement_pct:+.1f}%</span></p>'
+            f'<p>Median CV improvement: '
+            f'<span class="{improvement_class}">{improvement_pct:+.1f}%</span></p>'
         )
 
     # Legend
     html_parts.append('<div class="legend">')
-    html_parts.append('<div class="legend-item"><div class="legend-color" style="background-color: #4c6ef5;"></div><span>Observed intensity</span></div>')
-    html_parts.append('<div class="legend-item"><div class="legend-color" style="background-color: #ff6b6b;"></div><span>Outlier transition</span></div>')
+    html_parts.append(
+        '<div class="legend-item"><div class="legend-color" style="background-color: #4c6ef5;">'
+        '</div><span>Observed intensity</span></div>'
+    )
+    html_parts.append(
+        '<div class="legend-item"><div class="legend-color" style="background-color: #ff6b6b;">'
+        '</div><span>Outlier transition</span></div>'
+    )
     html_parts.append('<div class="legend-item">● Library predicted</div>')
     html_parts.append("</div>")
 
     # Top peptides section
-    html_parts.append(f"<h2>Top {len(result.top_peptides)} Peptides by {result.ranking_criterion.replace('_', ' ').title()}</h2>")
+    html_parts.append(
+        f"<h2>Top {len(result.top_peptides)} Peptides "
+        f"by {result.ranking_criterion.replace('_', ' ').title()}</h2>"
+    )
 
     for i, peptide in enumerate(result.top_peptides):
         pep_result = result.peptide_results[peptide]
@@ -763,7 +810,11 @@ def generate_rollup_comparison_report(
 
         # CV details
         sum_cv_pct = f"{pep_result.sum_cv * 100:.1f}%" if not np.isnan(pep_result.sum_cv) else "N/A"
-        lib_cv_pct = f"{pep_result.library_cv * 100:.1f}%" if not np.isnan(pep_result.library_cv) else "N/A"
+        lib_cv_pct = (
+            f"{pep_result.library_cv * 100:.1f}%"
+            if not np.isnan(pep_result.library_cv)
+            else "N/A"
+        )
         html_parts.append(f"<p>CV: sum = {sum_cv_pct}, library_assist = {lib_cv_pct}</p>")
 
         # Plot grid
@@ -775,7 +826,9 @@ def generate_rollup_comparison_report(
         html_parts.append("</div>")
 
     # Timestamp
-    html_parts.append(f'<div class="timestamp">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>')
+    html_parts.append(
+        f'<div class="timestamp">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>'
+    )
 
     # Close HTML
     html_parts.extend(["</div>", "</body>", "</html>"])
