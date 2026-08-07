@@ -488,7 +488,7 @@ public static class PlotRenderer
         // up in the backend's default typeface while its neighbours were in Segoe UI.
         StyleQcPlot(plt);
 
-        // A heatmap needs no axis frame or tick marks - the cells are the grid. Labels are centerd on
+        // A heatmap needs no axis frame or tick marks - the cells are the grid. Labels are centered on
         // the cells (y-labels on rows; x-labels rotated, right-aligned so they read up into their
         // column). Keeps the labels but drops the L-shaped axis lines.
         plt.Axes.Left.FrameLineStyle.Width = 0;

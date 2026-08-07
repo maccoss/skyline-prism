@@ -29,7 +29,7 @@ public class ScheduledWindowTests
         ThermoInclusionList.Parse(InclusionCsv.Split('\n').Select(l => l.TrimEnd('\r')).ToList(), "MTM method");
 
     [Fact]
-    public void InclusionList_BecomesWindowsCenterdOnMzWithTheirFiringInterval()
+    public void InclusionList_BecomesWindowsCenteredOnMzWithTheirFiringInterval()
     {
         var scheme = ParseCsv();
 

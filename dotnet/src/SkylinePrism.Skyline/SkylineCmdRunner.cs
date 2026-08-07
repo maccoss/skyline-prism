@@ -39,8 +39,14 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
     }
 
     /// <summary>
-    /// Run SkylineCmd, streaming its output into <paramref name="log"/>. No timeout: loading a large
-    /// document and writing a transition report legitimately takes many minutes - the caller cancels.
+    /// Run SkylineCmd, streaming its output into <paramref name="log"/>.
+    /// <para>
+    /// <paramref name="timeout"/> defaults to none, because loading a large document and writing a
+    /// transition report legitimately takes many minutes and the caller cancels. Pass a bound for work
+    /// that is merely an enrichment, where waiting indefinitely turns an optional extra into a hang -
+    /// see <see cref="ISkylineCommandRunner.Run"/>. On expiry the process is killed and a
+    /// <see cref="TimeoutException"/> is thrown.
+    /// </para>
     /// </summary>
     public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
         TimeSpan? timeout = null)
