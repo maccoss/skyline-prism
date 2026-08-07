@@ -50,6 +50,137 @@ public partial class MainWindow
     /// </summary>
     private bool _rangeLabelSelection;
 
+    // ---------------------------------------------------------------- follow Skyline's selection
+    //
+    // The other direction: picking a protein or peptide in Skyline highlights it here. Skyline's RPC
+    // is request/response and cannot push events, so this polls - one lightweight call, and only
+    // while this tab is actually on screen.
+    private System.Windows.Threading.DispatcherTimer? _rangeFollowTimer;
+    private string? _rangeFollowedLocator;
+    private bool _rangeFollowBusy;
+    private Dictionary<string, AbundanceEntry>? _rangeEntryByLocator;
+    private AbundanceLevel _rangeEntryByLocatorLevel = AbundanceLevel.Protein;
+
+    private static readonly TimeSpan RangeFollowInterval = TimeSpan.FromMilliseconds(750);
+
+    /// <summary>Start/stop following Skyline's selection as the tab comes into and out of view.</summary>
+    private void SetRangeFollowActive(bool active)
+    {
+        if (!active)
+        {
+            _rangeFollowTimer?.Stop();
+            return;
+        }
+        if (_session is null)
+            return; // standalone: nothing to follow
+
+        if (_rangeFollowTimer is null)
+        {
+            _rangeFollowTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = RangeFollowInterval,
+            };
+            _rangeFollowTimer.Tick += (_, _) => PollSkylineSelection();
+        }
+        _rangeFollowTimer.Start();
+    }
+
+    /// <summary>
+    /// Ask Skyline what is selected and, when it has changed, highlight the matching point.
+    /// <para>
+    /// The RPC runs off the UI thread - it opens a pipe and waits on a busy application, which must
+    /// never freeze this window - and one poll is never allowed to overlap the next, so a Skyline
+    /// that has gone slow just makes this quieter rather than piling up requests.
+    /// </para>
+    /// </summary>
+    private async void PollSkylineSelection()
+    {
+        if (_rangeFollowBusy || _session is null || !_rangeLoaded || _rangeEntries.Count == 0)
+            return;
+        _rangeFollowBusy = true;
+        try
+        {
+            var level = RangeLevel;
+            // Skyline resolves the ancestor at this level, so a precursor or transition selection -
+            // or a row in the precursor document grid - still lands on the right point.
+            var elementType = level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule";
+            var session = _session;
+            var entries = _rangeEntries;
+            // The RPC and the index build both go off the UI thread: the call waits on a busy
+            // application, and the index resolves every entry - 150,000 of them at peptide level.
+            var found = await Task.Run<(string? Locator, AbundanceEntry? Entry)>(() =>
+            {
+                string? locator;
+                try
+                {
+                    locator = session.Execute(c => c.GetSelectedElementLocator(elementType));
+                }
+                catch (Exception)
+                {
+                    return (null, null); // busy, closed, or mid-document-change; retry next tick
+                }
+                if (locator is null)
+                    return (null, null);
+                return (locator, FindEntryByLocator(locator, level, entries));
+            });
+
+            if (found.Locator is null || found.Locator == _rangeFollowedLocator)
+                return;
+            _rangeFollowedLocator = found.Locator;
+
+            // Level or data may have changed while the call was in flight.
+            if (RangeLevel != level || !_rangeLoaded || !ReferenceEquals(entries, _rangeEntries))
+                return;
+
+            var entry = found.Entry;
+            if (entry is null || ReferenceEquals(entry, _rangeSelected))
+                return;
+
+            _rangeSelected = entry;
+            RenderDynamicRange();
+            RangeStatusText.Text =
+                $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
+                + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
+        }
+        finally
+        {
+            _rangeFollowBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// The plotted point a Skyline locator refers to. Built by resolving every entry through the same
+    /// locator map a click uses, so the two directions agree by construction rather than by two
+    /// separate pieces of string matching.
+    /// </summary>
+    private AbundanceEntry? FindEntryByLocator(
+        string locator, AbundanceLevel level, List<AbundanceEntry> entries)
+    {
+        // Called from the poll's worker thread while a click may be resolving on the UI thread, and
+        // both go through the same lazily-built locator map.
+        lock (_rangeLocatorLock)
+        {
+            if (_rangeEntryByLocator is null || _rangeEntryByLocatorLevel != level)
+            {
+                var map = new Dictionary<string, AbundanceEntry>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in entries)
+                {
+                    var entryLocator = ResolveLocator(entry, out _, out var unavailable);
+                    if (unavailable)
+                        return null; // could not read the tree; do not cache a half-built index
+                    if (entryLocator is not null)
+                        map.TryAdd(entryLocator, entry); // first wins, as the forward map does
+                }
+                _rangeEntryByLocator = map;
+                _rangeEntryByLocatorLevel = level;
+            }
+            return _rangeEntryByLocator.TryGetValue(locator, out var hit) ? hit : null;
+        }
+    }
+
+    /// <summary>Guards the locator map and its reverse index, which the click and the poll share.</summary>
+    private readonly object _rangeLocatorLock = new();
+
     private AbundanceLevel RangeLevel =>
         ComboText(RangeLevelCombo, "Protein").StartsWith("Pep", StringComparison.OrdinalIgnoreCase)
             ? AbundanceLevel.Peptide
@@ -61,6 +192,9 @@ public partial class MainWindow
         _rangeEntries = new List<AbundanceEntry>();
         _rangePlotted = new List<AbundanceEntry>();
         _rangeSelected = null;
+        // The locator index is keyed to the entries it was built from.
+        _rangeEntryByLocator = null;
+        _rangeFollowedLocator = null;
     }
 
     private async void OnRangeReload(object sender, RoutedEventArgs e)
@@ -125,6 +259,7 @@ public partial class MainWindow
             _rangeOutputDir = outputDir;
             _rangeSampleColumns = samples;
             _rangeEntries = entries;
+            _rangeEntryByLocator = null; // rebuilt against the entries just loaded
             _rangeLoaded = true;
             PopulateRangeSamples(samples);
             RenderDynamicRange();
@@ -196,6 +331,7 @@ public partial class MainWindow
         {
             _rangeEntries = await Task.Run(() =>
                 DynamicRange.Compute(ParquetTable.Load(path), level, chosen));
+            _rangeEntryByLocator = null; // new entry objects, so the locator index is stale
             RenderDynamicRange();
         }
         catch (Exception ex)
@@ -277,6 +413,11 @@ public partial class MainWindow
     private void AddRangeLabels(
         Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList)
     {
+        // The current selection always gets a marker, whether or not labels are on. Without it,
+        // following Skyline's selection would move a highlight nobody can see.
+        if (_rangeSelected is not null)
+            AddSelectionMarker(plt, _rangeSelected);
+
         var wanted = new List<(AbundanceEntry Entry, Color Color)>();
         if (_rangeLabelSelection && _rangeSelected is not null)
             wanted.Add((_rangeSelected, Colors.Black));
@@ -304,6 +445,20 @@ public partial class MainWindow
 
         foreach (var (entry, color) in wanted)
             AddRangeLabel(plt, entry, color, placer.Place(entry));
+    }
+
+    /// <summary>
+    /// A hollow ring around the selected point. Hollow so the point's own color still reads through
+    /// it, and drawn whatever the label mode is: this is the only thing that shows on screen when
+    /// the selection arrives FROM Skyline rather than from a click here.
+    /// </summary>
+    private static void AddSelectionMarker(Plot plt, AbundanceEntry entry)
+    {
+        var marker = plt.Add.Marker(entry.Rank, entry.Log10Abundance);
+        marker.MarkerShape = MarkerShape.OpenCircle;
+        marker.MarkerSize = 18;
+        marker.MarkerLineWidth = 3;
+        marker.MarkerLineColor = Colors.Black;
     }
 
     /// <summary>
@@ -384,7 +539,7 @@ public partial class MainWindow
             return;
         }
 
-        var locator = ResolveLocator(entry, out var viaFallback, out var treeUnavailable);
+        var locator = ResolveLocatorLocked(entry, out var viaFallback, out var treeUnavailable);
         if (locator is null)
         {
             // "Could not read the tree" and "this one is not in the tree" look the same to a user
@@ -483,6 +638,16 @@ public partial class MainWindow
             if (_rangeLocatorMap.TryGetValue(key, out var locator))
                 return locator;
         return null;
+    }
+
+    /// <summary>
+    /// <see cref="ResolveLocator"/> under the shared lock, for the UI thread. The poll's worker
+    /// already holds it while building the reverse index.
+    /// </summary>
+    private string? ResolveLocatorLocked(AbundanceEntry entry, out bool viaFallback, out bool unavailable)
+    {
+        lock (_rangeLocatorLock)
+            return ResolveLocator(entry, out viaFallback, out unavailable);
     }
 
     private static string? CorrectedMatrixPath(string outputDir, string stem)

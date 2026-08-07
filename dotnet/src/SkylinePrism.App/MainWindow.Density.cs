@@ -64,6 +64,9 @@ public partial class MainWindow
         // the tab strip's own event.
         if (!ReferenceEquals(e.Source, MainTabs))
             return;
+        // Following Skyline's selection polls, so it runs only while its tab is actually on screen.
+        SetRangeFollowActive(ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab));
+
         if (ReferenceEquals(MainTabs.SelectedItem, DensityTab) && !_densityLoaded)
             await LoadDensitySamplesAsync();
         else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab))

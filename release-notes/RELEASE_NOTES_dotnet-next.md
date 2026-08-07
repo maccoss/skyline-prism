@@ -6,6 +6,18 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **The Dynamic Range plot now follows Skyline's selection, not just the other way round.** Pick a
+  protein or peptide anywhere in Skyline - the Targets tree, or a row in the protein, peptide or
+  precursor document grid - and the matching point is ringed on the plot. Selecting deeper than the
+  plot shows still works: with a transition selected, the protein plot highlights the protein
+  containing it, because Skyline resolves the ancestor at whichever level the plot is displaying.
+
+  Skyline's RPC cannot push events, so PRISM asks it - one lightweight call every 0.75 s, and only
+  while the Dynamic Range tab is on screen. The call and the index it looks into both run off the UI
+  thread, and a poll never overlaps the one before it, so a busy Skyline makes this quieter rather
+  than slower. The current selection is now always ringed, whether it came from a click here or from
+  Skyline.
+
 - **Reference-anchored ComBat is now a tick box in the Skyline tool**: *"Anchor ComBat on the Standard
   samples"* on the Settings tab. It estimates each batch's effect from the replicates whose Skyline
   Sample Type is **Standard** - identical material run in every batch - instead of from the

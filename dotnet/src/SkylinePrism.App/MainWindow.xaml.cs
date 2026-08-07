@@ -833,6 +833,7 @@ public partial class MainWindow : Window
             }
             _runCancellation?.Cancel();
         }
+        SetRangeFollowActive(false); // stop polling Skyline's selection
         base.OnClosing(e);
     }
 
