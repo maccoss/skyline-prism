@@ -64,7 +64,7 @@ public class ReferenceAnchoredComBatTests
             ReferenceAnchoredComBat.Run(data, new[] { "A", "B" }, new[] { false, false }));
     }
 
-    // ---------------------------------------------------------------- shared-core behaviour
+    // ---------------------------------------------------------------- shared-core behavior
     //
     // Reference-anchored runs on the same ComBatCore as standard ComBat, so the guarantees that were
     // fixed for standard have to hold here too. Before unification this path had its own estimator
@@ -126,7 +126,7 @@ public class ReferenceAnchoredComBatTests
     public void SkipPolicy_LeavesTheUnreferencedBatchAloneWithoutHoldingFeaturesOut()
     {
         // Three batches, so there is still a real offset to remove once the middle one is skipped.
-        // (With only two batches and one skipped, the single remaining anchor IS the centre, and
+        // (With only two batches and one skipped, the single remaining anchor IS the center, and
         // correctly nothing moves at all.)
         const int nF = 6;
         var batch = new[] { "A", "A", "A", "B", "B", "B", "C", "C", "C" };

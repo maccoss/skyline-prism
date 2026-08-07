@@ -45,7 +45,7 @@ public sealed class ComBatDiagnostics
 /// matching sva's treatment of its zero-variance rows.</item>
 /// <item><b>Scale not estimated</b> for a (batch, feature) with fewer than 2 observations, or with
 /// no spread among them. Its location effect IS estimable, so it is still applied - only the scale
-/// correction is skipped (<c>delta* = 1</c>). Note this is deliberately NOT sva's behaviour: sva
+/// correction is skipped (<c>delta* = 1</c>). Note this is deliberately NOT sva's behavior: sva
 /// drops the whole feature if any batch is constant in it, discarding a location correction that the
 /// data supports.</item>
 /// </list>
@@ -295,14 +295,23 @@ public static class ComBat
         return r;
     }
 
-    internal static void ReplaceZeroWithMedianOfPositive(double[] v)
+    /// <summary>
+    /// A scale of zero (or a non-finite one) cannot be divided by. Substitute the median of the
+    /// scales that ARE usable, or 1.0 when not one feature has a usable scale - which leaves the
+    /// standardization a no-op instead of producing infinities.
+    /// <para>
+    /// Shared by the in-memory core and the streaming path so the two cannot disagree about which
+    /// scales are usable.
+    /// </para>
+    /// </summary>
+    internal static void ReplaceUnusableWithMedianOfPositive(double[] v)
     {
-        var positives = v.Where(x => x > 0).ToArray();
-        if (positives.Length == 0)
-            return;
-        var med = Stats.NanMedian(positives);
+        var positives = v.Where(Usable).ToArray();
+        var fill = positives.Length > 0 ? Stats.NanMedian(positives) : 1.0;
         for (var i = 0; i < v.Length; i++)
-            if (v[i] == 0.0)
-                v[i] = med;
+            if (!Usable(v[i]))
+                v[i] = fill;
+
+        static bool Usable(double x) => x > 0 && !double.IsNaN(x) && !double.IsInfinity(x);
     }
 }

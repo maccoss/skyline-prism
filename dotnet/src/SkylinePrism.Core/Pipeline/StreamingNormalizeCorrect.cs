@@ -122,7 +122,7 @@ internal static class StreamingNormalizeCorrect
             // var_pooled's zero-fill is a median across ALL features, so standardization cannot
             // start until pass 1 has seen every row.
             var pooledArray = varPooled.ToArray();
-            ComBat.ReplaceZeroWithMedianOfPositive(pooledArray);
+            ComBat.ReplaceUnusableWithMedianOfPositive(pooledArray);
             stdPooled = pooledArray.Select(Math.Sqrt).ToArray();
             grandMeanArray = grandMeans.ToArray();
 
@@ -618,7 +618,7 @@ internal static class StreamingNormalizeCorrect
         /// How many of the batch's samples observed this feature, the mean of those values, and
         /// their sum of squared deviations about that mean - the three numbers
         /// <c>Stats.Var(observed, ddof: 1)</c> is built from, kept separately so the EB iteration
-        /// can shift the sum to any other centre.
+        /// can shift the sum to any other center.
         /// </summary>
         public (int Count, double Mean, double SumSq) Summarize(double[] values, int batch)
         {

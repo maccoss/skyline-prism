@@ -124,7 +124,7 @@ internal static class ComBatCore
             for (var s = 0; s < nSamples; s++)
                 d[a, s] = data[activeRows[a], s];
 
-        // ---- per-batch fit means, and the centre they are measured against ----
+        // ---- per-batch fit means, and the center they are measured against ----
         var bHat = new double[nBatch, nf];
         var totalFit = 0;
         foreach (var i in fitted)
@@ -143,17 +143,17 @@ internal static class ComBatCore
             }
         }
 
-        var centre = new double[nf];
+        var center = new double[nf];
         for (var f = 0; f < nf; f++)
         {
             var c = 0.0;
             foreach (var i in fitted)
                 c += ((double)plan.Fit[i].Count / totalFit) * bHat[i, f];
-            centre[f] = c;
+            center[f] = c;
         }
 
-        var varPooled = PooledScale(d, plan, fitted, bHat, centre, nf, nSamples);
-        ReplaceUnusableWithMedianOfPositive(varPooled);
+        var varPooled = PooledScale(d, plan, fitted, bHat, center, nf, nSamples);
+        ComBat.ReplaceUnusableWithMedianOfPositive(varPooled);
         var stdPooled = new double[nf];
         for (var f = 0; f < nf; f++)
             stdPooled[f] = Math.Sqrt(varPooled[f]);
@@ -162,7 +162,7 @@ internal static class ComBatCore
         var sData = new double[nf, nSamples];
         for (var f = 0; f < nf; f++)
             for (var s = 0; s < nSamples; s++)
-                sData[f, s] = (d[f, s] - centre[f]) / stdPooled[f]; // NaN stays NaN, and stays local
+                sData[f, s] = (d[f, s] - center[f]) / stdPooled[f]; // NaN stays NaN, and stays local
 
         // ---- batch effects, from the fit set only ----
         var gammaHat = new double[nBatch, nf];
@@ -251,7 +251,7 @@ internal static class ComBatCore
                     bayes[f, s] = (bayes[f, s] - gammaStar[i, f]) / Math.Sqrt(deltaStar[i, f]);
         for (var f = 0; f < nf; f++)
             for (var s = 0; s < nSamples; s++)
-                bayes[f, s] = bayes[f, s] * stdPooled[f] + centre[f];
+                bayes[f, s] = bayes[f, s] * stdPooled[f] + center[f];
 
         var result = new double[nFeatures, nSamples];
         for (var f = 0; f < nFeatures; f++)
@@ -277,7 +277,7 @@ internal static class ComBatCore
     /// has replicates to pool).
     /// </summary>
     private static double[] PooledScale(
-        double[,] d, ComBatPlan plan, List<int> fitted, double[,] bHat, double[] centre,
+        double[,] d, ComBatPlan plan, List<int> fitted, double[,] bHat, double[] center,
         int nf, int nSamples)
     {
         var varPooled = new double[nf];
@@ -348,7 +348,7 @@ internal static class ComBatCore
             for (var s = 0; s < nSamples; s++)
             {
                 var b = plan.BatchOfSample[s];
-                resBuf[s] = d[f, s] - centre[f] - (plan.Fit[b].Count > 0 ? bHat[b, f] - centre[f] : 0.0);
+                resBuf[s] = d[f, s] - center[f] - (plan.Fit[b].Count > 0 ? bHat[b, f] - center[f] : 0.0);
             }
             varPooled[f] = Stats.NanVar(resBuf, ddof: 1);
         }
@@ -418,27 +418,6 @@ internal static class ComBatCore
                 buffer[n++] = v;
         }
         return n;
-    }
-
-    /// <summary>
-    /// A scale of zero (or a non-finite one) cannot be divided by. Substitute the median of the
-    /// scales that ARE usable, or 1.0 when not one feature has a usable scale - which leaves the
-    /// standardization a no-op instead of producing infinities, the outcome the previous
-    /// zero-only version gave in that case.
-    /// </summary>
-    private static void ReplaceUnusableWithMedianOfPositive(double[] v)
-    {
-        var positives = new List<double>(v.Length);
-        foreach (var x in v)
-            if (Usable(x))
-                positives.Add(x);
-
-        var fill = positives.Count > 0 ? Stats.NanMedian(positives.ToArray()) : 1.0;
-        for (var i = 0; i < v.Length; i++)
-            if (!Usable(v[i]))
-                v[i] = fill;
-
-        static bool Usable(double x) => x > 0 && !double.IsNaN(x) && !double.IsInfinity(x);
     }
 
     private static double[] Row(double[,] m, int i, int nf)

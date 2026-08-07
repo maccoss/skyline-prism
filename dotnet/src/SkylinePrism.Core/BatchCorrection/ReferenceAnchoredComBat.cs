@@ -77,7 +77,7 @@ public static class ReferenceAnchoredComBat
             }
             else if (noReferenceBatch == "fallback")
             {
-                // No anchor: fall back to the batch's own centre. Its spread is biological, so this
+                // No anchor: fall back to the batch's own center. Its spread is biological, so this
                 // is a location correction only - the "assume comparable biology" assumption that
                 // reference anchoring exists to avoid, taken deliberately and only for this batch.
                 fit[i] = batches[i];
