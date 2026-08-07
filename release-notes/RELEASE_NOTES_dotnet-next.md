@@ -42,6 +42,13 @@ as the GitHub Release description and fails if it is missing.
   busy) now says so, is no longer cached as if the document had no proteins, and retries on the next
   click.
 
+- **The isolation-window import works again.** It was being driven through the full Skyline
+  application, which is the right choice for exporting reports - it is the only runner that can write
+  parquet - but wrong for reading settings, and it hung there. Measured on the same 4.9 GB Thermo
+  `.raw`: `SkylineCmd` returns all 167 windows in **8.7 seconds**, while the application runner
+  printed one line and then nothing, still silent when it was stopped five minutes later. The probe
+  now uses `SkylineCmd`; report export is unchanged.
+
 - **The isolation-window import could hang a run indefinitely.** Reading the real DIA windows out of a
   data file normally takes about 10 seconds, but PRISM waited on Skyline's output with no deadline and
   only checked for cancellation *after* a line of output arrived - so a Skyline that went quiet (a data
