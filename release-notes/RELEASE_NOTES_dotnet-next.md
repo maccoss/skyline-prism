@@ -22,7 +22,25 @@ as the GitHub Release description and fails if it is missing.
   default) sizes it from the machine. Work beyond the cap spills to the sort scratch directory, so a
   smaller value is slower, never wrong.
 
+## Breaking Changes
+
+- **Batch estimation from acquisition-time gaps is now OFF by default** (`batch_estimation.method`
+  is `none`, was `auto`). It cannot tell a real plate boundary from an ordinary pause in a
+  continuously acquired run, and when it guesses wrong ComBat "corrects" between batches that do not
+  exist - which silently changes every abundance. Batches should come from a real annotation; set
+  `batch_estimation.method: auto` to opt back in. Both engines.
+
 ## Bug Fixes
+
+- **Clicking a protein in the Dynamic Range plot works again.** Two things were wrong. The click
+  redrew the plot *after* reporting what it had done, and the redraw rewrites the status line - so
+  every message, including the reason a selection failed, was destroyed before it could be read, and
+  a failure looked exactly like a click that did nothing. And a protein group containing several
+  proteins reports its accessions and gene names as one `" / "`-joined string, which matches no node
+  in the document; each member is now tried separately. On an 11,320-group mouse cohort that takes
+  protein resolution from 99.1% to **100%**. A failure to read the document tree at all (Skyline
+  busy) now says so, is no longer cached as if the document had no proteins, and retries on the next
+  click.
 
 - **The isolation-window import could hang a run indefinitely.** Reading the real DIA windows out of a
   data file normally takes about 10 seconds, but PRISM waited on Skyline's output with no deadline and
@@ -30,6 +48,11 @@ as the GitHub Release description and fails if it is missing.
   file behind a slow or half-mounted link) stopped the run for good, and **Stop could not break it
   either**. The wait is now bounded and genuinely cancellable, and PRISM kills the Skyline it started
   when it gives up.
+
+  It also no longer runs **before** the pipeline. It is an enrichment for one plot, so it now runs
+  alongside the run and writes its catalog when it finishes; the density map reads that file when the
+  tab is opened, so landing late costs nothing. Previously every second it spent was a second the run
+  had not started - five minutes of it, on a data file that turned out to be unreachable.
 
   The import is also time-boxed at 5 minutes. It is an enrichment - without it the density map falls
   back to uniform bins and nothing else about the run changes - so it can no longer hold up a run at

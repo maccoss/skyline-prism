@@ -403,8 +403,17 @@ public sealed class PrismConfig
 
     public sealed class BatchEstimationSection
     {
-        /// <summary>auto | gap | fixed | source | none. Used only when no explicit batch is available.</summary>
-        public string Method { get; set; } = "auto";
+        /// <summary>
+        /// auto | gap | fixed | source | none. Used only when no explicit batch is available.
+        /// <para>
+        /// Defaults to <c>none</c>: INVENTING batches is worse than having none. Gap detection
+        /// cannot tell a real plate boundary from an ordinary pause in a continuously acquired run,
+        /// and when it guesses wrong ComBat "corrects" between batches that do not exist - which
+        /// silently alters every abundance. Batches should come from a real annotation; this is an
+        /// opt-in convenience for runs where one is genuinely unavailable.
+        /// </para>
+        /// </summary>
+        public string Method { get; set; } = "none";
         public int? NBatches { get; set; }
         public double GapIqrMultiplier { get; set; } = 1.5;
     }

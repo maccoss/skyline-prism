@@ -2235,7 +2235,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not sample_to_batch:
             # Priority 3: Estimate batches from acquisition times
             batch_est_config = config.get("batch_estimation", {})
-            est_method = batch_est_config.get("method", "auto")
+            # Default "none": inventing batches is worse than having none. Gap detection cannot
+            # tell a real plate boundary from an ordinary pause in a continuously acquired run,
+            # and a wrong guess makes ComBat "correct" between batches that do not exist.
+            est_method = batch_est_config.get("method", "none")
             est_n_batches = batch_est_config.get("n_batches")
             gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
 
@@ -2561,7 +2564,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not sample_to_batch:
             # Priority 3: Estimate batches from acquisition times
             batch_est_config = config.get("batch_estimation", {})
-            est_method = batch_est_config.get("method", "auto")
+            # Default "none": inventing batches is worse than having none. Gap detection cannot
+            # tell a real plate boundary from an ordinary pause in a continuously acquired run,
+            # and a wrong guess makes ComBat "correct" between batches that do not exist.
+            est_method = batch_est_config.get("method", "none")
             est_n_batches = batch_est_config.get("n_batches")
             gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
 
@@ -3218,10 +3224,13 @@ sample_annotations:
 
 batch_estimation:
   # Estimation method:
+  #   "none"  - DEFAULT. Do not guess; samples stay in one batch unless a real
+  #             annotation says otherwise, so ComBat cannot correct between
+  #             batches that do not exist.
   #   "auto"  - Try gap detection first, fall back to fixed if no gaps found
   #   "fixed" - Divide evenly into n_batches by acquisition time order
   #   "gap"   - Only use gap detection (skip batch correction if no gaps)
-  method: "auto"
+  method: "none"
 
   # Number of batches for "fixed" method (required for fixed, optional fallback for auto)
   # Set to null to disable fixed-count batch estimation

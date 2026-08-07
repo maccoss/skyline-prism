@@ -949,11 +949,31 @@ public partial class MainWindow : Window
         // Capture what each input knows about DIA isolation windows and save it beside the outputs, so the
         // Spectrum density tab can bin on the real windows later - including when this output directory is
         // reopened with no Skyline running.
-        var isolationCatalog = new IsolationSchemeCatalog();
-        foreach (var input in inputs)
-            input.CollectIsolationSchemes(isolationCatalog, Log, SkylineCmdPathOverride, cancellationToken);
-        if (!isolationCatalog.IsEmpty)
-            isolationCatalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+        //
+        // Runs ALONGSIDE the pipeline, not before it. This is an enrichment for one plot: reading the
+        // windows means asking Skyline to open a raw data file, which is normally ~10 s but can take
+        // minutes on a slow share - and every second of that used to be time the run had not started.
+        // The catalog is written when it finishes; the tab reads the file when it is opened, so landing
+        // late costs nothing. Failures are already non-fatal, and now they are not even in the way.
+        var isolationTask = Task.Run(() =>
+        {
+            try
+            {
+                var catalog = new IsolationSchemeCatalog();
+                foreach (var input in inputs)
+                    input.CollectIsolationSchemes(catalog, Log, SkylineCmdPathOverride, cancellationToken);
+                if (!catalog.IsEmpty)
+                    catalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop was pressed; the pipeline reports the cancellation.
+            }
+            catch (Exception ex)
+            {
+                Log("Could not collect isolation windows for the density map: " + ex.Message);
+            }
+        }, cancellationToken);
 
         Log($"Running the PRISM pipeline on {reportPaths.Count} report(s): "
             + string.Join(", ", reportPaths.Select(Path.GetFileName)));
@@ -961,6 +981,13 @@ public partial class MainWindow : Window
             reportPaths, outputDir, config, metadata, Log, cancellationToken: cancellationToken);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
+
+        // Give the window read a little longer to land so the density map has real windows on the
+        // first open, but never hold the run open for it - it is bounded and non-fatal either way.
+        if (!isolationTask.IsCompleted)
+            Log("Still reading the acquisition's isolation windows in the background; the density map "
+                + "will use them once it finishes.");
+        isolationTask.Wait(TimeSpan.FromSeconds(20));
     }
 
     /// <summary>Optional explicit SkylineCmd.exe path; null means auto-discover (see SkylineCmdLocator).</summary>

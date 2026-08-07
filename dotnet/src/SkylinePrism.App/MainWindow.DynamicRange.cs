@@ -361,8 +361,12 @@ public partial class MainWindow
             return;
 
         _rangeSelected = best;
+        // Redraw FIRST. RenderDynamicRange ends by rewriting the status line with the plot summary,
+        // so selecting before redrawing threw away everything SelectInSkyline had just reported -
+        // including the reason it could not select anything, which made a failure look identical to
+        // a click that did nothing at all.
+        RenderDynamicRange();
         SelectInSkyline(best);
-        RenderDynamicRange(); // redraw so a "label the selection" mode follows the click
     }
 
     private void SelectInSkyline(AbundanceEntry entry)
@@ -380,11 +384,16 @@ public partial class MainWindow
             return;
         }
 
-        var locator = ResolveLocator(entry, out var viaFallback);
+        var locator = ResolveLocator(entry, out var viaFallback, out var treeUnavailable);
         if (locator is null)
         {
-            RangeStatusText.Text = $"{entry.Label}{where} - no matching element in the Skyline document "
-                + "(PRISM's protein grouping can differ from the document's).";
+            // "Could not read the tree" and "this one is not in the tree" look the same to a user
+            // but need completely different actions, so they are never reported as the same thing.
+            RangeStatusText.Text = treeUnavailable
+                ? $"{entry.Label}{where} - could not read the document tree from Skyline "
+                  + "(it may be busy; see the Log tab). Click again to retry."
+                : $"{entry.Label}{where} - no matching element in the Skyline document "
+                  + "(PRISM's protein grouping can differ from the document's).";
             return;
         }
 
@@ -427,16 +436,28 @@ public partial class MainWindow
     /// sequence in the document tree. <paramref name="viaFallback"/> reports which happened, so the user
     /// is told when the tree's grouping decided it.</para>
     /// </summary>
-    private string? ResolveLocator(AbundanceEntry entry, out bool viaFallback)
+    private string? ResolveLocator(AbundanceEntry entry, out bool viaFallback, out bool treeUnavailable)
     {
         viaFallback = false;
+        treeUnavailable = false;
         if (_session is null)
             return null;
         var level = RangeLevel;
         if (_rangeLocatorMap is null || _rangeLocatorLevel != level)
         {
             var driver = new SkylineReportDriver(_session, Log);
-            _rangeLocatorMap = driver.GetLocatorMap(level == AbundanceLevel.Protein ? "group" : "molecule");
+            var map = driver.GetLocatorMap(level == AbundanceLevel.Protein ? "group" : "molecule");
+            // An empty map means the call failed (Skyline busy, RPC timed out) rather than that the
+            // document has no proteins. Do NOT cache that - the next click should try again, and
+            // caching it turned one slow moment into a tab that never worked until it was reopened.
+            if (map.Count == 0)
+            {
+                treeUnavailable = true;
+                Log($"Could not read the {level} tree from Skyline; selection is unavailable "
+                    + "until it responds.");
+                return null;
+            }
+            _rangeLocatorMap = map;
             _rangeLocatorLevel = level;
         }
 
@@ -458,8 +479,8 @@ public partial class MainWindow
             return null;
         }
 
-        foreach (var key in new[] { entry.Key, entry.ProteinName, entry.Accession, entry.Gene })
-            if (!string.IsNullOrWhiteSpace(key) && _rangeLocatorMap.TryGetValue(key!, out var locator))
+        foreach (var key in ProteinLocatorKeys.For(entry))
+            if (_rangeLocatorMap.TryGetValue(key, out var locator))
                 return locator;
         return null;
     }
