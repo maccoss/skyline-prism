@@ -20,6 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- So the pieces of the UI that are pure logic (label placement, for one) can be tested
+         without standing up a window. -->
+    <InternalsVisibleTo Include="SkylinePrism.Tests.Windows" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ScottPlot.WPF" Version="5.0.55" />
   </ItemGroup>
 

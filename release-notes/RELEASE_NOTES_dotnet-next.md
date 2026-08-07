@@ -47,6 +47,12 @@ as the GitHub Release description and fails if it is missing.
   level dropdown was gated on the previous load having succeeded, which the failed load had just
   cleared - so switching level did nothing, exactly when it was the natural way out.
 
+- **Point labels no longer pile on top of each other.** Every label went up-and-right at a fixed
+  offset, which is fine for one and unreadable for twenty on a dense curve. Each label now tries a
+  ring of positions around its point - **below as well as above**, left and right, then further out -
+  and takes the first that clears the labels already placed. Where nothing is clear it takes the
+  least-overlapping spot rather than dropping a label you asked for.
+
 - **"Label this list's members on the plot" did nothing.** The tick was a filter on a right-click label
   mode that is off by default, so it had no effect unless that mode had also been set from a menu there
   was no reason to open. The per-list tick now turns labels on by itself; the plot's right-click menu

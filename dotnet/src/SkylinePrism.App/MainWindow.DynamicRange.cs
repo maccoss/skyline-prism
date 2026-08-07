@@ -277,49 +277,54 @@ public partial class MainWindow
     private void AddRangeLabels(
         Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList)
     {
-        // Offsets in data units, from the plotted extents, so a leader line is the same visual length
-        // whatever the abundance range happens to be.
-        var xSpan = Math.Max(1, _rangeEntries.Count);
-        var ySpan = Math.Max(0.5, _rangeEntries[0].Log10Abundance - _rangeEntries[^1].Log10Abundance);
-        var dx = xSpan * 0.035;
-        var dy = ySpan * 0.045;
-
+        var wanted = new List<(AbundanceEntry Entry, Color Color)>();
         if (_rangeLabelSelection && _rangeSelected is not null)
-            AddRangeLabel(plt, _rangeSelected, Colors.Black, xSpan, dx, dy);
-
+            wanted.Add((_rangeSelected, Colors.Black));
         foreach (var (list, entries) in byList)
         {
             if (!list.ShowLabels)
                 continue;
+            var color = Color.FromHex(list.ColorHex);
             foreach (var entry in entries)
-                AddRangeLabel(plt, entry, Color.FromHex(list.ColorHex), xSpan, dx, dy);
+                wanted.Add((entry, color));
         }
+        if (wanted.Count == 0)
+            return;
+
+        // Highest-abundance first, so when the curve is crowded the labels that get the roomiest
+        // positions are the ones at the top of the plot where the eye starts.
+        wanted.Sort((a, b) => b.Entry.Log10Abundance.CompareTo(a.Entry.Log10Abundance));
+
+        var placer = new RangeLabelPlacer(
+            _rangeEntries.Count,
+            _rangeEntries[0].Log10Abundance,
+            _rangeEntries[^1].Log10Abundance,
+            RangePlot.ActualWidth,
+            RangePlot.ActualHeight);
+
+        foreach (var (entry, color) in wanted)
+            AddRangeLabel(plt, entry, color, placer.Place(entry));
     }
 
     /// <summary>
-    /// A label offset from its point with a leader line back to it. Offsetting matters because the points
-    /// sit on a dense curve - a label centerd on its point buries the very point it names.
+    /// A label offset from its point with a leader line back to it. Offsetting matters because the
+    /// points sit on a dense curve - a label centered on its point buries the very point it names.
     /// </summary>
     private static void AddRangeLabel(
-        Plot plt, AbundanceEntry entry, Color color, double xSpan, double dx, double dy)
+        Plot plt, AbundanceEntry entry, Color color, RangeLabelPlacer.Placement placement)
     {
-        // Labels go up-right, except near the right edge where they would run off the canvas.
-        var toLeft = entry.Rank > xSpan * 0.8;
-        var labelX = entry.Rank + (toLeft ? -dx : dx);
-        var labelY = entry.Log10Abundance + dy;
-
-        var leader = plt.Add.Line(entry.Rank, entry.Log10Abundance, labelX, labelY);
+        var leader = plt.Add.Line(entry.Rank, entry.Log10Abundance, placement.X, placement.Y);
         leader.LineColor = color.WithAlpha(0.75);
         leader.LineWidth = 1.5f;
         leader.MarkerSize = 0;
 
-        var text = plt.Add.Text(entry.Label, labelX, labelY);
+        var text = plt.Add.Text(entry.Label, placement.X, placement.Y);
         PlotRenderer.StyleTextLabel(text, 16, bold: true);
         text.LabelFontColor = color;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.75);
         text.LabelBorderColor = color.WithAlpha(0.4);
         text.LabelBorderWidth = 1;
-        text.LabelAlignment = toLeft ? Alignment.LowerRight : Alignment.LowerLeft;
+        text.LabelAlignment = placement.Alignment;
     }
 
     /// <summary>
