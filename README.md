@@ -128,6 +128,10 @@ the merged data, which keeps identically named reference/QC injections from diff
 Double-clicking the installed `SkylinePrism.exe` opens the same window in **standalone mode** — a plain
 PRISM GUI with no Skyline running. See [dotnet/README.md](dotnet/README.md) for details.
 
+**[docs/skyline-tool.md](docs/skyline-tool.md)** covers what the window does once a run finishes: the
+Dynamic Range and Spectrum density plots, protein lists, two-way selection with the document tree,
+stopping a run, and the environment variables.
+
 ## Quick start (CLI)
 
 ```bash
@@ -213,7 +217,7 @@ dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
 
 - **[dotnet/README.md](dotnet/README.md)** — building, testing, project layout, and CI for the C# code.
 - **[SPECIFICATION.md](SPECIFICATION.md)** — the authoritative algorithm/format specification.
-- **[docs/](docs/)** — [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
+- **[docs/](docs/)** — [the Skyline tool](docs/skyline-tool.md), [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
 - **[README-python.md](README-python.md)** — the original Python `skyline-prism` package.
 
 ## License
