@@ -14,7 +14,7 @@ namespace SkylinePrism.Tests.Visualization;
 /// <para>
 /// This is a regression test with a specific history: the correlation heatmap set its own font
 /// SIZES and never called <see cref="PlotRenderer.StyleQcPlot"/>, so it silently rendered in the
-/// backend's default typeface while the plots either side of it were in Segoe UI. The colour bars
+/// backend's default typeface while the plots either side of it were in Segoe UI. The color bars
 /// and text annotations had the same hole - ScottPlot styles those per item, so a call site that
 /// forgets is invisible until someone looks at the report.
 /// </para>
@@ -48,8 +48,8 @@ public class PlotFontConsistencyTests
 
         foreach (var bar in ColorBars(plt))
         {
-            Check("colour bar label", bar.LabelStyle.FontName);
-            Check("colour bar tick labels", bar.Axis.TickLabelStyle.FontName);
+            Check("color bar label", bar.LabelStyle.FontName);
+            Check("color bar tick labels", bar.Axis.TickLabelStyle.FontName);
         }
 
         return wrong;
@@ -101,7 +101,7 @@ public class PlotFontConsistencyTests
 
     /// <summary>
     /// The heatmap is the one that regressed, so it gets a direct check that it really did draw the
-    /// per-cell annotations and a colour bar - otherwise the theory above would pass by having
+    /// per-cell annotations and a color bar - otherwise the theory above would pass by having
     /// nothing to inspect.
     /// </summary>
     [Fact]

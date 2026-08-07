@@ -33,5 +33,13 @@ public interface ISkylineCommandRunner
     /// <see cref="InvalidOperationException"/> when Skyline reports an error, and
     /// <see cref="OperationCanceledException"/> if cancelled.
     /// </summary>
-    void Run(string[] args, Action<string> log, CancellationToken cancellationToken);
+    /// <param name="timeout">
+    /// Give up after this long with the command still running, killing the Skyline it started.
+    /// <c>null</c> means wait indefinitely, which is right for the report export - it is the point of
+    /// the run, it can legitimately take an hour on a large document, and abandoning it accomplishes
+    /// nothing. Pass a bound for work that is merely an enrichment, where waiting forever turns an
+    /// optional extra into a hang.
+    /// </param>
+    void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+        TimeSpan? timeout = null);
 }

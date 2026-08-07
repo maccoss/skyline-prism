@@ -29,14 +29,14 @@ public class ScheduledWindowTests
         ThermoInclusionList.Parse(InclusionCsv.Split('\n').Select(l => l.TrimEnd('\r')).ToList(), "MTM method");
 
     [Fact]
-    public void InclusionList_BecomesWindowsCentredOnMzWithTheirFiringInterval()
+    public void InclusionList_BecomesWindowsCenterdOnMzWithTheirFiringInterval()
     {
         var scheme = ParseCsv();
 
         Assert.Equal(3, scheme.Windows.Count);
         Assert.True(scheme.IsScheduled);
 
-        // Multiplexed slot: centre 500.5, width 4.7 -> 498.15-502.85, firing 10-14 min.
+        // Multiplexed slot: center 500.5, width 4.7 -> 498.15-502.85, firing 10-14 min.
         var mtm = scheme.Windows[0];
         Assert.Equal(498.15, mtm.Start, 6);
         Assert.Equal(502.85, mtm.End, 6);
@@ -124,7 +124,7 @@ public class ScheduledWindowTests
     public void UnscheduledWindowsStayAlwaysOn()
     {
         // A DIA scheme has no schedule: every window is on for the whole gradient, and nothing about the
-        // RT dimension may change that behaviour.
+        // RT dimension may change that behavior.
         var dia = new IsolationScheme("DIA", new[]
         {
             new IsolationWindow(400, 425), new IsolationWindow(425, 450),

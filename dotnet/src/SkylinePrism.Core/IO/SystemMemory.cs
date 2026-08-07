@@ -12,7 +12,7 @@ namespace SkylinePrism.Core.IO;
 /// memory the .NET GC knows nothing about: a limit set from TOTAL RAM on a machine that is already
 /// half full does not fail, it pages - which shows up as the whole system going to 100% memory and
 /// crawling, rather than as a clean spill to the temp directory. Budgeting from what is free keeps
-/// the sort inside real RAM and lets DuckDB spill the rest, which is the behaviour we want.
+/// the sort inside real RAM and lets DuckDB spill the rest, which is the behavior we want.
 /// </para>
 /// </summary>
 internal static class SystemMemory

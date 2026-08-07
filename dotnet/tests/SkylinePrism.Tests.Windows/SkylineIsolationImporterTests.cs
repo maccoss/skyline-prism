@@ -33,7 +33,8 @@ public class SkylineIsolationImporterTests
         public string Description => "fake runner";
         public bool SupportsParquet => false;
 
-        public void Run(string[] args, Action<string> log, CancellationToken cancellationToken)
+        public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+            TimeSpan? timeout = null)
         {
             Invocations.Add(args);
             if (_failWith is not null)

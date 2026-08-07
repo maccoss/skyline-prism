@@ -17,29 +17,38 @@ namespace SkylinePrism.App;
 /// <summary>
 /// The "Dynamic Range" tab: log10 abundance against abundance rank - Skyline's Relative Abundance shape -
 /// over the CORRECTED PRISM matrices. Clicking a point selects that protein/peptide in the Skyline
-/// document tree; user-defined protein lists highlight sets of interest in their own colours.
+/// document tree; user-defined protein lists highlight sets of interest in their own colors.
 /// </summary>
 public partial class MainWindow
 {
     private bool _rangeLoaded;
     private bool _suppressRangeRender;
+
+    /// <summary>
+    /// Whether the tab has ever been shown, i.e. whether a level change is a real user action rather
+    /// than the combo being populated at startup.
+    /// <para>
+    /// Kept separate from <see cref="_rangeLoaded"/> deliberately. Gating the level-change handler on
+    /// "a load succeeded" meant that once a load FAILED, switching level did nothing at all - the
+    /// handler returned before reloading and the previous level's error stayed on screen, so the
+    /// only way out was to leave the tab and come back.
+    /// </para>
+    /// </summary>
+    private bool _rangeTabShown;
     private string? _rangeOutputDir;
     private List<AbundanceEntry> _rangeEntries = new();
     private List<string> _rangeSampleColumns = new();
     private ProteinListSet _proteinLists = ProteinListSet.Load();
 
-    // Points as plotted, for the click hit-test, plus the current label mode.
+    // Points as plotted, for the click hit-test, plus what is currently labeled.
     private List<AbundanceEntry> _rangePlotted = new();
-    private RangeLabelMode _rangeLabels = RangeLabelMode.None;
     private AbundanceEntry? _rangeSelected;
 
-    /// <summary>What the plot labels, toggled from the right-click menu (as Skyline does).</summary>
-    private enum RangeLabelMode
-    {
-        None,
-        Selected,
-        Lists,
-    }
+    /// <summary>
+    /// Whether to label the element selected in Skyline. Independent of the protein lists: which
+    /// LISTS are labeled is each list's own <c>ShowLabels</c>, set in the Protein lists editor.
+    /// </summary>
+    private bool _rangeLabelSelection;
 
     private AbundanceLevel RangeLevel =>
         ComboText(RangeLevelCombo, "Protein").StartsWith("Pep", StringComparison.OrdinalIgnoreCase)
@@ -62,7 +71,9 @@ public partial class MainWindow
 
     private async void OnRangeLevelChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppressRangeRender || !_rangeLoaded)
+        // Not gated on a successful previous load: switching level after a failure has to try the
+        // other level, which is the natural way out of an error.
+        if (_suppressRangeRender || !_rangeTabShown)
             return;
         await LoadDynamicRangeAsync(force: true);
     }
@@ -252,7 +263,17 @@ public partial class MainWindow
         return ticked > 0 ? ticked : _rangeSampleColumns.Count;
     }
 
-    // Labels: nothing, just the element selected in Skyline, or every member of the visible lists.
+    /// <summary>
+    /// Draw the point labels. Two independent controls, deliberately: a list is labeled when its own
+    /// <c>ShowLabels</c> is ticked in the Protein lists editor, and the Skyline selection is labeled
+    /// when the right-click menu says so.
+    /// <para>
+    /// The per-list tick used to be a FILTER on a right-click label MODE that defaulted to "none", so
+    /// ticking "Label this list's members on the plot" did nothing whatsoever until a mode was also
+    /// set from a menu the user had no reason to open. The checkbox states what it does, so it now
+    /// does it by itself.
+    /// </para>
+    /// </summary>
     private void AddRangeLabels(
         Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList)
     {
@@ -263,29 +284,21 @@ public partial class MainWindow
         var dx = xSpan * 0.035;
         var dy = ySpan * 0.045;
 
-        switch (_rangeLabels)
-        {
-            case RangeLabelMode.Selected when _rangeSelected is not null:
-                AddRangeLabel(plt, _rangeSelected, Colors.Black, xSpan, dx, dy);
-                break;
+        if (_rangeLabelSelection && _rangeSelected is not null)
+            AddRangeLabel(plt, _rangeSelected, Colors.Black, xSpan, dx, dy);
 
-            case RangeLabelMode.Lists:
-                // If any list opted into labels explicitly, label only those; otherwise label them all.
-                var opted = matcher.Lists.Any(l => l.ShowLabels);
-                foreach (var (list, entries) in byList)
-                {
-                    if (opted && !list.ShowLabels)
-                        continue;
-                    foreach (var entry in entries)
-                        AddRangeLabel(plt, entry, Color.FromHex(list.ColorHex), xSpan, dx, dy);
-                }
-                break;
+        foreach (var (list, entries) in byList)
+        {
+            if (!list.ShowLabels)
+                continue;
+            foreach (var entry in entries)
+                AddRangeLabel(plt, entry, Color.FromHex(list.ColorHex), xSpan, dx, dy);
         }
     }
 
     /// <summary>
     /// A label offset from its point with a leader line back to it. Offsetting matters because the points
-    /// sit on a dense curve - a label centred on its point buries the very point it names.
+    /// sit on a dense curve - a label centerd on its point buries the very point it names.
     /// </summary>
     private static void AddRangeLabel(
         Plot plt, AbundanceEntry entry, Color color, double xSpan, double dx, double dy)
@@ -463,19 +476,38 @@ public partial class MainWindow
             return;
         menu.Reset(); // start from ScottPlot's defaults (Save Image, Copy, Autoscale)
         menu.AddSeparator();
-        menu.Add(Tick("No labels", RangeLabelMode.None), _ => SetRangeLabels(RangeLabelMode.None));
-        menu.Add(Tick("Label the Skyline selection", RangeLabelMode.Selected),
-            _ => SetRangeLabels(RangeLabelMode.Selected));
-        menu.Add(Tick("Label protein lists", RangeLabelMode.Lists), _ => SetRangeLabels(RangeLabelMode.Lists));
+        menu.Add(Tick("Label the Skyline selection", _rangeLabelSelection),
+            _ => SetSelectionLabel(!_rangeLabelSelection));
+        // Bulk operations on the per-list ticks, so the menu and the Protein lists editor drive the
+        // same setting rather than two that have to be combined in the user's head.
+        menu.Add("Label all protein lists", _ => SetAllListLabels(true));
+        menu.Add("No labels", _ =>
+        {
+            _rangeLabelSelection = false;
+            SetAllListLabels(false);
+        });
         menu.AddSeparator();
         menu.Add("Protein lists...", _ => OnManageProteinLists(this, new RoutedEventArgs()));
 
-        string Tick(string label, RangeLabelMode mode) => (_rangeLabels == mode ? "✓ " : "    ") + label;
+        string Tick(string label, bool on) => (on ? "✓ " : "    ") + label;
     }
 
-    private void SetRangeLabels(RangeLabelMode mode)
+    private void SetSelectionLabel(bool on)
     {
-        _rangeLabels = mode;
+        _rangeLabelSelection = on;
+        if (_rangeLoaded)
+            RenderDynamicRange();
+    }
+
+    /// <summary>
+    /// Tick or clear every list's labels, and persist it - the same setting the Protein lists editor
+    /// writes, so the menu is a shortcut rather than a second, competing switch.
+    /// </summary>
+    private void SetAllListLabels(bool on)
+    {
+        foreach (var list in _proteinLists.Lists)
+            list.ShowLabels = on;
+        _proteinLists.Save();
         if (_rangeLoaded)
             RenderDynamicRange();
     }

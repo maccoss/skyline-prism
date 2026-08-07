@@ -42,8 +42,10 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
     /// Run SkylineCmd, streaming its output into <paramref name="log"/>. No timeout: loading a large
     /// document and writing a transition report legitimately takes many minutes - the caller cancels.
     /// </summary>
-    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken)
+    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
+        var deadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
         var psi = new ProcessStartInfo
         {
             FileName = _exePath,
@@ -82,10 +84,18 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
         // thread). The final no-arg WaitForExit flushes the async stdout/stderr handlers.
         while (!process.WaitForExit(250))
         {
-            if (!cancellationToken.IsCancellationRequested)
-                continue;
-            TryKill(process, log);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                TryKill(process, log);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            if (deadline is not null && DateTime.UtcNow > deadline)
+            {
+                TryKill(process, log);
+                throw new TimeoutException(
+                    $"SkylineCmd did not finish within {timeout!.Value.TotalMinutes:F0} min "
+                    + "and was stopped.");
+            }
         }
         process.WaitForExit();
 

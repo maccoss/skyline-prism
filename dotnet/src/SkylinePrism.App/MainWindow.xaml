@@ -302,7 +302,7 @@
                         </ComboBox>
                         <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
                                 Click="OnManageProteinLists"
-                                ToolTip="Define named protein lists with colours - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
+                                ToolTip="Define named protein lists with colors - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
                         <Button Content="Reload" Padding="10,2" Margin="8,0,0,0" Click="OnRangeReload"
                                 ToolTip="Re-read the corrected matrices from the output directory above." />
                         <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"

@@ -11,7 +11,7 @@ namespace SkylinePrism.Tests.Visualization;
 /// The intensity-distribution plot must look the same in the HTML QC report and in the tool's
 /// interactive QC tab. Both render through <see cref="PlotRenderer.DrawIntensityDensity"/>, so the only
 /// way they can diverge is the caller dropping the group labels - which is exactly what the report used
-/// to do, giving it a per-sample rainbow while the tool coloured by sample type.
+/// to do, giving it a per-sample rainbow while the tool colored by sample type.
 /// </summary>
 public class IntensityDistributionColorTests
 {
@@ -30,30 +30,30 @@ public class IntensityDistributionColorTests
             .Select(i => i % 3 == 0 ? "reference" : i % 3 == 1 ? "qc" : "experimental")
             .ToList();
 
-    /// <summary>Line colours of the density curves, in draw order.</summary>
+    /// <summary>Line colors of the density curves, in draw order.</summary>
     private static List<Color> CurveColors(Plot plt) =>
         plt.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Select(s => s.Color).ToList();
 
     [Fact]
-    public void GroupLabels_ColourEverySampleOfATypeIdentically()
+    public void GroupLabels_ColorEverySampleOfATypeIdentically()
     {
         var plt = new Plot();
         PlotRenderer.DrawIntensityDensity(plt, Matrix(200, 9), Types(9));
 
         var colors = CurveColors(plt);
         Assert.Equal(9, colors.Count);
-        // 9 samples, 3 types -> exactly 3 distinct colours, not 9.
+        // 9 samples, 3 types -> exactly 3 distinct colors, not 9.
         Assert.Equal(3, colors.Distinct().Count());
-        // Samples of the same type (indices 0,3,6) share a colour.
+        // Samples of the same type (indices 0,3,6) share a color.
         Assert.Equal(colors[0], colors[3]);
         Assert.Equal(colors[0], colors[6]);
         Assert.NotEqual(colors[0], colors[1]);
     }
 
     [Fact]
-    public void WithoutGroupLabels_EachSampleGetsItsOwnColour()
+    public void WithoutGroupLabels_EachSampleGetsItsOwnColor()
     {
-        // The old report behaviour, retained for the genuinely ungrouped case.
+        // The old report behavior, retained for the genuinely ungrouped case.
         var plt = new Plot();
         PlotRenderer.DrawIntensityDensity(plt, Matrix(200, 9));
 
@@ -61,7 +61,7 @@ public class IntensityDistributionColorTests
     }
 
     [Fact]
-    public void TheHtmlReportPathColoursByType_NotPerSample()
+    public void TheHtmlReportPathColorsByType_NotPerSample()
     {
         // IntensityDistribution used to accept sampleTypes and drop them. Rendering the same matrix with
         // uniform vs varied types must therefore differ - if it did not, the labels are being ignored again.
@@ -74,19 +74,19 @@ public class IntensityDistributionColorTests
     }
 
     [Fact]
-    public void SkylineAndPrismSpellingsOfATypeShareAColour()
+    public void SkylineAndPrismSpellingsOfATypeShareAColor()
     {
         // The tool groups by the Replicates report's "Sample Type" (Skyline spellings); the HTML report
-        // uses PRISM's mapped names. They must still agree on colour, or the two views disagree.
+        // uses PRISM's mapped names. They must still agree on color, or the two views disagree.
         Assert.Equal(PlotRenderer.GroupColor("Standard"), PlotRenderer.GroupColor("reference"));
         Assert.Equal(PlotRenderer.GroupColor("Quality Control"), PlotRenderer.GroupColor("qc"));
         Assert.Equal(PlotRenderer.GroupColor("Unknown"), PlotRenderer.GroupColor("experimental"));
     }
 
     [Fact]
-    public void ATypeKeepsItsColourRegardlessOfHowManyGroupsArePresent()
+    public void ATypeKeepsItsColorRegardlessOfHowManyGroupsArePresent()
     {
-        // Colours must not shift with the cycle index when a group set changes between plots.
+        // Colors must not shift with the cycle index when a group set changes between plots.
         var two = new Plot();
         PlotRenderer.DrawIntensityDensity(two, Matrix(100, 2), new List<string> { "reference", "qc" });
         var three = new Plot();

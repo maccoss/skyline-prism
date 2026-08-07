@@ -126,7 +126,7 @@ public static class DuckDbMerge
         }
         catch (Exception)
         {
-            // Unknown/unreachable volume: keep the old behaviour rather than refuse to merge.
+            // Unknown/unreachable volume: keep the old behavior rather than refuse to merge.
             return false;
         }
     }

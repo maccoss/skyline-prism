@@ -62,7 +62,7 @@ public class RvrDegenerateTests
     {
         var status = Evaluate(0.30, 0.34, 0.50, 0.48);
 
-        // The old behaviour CLAIMED overfitting to the reference while the reference had degraded. The
+        // The old behavior CLAIMED overfitting to the reference while the reference had degraded. The
         // new message mentions the overfitting check by name, so match the claim, not the word.
         Assert.DoesNotContain(status.Warnings,
             w => w.Contains("possible overfitting", StringComparison.OrdinalIgnoreCase));

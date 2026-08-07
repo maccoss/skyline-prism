@@ -29,7 +29,7 @@ namespace SkylinePrism.Skyline;
 ///
 /// <para><b>Side effect.</b> <c>--report-add</c> installs the PRISM report definitions into Skyline's
 /// saved-report list, which is a per-user program setting shared with the GUI. The live RPC path already
-/// does exactly this, so behaviour is consistent between the two. Nothing here writes to the .sky - the
+/// does exactly this, so behavior is consistent between the two. Nothing here writes to the .sky - the
 /// document is opened with <c>--in</c> and never saved.</para>
 /// </summary>
 public sealed class HeadlessSkylineExporter

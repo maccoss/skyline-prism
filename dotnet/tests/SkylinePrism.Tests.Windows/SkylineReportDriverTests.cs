@@ -165,7 +165,7 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work, metadataReportName: "myreplicates");
 
-        // The available casing wins, and it is what gets exported to the document-labelled metadata CSV.
+        // The available casing wins, and it is what gets exported to the document-labeled metadata CSV.
         Assert.Contains(client.Exports,
             e => e.Report == "MyReplicates" && e.Path.EndsWith(SkylineReportDriver.MetadataFileName("PRISM")));
     }

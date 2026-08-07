@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace SkylinePrism.Core.Numerics;
 
 /// <summary>
-/// Deterministic numeric primitives that reproduce the numpy / scipy behaviour the
+/// Deterministic numeric primitives that reproduce the numpy / scipy behavior the
 /// Python PRISM pipeline relies on. Every method here is a PARITY KEYSTONE: subtle
 /// differences (even-count median averaging, percentile interpolation, ddof) compound
 /// downstream through rollup and ComBat, so the semantics must match numpy exactly.
@@ -183,7 +183,7 @@ public static class Stats
         var vals = new double[n];
         values.CopyTo(vals);
         // Stable sort by value so ties keep original order (irrelevant for average
-        // ranks but keeps behaviour deterministic).
+        // ranks but keeps behavior deterministic).
         Array.Sort(order, (a, b) =>
         {
             var c = vals[a].CompareTo(vals[b]);
@@ -211,7 +211,7 @@ public static class Stats
     /// numpy.interp: piecewise-linear interpolation of <paramref name="x"/> onto the
     /// data points (<paramref name="xp"/>, <paramref name="fp"/>). <paramref name="xp"/>
     /// must be monotonically increasing. Values of x outside the range clamp to the
-    /// endpoint fp values (numpy's default left/right behaviour).
+    /// endpoint fp values (numpy's default left/right behavior).
     /// </summary>
     public static double Interp(double x, double[] xp, double[] fp)
     {

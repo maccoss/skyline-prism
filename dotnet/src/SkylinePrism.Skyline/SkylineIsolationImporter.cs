@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using SkylinePrism.Core.Qc;
@@ -31,6 +32,35 @@ namespace SkylinePrism.Skyline;
 /// </remarks>
 public static class SkylineIsolationImporter
 {
+    /// <summary>
+    /// Override for how long to wait on Skyline here, in seconds.
+    /// </summary>
+    public const string TimeoutEnvVar = "PRISM_ISOLATION_TIMEOUT_SEC";
+
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How long to let Skyline read the data file before giving up on it.
+    /// <para>
+    /// This step is an ENRICHMENT - without it the density map falls back to uniform bins and every
+    /// other part of the run is unaffected - so it must never be able to hold a run up indefinitely.
+    /// It normally takes ~10 s (167 windows from a 5.2 GB Thermo .raw on a share), but a file that
+    /// has moved behind a slow or half-mounted link can leave Skyline reading with nothing to print,
+    /// and there is no output to time out on. Five minutes is roughly 30x the expected time.
+    /// </para>
+    /// </summary>
+    internal static TimeSpan Timeout
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable(TimeoutEnvVar);
+            if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                && seconds > 0)
+                return TimeSpan.FromSeconds(seconds);
+            return DefaultTimeout;
+        }
+    }
+
     /// <summary>
     /// Import the isolation scheme from <paramref name="dataFilePath"/> (.raw file or .d folder, anything
     /// Skyline can open). Returns null when the file is unreachable, Skyline reports an error, or the
@@ -71,7 +101,8 @@ public static class SkylineIsolationImporter
                     if (!message.Contains("Prespecified isolation windows", StringComparison.Ordinal))
                         log(message);
                 },
-                cancellationToken);
+                cancellationToken,
+                Timeout);
 
             var scheme = IsolationScheme.Parse(SkyDocumentInfo.ReadIsolationSchemeXml(tempDoc));
             if (scheme is null || !scheme.HasWindows)
@@ -90,6 +121,15 @@ public static class SkylineIsolationImporter
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (TimeoutException ex)
+        {
+            // Deliberately not fatal: the map falls back to uniform bins and the rest of the run is
+            // unaffected. Say what was lost and how to get it, rather than only that time ran out.
+            log($"{ex.Message} The density map will use uniform bins instead of this run's real "
+                + "isolation windows; everything else is unaffected. This usually means the data file "
+                + $"is slow to reach ({dataFilePath}) - raise {TimeoutEnvVar} (seconds) to wait longer.");
+            return null;
         }
         catch (Exception ex)
         {

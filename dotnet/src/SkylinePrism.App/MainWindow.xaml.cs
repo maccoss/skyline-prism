@@ -1448,7 +1448,7 @@ public partial class MainWindow : Window
         }
         var matrix = cols.Count == d.Samples.Count ? d.FeaturesBySamples : SelectColumns(d.FeaturesBySamples, cols);
         var types = cols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
-        // PCA colours each point by its Group-by column value, so the groups show as distinct colours.
+        // PCA colors each point by its Group-by column value, so the groups show as distinct colors.
         var colorLabels = cols.Select(i =>
         {
             var v = SampleAnnotation(d.Samples[i], column);
@@ -1681,8 +1681,8 @@ public partial class MainWindow : Window
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
-            // Standardized colours (same across all plots): known sample types get their fixed colour,
-            // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled colour.
+            // Standardized colors (same across all plots): known sample types get their fixed color,
+            // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled color.
             markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
             markers.MarkerSize = 15; // sized to match the figure-scale axis text
             markers.LegendText = label;
@@ -1805,7 +1805,7 @@ public partial class MainWindow : Window
 
     private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)
     {
-        // Per-sample KDE density curves, coloured by Group-by value (N groups -> N colours). All samples shown.
+        // Per-sample KDE density curves, colored by Group-by value (N groups -> N colors). All samples shown.
         PlotRenderer.DrawIntensityDensity(plt, featuresBySamples, labels);
         // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("Log2 Abundance");

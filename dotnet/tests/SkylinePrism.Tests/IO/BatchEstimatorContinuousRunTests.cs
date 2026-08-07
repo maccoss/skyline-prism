@@ -13,7 +13,7 @@ namespace SkylinePrism.Tests.IO;
 /// <para>The threshold is <c>max(q3 + k*IQR, 1.1 * median gap)</c>. On an evenly spaced run the IQR is
 /// ~0, so the Tukey term collapses to roughly the median and the <b>1.1x floor becomes the binding
 /// constraint</b> - meaning any gap barely 10% longer than the typical spacing starts a new batch. These
-/// tests pin that behaviour (it matches the Python implementation, cli.py:412-415) so the sensitivity is
+/// tests pin that behavior (it matches the Python implementation, cli.py:412-415) so the sensitivity is
 /// visible and any future change to it is deliberate.</para>
 /// </summary>
 public class BatchEstimatorContinuousRunTests
@@ -89,7 +89,7 @@ public class BatchEstimatorContinuousRunTests
     public void IrregularSpacingRaisesTheThreshold_SoSmallGapsAreTolerated()
     {
         // With genuinely variable spacing the IQR is wide, the Tukey term binds, and a modestly longer
-        // gap no longer splits - the opposite of the even-run behaviour.
+        // gap no longer splits - the opposite of the even-run behavior.
         var rows = new List<(string, DateTime)>();
         var t = new DateTime(2026, 3, 1, 8, 0, 0, DateTimeKind.Utc);
         var spacings = new[] { 40, 120, 55, 200, 60, 30, 150, 45, 90, 70, 180, 50 };
