@@ -94,6 +94,84 @@ public sealed record PrecursorDensityMap(
         return grid;
     }
 
+    /// <summary>
+    /// How many SPECTRA had each precursor load: <c>result[n]</c> is the number of spectra that had to
+    /// resolve exactly <c>n</c> precursors, for n = 0..<see cref="MaxCount"/>.
+    /// <para>
+    /// The heatmap shows where the load is; this shows how it is distributed. A long tail says a few
+    /// spectra are carrying many co-isolated precursors, which is what limits identification - and it is
+    /// invisible on a map whose color scale is set by that same tail.
+    /// </para>
+    /// <para>
+    /// Only cells that were actually ACQUIRED are counted, using the same rule as
+    /// <see cref="ToDisplayGrid"/>: a scheduled window that was not firing at that time is not a
+    /// spectrum with zero precursors, it is not a spectrum at all. Counting those would pile a huge
+    /// spike onto bin 0 that is purely an artifact of the schedule.
+    /// </para>
+    /// </summary>
+    public int[] PrecursorsPerSpectrumHistogram()
+    {
+        if (IsEmpty)
+            return Array.Empty<int>();
+
+        var histogram = new int[MaxCount + 1];
+        for (var i = 0; i < MzBins; i++)
+            for (var j = 0; j < RtBins; j++)
+                if (WasAcquired(i, j))
+                    histogram[Counts[i, j]]++;
+        return histogram;
+    }
+
+    /// <summary>
+    /// Per RT bin: the mean, minimum and maximum precursor load across the spectra acquired at that
+    /// time, plus the bin's center time.
+    /// <para>
+    /// This is the load over the gradient - where the instrument is working hardest. The spread between
+    /// min and max at one time says whether the load is even across the m/z range or concentrated in a
+    /// few windows, which the mean alone hides.
+    /// </para>
+    /// <para>
+    /// A time with no acquired spectrum at all yields NaN for all three rather than zero, so a gap in
+    /// the schedule reads as a gap instead of as an idle instrument.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<(double TimeMin, double Mean, double Min, double Max)> LoadOverTime()
+    {
+        var series = new List<(double, double, double, double)>(RtBins);
+        if (IsEmpty)
+            return series;
+
+        for (var j = 0; j < RtBins; j++)
+        {
+            var time = RtLow + (j + 0.5) * RtBinMin;
+            long sum = 0;
+            var n = 0;
+            var min = int.MaxValue;
+            var max = 0;
+            for (var i = 0; i < MzBins; i++)
+            {
+                if (!WasAcquired(i, j))
+                    continue;
+                var c = Counts[i, j];
+                sum += c;
+                n++;
+                if (c < min) min = c;
+                if (c > max) max = c;
+            }
+            series.Add(n == 0
+                ? (time, double.NaN, double.NaN, double.NaN)
+                : (time, (double)sum / n, min, max));
+        }
+        return series;
+    }
+
+    /// <summary>
+    /// Whether row <paramref name="i"/> was firing during RT bin <paramref name="j"/>. Always true for
+    /// ordinary DIA (a window is on for the whole gradient); false outside a scheduled window's interval.
+    /// </summary>
+    private bool WasAcquired(int i, int j) =>
+        Rows[i].IsOnAt(RtLow + (j + 0.5) * RtBinMin);
+
     /// <summary>The row containing <paramref name="mz"/>, or -1 (used by the tool's hover readout).</summary>
     public int RowAt(double mz)
     {

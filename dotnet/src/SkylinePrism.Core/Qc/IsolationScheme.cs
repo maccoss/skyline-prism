@@ -115,6 +115,53 @@ public sealed record IsolationScheme(string Name, IReadOnlyList<IsolationWindow>
         return (double)inside / precursorMz.Count;
     }
 
+    /// <summary>
+    /// The built-in starting scheme's name, so the UI can mark it as the default.
+    /// <para>
+    /// The range in the name is NOMINAL, as it is in Skyline's own "SWATH (25 m/z)": the windows
+    /// actually run 400.43 to 901.66, because 167 windows of ~3.0014 Th starting at a forbidden-zone
+    /// edge do not land on a round number. Rounding the windows to make the label exact would defeat
+    /// the point of the scheme. The picker shows the real extents next to the name via
+    /// <see cref="Describe"/>, so nothing has to be inferred from the label.
+    /// </para>
+    /// </summary>
+    public const string AstralDefaultName = "Astral 3 Th, 400-900 m/z";
+
+    /// <summary>
+    /// The scheme to start from when an acquisition's own windows cannot be read: a modern Astral-style
+    /// narrow-window DIA cycle.
+    ///
+    /// <para><b>Why this and not Skyline's saved schemes.</b> Those are generic templates - SWATH
+    /// (25 m/z), SWATH (VW 64) - designed for instruments and experiments that narrow-window DIA has
+    /// moved on from. Binning a 3 Th acquisition on a 25 Th grid produces a map that looks plausible
+    /// and is wrong, so offering them was worse than offering nothing.</para>
+    ///
+    /// <para><b>Where the numbers come from.</b> A real forbidden-zone acquisition, whose 167 windows
+    /// were read from the raw file. The edges are not round: they start at 400.4319 and step by
+    /// ~3.0014 Th, because the boundaries are placed in the m/z regions where peptide isotope clusters
+    /// do not fall. Generating the windows from (start, step, width) rather than storing all 167
+    /// reproduces that acquisition to within <b>0.084 mDa</b> - a thousandth of a window - while making
+    /// it obvious this is a template rather than a measurement of any one run.</para>
+    ///
+    /// <para>It is still only a starting point. When the real windows are available they win, and the
+    /// tab says which it is using.</para>
+    /// </summary>
+    public static IsolationScheme AstralDefault()
+    {
+        const double start = 400.4319;
+        const double step = 3.001365;
+        const double width = 3.001364;
+        const int count = 167; // 400.4319 -> 901.66 m/z
+
+        var windows = new List<IsolationWindow>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var lo = start + i * step;
+            windows.Add(new IsolationWindow(lo, lo + width));
+        }
+        return new IsolationScheme(AstralDefaultName, windows);
+    }
+
     /// <summary>Short human-readable summary for the UI: "35 windows, 400-1240 m/z, 24 Th".</summary>
     public string Describe()
     {

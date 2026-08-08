@@ -74,6 +74,7 @@ public partial class MainWindow
         if (_session is null)
             return; // standalone: nothing to follow
 
+        _rangeFollowFailures = 0;
         if (_rangeFollowTimer is null)
         {
             _rangeFollowTimer = new System.Windows.Threading.DispatcherTimer
@@ -141,12 +142,33 @@ public partial class MainWindow
             RangeStatusText.Text =
                 $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
                 + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
+            _rangeFollowFailures = 0;
+        }
+        catch (Exception ex)
+        {
+            // This method is `async void` on a timer: an escaping exception becomes an unhandled
+            // application exception, and the timer keeps firing - so one fault produces an error
+            // dialog every 750 ms until the tool is killed. Nothing here is worth interrupting the
+            // user for; following the selection is a convenience, and the plot is unaffected.
+            App.WriteLog("Following Skyline's selection failed: " + ex);
+            if (++_rangeFollowFailures >= MaxRangeFollowFailures)
+            {
+                _rangeFollowTimer?.Stop();
+                Log("Stopped following Skyline's selection after "
+                    + $"{MaxRangeFollowFailures} consecutive failures ({ex.Message}). "
+                    + "Clicking a point still works; switch away from this tab and back to retry.");
+            }
         }
         finally
         {
             _rangeFollowBusy = false;
         }
     }
+
+    /// <summary>Consecutive poll failures; the timer gives up rather than retrying a broken state forever.</summary>
+    private int _rangeFollowFailures;
+
+    private const int MaxRangeFollowFailures = 3;
 
     /// <summary>
     /// The plotted point a Skyline locator refers to. Built by resolving every entry through the same
@@ -165,7 +187,7 @@ public partial class MainWindow
                 var map = new Dictionary<string, AbundanceEntry>(StringComparer.OrdinalIgnoreCase);
                 foreach (var entry in entries)
                 {
-                    var entryLocator = ResolveLocator(entry, out _, out var unavailable);
+                    var entryLocator = ResolveLocator(entry, level, out _, out var unavailable);
                     if (unavailable)
                         return null; // could not read the tree; do not cache a half-built index
                     if (entryLocator is not null)
@@ -199,17 +221,31 @@ public partial class MainWindow
 
     private async void OnRangeReload(object sender, RoutedEventArgs e)
     {
-        InvalidateDynamicRange();
-        await LoadDynamicRangeAsync();
+        try
+        {
+            InvalidateDynamicRange();
+            await LoadDynamicRangeAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnRangeReload), ex);
+        }
     }
 
     private async void OnRangeLevelChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Not gated on a successful previous load: switching level after a failure has to try the
-        // other level, which is the natural way out of an error.
-        if (_suppressRangeRender || !_rangeTabShown)
-            return;
-        await LoadDynamicRangeAsync(force: true);
+        try
+        {
+            // Not gated on a successful previous load: switching level after a failure has to try the
+            // other level, which is the natural way out of an error.
+            if (_suppressRangeRender || !_rangeTabShown)
+                return;
+            await LoadDynamicRangeAsync(force: true);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnRangeLevelChanged), ex);
+        }
     }
 
     /// <summary>
@@ -591,13 +627,18 @@ public partial class MainWindow
     /// sequence in the document tree. <paramref name="viaFallback"/> reports which happened, so the user
     /// is told when the tree's grouping decided it.</para>
     /// </summary>
-    private string? ResolveLocator(AbundanceEntry entry, out bool viaFallback, out bool treeUnavailable)
+    /// <param name="level">
+    /// Passed in, never read from the combo box. This runs on the selection poll's worker thread as
+    /// well as the UI thread, and touching a WPF control off the UI thread throws
+    /// "The calling thread cannot access this object because a different thread owns it".
+    /// </param>
+    private string? ResolveLocator(
+        AbundanceEntry entry, AbundanceLevel level, out bool viaFallback, out bool treeUnavailable)
     {
         viaFallback = false;
         treeUnavailable = false;
         if (_session is null)
             return null;
-        var level = RangeLevel;
         if (_rangeLocatorMap is null || _rangeLocatorLevel != level)
         {
             var driver = new SkylineReportDriver(_session, Log);
@@ -646,8 +687,9 @@ public partial class MainWindow
     /// </summary>
     private string? ResolveLocatorLocked(AbundanceEntry entry, out bool viaFallback, out bool unavailable)
     {
+        var level = RangeLevel; // read on the UI thread, before taking the lock
         lock (_rangeLocatorLock)
-            return ResolveLocator(entry, out viaFallback, out unavailable);
+            return ResolveLocator(entry, level, out viaFallback, out unavailable);
     }
 
     private static string? CorrectedMatrixPath(string outputDir, string stem)
