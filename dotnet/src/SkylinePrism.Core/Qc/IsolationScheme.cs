@@ -146,20 +146,45 @@ public sealed record IsolationScheme(string Name, IReadOnlyList<IsolationWindow>
     /// <para>It is still only a starting point. When the real windows are available they win, and the
     /// tab says which it is using.</para>
     /// </summary>
-    public static IsolationScheme AstralDefault()
-    {
-        const double start = 400.4319;
-        const double step = 3.001365;
-        const double width = 3.001364;
-        const int count = 167; // 400.4319 -> 901.66 m/z
+    public static IsolationScheme AstralDefault() => BuiltIns[0];
 
+    /// <summary>
+    /// The schemes PRISM ships, newest-instrument-first; <see cref="BuiltIns"/>[0] is the default the
+    /// picker preselects. Add a scheme HERE and it appears in the tool automatically - the density tab
+    /// enumerates this list rather than naming any single scheme, so there is no second place to edit
+    /// and no way to add one half-way.
+    ///
+    /// <para>These are deliberately a short, curated list of acquisitions actually in use, not a
+    /// catalog. Skyline's own saved templates (SWATH 25 m/z, VW 64) are NOT offered: binning a 3 Th
+    /// acquisition on a 25 Th grid produces a map that looks plausible and is wrong, so offering them
+    /// was worse than offering nothing.</para>
+    /// </summary>
+    public static IReadOnlyList<IsolationScheme> BuiltIns { get; } = new[]
+    {
+        // start, step and width are the instrument's real numbers - see AstralDefault's remarks on why
+        // they are not round. count * step from start gives the nominal range in the name.
+        Cycle(AstralDefaultName, start: 400.4319, step: 3.001365, width: 3.001364, count: 167),
+    };
+
+    /// <summary>
+    /// A repeating DIA cycle from (start, step, width): <paramref name="count"/> windows of
+    /// <paramref name="width"/> Th, each starting <paramref name="step"/> Th after the last. Generating
+    /// them beats storing every edge - it reproduces a real acquisition to well under a milli-Dalton
+    /// while making it obvious the scheme is a template rather than a measurement of one run.
+    /// <para><paramref name="step"/> and <paramref name="width"/> are separate on purpose: they are
+    /// equal for an abutting scheme, but a staggered/overlapping one has width &gt; step, and a scheme
+    /// with gaps has width &lt; step.</para>
+    /// </summary>
+    public static IsolationScheme Cycle(
+        string name, double start, double step, double width, int count)
+    {
         var windows = new List<IsolationWindow>(count);
         for (var i = 0; i < count; i++)
         {
             var lo = start + i * step;
             windows.Add(new IsolationWindow(lo, lo + width));
         }
-        return new IsolationScheme(AstralDefaultName, windows);
+        return new IsolationScheme(name, windows);
     }
 
     /// <summary>Short human-readable summary for the UI: "35 windows, 400-1240 m/z, 24 Th".</summary>

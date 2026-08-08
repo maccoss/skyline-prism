@@ -354,29 +354,6 @@ public sealed class SkylineReportDriver
         }
     }
 
-    /// <summary>
-    /// Every isolation scheme saved in this Skyline (Settings &gt; Transition Settings &gt; Full-Scan), as
-    /// raw XML. This is the acquisition's real window layout, and the only source of it for a document
-    /// whose scheme is "Results only" - Skyline reads those windows from the data files at import and
-    /// stores them neither in the .sky nor in any report column, so the user has to say which of their
-    /// saved schemes the run was acquired with. Empty when the RPC is unavailable.
-    /// </summary>
-    public List<string> GetIsolationSchemeXml()
-    {
-        var names = Try(() => _session.Execute(c => c.GetSettingsListNames("IsolationSchemeList", null)));
-        if (names is null)
-            return new List<string>();
-
-        var result = new List<string>();
-        foreach (var name in names.Where(n => !string.IsNullOrWhiteSpace(n)))
-        {
-            var xml = Try(() => _session.Execute(c => c.GetSettingsListItem("IsolationSchemeList", name)));
-            if (!string.IsNullOrWhiteSpace(xml))
-                result.Add(xml!);
-        }
-        return result;
-    }
-
     private List<string> GetAvailableReportNames()
     {
         var names = new List<string>();
