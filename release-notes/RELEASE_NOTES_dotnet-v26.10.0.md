@@ -67,16 +67,16 @@ its memory from what is actually free.
   had even started.
 
   It was being driven through the **SkylineRunner** path (launch the installed Skyline and talk to it
-  over named pipes), which stalls. On the machine this was found on it stalls for *any* command, not
-  just this one: `SkylineDailyRunner.exe --new=x.sky --overwrite --save` prints `File x.sky opened.`
-  and then nothing, and never writes the file - while `SkylineCmd.exe` runs the identical arguments in
-  **0.9 s**. For the isolation import specifically, `SkylineCmd` returns all 167 windows in **8.7 s**.
-  The probe now uses `SkylineCmd`.
+  over named pipes). That path hangs on `--new`, which is exactly what this probe uses: it works
+  against a throwaway document so your own is never touched. `SkylineDailyRunner.exe --new=x.sky
+  --overwrite --save` prints `File x.sky opened.` and then nothing, never writing the file, while
+  `SkylineCmd.exe` runs the identical arguments in **0.9 s**. The probe now uses `SkylineCmd`, which
+  returns all 167 windows in **8.7 s**.
 
   This looks like a Skyline-daily issue rather than a PRISM one - it reproduces with MacCoss Lab's own
-  `SkylineDailyRunner.exe`, with no PRISM code involved - and is being followed up separately. Report
-  export for **closed** documents still prefers the parquet-capable runner, so if you hit the same
-  stall there, set `PRISM_SKYLINECMD` to force `SkylineCmd` (CSV instead of parquet, but it completes).
+  `SkylineDailyRunner.exe`, no PRISM code involved - and has been raised with them. **Report export is
+  unaffected**: it opens an existing document (`--in`), which the same runner handles in 1.6 s, so
+  runs that add closed `.sky` documents still get parquet exactly as before.
 
   PRISM also waited on Skyline's output with no deadline, and only checked for cancellation *after* a
   line arrived - so a Skyline that went quiet stopped the run for good and **Stop could not break it
