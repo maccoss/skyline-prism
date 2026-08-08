@@ -462,8 +462,11 @@ public partial class MainWindow
 
     private void OnDensityColormapChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_suppressDensityRender && _densityMap is not null)
-            DrawDensity();
+        // IsInitialized: XAML preselects this combo too, so this runs once during InitializeComponent.
+        // It survived only because _densityMap happens to be null then - an accident, not a guard.
+        if (!IsInitialized || _suppressDensityRender || _densityMap is null)
+            return;
+        DrawDensity();
     }
 
     /// <summary>Which of the three readings of the map to draw.</summary>
@@ -492,7 +495,12 @@ public partial class MainWindow
     // The view only changes how the same map is drawn - no re-query, no re-bin.
     private void OnDensityViewChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppressDensityRender)
+        // IsInitialized, not just the suppress flag: the XAML preselects this combo, so WPF raises
+        // SelectionChanged from the ComboBox's EndInit - part way through InitializeComponent, when the
+        // controls declared AFTER it (DensityColormapLabel, DensityHoverText) have not been created and
+        // their fields are still null. Touching one there threw an NRE out of the window's constructor,
+        // which is a startup crash, not a handler error.
+        if (_suppressDensityRender || !IsInitialized)
             return;
         UpdateViewControls();
         if (_densityMap is not null)

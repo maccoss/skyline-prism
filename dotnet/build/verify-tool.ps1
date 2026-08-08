@@ -48,11 +48,14 @@ if (Test-Path $log) {
 }
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
 
-# Broken-binary/dependency signatures. A failed Skyline connection (expected with the dummy arg)
-# throws pipe/IO/timeout errors that do NOT match these, so it will not fail the check.
-$loadFailure = 'Could not load file or assembly|XamlParseException|TypeInitializationException|DllNotFoundException|BadImageFormatException'
-if ($tail -match $loadFailure) {
-    Write-Host 'VERIFY FAILED: the tool hit a dependency/XAML load error on startup:'
+# ANY exception that escaped to App's global handlers fails the check. This deliberately replaces an
+# allowlist of five load-failure strings, which let a startup crash through: an NRE thrown out of
+# MainWindow's constructor is logged as "UNHANDLED (UI thread): ...TargetInvocationException", matches
+# none of those five, and - because App sets e.Handled to keep the error dialog readable - leaves the
+# process alive, so the wait below looked healthy too. A failed Skyline connection (expected with the
+# dummy arg) is caught by the driver and never reaches these handlers, so it still will not fail here.
+if ($tail -match 'UNHANDLED \(') {
+    Write-Host 'VERIFY FAILED: an exception escaped to the tool''s global handler on startup:'
     Write-Host '----------------------------------------------------------------------'
     Write-Host $tail
     exit 1
@@ -62,5 +65,13 @@ if ($tail -notmatch 'Skyline-PRISM tool started') {
     Write-Host $tail
     exit 1
 }
-Write-Host 'VERIFY PASSED: SkylinePrism.exe launched from the packaged zip and loaded the UI (no dependency/XAML load errors).'
+# The startup line above is written in OnStartup, BEFORE base.OnStartup builds MainWindow - so on its
+# own it only proves the process ran, not that the UI came up. MainWindow logs this once it is fully
+# constructed and shown; requiring it is what makes this a launch verification rather than a smoke test.
+if ($tail -notmatch 'MainWindow loaded') {
+    Write-Host 'VERIFY FAILED: the process started but the main window never finished loading.'
+    Write-Host $tail
+    exit 1
+}
+Write-Host 'VERIFY PASSED: SkylinePrism.exe launched from the packaged zip, built its main window, and logged no unhandled exception.'
 exit 0
