@@ -1874,6 +1874,21 @@ public partial class MainWindow : Window
         return map;
     }
 
+    /// <summary>
+    /// Report a failure that reached an <c>async void</c> event handler.
+    /// <para>
+    /// An exception escaping <c>async void</c> becomes an unhandled application exception - a modal
+    /// error dialog - and for a handler on a timer that means one dialog per tick until the tool is
+    /// killed, which is exactly how the Dynamic Range selection poll made the tool unusable. Every
+    /// such handler catches, and reports here instead.
+    /// </para>
+    /// </summary>
+    private void ReportHandlerFailure(string where, Exception ex)
+    {
+        App.WriteLog($"{where} failed: {ex}");
+        Log($"{where} failed: {ex.Message}");
+    }
+
     private void Log(string message)
     {
         // Persist to the diagnostic file first so a hard crash still leaves a trail.

@@ -221,17 +221,31 @@ public partial class MainWindow
 
     private async void OnRangeReload(object sender, RoutedEventArgs e)
     {
-        InvalidateDynamicRange();
-        await LoadDynamicRangeAsync();
+        try
+        {
+            InvalidateDynamicRange();
+            await LoadDynamicRangeAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnRangeReload), ex);
+        }
     }
 
     private async void OnRangeLevelChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Not gated on a successful previous load: switching level after a failure has to try the
-        // other level, which is the natural way out of an error.
-        if (_suppressRangeRender || !_rangeTabShown)
-            return;
-        await LoadDynamicRangeAsync(force: true);
+        try
+        {
+            // Not gated on a successful previous load: switching level after a failure has to try the
+            // other level, which is the natural way out of an error.
+            if (_suppressRangeRender || !_rangeTabShown)
+                return;
+            await LoadDynamicRangeAsync(force: true);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnRangeLevelChanged), ex);
+        }
     }
 
     /// <summary>

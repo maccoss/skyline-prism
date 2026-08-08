@@ -60,29 +60,43 @@ public partial class MainWindow
 
     private async void OnMainTabChanged(object sender, SelectionChangedEventArgs e)
     {
-        // A TabControl also receives the SelectionChanged of every ComboBox inside it, so only act on
-        // the tab strip's own event.
-        if (!ReferenceEquals(e.Source, MainTabs))
-            return;
-        // Following Skyline's selection polls, so it runs only while its tab is actually on screen.
-        SetRangeFollowActive(ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab));
-
-        if (ReferenceEquals(MainTabs.SelectedItem, DensityTab) && !_densityLoaded)
-            await LoadDensitySamplesAsync();
-        else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab))
+        try
         {
-            // Marked shown before loading, so a load that FAILS still leaves the level combo live -
-            // switching level is how a user gets out of an error, and it used to be inert afterwards.
-            _rangeTabShown = true;
-            if (!_rangeLoaded)
-                await LoadDynamicRangeAsync();
+            // A TabControl also receives the SelectionChanged of every ComboBox inside it, so only act on
+            // the tab strip's own event.
+            if (!ReferenceEquals(e.Source, MainTabs))
+                return;
+            // Following Skyline's selection polls, so it runs only while its tab is actually on screen.
+            SetRangeFollowActive(ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab));
+
+            if (ReferenceEquals(MainTabs.SelectedItem, DensityTab) && !_densityLoaded)
+                await LoadDensitySamplesAsync();
+            else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab))
+            {
+                // Marked shown before loading, so a load that FAILS still leaves the level combo live -
+                // switching level is how a user gets out of an error, and it used to be inert afterwards.
+                _rangeTabShown = true;
+                if (!_rangeLoaded)
+                    await LoadDynamicRangeAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnMainTabChanged), ex);
         }
     }
 
     private async void OnDensityReload(object sender, RoutedEventArgs e)
     {
-        InvalidateDensity();
-        await LoadDensitySamplesAsync();
+        try
+        {
+            InvalidateDensity();
+            await LoadDensitySamplesAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDensityReload), ex);
+        }
     }
 
     /// <summary>
@@ -171,11 +185,18 @@ public partial class MainWindow
 
     private async void OnDensitySampleChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppressDensityRender)
-            return;
-        _densityPrecursors = null; // different run -> re-query
-        PopulateSchemeCombo();     // a different batch may declare a different scheme
-        await RenderDensityAsync();
+        try
+        {
+            if (_suppressDensityRender)
+                return;
+            _densityPrecursors = null; // different run -> re-query
+            PopulateSchemeCombo();     // a different batch may declare a different scheme
+            await RenderDensityAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDensitySampleChanged), ex);
+        }
     }
 
     /// <summary>
@@ -374,13 +395,20 @@ public partial class MainWindow
 
     private async void OnDensityQValueChanged(object sender, RoutedEventArgs e)
     {
-        // LostFocus fires on every tab-out, so re-query only when the cutoff actually changed.
-        var text = DensityQValueBox.Text?.Trim() ?? "";
-        if (_suppressDensityRender || text == _densityQValueApplied)
-            return;
-        _densityQValueApplied = text;
-        _densityPrecursors = null; // the cutoff is applied in the query
-        await RenderDensityAsync();
+        try
+        {
+            // LostFocus fires on every tab-out, so re-query only when the cutoff actually changed.
+            var text = DensityQValueBox.Text?.Trim() ?? "";
+            if (_suppressDensityRender || text == _densityQValueApplied)
+                return;
+            _densityQValueApplied = text;
+            _densityPrecursors = null; // the cutoff is applied in the query
+            await RenderDensityAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDensityQValueChanged), ex);
+        }
     }
 
     private void OnDensityQValueKeyDown(object sender, KeyEventArgs e)
