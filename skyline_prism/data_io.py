@@ -192,7 +192,8 @@ def generate_sample_metadata(
 
     Args:
         samples_by_batch: Dict mapping batch_name -> set of sample names
-        reference_patterns: Patterns for reference samples (patterns like -Pool_ match reference samples)
+        reference_patterns: Patterns for reference samples (patterns like -Pool_ match
+            reference samples)
         qc_patterns: Patterns for QC samples (default: -Carl_, -QC_, etc.)
 
     Returns:
@@ -243,6 +244,7 @@ class ValidationResult:
     n_replicates: int = 0
 
     def __str__(self) -> str:
+        """Summarize the validation outcome for a log line."""
         if self.is_valid:
             return (
                 f"Valid: {self.filepath.name} ({self.n_rows} rows, {self.n_replicates} replicates)"
@@ -1876,7 +1878,7 @@ def load_sample_metadata_files(filepaths: list[Path]) -> pd.DataFrame:
                 f"Duplicate sample entries found: {duplicates[:5]}... "
                 "Attempting to resolve by deduplication."
             )
-            # If we really have duplicates after drop_duplicates(), it means they have conflicting info
+            # If we really have duplicates after drop_duplicates(), they have conflicting info
             # (e.g. different RunOrder or SampleType for same Sample name).
             # This is a data error.
 
@@ -2069,6 +2071,7 @@ class BatchEstimationResult:
     details: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
+        """Summarize how many batches were found and by which method."""
         return f"BatchEstimation: {self.n_batches} batches via '{self.method}'"
 
 

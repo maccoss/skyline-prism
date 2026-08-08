@@ -214,7 +214,7 @@ public class DynamicRangeTests
             Assert.Equal("sp|P68871|HBB_HUMAN", sharedPeptide.ProteinName);
             Assert.Equal("P68871", sharedPeptide.Accession);
             Assert.Equal("HBB", sharedPeptide.Gene);
-            // Peptides stay labelled by sequence - gene labels would collide across a protein's peptides.
+            // Peptides stay labeled by sequence - gene labels would collide across a protein's peptides.
             Assert.Equal("SHAREDPEPTIDEK", sharedPeptide.Label);
         }
         finally

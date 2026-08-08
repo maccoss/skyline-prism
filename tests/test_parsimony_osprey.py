@@ -11,7 +11,7 @@ from skyline_prism.parsimony import compute_protein_groups
 
 
 def build(prot_to_peps: dict[str, list[str]]):
-    """Groups from a protein -> peptides map (one edge per (protein, peptide))."""
+    """Build groups from a protein -> peptides map (one edge per (protein, peptide))."""
     protein_to_peptides = {p: set(peps) for p, peps in prot_to_peps.items()}
     peptide_to_proteins: dict[str, set[str]] = {}
     for prot, peps in prot_to_peps.items():
@@ -63,7 +63,9 @@ def test_razor_assigns_to_most_unique():
 
 def test_razor_cascading():
     # Osprey Example 2: P1 claims X,Y (3 unique); then P2 claims Z.
-    r = razor(build({"P1": ["A", "B", "C", "X", "Y"], "P2": ["D", "X", "Z"], "P3": ["E", "Y", "Z"]}))
+    r = razor(
+        build({"P1": ["A", "B", "C", "X", "Y"], "P2": ["D", "X", "Z"], "P3": ["E", "Y", "Z"]})
+    )
     assert r["P1"] == ["X", "Y"]
     assert r["P2"] == ["Z"]
     assert r.get("P3", []) == []

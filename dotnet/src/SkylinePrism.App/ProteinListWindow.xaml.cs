@@ -18,7 +18,7 @@ namespace SkylinePrism.App;
 /// </summary>
 public partial class ProteinListWindow : Window
 {
-    /// <summary>Palette offered for list colours: the categorical set used elsewhere in the tool.</summary>
+    /// <summary>Palette offered for list colors: the categorical set used elsewhere in the tool.</summary>
     private static readonly (string Name, string Hex)[] Palette =
     {
         ("Red", "#d62728"), ("Blue", "#1f77b4"), ("Green", "#2ca02c"), ("Orange", "#ff7f0e"),

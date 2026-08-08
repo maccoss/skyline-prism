@@ -169,6 +169,12 @@ public sealed class SkylineSession : ISkylineExecutor
 
         public void SetSelectedElement(string elementLocator) => _c.SetSelectedElement(elementLocator, null);
 
+        public string? GetSelectedElementLocator(string elementType)
+        {
+            var locator = _c.GetSelectedElementLocator(elementType);
+            return string.IsNullOrWhiteSpace(locator) ? null : locator;
+        }
+
         public IReadOnlyList<(string Name, string Locator)> GetLocations(string level)
         {
             var entries = _c.GetLocations(level, null);

@@ -39,11 +39,19 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
     }
 
     /// <summary>
-    /// Run SkylineCmd, streaming its output into <paramref name="log"/>. No timeout: loading a large
-    /// document and writing a transition report legitimately takes many minutes - the caller cancels.
+    /// Run SkylineCmd, streaming its output into <paramref name="log"/>.
+    /// <para>
+    /// <paramref name="timeout"/> defaults to none, because loading a large document and writing a
+    /// transition report legitimately takes many minutes and the caller cancels. Pass a bound for work
+    /// that is merely an enrichment, where waiting indefinitely turns an optional extra into a hang -
+    /// see <see cref="ISkylineCommandRunner.Run"/>. On expiry the process is killed and a
+    /// <see cref="TimeoutException"/> is thrown.
+    /// </para>
     /// </summary>
-    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken)
+    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
+        var deadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
         var psi = new ProcessStartInfo
         {
             FileName = _exePath,
@@ -82,10 +90,18 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
         // thread). The final no-arg WaitForExit flushes the async stdout/stderr handlers.
         while (!process.WaitForExit(250))
         {
-            if (!cancellationToken.IsCancellationRequested)
-                continue;
-            TryKill(process, log);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                TryKill(process, log);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            if (deadline is not null && DateTime.UtcNow > deadline)
+            {
+                TryKill(process, log);
+                throw new TimeoutException(
+                    $"SkylineCmd did not finish within {timeout!.Value.TotalMinutes:F0} min "
+                    + "and was stopped.");
+            }
         }
         process.WaitForExit();
 

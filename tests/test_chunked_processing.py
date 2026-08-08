@@ -567,7 +567,8 @@ class TestOutputLog2Scale:
             max_val = sample_values.max()
 
             assert min_val > 10 and max_val < 30, (
-                f"Protein output appears to be in linear scale! min={min_val:.2f}, max={max_val:.2f}. "
+                f"Protein output appears to be in linear scale! "
+                f"min={min_val:.2f}, max={max_val:.2f}. "
                 f"Expected log2 scale values"
             )
 

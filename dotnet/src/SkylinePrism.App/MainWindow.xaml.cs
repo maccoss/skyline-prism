@@ -467,6 +467,7 @@ public partial class MainWindow : Window
         ExcludeOutliersCheck.IsChecked = c.SampleOutlierDetection.Action == "exclude";
         PeptideBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.PeptideLevel;
         ProteinBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.ProteinLevel;
+        ReferenceAnchoredCheck.IsChecked = c.BatchCorrection.ReferenceAnchored;
         ParsimonyCheck.IsChecked = c.Parsimony.Enabled;
         SelectCombo(SharedPeptideCombo, c.Parsimony.SharedPeptideHandling);
         UpdateSharedPeptideRow();
@@ -513,6 +514,9 @@ public partial class MainWindow : Window
         c.BatchCorrection.Enabled = pepBatch || protBatch;
         c.BatchCorrection.PeptideLevel = pepBatch;
         c.BatchCorrection.ProteinLevel = protBatch;
+        // reference_type stays at its default "reference", which is what Skyline's "Standard" sample
+        // type maps to (ReplicateMetadata.MapSampleType) - so the checkbox's wording is literal.
+        c.BatchCorrection.ReferenceAnchored = ReferenceAnchoredCheck.IsChecked == true;
 
         c.Parsimony.Enabled = ParsimonyCheck.IsChecked == true;
         c.Parsimony.SharedPeptideHandling = ComboText(SharedPeptideCombo, "all_groups");
@@ -829,6 +833,7 @@ public partial class MainWindow : Window
             }
             _runCancellation?.Cancel();
         }
+        SetRangeFollowActive(false); // stop polling Skyline's selection
         base.OnClosing(e);
     }
 
@@ -945,11 +950,31 @@ public partial class MainWindow : Window
         // Capture what each input knows about DIA isolation windows and save it beside the outputs, so the
         // Spectrum density tab can bin on the real windows later - including when this output directory is
         // reopened with no Skyline running.
-        var isolationCatalog = new IsolationSchemeCatalog();
-        foreach (var input in inputs)
-            input.CollectIsolationSchemes(isolationCatalog, Log, SkylineCmdPathOverride, cancellationToken);
-        if (!isolationCatalog.IsEmpty)
-            isolationCatalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+        //
+        // Runs ALONGSIDE the pipeline, not before it. This is an enrichment for one plot: reading the
+        // windows means asking Skyline to open a raw data file, which is normally ~10 s but can take
+        // minutes on a slow share - and every second of that used to be time the run had not started.
+        // The catalog is written when it finishes; the tab reads the file when it is opened, so landing
+        // late costs nothing. Failures are already non-fatal, and now they are not even in the way.
+        var isolationTask = Task.Run(() =>
+        {
+            try
+            {
+                var catalog = new IsolationSchemeCatalog();
+                foreach (var input in inputs)
+                    input.CollectIsolationSchemes(catalog, Log, SkylineCmdPathOverride, cancellationToken);
+                if (!catalog.IsEmpty)
+                    catalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop was pressed; the pipeline reports the cancellation.
+            }
+            catch (Exception ex)
+            {
+                Log("Could not collect isolation windows for the density map: " + ex.Message);
+            }
+        }, cancellationToken);
 
         Log($"Running the PRISM pipeline on {reportPaths.Count} report(s): "
             + string.Join(", ", reportPaths.Select(Path.GetFileName)));
@@ -957,6 +982,13 @@ public partial class MainWindow : Window
             reportPaths, outputDir, config, metadata, Log, cancellationToken: cancellationToken);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
+
+        // Give the window read a little longer to land so the density map has real windows on the
+        // first open, but never hold the run open for it - it is bounded and non-fatal either way.
+        if (!isolationTask.IsCompleted)
+            Log("Still reading the acquisition's isolation windows in the background; the density map "
+                + "will use them once it finishes.");
+        isolationTask.Wait(TimeSpan.FromSeconds(20));
     }
 
     /// <summary>Optional explicit SkylineCmd.exe path; null means auto-discover (see SkylineCmdLocator).</summary>
@@ -1448,7 +1480,7 @@ public partial class MainWindow : Window
         }
         var matrix = cols.Count == d.Samples.Count ? d.FeaturesBySamples : SelectColumns(d.FeaturesBySamples, cols);
         var types = cols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
-        // PCA colours each point by its Group-by column value, so the groups show as distinct colours.
+        // PCA colors each point by its Group-by column value, so the groups show as distinct colors.
         var colorLabels = cols.Select(i =>
         {
             var v = SampleAnnotation(d.Samples[i], column);
@@ -1681,8 +1713,8 @@ public partial class MainWindow : Window
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var markers = plt.Add.Markers(g.X.ToArray(), g.Y.ToArray());
-            // Standardized colours (same across all plots): known sample types get their fixed colour,
-            // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled colour.
+            // Standardized colors (same across all plots): known sample types get their fixed color,
+            // any other Group-by value (e.g. a Condition annotation) gets a distinct cycled color.
             markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
             markers.MarkerSize = 15; // sized to match the figure-scale axis text
             markers.LegendText = label;
@@ -1805,7 +1837,7 @@ public partial class MainWindow : Window
 
     private static void DrawIntensity(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)
     {
-        // Per-sample KDE density curves, coloured by Group-by value (N groups -> N colours). All samples shown.
+        // Per-sample KDE density curves, colored by Group-by value (N groups -> N colors). All samples shown.
         PlotRenderer.DrawIntensityDensity(plt, featuresBySamples, labels);
         // No title in the tool - the selectors above already describe the plot.
         plt.XLabel("Log2 Abundance");

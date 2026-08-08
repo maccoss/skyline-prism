@@ -15,7 +15,14 @@ namespace SkylinePrism.Core.BatchCorrection;
 /// </summary>
 internal sealed class ComBatSufficientStats
 {
-    public required IReadOnlyList<List<int>> Batches { get; init; }
+    /// <summary>
+    /// Which samples each batch's effect was estimated from and applied to. The summaries below are
+    /// over the FIT sets, so for reference-anchored ComBat they describe the reference replicates
+    /// even though the correction lands on every sample.
+    /// </summary>
+    public required ComBatPlan Plan { get; init; }
+
+    public IReadOnlyList<List<int>> Batches => Plan.Apply;
 
     /// <summary>Number of active (correctable) features summarized.</summary>
     public required int NFeatures { get; init; }
@@ -111,15 +118,35 @@ internal static class StreamingComBat
 
         for (var i = 0; i < nBatch; i++)
         {
+            var plan = stats.Plan;
+            if (plan.Fit[i].Count == 0)
+            {
+                // Nothing to estimate from: left exactly as it came in (gamma* = 0, delta* = 1).
+                gammaStar[i] = new double[nf];
+                deltaStar[i] = Ones(nf);
+                continue;
+            }
+
             var gammaHat = stats.GammaHat[i];
+            var gammaBar = Stats.Mean(gammaHat);
+            var t2 = Stats.Var(gammaHat, ddof: 1);
+
+            if (plan.MeanOnly || plan.LocationOnly[i])
+            {
+                // No scale: shrink the location effect alone, weighted by the fit set's size.
+                var n = plan.Fit[i].Count;
+                var located = new double[nf];
+                for (var f = 0; f < nf; f++)
+                    located[f] = ComBat.PostMean(gammaHat[f], gammaBar, n, 1.0, t2);
+                gammaStar[i] = located;
+                deltaStar[i] = Ones(nf);
+                continue;
+            }
+
             var (deltaHat, estimable) = stats.DeltaHat(i);
             foreach (var ok in estimable)
                 if (!ok)
                     unestimable++;
-
-            // --- _compute_priors (per batch, across features) ---
-            var gammaBar = Stats.Mean(gammaHat);
-            var t2 = Stats.Var(gammaHat, ddof: 1);
 
             // Only the deltas the data supports - a placeholder 1.0 in here would bias the
             // shrinkage of every feature in the batch.
@@ -151,6 +178,13 @@ internal static class StreamingComBat
         }
 
         return (gammaStar, deltaStar, unestimable);
+    }
+
+    private static double[] Ones(int n)
+    {
+        var v = new double[n];
+        Array.Fill(v, 1.0);
+        return v;
     }
 
     /// <summary>

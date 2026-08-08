@@ -17,6 +17,7 @@ class PRISMConsoleWidget(QWidget):
     process_finished = pyqtSignal(bool, str)  # success, output_dir
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Create the console; no process is started until a run is requested."""
         super().__init__(parent)
         self._process: QProcess | None = None
         self._output_dir: str = ""

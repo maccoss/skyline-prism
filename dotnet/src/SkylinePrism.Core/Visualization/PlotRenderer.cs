@@ -140,7 +140,7 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// Style a colour bar to match the axes. A colour bar is a plot item, not part of the axis
+    /// Style a color bar to match the axes. A color bar is a plot item, not part of the axis
     /// system, so <see cref="StyleQcPlot"/> does not reach it and it would otherwise render in the
     /// backend's default family next to axes that do not.
     /// </summary>
@@ -170,7 +170,7 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// The precursor-density map: retention time across, precursor m/z up, colour = how many peptide
+    /// The precursor-density map: retention time across, precursor m/z up, color = how many peptide
     /// precursors were eluting in that isolation window at that time (one cell = one DIA spectrum).
     /// </summary>
     /// <remarks>
@@ -206,7 +206,7 @@ public static class PlotRenderer
         plt.YLabel("Precursor m/z");
         StyleQcPlot(plt, fontScale);
 
-        // The colour bar IS this plot's legend - it carries the number the reader cares about, so it gets
+        // The color bar IS this plot's legend - it carries the number the reader cares about, so it gets
         // the same treatment as the axes.
         StyleColorBar(plt.Add.ColorBar(heat), "Precursors per spectrum", fontScale);
 
@@ -237,7 +237,7 @@ public static class PlotRenderer
     /// not claimed by a protein list are drawn first in grey so the highlighted lists sit on top of them.
     /// </summary>
     /// <param name="highlights">
-    /// Ordered groups drawn over the background, each with its own colour and legend entry.
+    /// Ordered groups drawn over the background, each with its own color and legend entry.
     /// </param>
     public static void DrawDynamicRange(
         Plot plt,
@@ -325,7 +325,7 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// Overlaid before/after CV histograms (before in grey, after in colour) with both median
+    /// Overlaid before/after CV histograms (before in grey, after in color) with both median
     /// lines - the comparative-CV plot users expect from the Python report.
     /// </summary>
     public static byte[] CvComparison(double[] beforeCvs, double[] afterCvs, string title, string afterColorHex)
@@ -371,7 +371,7 @@ public static class PlotRenderer
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
-    /// <summary>2-D PCA scatter coloured by sample type.</summary>
+    /// <summary>2-D PCA scatter colored by sample type.</summary>
     public static byte[] PcaScatter(double[,] scores2d, IReadOnlyList<string> sampleTypes, string title)
     {
         var plt = new Plot();
@@ -437,7 +437,7 @@ public static class PlotRenderer
                 rc[i, j] = corr[order[i], order[j]];
         var labels = TypeLabels(order, colTypes);
 
-        // Colour range: 1.0 = best (red), the min off-diagonal correlation = worst (blue).
+        // Color range: 1.0 = best (red), the min off-diagonal correlation = worst (blue).
         var vmin = 1.0;
         for (var i = 0; i < n; i++)
             for (var j = 0; j < n; j++)
@@ -446,12 +446,12 @@ public static class PlotRenderer
         vmin = Math.Max(-1.0, vmin);
 
         // ScottPlot draws array row 0 at the TOP (matplotlib/Python orientation), so pass rc directly:
-        // the 1.0 diagonal runs top-left -> bottom-right. Cell rc[i,j] centre is (j+0.5, n-0.5-i).
+        // the 1.0 diagonal runs top-left -> bottom-right. Cell rc[i,j] center is (j+0.5, n-0.5-i).
         var hm = plt.Add.Heatmap(rc);
         hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdBuReversed);
         hm.ManualRange = new ScottPlot.Range(vmin, 1.0);
         hm.Position = new ScottPlot.CoordinateRect(0, n, 0, n);
-        // The colour bar carries only ~15 labels however many samples there are, so it does not have
+        // The color bar carries only ~15 labels however many samples there are, so it does not have
         // to shrink with the grid - keep it near the size the other plots' tick labels use.
         StyleColorBar(plt.Add.ColorBar(hm), fontScale: HeatmapColorBarScale);
 
@@ -470,7 +470,7 @@ public static class PlotRenderer
                     t.LabelFontColor = Math.Abs(rc[i, j] - mid) > (1.0 - vmin) * 0.28 ? Colors.White : Colors.Black;
                 }
 
-        // Ref_001 / QC_001 / ... tick labels at cell centres.
+        // Ref_001 / QC_001 / ... tick labels at cell centers.
         var pos = new double[n];
         for (var i = 0; i < n; i++)
             pos[i] = i + 0.5;
@@ -488,7 +488,7 @@ public static class PlotRenderer
         // up in the backend's default typeface while its neighbours were in Segoe UI.
         StyleQcPlot(plt);
 
-        // A heatmap needs no axis frame or tick marks - the cells are the grid. Labels are centred on
+        // A heatmap needs no axis frame or tick marks - the cells are the grid. Labels are centered on
         // the cells (y-labels on rows; x-labels rotated, right-aligned so they read up into their
         // column). Keeps the labels but drops the L-shaped axis lines.
         plt.Axes.Left.FrameLineStyle.Width = 0;
@@ -508,7 +508,7 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// The correlation heatmap's colour bar, relative to the shared sizes. Smaller than the other
+    /// The correlation heatmap's color bar, relative to the shared sizes. Smaller than the other
     /// plots because it sits beside a dense grid, but nowhere near as small as that grid's own tick
     /// labels have to be - the bar's label count does not grow with the cohort.
     /// </summary>
@@ -648,7 +648,7 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// Per-sample LOWESS curves of LOG2 abundance vs mean RT, coloured by sample type - the
+    /// Per-sample LOWESS curves of LOG2 abundance vs mean RT, colored by sample type - the
     /// diagnostic for RT-lowess normalization (before curves spread; after curves collapse).
     /// </summary>
     public static byte[] RtLowessCurves(
@@ -673,8 +673,8 @@ public static class PlotRenderer
             for (var k = 0; k < g; k++)
                 grid[k] = rtMin + k * step;
 
-            // Colour by the passed label (sample type in the report, Group-by value in the tool): a
-            // distinct colour per distinct value, so N groups -> N colours.
+            // Color by the passed label (sample type in the report, Group-by value in the tool): a
+            // distinct color per distinct value, so N groups -> N colors.
             var groupColors = new Dictionary<string, Color>(StringComparer.Ordinal);
             var gci = 0;
             foreach (var lab in types.Distinct().OrderBy(x => x, StringComparer.Ordinal))
@@ -845,7 +845,7 @@ public static class PlotRenderer
                     BoxMax = q3,
                     WhiskerMin = Math.Max(dataMin, q1 - 1.5 * iqr),
                     WhiskerMax = Math.Min(dataMax, q3 + 1.5 * iqr),
-                    FillColor = fill, // Box.Fill is obsolete in ScottPlot 5; only the colour is set here
+                    FillColor = fill, // Box.Fill is obsolete in ScottPlot 5; only the color is set here
                 });
             }
             if (boxes.Count > 0)
@@ -891,8 +891,8 @@ public static class PlotRenderer
         return cvs.Count == 0 ? double.NaN : Numerics.Stats.NanMedian(cvs.ToArray());
     }
 
-    // The 10 distinct matplotlib tab10 hues first (so a few groups get well-separated colours), then
-    // their tab20 light variants (so many overlaid samples still each get a colour).
+    // The 10 distinct matplotlib tab10 hues first (so a few groups get well-separated colors), then
+    // their tab20 light variants (so many overlaid samples still each get a color).
     private static readonly string[] Tab20 =
     {
         "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
@@ -900,13 +900,13 @@ public static class PlotRenderer
         "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
     };
 
-    /// <summary>Cycled per-sample colour for overlaid density curves.</summary>
+    /// <summary>Cycled per-sample color for overlaid density curves.</summary>
     public static Color SampleColor(int index) => Color.FromHex(Tab20[((index % Tab20.Length) + Tab20.Length) % Tab20.Length]);
 
     /// <summary>
-    /// Standardized colour for a group label, consistent across every plot. Sample types map to fixed
-    /// colours in any spelling (Skyline "Standard"/"Quality Control"/"Unknown" or the PRISM
-    /// reference/qc/experimental names); any other value (e.g. a Condition annotation) gets a cycled colour.
+    /// Standardized color for a group label, consistent across every plot. Sample types map to fixed
+    /// colors in any spelling (Skyline "Standard"/"Quality Control"/"Unknown" or the PRISM
+    /// reference/qc/experimental names); any other value (e.g. a Condition annotation) gets a cycled color.
     /// </summary>
     public static Color GroupColor(string? label, int cycleIndex = 0)
     {
@@ -926,9 +926,9 @@ public static class PlotRenderer
     /// <paramref name="plt"/> - the Python "Intensity Distribution" plot. Shared by the static PNG in the
     /// HTML report and the interactive tool, which must look the same.
     ///
-    /// <para>With <paramref name="groupLabels"/> every sample in a group shares a colour (via
-    /// <see cref="GroupColor"/>, so a type keeps its colour in any spelling) and the plot gets a legend.
-    /// Without them each sample gets its own cycled colour and there is no legend - only appropriate when
+    /// <para>With <paramref name="groupLabels"/> every sample in a group shares a color (via
+    /// <see cref="GroupColor"/>, so a type keeps its color in any spelling) and the plot gets a legend.
+    /// Without them each sample gets its own cycled color and there is no legend - only appropriate when
     /// there is genuinely no grouping to show.</para>
     /// </summary>
     public static void DrawIntensityDensity(Plot plt, double[,] log2Matrix, IReadOnlyList<string>? groupLabels = null)
@@ -961,8 +961,8 @@ public static class PlotRenderer
         for (var i = 0; i < gN; i++)
             grid[i] = gmin + i * step;
 
-        // Colour by group value if given (every sample in a group shares a colour; N groups -> N colours),
-        // else one colour per sample. Legend + a distinct colour per distinct group.
+        // Color by group value if given (every sample in a group shares a color; N groups -> N colors),
+        // else one color per sample. Legend + a distinct color per distinct group.
         Dictionary<string, Color>? groupColors = null;
         if (groupLabels is not null)
         {
@@ -1003,12 +1003,12 @@ public static class PlotRenderer
     }
 
     /// <summary>
-    /// LOG2 intensity density curves, one per sample, coloured by sample type (the Python "Intensity
+    /// LOG2 intensity density curves, one per sample, colored by sample type (the Python "Intensity
     /// Distribution" plot).
     ///
     /// <para><paramref name="sampleTypes"/> must be passed through to the draw call: it is what makes the
     /// HTML report match the tool's interactive plot, and the PCA and RT-lowess plots in this same report,
-    /// all of which colour by group. Dropping it falls back to a per-sample colour cycle - a rainbow that
+    /// all of which color by group. Dropping it falls back to a per-sample color cycle - a rainbow that
     /// carries no information and silently disagrees with every other view of the same data.</para>
     /// </summary>
     public static byte[] IntensityDistribution(

@@ -9,18 +9,18 @@ namespace SkylinePrism.Core.Qc;
 
 /// <summary>
 /// A user-defined set of proteins to highlight on the dynamic-range plot - plasma contaminants, EV
-/// markers, endothelial markers, and so on - with a colour and a visibility toggle.
+/// markers, endothelial markers, and so on - with a color and a visibility toggle.
 /// </summary>
 public sealed class ProteinList
 {
     public string Name { get; set; } = "New list";
 
-    /// <summary>Hex colour used for this list's points and labels, e.g. "#d62728".</summary>
+    /// <summary>Hex color used for this list's points and labels, e.g. "#d62728".</summary>
     public string ColorHex { get; set; } = "#d62728";
 
     public bool Visible { get; set; } = true;
 
-    /// <summary>Whether this list's members are labelled on the plot.</summary>
+    /// <summary>Whether this list's members are labeled on the plot.</summary>
     public bool ShowLabels { get; set; }
 
     /// <summary>

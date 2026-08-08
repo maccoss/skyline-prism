@@ -41,6 +41,19 @@ public interface ISkylineClient
     void SetSelectedElement(string elementLocator);
 
     /// <summary>
+    /// The locator of what is selected in Skyline right now, at the requested tree level, or null when
+    /// nothing of that level is selected.
+    /// <para>
+    /// <paramref name="elementType"/> is <c>"MoleculeGroup"</c> (protein), <c>"Molecule"</c> (peptide),
+    /// <c>"Precursor"</c> or <c>"Transition"</c>. Skyline resolves the ANCESTOR at that level, so asking
+    /// for the protein while a transition is selected returns the protein containing it - which is what
+    /// lets a plot follow the selection without parsing locator strings, and works the same whether the
+    /// user clicked the Targets tree or a row in a document grid.
+    /// </para>
+    /// </summary>
+    string? GetSelectedElementLocator(string elementType);
+
+    /// <summary>
     /// Every element at a tree level ("group" = proteins, "molecule" = peptides) as (name, locator).
     /// Read once and cached, so a click maps a plotted protein to the locator Skyline itself uses rather
     /// than one built by string surgery.

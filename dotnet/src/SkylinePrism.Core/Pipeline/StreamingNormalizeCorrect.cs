@@ -35,9 +35,10 @@ internal static class StreamingNormalizeCorrect
     /// distribution at apply time, so streaming it row-wise is the full matrix again.</item>
     /// <item>a non-parquet corrected output - CSV/TSV of a cohort this large is not a real
     /// scenario, and the delimited writer is not incremental.</item>
-    /// <item>reference-anchored ComBat - a different estimator (NaN-aware, anchored on the
-    /// reference replicates) that has not been given the streaming treatment yet.</item>
     /// </list>
+    /// <para>Reference-anchored ComBat used to be excluded too. It no longer is: both estimators are
+    /// the same code differing only in a <see cref="ComBatPlan"/>, and every per-feature term the
+    /// streaming passes compute is defined against that plan's fit sets rather than whole batches.</para>
     /// </summary>
     public static bool CanHandle(NormalizeCorrectRequest r) => Eligibility(r).CanStream;
 
@@ -52,8 +53,6 @@ internal static class StreamingNormalizeCorrect
         if (!r.CorrectedLinearPath.EndsWith(".parquet", StringComparison.OrdinalIgnoreCase))
             return (false, $"in-memory (output format '{Path.GetExtension(r.CorrectedLinearPath).TrimStart('.')}' "
                 + "is not written incrementally)");
-        if (r.CombatEnabled && r.ReferenceAnchored && r.ReferenceMask is not null && r.ReferenceMask.Any(m => m))
-            return (false, "in-memory (reference-anchored ComBat is not streamed yet)");
         return (true, "streaming (bounded memory)");
     }
 
@@ -82,7 +81,13 @@ internal static class StreamingNormalizeCorrect
         var grandMeans = new List<double>();
         var varPooled = new List<double>();
         if (r.CombatEnabled)
-            batching = Batching.Build(r.BatchLabels);
+        {
+            // Reference-anchored only when there is something to anchor ON; the pipeline reports the
+            // fallback to standard ComBat, so silently doing it here would contradict the log.
+            batching = r.ReferenceAnchored && r.ReferenceMask is not null && r.ReferenceMask.Any(m => m)
+                ? Batching.BuildReferenceAnchored(r.BatchLabels, r.ReferenceMask, r.NoReferenceBatch)
+                : Batching.Build(r.BatchLabels);
+        }
 
         var nKept = ForEachRow(reader, samples, factors, rtColumn, (raw, normalized) =>
         {
@@ -101,8 +106,8 @@ internal static class StreamingNormalizeCorrect
                 return;
             }
             zeroVar.Add(false);
-            var (grandMean, pooled) = batching.RowMeanAndPooledVar(normalized);
-            grandMeans.Add(grandMean);
+            var (center, pooled) = batching.RowCenterAndScale(normalized);
+            grandMeans.Add(center);
             varPooled.Add(pooled);
         }, r.CancellationToken);
 
@@ -122,7 +127,7 @@ internal static class StreamingNormalizeCorrect
             // var_pooled's zero-fill is a median across ALL features, so standardization cannot
             // start until pass 1 has seen every row.
             var pooledArray = varPooled.ToArray();
-            ComBat.ReplaceZeroWithMedianOfPositive(pooledArray);
+            ComBat.ReplaceUnusableWithMedianOfPositive(pooledArray);
             stdPooled = pooledArray.Select(Math.Sqrt).ToArray();
             grandMeanArray = grandMeans.ToArray();
 
@@ -265,7 +270,7 @@ internal static class StreamingNormalizeCorrect
 
         return new ComBatSufficientStats
         {
-            Batches = batching.Batches,
+            Plan = batching.Plan,
             NFeatures = nActive,
             GrandMean = grandMean,
             StdPooled = stdPooled,
@@ -522,52 +527,79 @@ internal static class StreamingNormalizeCorrect
     /// </summary>
     private sealed class Batching
     {
-        public required IReadOnlyList<List<int>> Batches { get; init; }
-        public required int[] BatchOfSample { get; init; }
+        public required ComBatPlan Plan { get; init; }
         public required int NSamples { get; init; }
+
+        /// <summary>Fitted batch indices, materialized once - walked once per feature.</summary>
+        private int[] _fitted = Array.Empty<int>();
+
+        /// <summary>Whether a sample belongs to ANY fit set, for the residual pass's sample order.</summary>
+        private bool[] _inFit = Array.Empty<bool>();
+
+        private int _totalFit;
+        private int _pooledDf;
+
+        public IReadOnlyList<List<int>> Batches => Plan.Apply;
+        public int[] BatchOfSample => Plan.BatchOfSample;
 
         // Scratch reused across rows: this runs once per feature, and allocating here would put
         // millions of short-lived arrays through the GC on a real cohort. Single-threaded by design.
         private double[] _buffer = Array.Empty<double>();
         private double[] _residual = Array.Empty<double>();
+        private double[] _fitMean = Array.Empty<double>();
 
+        /// <summary>Standard ComBat: each batch's effect is estimated from all of its samples.</summary>
         public static Batching Build(IReadOnlyList<string> batchLabels)
         {
-            // np.unique order: sorted unique labels.
-            var unique = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
-            var indexOf = unique.Select((b, i) => (b, i))
-                .ToDictionary(x => x.b, x => x.i, StringComparer.Ordinal);
-            var batches = new List<int>[unique.Count];
-            for (var i = 0; i < unique.Count; i++)
-                batches[i] = new List<int>();
-            var batchOfSample = new int[batchLabels.Count];
-            for (var s = 0; s < batchLabels.Count; s++)
-            {
-                var b = indexOf[batchLabels[s]];
-                batchOfSample[s] = b;
-                batches[b].Add(s);
-            }
+            var (unique, batches, batchOfSample) = ComBat.SortedBatches(batchLabels);
             ComBat.ValidateBatchSizes(unique, batches);
+            return ForPlan(ComBatPlan.Standard(batches, batchOfSample), batchLabels.Count);
+        }
+
+        /// <summary>Reference-anchored: estimated from each batch's reference replicates only.</summary>
+        public static Batching BuildReferenceAnchored(
+            IReadOnlyList<string> batchLabels, IReadOnlyList<bool> referenceMask,
+            string noReferenceBatch)
+        {
+            var (unique, batches, batchOfSample) = ComBat.SortedBatches(batchLabels);
+            ComBat.ValidateBatchSizes(unique, batches);
+            return ForPlan(
+                ComBatPlan.ReferenceAnchored(batches, batchOfSample, referenceMask, noReferenceBatch),
+                batchLabels.Count);
+        }
+
+        private static Batching ForPlan(ComBatPlan plan, int nSamples)
+        {
+            var inFit = new bool[nSamples];
+            foreach (var i in plan.Fitted)
+                foreach (var s in plan.Fit[i])
+                    inFit[s] = true;
+
             return new Batching
             {
-                Batches = batches,
-                BatchOfSample = batchOfSample,
-                NSamples = batchLabels.Count,
-                _buffer = new double[batchLabels.Count],
-                _residual = new double[batchLabels.Count],
+                Plan = plan,
+                NSamples = nSamples,
+                _fitted = plan.Fitted.ToArray(),
+                _inFit = inFit,
+                _totalFit = plan.TotalFit,
+                _pooledDf = plan.PooledWithinBatchDf,
+                _buffer = new double[nSamples],
+                _residual = new double[nSamples],
+                _fitMean = new double[plan.BatchCount],
             };
         }
 
         /// <summary>
-        /// Whether ComBat can estimate anything for this feature - <c>ComBat.IsCorrectable</c> for
-        /// one row: every batch must have observed it at least once, and it must vary somewhere.
+        /// Whether ComBat can estimate anything for this feature - <c>ComBatCore.IsCorrectable</c>
+        /// for one row: every FITTED batch must have observed it at least once in its fit set, and it
+        /// must vary somewhere. A batch that is not being fitted gets no vote.
         /// </summary>
         public bool IsCorrectable(double[] row)
         {
-            foreach (var batch in Batches)
+            foreach (var i in _fitted)
             {
                 var seen = false;
-                foreach (var s in batch)
+                foreach (var s in Plan.Fit[i])
                 {
                     if (!double.IsNaN(row[s]))
                     {
@@ -584,45 +616,75 @@ internal static class StreamingNormalizeCorrect
         }
 
         /// <summary>
-        /// One feature's grand mean (batch-size-weighted mean of the batch means) and pooled
-        /// residual variance (ddof=1) over its OBSERVED values - <c>_calculate_mean_var</c> for one
-        /// row. Residuals are collected in SAMPLE order because the pairwise summation inside
+        /// One feature's center (fit-set-size-weighted mean of the per-batch fit means) and the
+        /// pooled scale standardization divides by - <c>ComBatCore</c>'s per-feature terms for a
+        /// single row. Residuals are collected in SAMPLE order because the pairwise summation inside
         /// <c>Stats.Var</c> is order-sensitive and that is the order the in-memory path uses.
         /// </summary>
-        public (double GrandMean, double VarPooled) RowMeanAndPooledVar(double[] row)
+        public (double Center, double VarPooled) RowCenterAndScale(double[] row)
         {
-            var nBatch = Batches.Count;
-            var bHat = new double[nBatch];
-            for (var i = 0; i < nBatch; i++)
+            foreach (var i in _fitted)
             {
-                var n = Observed(row, Batches[i]);
-                bHat[i] = NumpyMath.PairwiseSum(_buffer, 0, n) / n;
+                var n = Observed(row, Plan.Fit[i]);
+                _fitMean[i] = NumpyMath.PairwiseSum(_buffer, 0, n) / n;
             }
 
-            var grandMean = 0.0;
-            for (var i = 0; i < nBatch; i++)
-                grandMean += ((double)Batches[i].Count / NSamples) * bHat[i];
+            var center = 0.0;
+            foreach (var i in _fitted)
+                center += ((double)Plan.Fit[i].Count / _totalFit) * _fitMean[i];
 
-            var m = 0;
+            if (Plan.PooledScale == PooledScaleRule.ResidualVariance)
+            {
+                var m = 0;
+                for (var s = 0; s < NSamples; s++)
+                {
+                    if (!_inFit[s])
+                        continue;
+                    var v = row[s];
+                    if (!double.IsNaN(v))
+                        _residual[m++] = v - _fitMean[BatchOfSample[s]];
+                }
+                return (center, Stats.Var(_residual.AsSpan(0, m), Plan.ResidualDdof));
+            }
+
+            if (_pooledDf > 0)
+            {
+                var sumSq = 0.0;
+                foreach (var i in _fitted)
+                {
+                    if (Plan.LocationOnly[i] || Plan.Fit[i].Count < 2)
+                        continue;
+                    foreach (var s in Plan.Fit[i])
+                    {
+                        var v = row[s];
+                        if (double.IsNaN(v))
+                            continue;
+                        var r = v - _fitMean[i];
+                        sumSq += r * r;
+                    }
+                }
+                return (center, sumSq / _pooledDf);
+            }
+
+            // No fit set has replicates, so there is no technical scale to measure. A homoscedastic
+            // one, which only sets how hard the location prior shrinks and cancels on back-transform.
             for (var s = 0; s < NSamples; s++)
             {
-                var v = row[s];
-                if (!double.IsNaN(v))
-                    _residual[m++] = v - bHat[BatchOfSample[s]];
+                var b = BatchOfSample[s];
+                _residual[s] = row[s] - center - (Plan.Fit[b].Count > 0 ? _fitMean[b] - center : 0.0);
             }
-
-            return (grandMean, Stats.Var(_residual.AsSpan(0, m), ComBat.VarPooledDdof));
+            return (center, Stats.NanVar(_residual, ddof: 1));
         }
 
         /// <summary>
-        /// How many of the batch's samples observed this feature, the mean of those values, and
+        /// How many of the batch's FIT samples observed this feature, the mean of those values, and
         /// their sum of squared deviations about that mean - the three numbers
         /// <c>Stats.Var(observed, ddof: 1)</c> is built from, kept separately so the EB iteration
-        /// can shift the sum to any other centre.
+        /// can shift the sum to any other center.
         /// </summary>
         public (int Count, double Mean, double SumSq) Summarize(double[] values, int batch)
         {
-            var n = Observed(values, Batches[batch]);
+            var n = Observed(values, Plan.Fit[batch]);
             if (n == 0)
                 return (0, double.NaN, double.NaN);
             var mean = NumpyMath.PairwiseSum(_buffer, 0, n) / n;

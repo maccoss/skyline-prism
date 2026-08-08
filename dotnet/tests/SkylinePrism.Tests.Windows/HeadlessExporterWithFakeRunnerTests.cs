@@ -34,7 +34,8 @@ public class HeadlessExporterWithFakeRunnerTests
         /// <summary>(args, reportFile) -> write the output, or throw to simulate a Skyline error.</summary>
         public Action<string[], string>? OnRun;
 
-        public void Run(string[] args, Action<string> log, CancellationToken cancellationToken)
+        public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+            TimeSpan? timeout = null)
         {
             Invocations.Add(args);
             var file = args.First(a => a.StartsWith("--report-file=", StringComparison.Ordinal))

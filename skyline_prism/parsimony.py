@@ -63,18 +63,22 @@ class ProteinGroup:
 
     @property
     def n_peptides(self) -> int:
+        """Peptides assigned to this group by parsimony (unique + razor)."""
         return len(self.peptides)
 
     @property
     def n_unique_peptides(self) -> int:
+        """Peptides that map to this group ALONE, before parsimony assigns shared ones."""
         return len(self.unique_peptides)
 
     @property
     def n_razor_peptides(self) -> int:
+        """Shared peptides that parsimony awarded to this group rather than another."""
         return len(self.razor_peptides)
 
     @property
     def n_all_mapped_peptides(self) -> int:
+        """Every peptide whose sequence maps here, shared or not - the pre-parsimony total."""
         return len(self.all_mapped_peptides)
 
     def to_dict(self) -> dict:

@@ -64,10 +64,19 @@ public partial class MainWindow
         // the tab strip's own event.
         if (!ReferenceEquals(e.Source, MainTabs))
             return;
+        // Following Skyline's selection polls, so it runs only while its tab is actually on screen.
+        SetRangeFollowActive(ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab));
+
         if (ReferenceEquals(MainTabs.SelectedItem, DensityTab) && !_densityLoaded)
             await LoadDensitySamplesAsync();
-        else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab) && !_rangeLoaded)
-            await LoadDynamicRangeAsync();
+        else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab))
+        {
+            // Marked shown before loading, so a load that FAILS still leaves the level combo live -
+            // switching level is how a user gets out of an error, and it used to be inert afterwards.
+            _rangeTabShown = true;
+            if (!_rangeLoaded)
+                await LoadDynamicRangeAsync();
+        }
     }
 
     private async void OnDensityReload(object sender, RoutedEventArgs e)
@@ -439,8 +448,8 @@ public partial class MainWindow
             return;
 
         // The ColorBar attaches as an axis panel and survives Plot.Clear(), so start from a fresh Plot
-        // on every draw rather than stacking one colour bar per render. No title: the run is named in the
-        // drop-down and the colour bar is labelled, so a title would only repeat them.
+        // on every draw rather than stacking one color bar per render. No title: the run is named in the
+        // drop-down and the color bar is labeled, so a title would only repeat them.
         DensityPlot.Reset();
         PlotRenderer.DrawPrecursorDensity(
             DensityPlot.Plot, map, DensityColormap(ComboText(DensityColormapCombo, "Viridis")));
@@ -471,7 +480,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Read out the cell under the cursor. The colour bar gives the scale; the question this plot is
+    /// Read out the cell under the cursor. The color bar gives the scale; the question this plot is
     /// asked ("how many precursors was THAT spectrum carrying") wants the number itself.
     /// </summary>
     private void OnDensityPlotMouseMove(object sender, MouseEventArgs e)

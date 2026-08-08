@@ -18,16 +18,16 @@ public class StreamingComBatTests
     /// <summary>
     /// <paramref name="maxRel"/> is predicted from the input's conditioning, not fitted to what
     /// passes: reconstructing the sum of squares costs about the digits lost in
-    /// <c>value - batchMean</c>, i.e. roughly <c>centre/spread</c> squared. Standardized data
-    /// (centre 0, spread 1) loses none of them and lands at machine noise; the 50 / 1e-3 row is a
+    /// <c>value - batchMean</c>, i.e. roughly <c>center/spread</c> squared. Standardized data
+    /// (center 0, spread 1) loses none of them and lands at machine noise; the 50 / 1e-3 row is a
     /// deliberately ill-conditioned input standardization does not actually produce, included to
     /// show the degradation is bounded and gradual rather than a cliff.
     /// </summary>
     [Theory]
     [InlineData(0.0, 1.0, 1e-14)]     // standardized data as ComBat actually produces it
-    [InlineData(-8.0, 4.0, 1e-14)]    // off-centre but well-scaled
-    [InlineData(50.0, 1e-3, 1e-10)]   // ~5e4 centre-to-spread ratio -> ~9.4 digits lost of 16
-    public void Estimate_ReproducesInMemoryItSol(double centre, double spread, double maxRel)
+    [InlineData(-8.0, 4.0, 1e-14)]    // off-center but well-scaled
+    [InlineData(50.0, 1e-3, 1e-10)]   // ~5e4 center-to-spread ratio -> ~9.4 digits lost of 16
+    public void Estimate_ReproducesInMemoryItSol(double center, double spread, double maxRel)
     {
         const int nf = 60;
         var batches = new List<List<int>>
@@ -44,7 +44,7 @@ public class StreamingComBatTests
         var sData = new double[nf, nSamples];
         for (var f = 0; f < nf; f++)
         for (var s = 0; s < nSamples; s++)
-            sData[f, s] = centre + spread * (rng.NextDouble() - 0.5);
+            sData[f, s] = center + spread * (rng.NextDouble() - 0.5);
 
         var (gammaHat, deltaHat, sumSq) = Summarize(sData, batches, nf);
 
@@ -62,7 +62,7 @@ public class StreamingComBatTests
 
         var (actualGamma, actualDelta, unestimable) = StreamingComBat.Estimate(new ComBatSufficientStats
         {
-            Batches = batches,
+            Plan = ComBatPlan.Standard(batches, BatchOfSample(batches, nSamples)),
             NFeatures = nf,
             GrandMean = new double[nf],
             StdPooled = Enumerable.Repeat(1.0, nf).ToArray(),
@@ -104,16 +104,16 @@ public class StreamingComBatTests
         var values = new[] { 1000.0, 1000.001, 999.9995, 1000.0002, 999.9998 };
         var n = values.Length;
         var mean = NumpyMath.PairwiseSum(values) / n;
-        var centre = mean + 1e-6; // where the EB iteration evaluates the sum
+        var center = mean + 1e-6; // where the EB iteration evaluates the sum
 
-        var exact = values.Sum(v => ((decimal)v - (decimal)centre) * ((decimal)v - (decimal)centre));
+        var exact = values.Sum(v => ((decimal)v - (decimal)center) * ((decimal)v - (decimal)center));
 
         var sumSqAboutMean = values.Sum(v => (v - mean) * (v - mean));
-        var shifted = sumSqAboutMean + n * (mean - centre) * (mean - centre);
+        var shifted = sumSqAboutMean + n * (mean - center) * (mean - center);
 
         var s1 = values.Sum();
         var s2 = values.Sum(v => v * v);
-        var expanded = s2 - 2 * centre * s1 + n * centre * centre;
+        var expanded = s2 - 2 * center * s1 + n * center * center;
 
         var shiftedError = Math.Abs(shifted - (double)exact) / (double)exact;
         var expandedError = Math.Abs(expanded - (double)exact) / (double)exact;
@@ -125,6 +125,16 @@ public class StreamingComBatTests
     }
 
     // gammaHat / deltaHat / sumSq exactly as ComBat._fit_batch_effects computes them.
+    /// <summary>Batch index per sample, from the per-batch index lists.</summary>
+    private static int[] BatchOfSample(IReadOnlyList<List<int>> batches, int nSamples)
+    {
+        var of = new int[nSamples];
+        for (var i = 0; i < batches.Count; i++)
+            foreach (var s in batches[i])
+                of[s] = i;
+        return of;
+    }
+
     private static (double[][] GammaHat, double[][] DeltaHat, double[][] SumSq) Summarize(
         double[,] sData, List<List<int>> batches, int nf)
     {

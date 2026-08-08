@@ -497,6 +497,7 @@ KNOWN_CONFIG_KEYS = {
     "processing": {
         "n_workers",
         "peptide_batch_size",
+        "merge_memory_mb",
     },
     "transition_rollup": {
         "enabled",
@@ -1228,11 +1229,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"Merging and sorting {len(all_report_files)} Skyline reports "
             f"({file_type_summary}) (streaming)..."
         )
+        # 0 (the template default) means "engine default", so fall through to the
+        # signature default rather than passing a zero memory limit to DuckDB.
+        merge_memory_mb = config.get("processing", {}).get("merge_memory_mb", 0)
+        merge_kwargs = {"sort_buffer_mb": merge_memory_mb} if merge_memory_mb else {}
         merged_path, samples_by_batch, total_rows = merge_and_sort_streaming(
             all_report_files,
             merged_parquet_path,
             sort_column=None,  # Auto-detect peptide column
             batch_names=batch_names,
+            **merge_kwargs,
         )
         n_transitions = total_rows
         is_pre_sorted = True  # Flag for rollup to skip sorting
@@ -1426,7 +1432,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Check for empty data
     if n_peptides == 0 or n_samples == 0:
         logger.error("No data found in input file. The merged parquet may be corrupted.")
-        logger.error("Try deleting the cached parquet and re-running: rm <output_dir>/merged_data.parquet")
+        logger.error(
+            "Try deleting the cached parquet and re-running: rm <output_dir>/merged_data.parquet"
+        )
         return 1
 
     # =========================================================================
@@ -2227,7 +2235,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not sample_to_batch:
             # Priority 3: Estimate batches from acquisition times
             batch_est_config = config.get("batch_estimation", {})
-            est_method = batch_est_config.get("method", "auto")
+            # Default "none": inventing batches is worse than having none. Gap detection cannot
+            # tell a real plate boundary from an ordinary pause in a continuously acquired run,
+            # and a wrong guess makes ComBat "correct" between batches that do not exist.
+            est_method = batch_est_config.get("method", "none")
             est_n_batches = batch_est_config.get("n_batches")
             gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
 
@@ -2553,7 +2564,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not sample_to_batch:
             # Priority 3: Estimate batches from acquisition times
             batch_est_config = config.get("batch_estimation", {})
-            est_method = batch_est_config.get("method", "auto")
+            # Default "none": inventing batches is worse than having none. Gap detection cannot
+            # tell a real plate boundary from an ordinary pause in a continuously acquired run,
+            # and a wrong guess makes ComBat "correct" between batches that do not exist.
+            est_method = batch_est_config.get("method", "none")
             est_n_batches = batch_est_config.get("n_batches")
             gap_iqr = batch_est_config.get("gap_iqr_multiplier", 1.5)
 
@@ -2973,8 +2987,8 @@ def get_minimal_config_template() -> str:
 # =============================================================================
 sample_annotations:
   # Sample type comes from the Skyline Replicates "Sample Type" column first (Standard -> reference,
-  # Quality Control -> qc). These substring patterns are a FALLBACK for replicates with no Sample Type
-  # annotation, matched against the replicate/sample name.
+  # Quality Control -> qc). These substring patterns are a FALLBACK for replicates with
+  # no Sample Type annotation, matched against the replicate/sample name.
   # Patterns to identify inter-experiment reference samples
   reference_pattern:
     - "-Pool-"
@@ -3157,8 +3171,9 @@ data:
   # Retention time column
   rt_column: "Retention Time"
 
-  # Peptide identification (modified sequence distinguishes peptidoforms). Skyline-PRISM.skyr exports
-  # "Peptide Modified Sequence Unimod Ids" (invariant: PeptideModifiedSequenceUnimodIds); preferred.
+  # Peptide identification (modified sequence distinguishes peptidoforms). Skyline-PRISM.skyr
+  # exports "Peptide Modified Sequence Unimod Ids"
+  # (invariant: PeptideModifiedSequenceUnimodIds); preferred.
   peptide_column: "Peptide Modified Sequence Unimod Ids"
 
   # Protein identification
@@ -3209,10 +3224,13 @@ sample_annotations:
 
 batch_estimation:
   # Estimation method:
+  #   "none"  - DEFAULT. Do not guess; samples stay in one batch unless a real
+  #             annotation says otherwise, so ComBat cannot correct between
+  #             batches that do not exist.
   #   "auto"  - Try gap detection first, fall back to fixed if no gaps found
   #   "fixed" - Divide evenly into n_batches by acquisition time order
   #   "gap"   - Only use gap detection (skip batch correction if no gaps)
-  method: "auto"
+  method: "none"
 
   # Number of batches for "fixed" method (required for fixed, optional fallback for auto)
   # Set to null to disable fixed-count batch estimation
@@ -3257,6 +3275,12 @@ processing:
 
   # Peptides per batch (larger = faster but more memory)
   peptide_batch_size: 1000
+
+  # Ceiling on DuckDB's buffer pool during the Stage 1 merge/sort, in MB.
+  #   0 = engine default (Python: 8192; the C# engine sizes it from free memory)
+  # Work beyond the ceiling spills to the sort scratch directory, so a smaller
+  # value is slower, never wrong.
+  merge_memory_mb: 0
 
 # =============================================================================
 # Transition to Peptide Rollup
@@ -3690,7 +3714,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
             comparison_samples = sample_cols
 
         if len(comparison_samples) < 2:
-            logger.error(f"Not enough samples for comparison ({len(comparison_samples)} found, need >= 2)")
+            logger.error(
+                f"Not enough samples for comparison ({len(comparison_samples)} found, need >= 2)"
+            )
             return 1
 
         logger.info(f"  Using {len(comparison_samples)} {args.sample_type} samples")
@@ -3726,16 +3752,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # Determine sample column name
         con = duckdb.connect()
         cols_df = con.execute(
-            f"SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('{transition_parquet}') LIMIT 0)"
+            "SELECT column_name FROM (DESCRIBE SELECT * FROM "
+            f"read_parquet('{transition_parquet}') LIMIT 0)"
         ).fetchdf()
         available_cols = cols_df["column_name"].tolist()
         con.close()
 
         sample_col = "Sample ID"
         if sample_col not in available_cols:
-            sample_col = "Replicate Name" if "Replicate Name" in available_cols else available_cols[0]
+            sample_col = (
+                "Replicate Name" if "Replicate Name" in available_cols else available_cols[0]
+            )
 
-        # Also find peptide column in transition data (Skyline-PRISM.skyr exports the Unimod-Ids column)
+        # Also find peptide column in transition data (Skyline-PRISM.skyr exports the
+        # Unimod-Ids column)
         trans_peptide_col = "Peptide Modified Sequence Unimod Ids"
         if trans_peptide_col not in available_cols:
             for alt in ["Peptide Modified Sequence", "Peptide"]:
@@ -3943,7 +3973,8 @@ def main() -> int:
     compare_parser = subparsers.add_parser(
         "compare",
         help="Compare rollup methods between two PRISM runs with library fitting visualization",
-        description="Compare two PRISM output directories and generate a detailed comparison report. "
+        description="Compare two PRISM output directories and generate a detailed "
+        "comparison report. "
         "Uses CV comparison to select peptides, then visualizes the library fitting process "
         "for the top N peptides showing raw transitions, library scaling, and outlier detection.",
     )

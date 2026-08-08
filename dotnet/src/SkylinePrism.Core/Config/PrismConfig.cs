@@ -168,7 +168,7 @@ public sealed class PrismConfig
             ["qc_report"] = Leaves("enabled", "save_plots"),
             ["sample_outlier_detection"] = Leaves("enabled", "action", "method", "iqr_multiplier", "fold_threshold"),
             ["metadata"] = Leaves("batch_column", "sample_type_column"),
-            ["processing"] = Leaves("n_workers", "peptide_batch_size"),
+            ["processing"] = Leaves("n_workers", "peptide_batch_size", "merge_memory_mb"),
             ["batch_estimation"] = Leaves("method", "n_batches", "gap_iqr_multiplier"),
         };
     }
@@ -403,8 +403,17 @@ public sealed class PrismConfig
 
     public sealed class BatchEstimationSection
     {
-        /// <summary>auto | gap | fixed | source | none. Used only when no explicit batch is available.</summary>
-        public string Method { get; set; } = "auto";
+        /// <summary>
+        /// auto | gap | fixed | source | none. Used only when no explicit batch is available.
+        /// <para>
+        /// Defaults to <c>none</c>: INVENTING batches is worse than having none. Gap detection
+        /// cannot tell a real plate boundary from an ordinary pause in a continuously acquired run,
+        /// and when it guesses wrong ComBat "corrects" between batches that do not exist - which
+        /// silently alters every abundance. Batches should come from a real annotation; this is an
+        /// opt-in convenience for runs where one is genuinely unavailable.
+        /// </para>
+        /// </summary>
+        public string Method { get; set; } = "none";
         public int? NBatches { get; set; }
         public double GapIqrMultiplier { get; set; } = 1.5;
     }
@@ -416,6 +425,15 @@ public sealed class PrismConfig
 
         /// <summary>Peptides buffered per streamed parquet row group (flush granularity).</summary>
         public int PeptideBatchSize { get; set; } = 2000;
+
+        /// <summary>
+        /// Ceiling on DuckDB's buffer pool during the Stage 1 merge, in MB. 0 = size it from the
+        /// machine (see <c>DuckDbMerge.AutoMemoryBudgetMb</c>). Work beyond the ceiling spills to
+        /// the sort scratch directory, so this trades speed for footprint and cannot cause a wrong
+        /// answer. Raise it when the merge spills on a machine with RAM to spare; lower it to leave
+        /// room for something else running alongside.
+        /// </summary>
+        public int MergeMemoryMb { get; set; }
     }
 
     public sealed class SampleOutlierDetectionSection

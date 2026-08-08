@@ -31,7 +31,7 @@ public sealed record PrecursorDensityMap(
     public double MzLow => Rows.Count == 0 ? 0 : Rows.Min(w => w.Start);
     public double MzHigh => Rows.Count == 0 ? 0 : Rows.Max(w => w.End);
 
-    /// <summary>Busiest cell (0 when empty) - the top of the colour scale.</summary>
+    /// <summary>Busiest cell (0 when empty) - the top of the color scale.</summary>
     public int MaxCount
     {
         get
@@ -46,7 +46,7 @@ public sealed record PrecursorDensityMap(
 
     /// <summary>
     /// Rasterize onto a uniform grid for drawing: heatmap plottables have equal-height cells, but real
-    /// isolation windows do not. Each display row takes the count of the data row covering its centre
+    /// isolation windows do not. Each display row takes the count of the data row covering its center
     /// (the largest, where windows overlap), so a variable-width or staggered scheme still renders with
     /// its true m/z extents.
     /// <para>NaN means "no spectrum here", and draws as a gap rather than a zero: either no window covers
@@ -66,10 +66,10 @@ public sealed record PrecursorDensityMap(
         for (var r = 0; r < rows; r++)
         {
             // Display row 0 is drawn at the TOP, so walk m/z downward.
-            var centre = high - (r + 0.5) * height;
+            var center = high - (r + 0.5) * height;
             candidates.Clear();
             for (var i = 0; i < Rows.Count; i++)
-                if (Rows[i].Contains(centre))
+                if (Rows[i].Contains(center))
                     candidates.Add(i);
 
             for (var c = 0; c < RtBins; c++)

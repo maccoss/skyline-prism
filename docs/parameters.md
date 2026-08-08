@@ -179,6 +179,7 @@ invariant/parquet export (`PeptideModifiedSequenceUnimodIds`) and the English/CS
 |-----|---------|-------------|--------------|
 | `n_workers` | `0` | `0` = all cores, `1` = serial, `N` = cap at N | **Both** |
 | `peptide_batch_size` | C# `2000`, Python `1000` | Peptides buffered per streamed row group (performance only) | **Both** (default differs; no numeric effect) |
+| `merge_memory_mb` | `0` | Ceiling on DuckDB's buffer pool during the Stage 1 merge, in MB. `0` = engine default. Beyond the ceiling the sort spills to scratch, so a smaller value is slower, never wrong (performance only) | **Both** (`0` differs: C# sizes it from **free** memory, Python uses a fixed 8192) |
 
 ---
 
@@ -188,7 +189,7 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 
 | Key | Default | Description | Availability |
 |-----|---------|-------------|--------------|
-| `method` | `auto` | `auto`, `gap`, `fixed`, `source`, `none` | **Both** |
+| `method` | `none` | `none`, `auto`, `gap`, `fixed`, `source`. **Off by default**: guessing batches from acquisition-time gaps cannot tell a real plate boundary from an ordinary pause, and a wrong guess makes ComBat correct between batches that do not exist | **Both** |
 | `gap_iqr_multiplier` | `1.5` | `auto`/`gap` — split when an acquisition-time gap exceeds k·IQR | **Both** |
 | `n_batches` | `null` | `method: fixed` — split into exactly N batches | **Both** |
 | `min_samples_per_batch` / `max_samples_per_batch` | — | Bounds on estimated batch size | **Python only** (also absent from Python's template) |

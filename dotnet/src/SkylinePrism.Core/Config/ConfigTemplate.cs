@@ -106,19 +106,25 @@ protein_normalization:
   method: "median"
 
 # Parallelism / memory. n_workers: 0 = all cores, 1 = serial, N = cap at N.
+# merge_memory_mb caps DuckDB's buffer pool during the Stage 1 merge; 0 sizes it from the
+# machine's FREE memory. Anything beyond the cap spills to the sort scratch directory, so a
+# smaller value is slower, never wrong.
 processing:
   n_workers: 0
   peptide_batch_size: 2000
+  merge_memory_mb: 0
 
 # Metadata columns in the Replicates/metadata report. null = auto-detect.
 metadata:
   batch_column: null         # column carrying the batch/plate label
   sample_type_column: null   # Sample Type column (reference / qc / experimental)
 
-# Batch estimation fallback, used only when no metadata / Source Document batch distinguishes
-# samples. method: auto (gap detection) | gap | fixed | source | none.
+# Fallback batch assignment, used ONLY when neither the metadata nor the Source Document
+# distinguishes batches. Off by default: guessing batches from acquisition-time gaps cannot
+# distinguish a real plate boundary from an ordinary pause, and a wrong guess makes ComBat
+# "correct" between batches that do not exist. Turn it on deliberately.
 batch_estimation:
-  method: "auto"
+  method: "none"             # none | auto | gap | fixed | source
   gap_iqr_multiplier: 1.5    # auto/gap: split when an acquisition-time gap exceeds k*IQR
   # n_batches: 3             # method: fixed - split into exactly N equal batches
 

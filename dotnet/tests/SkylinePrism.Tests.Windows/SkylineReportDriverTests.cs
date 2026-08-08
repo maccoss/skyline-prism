@@ -50,6 +50,12 @@ public class SkylineReportDriverTests
             SelectedElements.Add(elementLocator);
         }
 
+        /// <summary>What Skyline should report as selected, per element type.</summary>
+        public Dictionary<string, string?> SelectedByType { get; } = new();
+
+        public string? GetSelectedElementLocator(string elementType)
+            => SelectedByType.TryGetValue(elementType, out var l) ? l : null;
+
         public IReadOnlyList<(string Name, string Locator)> GetLocations(string level)
             => LocationsByLevel.TryGetValue(level, out var l)
                 ? l
@@ -165,7 +171,7 @@ public class SkylineReportDriverTests
 
         new SkylineReportDriver(new FakeExecutor(client)).Export(work, metadataReportName: "myreplicates");
 
-        // The available casing wins, and it is what gets exported to the document-labelled metadata CSV.
+        // The available casing wins, and it is what gets exported to the document-labeled metadata CSV.
         Assert.Contains(client.Exports,
             e => e.Report == "MyReplicates" && e.Path.EndsWith(SkylineReportDriver.MetadataFileName("PRISM")));
     }
@@ -366,6 +372,37 @@ public class SkylineReportDriverTests
         Assert.Equal(expected, map["sp|P02768|ALBU_HUMAN"]);
         Assert.Equal(expected, map["P02768"]);
         Assert.Equal(expected, map["ALBU_HUMAN"]);
+    }
+
+    /// <summary>
+    /// The invariant the Skyline -> plot direction rests on: the locator PRISM resolves for a plotted
+    /// protein is the SAME STRING Skyline reports when that protein is selected. That is what lets
+    /// following the selection be a dictionary lookup instead of a second, independent piece of name
+    /// matching that could disagree with the first.
+    /// <para>The expected value here was taken from a live Skyline: selecting this protein's peptide
+    /// and asking for the MoleculeGroup returned exactly <c>MoleculeGroup:/sp|P58252|EF2_MOUSE</c>.</para>
+    /// </summary>
+    [Fact]
+    public void AResolvedLocator_IsTheStringSkylineReportsForThatSelection()
+    {
+        const string asSkylineReportsIt = "MoleculeGroup:/sp|P58252|EF2_MOUSE";
+        var client = new FakeClient();
+        client.LocationsByLevel["group"] = new List<(string, string)>
+        {
+            ("sp|P58252|EF2_MOUSE", asSkylineReportsIt),
+        };
+        var map = new SkylineReportDriver(new FakeExecutor(client)).GetLocatorMap("group");
+
+        // How the PRISM protein matrix names that group: leading_name is the bare entry name.
+        var entry = new SkylinePrism.Core.Qc.AbundanceEntry(
+            Key: "EF2_MOUSE", Label: "Eef2", Accession: "P58252", Gene: "Eef2",
+            ProteinName: "EF2_MOUSE", MeanAbundance: 1e8, Log10Abundance: 8, Rank: 1, SamplesUsed: 36);
+
+        var resolved = SkylinePrism.App.ProteinLocatorKeys.For(entry)
+            .Select(k => map.TryGetValue(k, out var l) ? l : null)
+            .FirstOrDefault(l => l is not null);
+
+        Assert.Equal(asSkylineReportsIt, resolved);
     }
 
     [Fact]

@@ -182,8 +182,17 @@
                             <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
                         </StackPanel>
 
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="ReferenceAnchoredCheck" VerticalAlignment="Center"
+                                      Content="Anchor ComBat on the Standard samples"
+                                      ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels." />
+                        </StackPanel>
+
                         <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
                                    Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                        <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                   Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -302,7 +311,7 @@
                         </ComboBox>
                         <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
                                 Click="OnManageProteinLists"
-                                ToolTip="Define named protein lists with colours - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
+                                ToolTip="Define named protein lists with colors - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
                         <Button Content="Reload" Padding="10,2" Margin="8,0,0,0" Click="OnRangeReload"
                                 ToolTip="Re-read the corrected matrices from the output directory above." />
                         <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"

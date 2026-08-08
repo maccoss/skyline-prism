@@ -113,6 +113,28 @@ public sealed class ParquetTable
             ? arr
             : throw new KeyNotFoundException($"Column '{name}' not found. Available: {string.Join(", ", ColumnNames)}");
 
+    /// <summary>
+    /// Whether this column holds numbers. Used to tell replicate columns from metadata without
+    /// relying on a list of names: abundances are always written as a numeric type, so a text column
+    /// can never be a replicate however it happens to be called.
+    /// <para>
+    /// That distinction matters because one metadata column's name is not fixed - the peptide column
+    /// keeps whatever name the Skyline export used, which is auto-detected per document. Any list of
+    /// names is therefore a guess, and guessing wrong makes a reader parse a peptide sequence as an
+    /// abundance.
+    /// </para>
+    /// </summary>
+    public bool IsNumericColumn(string name)
+    {
+        var element = Column(name).GetType().GetElementType();
+        if (element is null)
+            return false;
+        var underlying = Nullable.GetUnderlyingType(element) ?? element;
+        return underlying == typeof(double) || underlying == typeof(float)
+            || underlying == typeof(long) || underlying == typeof(int)
+            || underlying == typeof(short) || underlying == typeof(decimal);
+    }
+
     /// <summary>Column coerced to double?[] (null preserved), from any numeric source type.</summary>
     public double?[] GetDouble(string name)
     {

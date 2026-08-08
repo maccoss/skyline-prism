@@ -41,6 +41,11 @@ class PRISMConfigWidget(QWidget):
         has_batch_column: bool = True,
         parent: QWidget | None = None,
     ) -> None:
+        """Build the dialog.
+
+        ``has_batch_column`` False hides the batch-correction options, because there is
+        nothing to correct on.
+        """
         super().__init__(parent)
         self.has_batch_column = has_batch_column
         self._setup_ui()

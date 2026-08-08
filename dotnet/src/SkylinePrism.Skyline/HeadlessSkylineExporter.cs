@@ -29,7 +29,7 @@ namespace SkylinePrism.Skyline;
 ///
 /// <para><b>Side effect.</b> <c>--report-add</c> installs the PRISM report definitions into Skyline's
 /// saved-report list, which is a per-user program setting shared with the GUI. The live RPC path already
-/// does exactly this, so behaviour is consistent between the two. Nothing here writes to the .sky - the
+/// does exactly this, so behavior is consistent between the two. Nothing here writes to the .sky - the
 /// document is opened with <c>--in</c> and never saved.</para>
 /// </summary>
 public sealed class HeadlessSkylineExporter
@@ -63,14 +63,26 @@ public sealed class HeadlessSkylineExporter
     /// Pick the best available way to drive Skyline, or throw a message the UI can show verbatim.
     /// Prefers the installed Skyline application (parquet-capable) over SkylineCmd.
     /// </summary>
+    /// <param name="preferCmd">
+    /// Prefer <see cref="SkylineCmdRunner"/> over the full application. The app runner exists because it
+    /// is the only one that can export parquet, so it is the default - but it pays for that by driving a
+    /// whole UI-less Skyline through a pair of named pipes, and for work that does not need parquet that
+    /// is cost without benefit. Reading DIA isolation windows out of a data file is the case in point:
+    /// the same command that SkylineCmd completes in <b>8.7 s</b> on a 4.9 GB Thermo .raw has been seen
+    /// to produce its first line through the app runner and then nothing at all, until it was killed
+    /// minutes later. Pass true for any settings-only probe.
+    /// </param>
     public static HeadlessSkylineExporter Create(
-        string? explicitCmdPath = null, Action<string>? log = null, string? reportsDir = null)
+        string? explicitCmdPath = null, Action<string>? log = null, string? reportsDir = null,
+        bool preferCmd = false)
     {
         // An explicit SkylineCmd path is a deliberate override, so honour it ahead of discovery.
-        ISkylineCommandRunner? runner = string.IsNullOrWhiteSpace(explicitCmdPath)
+        ISkylineCommandRunner? runner = string.IsNullOrWhiteSpace(explicitCmdPath) && !preferCmd
             ? SkylineAppRunner.Find(log)
             : SkylineCmdRunner.Find(explicitCmdPath, log);
-        runner ??= SkylineCmdRunner.Find(explicitCmdPath, log);
+        runner ??= preferCmd
+            ? (ISkylineCommandRunner?)SkylineAppRunner.Find(log)
+            : SkylineCmdRunner.Find(explicitCmdPath, log);
 
         if (runner is null)
         {

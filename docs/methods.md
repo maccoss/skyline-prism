@@ -41,28 +41,19 @@ Optional quality columns:
 
 ### Output Parquet Schemas
 
-#### Peptide Abundances (`corrected_peptides.parquet`)
+**[`docs/output_files.md`](output_files.md) is the authoritative column-by-column reference** for every file PRISM writes, including the intermediates. It is not repeated here — a second copy is a second thing to go stale, and these tables had already drifted from what the pipeline writes.
 
-| Column | Type | Description |
-| ------ | ---- | ----------- |
-| `peptide` | string | Modified peptide sequence |
-| `protein_accession` | string | Associated protein(s) |
-| `mean_rt` | float64 | Mean retention time across samples |
-| `<sample_1>` ... `<sample_n>` | float64 | Linear-scale abundance per sample |
+The shape of both matrices is the same: a few **metadata** columns, then one **sample** column per replicate named `<replicate>__@__<source document>`, holding LINEAR abundances.
 
-#### Protein Abundances (`corrected_proteins.parquet`)
+| File | Metadata columns |
+| ---- | ---------------- |
+| `corrected_peptides.parquet` | the peptide column (**named as the Skyline export named it**), `n_transitions`, `mean_rt`, and — C# engine only — `protein_group`, `leading_protein`, `leading_name`, `leading_gene_name` |
+| `corrected_proteins.parquet` | `protein_group`, `leading_protein`, `leading_name`, `leading_uniprot_id`, `leading_gene_name`, `leading_description`, `n_peptides`, `n_unique_peptides`, `low_confidence` |
 
-| Column | Type | Description |
-| ------ | ---- | ----------- |
-| `protein_group` | string | Protein group identifier |
-| `leading_protein` | string | Representative protein accession |
-| `leading_uniprot_id` | string | UniProt accession for the leading protein |
-| `leading_gene_name` | string | Gene symbol for the leading protein |
-| `leading_description` | string | Full protein description/name for the leading protein |
-| `n_peptides` | int64 | Number of peptides in group |
-| `<sample_1>` ... `<sample_n>` | float64 | Linear-scale abundance per sample |
+**Leading metadata semantics:** the `leading_` prefix means these fields describe the canonical representative of the parsimony group, not all member proteins. Values come from the Skyline export columns (`Protein Accession`, `Protein Gene`, `Protein`).
 
-**Leading metadata semantics:** The `leading_` prefix indicates that these fields describe the canonical representative (leading protein) of the parsimony group, not all member proteins. Values are populated from Skyline export columns (`Protein Accession`, `Protein Gene`, `Protein`).
+> [!IMPORTANT]
+> Identify sample columns **by type**, not by subtracting a list of expected metadata names. The peptide column's name is whatever the export used, so no such list can be complete. Every text column is metadata; the only numeric metadata are `n_transitions` and `mean_rt` (peptides) and `n_peptides` / `n_unique_peptides` (proteins).
 
 ---
 
@@ -472,13 +463,53 @@ Batch effect parameters are shrunken toward their prior distributions:
 
 This "borrows strength" across features to improve estimation when batches have few samples.
 
-**Reference batch option:** One batch can be designated as reference and left unadjusted.
-
 By default PRISM applies **standard grand-mean ComBat**: $\gamma_{ig}$ and $\delta_{ig}$ are estimated from all samples in batch $i$, aligning every batch to the across-batch grand mean. This assumes each batch has a comparable biological composition.
+
+#### One implementation, two ways of pointing it
+
+Standard and reference-anchored ComBat are the **same estimator**. Both build a *plan* and hand it to one core, and the plan is the whole of the difference between them:
+
+| The plan says | Standard | Reference-anchored |
+|---|---|---|
+| Which samples a batch's effect is estimated **from** (the *fit set*) | every sample in the batch | the batch's reference replicates |
+| Which samples it is applied **to** | every sample in the batch | every sample in the batch |
+| Whether a batch gets a scale correction at all | always | only where the fit set has ≥ 2 replicates |
+| What the pooled per-feature scale is | residual variance about the batch means | pooled *within-batch* variance of the replicates |
+
+Everything else — the empirical-Bayes shrinkage, the missing-value handling, the refusal to invent quantities the data does not determine — is literally shared code. A fix to one is a fix to both.
+
+#### Missing values
+
+Every reduction ignores NaN, as `sva::ComBat` does. It is done by compacting a feature's observed values and running the ordinary reductions on them, so a **dense** cohort produces bit-identical results to an implementation that could not handle NaN at all. This matters because Skyline integrates imputed peak boundaries for every replicate, so PRISM's input is normally dense and NaN is the exception (see "Data Density" in `CLAUDE.md`).
+
+> Until 26.9.0 a single missing value turned **every** corrected value in the cohort into NaN, because the empirical-Bayes priors are means taken *across* features and one NaN reached them.
+
+#### What is not invented
+
+A quantity the data does not determine is never given a placeholder value:
+
+- **A feature is held out entirely** — returned unchanged — when it has no variance at all, or when some fitted batch never observed it. That batch's effect on it is *undefined*, which is not the same as zero.
+- **A (batch, feature) scale is skipped** when the fit set has fewer than 2 observations or no resolvable spread. Its *location* effect is still estimable, so that correction is applied; only the rescaling is dropped. Crucially such a scale is also **excluded from that batch's prior** — feeding a placeholder `1.0` into a mean taken across features lets one unestimable feature perturb the shrinkage of every other feature in the batch.
+
+Both are counted and reported in the run log rather than happening silently. "No resolvable spread" means a standard deviation below $10^{-12}$ of the values' own magnitude. An exact `variance == 0` test is knife-edge: the same 82 replicates once produced exactly `0.0` in Python and `7.99e-31` in C#, which flipped the feature between "no scale to estimate" and "a scale of 8e-31" — and left the two engines' protein abundances 3% apart.
+
+#### Relationship to R's `sva::ComBat`
+
+PRISM's ComBat is validated against `sva::ComBat` 3.58.0 by golden fixtures (`dotnet/tests/fixtures/sva/`), which hold **both** engines to an external reference rather than only to each other. **On dense input — the normal case — PRISM reproduces sva to floating-point noise.** Three differences remain, all deliberate:
+
+- **`var_pooled`'s denominator.** sva uses $\sum r^2/n$ when the input is dense but `rowVars(na.rm = TRUE)` when it is not. PRISM uses the former throughout, so it matches sva on dense input and differs by ~0.3% on input with missing values. Following sva's switch would mean one peptide missing from one document shifts every corrected value in the cohort by ~0.3%.
+- **Features constant within a batch** keep the location correction the data supports; sva drops them entirely.
+- **Two inputs sva errors on outright**, PRISM handles: a feature observed once in a batch, and a feature absent from a batch.
+
+#### Memory
+
+Stage 2b/2c never holds the feature × sample matrix in memory. Normalization factors come from a column-at-a-time pass, the empirical-Bayes step is driven from two summary numbers per (batch, feature) instead of the standardized matrix, and both outputs are written one row group at a time. Peak memory is bounded by the input's row-group size rather than by the number of samples — measured at 102 MB against 798 MB on a 20,000-peptide × 600-sample cohort. This applies to standard **and** reference-anchored correction; only `quantile` normalization and a CSV/TSV `output.format` fall back to the in-memory implementation, and the log says which one ran.
 
 ### Reference-anchored ComBat (single-point calibration with empirical-Bayes shrinkage)
 
-Enabled with `batch_correction.reference_anchored: true`. This is PRISM's recommended correction when inter-experiment **reference samples** (identical material run in every batch) are available. It combines single-point external reference calibration (Pino et al., 2020) with ComBat's empirical-Bayes shrinkage.
+Enabled with `batch_correction.reference_anchored: true`, or in the Skyline tool by ticking **"Anchor ComBat on the Standard samples"** on the Settings tab. This is PRISM's recommended correction when inter-experiment **reference samples** (identical material run in every batch) are available. It combines single-point external reference calibration (Pino et al., 2020) with ComBat's empirical-Bayes shrinkage.
+
+**Which samples are the references.** The samples whose PRISM sample type equals `batch_correction.reference_type` (default `reference`), which is what Skyline's **`Standard`** Sample Type maps to. So in practice: mark your inter-batch reference injections as `Standard` in Skyline and PRISM will anchor on them, with no metadata editing needed.
 
 **Concept.** Rather than estimating the batch effect from all samples (which conflates technical and biological variation when batches differ biologically), PRISM estimates each batch's technical effect from the **reference samples only**. Because the reference is identical material, any per-batch difference in it is purely technical, so the correction removes no biology.
 
@@ -493,9 +524,22 @@ Enabled with `batch_correction.reference_anchored: true`. This is PRISM's recomm
 
 **Output.** Calibrated absolute log2 abundance on the input scale, applied to all samples (experimental, QC, and reference). The result is **not** a ratio to the reference; it is each sample's own abundance with the reference-derived technical offset (and, where estimable, dispersion) removed.
 
-**No-reference batches.** A batch with no reference samples cannot be reference-anchored. By default (`no_reference_batch="fallback"`) such a batch is corrected with standard grand-mean estimation and a warning is logged.
+**Batches with few or no references.** The fit set decides what can be estimated, and the shortfall is handled per batch rather than by failing the run:
 
-**Implementation:** `skyline_prism/batch_correction.py` -> `combat_reference_anchored()`.
+| References in the batch | What happens |
+|---|---|
+| ≥ 2 | Full location + scale correction, empirical-Bayes shrunk. |
+| exactly 1 | **Location only.** One reference is a level, not a spread, so there is nothing to estimate a scale from. |
+| 0, `no_reference_batch="fallback"` (default) | **Location only, from the batch's own average** — i.e. the grand-mean assumption, taken deliberately and only for that batch, and logged. A scale is *not* estimated here: that fit set's spread is biological, and rescaling by it would shrink real signal. |
+| 0, `no_reference_batch="skip"` | Left exactly as it came in. It also gets no vote in the hold-out screening — a batch that is not being fitted cannot veto a feature. |
+| 0, `no_reference_batch="error"` | The run stops. |
+
+A feature that a batch's *references* never observed is held out and returned unchanged, for the same reason as in standard ComBat: the offset is unknown, not zero.
+
+**Implementation:** both engines share one estimator with standard ComBat.
+Python `skyline_prism/batch_correction.py` -> `combat_reference_anchored()`;
+C# `ComBatCore` + `ComBatPlan.ReferenceAnchored` (`dotnet/src/SkylinePrism.Core/BatchCorrection/`).
+Because there is no third-party implementation of this method to check against, cross-engine fixtures (`dotnet/tests/fixtures/refanchored/`) pin Python's output and hold C# to it — the two agree to $10^{-10}$, including on sparse input and both no-reference policies.
 
 ---
 

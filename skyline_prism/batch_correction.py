@@ -207,7 +207,7 @@ def _beta_na(y: np.ndarray, design: np.ndarray) -> np.ndarray:
 
     """
     mask = ~np.isnan(y)
-    X = design[mask]
+    X = design[mask]  # noqa: N806 - sva/ComBat notation: X is the design matrix
     return np.linalg.solve(X.T @ X, X.T @ y[mask])
 
 
@@ -249,7 +249,7 @@ def _calculate_mean_var(
     n_batches = [len(b) for b in batches]
 
     # Solve for B_hat: (X'X)^-1 X'Y, per feature where values are missing (sva's Beta.NA).
-    B_hat = _fit_coefficients(data, design)
+    B_hat = _fit_coefficients(data, design)  # noqa: N806 - sva's B.hat, kept comparable
 
     # Calculate grand mean
     if ref_idx is not None:
@@ -295,7 +295,7 @@ def _calculate_mean_var(
 def _standardize_data(
     data: np.ndarray,
     design: np.ndarray,
-    B_hat: np.ndarray,
+    B_hat: np.ndarray,  # noqa: N803 - sva's B.hat, kept comparable
     grand_mean: np.ndarray,
     var_pooled: np.ndarray,
     n_batch: int,
@@ -496,7 +496,7 @@ def _it_sol(
     counts: np.ndarray | None = None,
     estimable: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Iterative solution for parametric empirical Bayes.
+    """Solve iteratively for the parametric empirical-Bayes estimates.
 
     Iterates between updating gamma and delta estimates until convergence.
 
@@ -510,6 +510,11 @@ def _it_sol(
         b: Prior rate for delta
         conv: Convergence threshold
         max_iter: Maximum iterations
+        counts: Per-(batch, feature) count of OBSERVED values, sva's
+            ``n <- rowSums(!is.na(sdat))``. None means "every feature was seen in every
+            sample of the batch", i.e. the scalar batch size.
+        estimable: Per-feature mask of the scales the data supports. Where False the scale
+            is left at 1.0 (not rescaled) instead of being estimated from too few points.
 
     Returns:
         gamma_star: EB-adjusted gamma
@@ -751,7 +756,7 @@ def combat(
         mean_only = True
 
     # Calculate mean and variance
-    B_hat, grand_mean, var_pooled = _calculate_mean_var(
+    B_hat, grand_mean, var_pooled = _calculate_mean_var(  # noqa: N806 - sva's B.hat
         data_array, design, batches, n_batch, ref_idx
     )
 
@@ -940,8 +945,10 @@ def combat_reference_anchored(
             "(reference_mask is all False)."
         )
 
-    # Preserve first-seen batch order
-    unique_batches = list(dict.fromkeys(batch.tolist()))
+    # Sorted unique labels, as standard combat uses (np.unique order). Batch ORDER is not
+    # statistically meaningful here - every effect is estimated per batch - but it fixes the
+    # summation order of the pooled center below, so both engines must agree on it.
+    unique_batches = sorted(set(batch.tolist()))
     n_batch = len(unique_batches)
     if n_batch < 2:
         logger.warning("Only one batch found - returning data unchanged")
@@ -958,17 +965,6 @@ def combat_reference_anchored(
         f"Reference-anchored ComBat: {n_features} features, {n_samples} samples, "
         f"{n_batch} batches, {int(reference_mask.sum())} reference samples"
     )
-
-    # Hold out zero-variance features (corrected as identity)
-    row_vars = np.nanvar(data_array, axis=1)
-    zero_var_mask = (row_vars == 0) | np.isnan(row_vars)
-    if np.any(zero_var_mask):
-        logger.warning(
-            f"Found {int(zero_var_mask.sum())} zero-variance features; "
-            "passing them through uncorrected."
-        )
-    work = data_array[~zero_var_mask, :]
-    n_work = work.shape[0]
 
     # Per-batch sample / reference index lists
     batch_indices = [np.where(batch == b)[0] for b in unique_batches]
@@ -991,24 +987,50 @@ def combat_reference_anchored(
             )
         )
 
-    # alpha[g]: pooled reference level for each feature
-    alpha = np.nanmean(work[:, reference_mask], axis=1)
-    # If a feature is NaN in every reference, fall back to the all-sample mean so the
-    # standardized data is still finite (its gamma will be ~0 / fully shrunk).
-    alpha_nan = np.isnan(alpha)
-    if np.any(alpha_nan):
-        alpha[alpha_nan] = np.nanmean(work[alpha_nan, :], axis=1)
-
-    # Raw additive offsets per batch (log2). Anchored batches use references; fallback
-    # batches use all their samples (grand-mean estimand for that batch).
-    gamma_raw = np.zeros((n_batch, n_work))
+    # The FIT SET: which samples estimate each batch's effect. This, and not a different
+    # estimator, is the whole of the difference from standard ComBat - see the C# ComBatPlan,
+    # which both engines' reference-anchored and standard paths are now expressed in terms of.
+    #   >= 1 reference   -> the batch's references (location only when there is just one, since
+    #                       a single reference is a level, not a spread)
+    #   0, "fallback"    -> the batch's own samples, LOCATION ONLY: their spread is biological,
+    #                       and estimating a scale from it would shrink real signal
+    #   0, "skip"        -> empty; the batch is left exactly as it came in
+    fit_indices: list[np.ndarray] = []
+    location_only = np.zeros(n_batch, dtype=bool)
     for bi in range(n_batch):
         if n_ref_per_batch[bi] >= 1:
-            gamma_raw[bi, :] = np.nanmean(work[:, batch_ref_indices[bi]], axis=1) - alpha
+            fit_indices.append(batch_ref_indices[bi])
+            location_only[bi] = n_ref_per_batch[bi] < 2
         elif no_reference_batch == "fallback":
-            gamma_raw[bi, :] = np.nanmean(work[:, batch_indices[bi]], axis=1) - alpha
-        # "skip": gamma_raw stays 0 (no correction)
-    gamma_raw = np.nan_to_num(gamma_raw, nan=0.0)
+            fit_indices.append(batch_indices[bi])
+            location_only[bi] = True
+        else:
+            fit_indices.append(np.empty(0, dtype=int))
+    fitted = [bi for bi in range(n_batch) if fit_indices[bi].size > 0]
+
+    # Hold out what the data does not determine: a feature that never varies, or that some
+    # FITTED batch never observed in its fit set - that batch's effect on it is then undefined,
+    # which is not the same as it being zero. Batches we are not fitting ("skip") get no vote.
+    row_vars = np.nanvar(data_array, axis=1)
+    held_out_mask = (row_vars == 0) | np.isnan(row_vars)
+    for bi in fitted:
+        held_out_mask |= np.all(np.isnan(data_array[:, fit_indices[bi]]), axis=1)
+    if np.any(held_out_mask):
+        logger.warning(
+            f"Found {int(held_out_mask.sum())} features with no variance or no observation in "
+            "some batch's reference samples; passing them through uncorrected."
+        )
+    work = data_array[~held_out_mask, :]
+    n_work = work.shape[0]
+
+    # alpha[g]: the level everything is measured against - the fit sets' pooled mean, weighted
+    # by fit-set size. With references in every batch this is the pooled reference level.
+    total_fit = sum(fit_indices[bi].size for bi in fitted)
+    alpha = np.zeros(n_work)
+    fit_means = np.zeros((n_batch, n_work))
+    for bi in fitted:
+        fit_means[bi, :] = np.nanmean(work[:, fit_indices[bi]], axis=1)
+        alpha += (fit_indices[bi].size / total_fit) * fit_means[bi, :]
 
     # var_pooled[g]: the standardization scale. For location+scale to be coherent it
     # must be the TECHNICAL variance, i.e. the pooled within-batch variance of the
@@ -1019,91 +1041,99 @@ def combat_reference_anchored(
     # dispersion rather than inflating the data.
     sumsq = np.zeros(n_work)
     pooled_df = 0
-    for bi in range(n_batch):
-        if n_ref_per_batch[bi] >= 2:
-            ref_cols = work[:, batch_ref_indices[bi]]
-            ref_mean = np.nanmean(ref_cols, axis=1, keepdims=True)
-            resid = ref_cols - ref_mean
-            sumsq += np.nansum(resid**2, axis=1)
-            pooled_df += n_ref_per_batch[bi] - 1
+    for bi in fitted:
+        if location_only[bi] or fit_indices[bi].size < 2:
+            continue  # no replicates here to pool
+        cols = work[:, fit_indices[bi]]
+        resid = cols - fit_means[bi, :][:, None]
+        sumsq += np.nansum(resid**2, axis=1)
+        # Nominal, not per-feature-observed: one scalar df for the whole matrix, so a feature
+        # missing from one replicate does not get a different denominator from its neighbours.
+        pooled_df += fit_indices[bi].size - 1
 
-    scale_estimable = pooled_df > 0
-    if scale_estimable:
+    if pooled_df > 0:
         var_pooled = sumsq / pooled_df
     else:
-        # No batch has >=2 references: technical variance is not estimable, so scale
-        # correction is impossible (delta forced to 1 below). Use the all-sample
-        # residual variance purely as a homoscedastic scale for the location EB prior;
-        # it cancels on back-transform and only affects shrinkage weighting.
+        # No fit set has replicates: technical variance is not estimable, so scale
+        # correction is impossible (delta stays 1 below). Use the all-sample residual
+        # variance purely as a homoscedastic scale for the location EB prior; it cancels
+        # on back-transform and only affects shrinkage weighting.
         residual = work - alpha[:, None]
         for bi in range(n_batch):
             idx = batch_indices[bi]
-            residual[:, idx] = residual[:, idx] - gamma_raw[bi, :][:, None]
+            gamma_raw = fit_means[bi, :] - alpha if fit_indices[bi].size > 0 else 0.0
+            residual[:, idx] = residual[:, idx] - np.reshape(gamma_raw, (-1, 1))
         var_pooled = np.nanvar(residual, axis=1, ddof=1)
 
-    positive = var_pooled[(var_pooled > 0) & np.isfinite(var_pooled)]
-    fill = np.median(positive) if positive.size else 1.0
-    var_pooled[~((var_pooled > 0) & np.isfinite(var_pooled))] = fill
+    usable = (var_pooled > 0) & np.isfinite(var_pooled)
+    var_pooled[~usable] = np.median(var_pooled[usable]) if usable.any() else 1.0
     std_pooled = np.sqrt(var_pooled)
 
-    # Standardized data and standardized raw effects
+    # Standardized data, and the batch effects estimated from the fit sets only.
     s_data = (work - alpha[:, None]) / std_pooled[:, None]
-    gamma_hat = np.nan_to_num(gamma_raw / std_pooled[None, :], nan=0.0)
 
-    # Scale effects: variance of standardized reference replicates per batch (>=2 refs),
-    # which averages ~1 across batches because var_pooled is the pooled reference
-    # variance. Forced to 1 when scale is not estimable.
+    gamma_hat = np.zeros((n_batch, n_work))
     delta_hat = np.ones((n_batch, n_work))
-    if scale_estimable:
-        for bi in range(n_batch):
-            if n_ref_per_batch[bi] >= 2:
-                dv = np.nanvar(s_data[:, batch_ref_indices[bi]], axis=1, ddof=1)
-                dv = np.nan_to_num(dv, nan=1.0)
-                dv[dv <= 0] = 1.0
-                delta_hat[bi, :] = dv
+    counts = np.zeros((n_batch, n_work), dtype=int)
+    estimable = np.zeros((n_batch, n_work), dtype=bool)
+    for bi in fitted:
+        fit_cols = s_data[:, fit_indices[bi]]
+        gamma_hat[bi, :] = np.nanmean(fit_cols, axis=1)
+        counts[bi, :] = np.sum(~np.isnan(fit_cols), axis=1)
+        if location_only[bi]:
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            v = np.nanvar(fit_cols, axis=1, ddof=1)
+        # 1.0 means "do not rescale", NOT an estimate: a (batch, feature) with fewer than two
+        # observations or no resolvable spread is flagged and kept out of the prior, because a
+        # placeholder inside a mean taken ACROSS features biases every feature in the batch.
+        ok = (counts[bi, :] >= 2) & _spread_is_resolvable(v, gamma_hat[bi, :])
+        delta_hat[bi, ok] = v[ok]
+        estimable[bi, :] = ok
 
     # Empirical-Bayes priors. _compute_priors derives gamma_bar/t2 (and a/b for delta)
     # PER BATCH from that batch's own features, so anchored and fallback batches never
     # share a prior pool even though they are computed in one call.
-    gamma_bar, t2, a_prior, b_prior = _compute_priors(gamma_hat, delta_hat, mean_only=False)
+    gamma_bar, t2, a_prior, b_prior = _compute_priors(
+        gamma_hat, delta_hat, mean_only=False, estimable=estimable
+    )
 
     gamma_star = np.zeros_like(gamma_hat)
     delta_star = np.ones_like(delta_hat)
 
     for bi in range(n_batch):
-        n_ref = n_ref_per_batch[bi]
-        if n_ref == 0 and no_reference_batch == "skip":
-            # leave uncorrected
-            continue
-        if n_ref >= 2:
-            # Joint location+scale EB on the reference columns only, so the iterative
-            # delta update sees reference replicate spread, not experimental biology.
-            if par_prior:
-                g_star, d_star = _it_sol(
-                    s_data[:, batch_ref_indices[bi]],
-                    gamma_hat[bi, :],
-                    delta_hat[bi, :],
-                    gamma_bar[bi],
-                    t2[bi],
-                    a_prior[bi],
-                    b_prior[bi],
-                )
-            else:
-                g_star, d_star = _int_eprior(
-                    s_data[:, batch_ref_indices[bi]],
-                    gamma_hat[bi, :],
-                    delta_hat[bi, :],
-                )
-            gamma_star[bi, :] = g_star
-            delta_star[bi, :] = d_star
-        else:
-            # Location-only: single-reference batch (n_ref=1) or grand-mean fallback
-            # (n_ref=0). Shrinkage sample size = references (1) or full batch size.
-            n_eff = n_ref if n_ref >= 1 else len(batch_indices[bi])
+        if fit_indices[bi].size == 0:
+            continue  # "skip": gamma* = 0, delta* = 1
+        if location_only[bi]:
+            # No spread to estimate a scale from. n is the fit set's size, which is what
+            # decides how far this batch's own estimate is trusted against the prior.
             gamma_star[bi, :] = _postmean(
-                gamma_hat[bi, :], gamma_bar[bi], n_eff, np.ones(n_work), t2[bi]
+                gamma_hat[bi, :], gamma_bar[bi], fit_indices[bi].size, np.ones(n_work), t2[bi]
             )
-            delta_star[bi, :] = 1.0
+            continue
+        # Joint location+scale EB on the fit columns only, so the iterative delta update
+        # sees reference replicate spread, not experimental biology.
+        if par_prior:
+            g_star, d_star = _it_sol(
+                s_data[:, fit_indices[bi]],
+                gamma_hat[bi, :],
+                delta_hat[bi, :],
+                gamma_bar[bi],
+                t2[bi],
+                a_prior[bi],
+                b_prior[bi],
+                counts=counts[bi, :],
+                estimable=estimable[bi, :],
+            )
+        else:
+            g_star, d_star = _int_eprior(
+                s_data[:, fit_indices[bi]],
+                gamma_hat[bi, :],
+                delta_hat[bi, :],
+            )
+        gamma_star[bi, :] = g_star
+        delta_star[bi, :] = d_star
 
     # Apply correction to ALL samples (stand_mean = alpha, broadcast across samples)
     bayes_work = _adjust_data(
@@ -1115,11 +1145,11 @@ def combat_reference_anchored(
         alpha.reshape(-1, 1),
     )
 
-    # Restore zero-variance features
-    if np.any(zero_var_mask):
+    # Restore held-out features
+    if np.any(held_out_mask):
         full = np.empty((n_features, n_samples), dtype=np.float64)
-        full[~zero_var_mask, :] = bayes_work
-        full[zero_var_mask, :] = data_array[zero_var_mask, :]
+        full[~held_out_mask, :] = bayes_work
+        full[held_out_mask, :] = data_array[held_out_mask, :]
         bayes_work = full
 
     return _return(bayes_work)

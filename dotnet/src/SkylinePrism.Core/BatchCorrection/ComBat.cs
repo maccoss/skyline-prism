@@ -45,7 +45,7 @@ public sealed class ComBatDiagnostics
 /// matching sva's treatment of its zero-variance rows.</item>
 /// <item><b>Scale not estimated</b> for a (batch, feature) with fewer than 2 observations, or with
 /// no spread among them. Its location effect IS estimable, so it is still applied - only the scale
-/// correction is skipped (<c>delta* = 1</c>). Note this is deliberately NOT sva's behaviour: sva
+/// correction is skipped (<c>delta* = 1</c>). Note this is deliberately NOT sva's behavior: sva
 /// drops the whole feature if any batch is constant in it, discarding a location correction that the
 /// data supports.</item>
 /// </list>
@@ -97,268 +97,40 @@ public static class ComBat
     internal static double[,] Run(double[,] data, IReadOnlyList<string> batchLabels,
         bool parPrior, bool meanOnly, ComBatDiagnostics? diagnostics, int varPooledDdof)
     {
-        var nFeatures = data.GetLength(0);
         var nSamples = data.GetLength(1);
         if (batchLabels.Count != nSamples)
             throw new ArgumentException("batchLabels length must equal number of samples.");
 
-        // Batches: sorted unique labels (np.unique), sample indices per batch (ascending).
-        var uniqueBatches = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
-        var nBatch = uniqueBatches.Count;
-        var batchOf = uniqueBatches.Select((b, i) => (b, i)).ToDictionary(x => x.b, x => x.i, StringComparer.Ordinal);
-        var batches = new List<int>[nBatch];
-        for (var i = 0; i < nBatch; i++)
-            batches[i] = new List<int>();
-        var batchOfSample = new int[nSamples];
-        for (var s = 0; s < nSamples; s++)
-        {
-            var b = batchOf[batchLabels[s]];
-            batchOfSample[s] = b;
-            batches[b].Add(s);
-        }
-
+        var (uniqueBatches, batches, batchOfSample) = SortedBatches(batchLabels);
         ValidateBatchSizes(uniqueBatches, batches);
 
-        // Features whose effects the data does not determine are held out and restored untouched.
-        var heldOut = new bool[nFeatures];
-        var activeRows = new List<int>(nFeatures);
-        var scratch = new double[nSamples];
-        for (var f = 0; f < nFeatures; f++)
-        {
-            if (IsCorrectable(data, f, nSamples, batches, scratch))
-                activeRows.Add(f);
-            else
-                heldOut[f] = true;
-        }
-
-        var nf = activeRows.Count;
-        // Active data submatrix [nf, nSamples].
-        var d = new double[nf, nSamples];
-        for (var a = 0; a < nf; a++)
-            for (var s = 0; s < nSamples; s++)
-                d[a, s] = data[activeRows[a], s];
-
-        // --- _calculate_mean_var ---
-        // One-hot design: XtX = diag(batch sizes); B_hat[i,f] = batch-i mean of feature f.
-        var bHat = new double[nBatch, nf];
-        for (var i = 0; i < nBatch; i++)
-        {
-            var idx = batches[i];
-            var buf = new double[idx.Count];
-            for (var f = 0; f < nf; f++)
-            {
-                var n = Observed(d, f, idx, buf);
-                bHat[i, f] = NumpyMath.PairwiseSum(buf, 0, n) / n;
-            }
-        }
-
-        var grandMean = new double[nf];
-        for (var f = 0; f < nf; f++)
-        {
-            double gm = 0.0;
-            for (var i = 0; i < nBatch; i++)
-                gm += ((double)batches[i].Count / nSamples) * bHat[i, f];
-            grandMean[f] = gm;
-        }
-
-        // Residuals = data.T - design@B_hat; predicted[s,f] = bHat[batch(s), f].
-        // var_pooled[f] = var over samples of residual (ddof=1), zero -> median of positives.
-        // Residuals are collected in SAMPLE order, not batch order: the pairwise summation inside
-        // Stats.Var is order-sensitive, and this is the order the pre-NaN implementation used.
-        var varPooled = new double[nf];
-        var residual = new double[nSamples];
-        for (var f = 0; f < nf; f++)
-        {
-            var n = 0;
-            for (var s = 0; s < nSamples; s++)
-            {
-                var v = d[f, s];
-                if (!double.IsNaN(v))
-                    residual[n++] = v - bHat[batchOfSample[s], f];
-            }
-            varPooled[f] = Stats.Var(residual.AsSpan(0, n), varPooledDdof);
-        }
-        ReplaceZeroWithMedianOfPositive(varPooled);
-
-        // --- _standardize_data --- (no covariates => stand_mean[f,s] = grandMean[f])
-        var sData = new double[nf, nSamples];
-        var stdPooled = new double[nf];
-        for (var f = 0; f < nf; f++)
-        {
-            stdPooled[f] = Math.Sqrt(varPooled[f]);
-            for (var s = 0; s < nSamples; s++)
-                sData[f, s] = (d[f, s] - grandMean[f]) / stdPooled[f]; // NaN stays NaN, and stays local
-        }
-
-        // --- _fit_batch_effects ---
-        // gamma_hat[i,f] = mean over batch-i samples of sData[f,s] (one-hot solve).
-        var gammaHat = new double[nBatch, nf];
-        for (var i = 0; i < nBatch; i++)
-        {
-            var idx = batches[i];
-            var buf = new double[idx.Count];
-            for (var f = 0; f < nf; f++)
-            {
-                var n = Observed(sData, f, idx, buf);
-                gammaHat[i, f] = NumpyMath.PairwiseSum(buf, 0, n) / n;
-            }
-        }
-
-        // delta_hat[i,f], plus which of them the data actually supports.
-        var deltaHat = new double[nBatch, nf];
-        var scaleEstimable = new bool[nBatch][];
-        long unestimableScales = 0;
-        for (var i = 0; i < nBatch; i++)
-        {
-            var idx = batches[i];
-            var buf = new double[idx.Count];
-            scaleEstimable[i] = new bool[nf];
-            for (var f = 0; f < nf; f++)
-            {
-                if (meanOnly)
-                {
-                    deltaHat[i, f] = 1.0;
-                    continue;
-                }
-                var n = Observed(sData, f, idx, buf);
-                var v = n >= 2 ? Stats.Var(buf.AsSpan(0, n), ddof: 1) : double.NaN;
-                if (n < 2 || !IsSpreadResolvable(v, gammaHat[i, f]))
-                {
-                    deltaHat[i, f] = 1.0; // no spread to estimate from -> do not scale this one
-                    unestimableScales++;
-                }
-                else
-                {
-                    deltaHat[i, f] = v;
-                    scaleEstimable[i][f] = true;
-                }
-            }
-        }
-
-        // --- _compute_priors ---
-        var gammaBar = new double[nBatch];
-        var t2 = new double[nBatch];
-        var aPrior = new double[nBatch];
-        var bPrior = new double[nBatch];
-        for (var i = 0; i < nBatch; i++)
-        {
-            var gRow = Row(gammaHat, i, nf);
-            gammaBar[i] = Stats.Mean(gRow);
-            t2[i] = Stats.Var(gRow, ddof: 1);
-            if (meanOnly)
-            {
-                aPrior[i] = 1.0;
-                bPrior[i] = 1.0;
-            }
-            else
-            {
-                // Only the deltas the data supports; a placeholder 1.0 in here would bias the
-                // shrinkage of every feature in the batch.
-                var dRow = EstimatedDeltas(deltaHat, scaleEstimable[i], i, nf);
-                var m = Stats.Mean(dRow);
-                var v = Stats.Var(dRow, ddof: 1);
-                if (v > 0 && m > 0)
-                {
-                    aPrior[i] = (m * m / v) + 2;
-                    bPrior[i] = m * ((m * m / v) + 1);
-                }
-                else
-                {
-                    aPrior[i] = 1.0;
-                    bPrior[i] = 1.0;
-                }
-            }
-        }
-
-        // --- EB estimation ---
-        var gammaStar = new double[nBatch, nf];
-        var deltaStar = new double[nBatch, nf];
-        for (var i = 0; i < nBatch; i++)
-        {
-            if (parPrior)
-            {
-                if (meanOnly)
-                {
-                    var n = batches[i].Count;
-                    for (var f = 0; f < nf; f++)
-                    {
-                        gammaStar[i, f] = PostMean(gammaHat[i, f], gammaBar[i], n, 1.0, t2[i]);
-                        deltaStar[i, f] = 1.0;
-                    }
-                }
-                else
-                {
-                    ItSol(sData, batches[i], i, gammaHat, deltaHat, gammaBar[i], t2[i], aPrior[i], bPrior[i],
-                        gammaStar, deltaStar, nf, scaleEstimable[i]);
-                }
-            }
-            else
-            {
-                IntEprior(i, gammaHat, deltaHat, gammaStar, deltaStar, nf, meanOnly);
-            }
-        }
-
-        // --- _adjust_data ---
-        var bayes = (double[,])sData.Clone();
-        for (var i = 0; i < nBatch; i++)
-        {
-            foreach (var s in batches[i])
-                for (var f = 0; f < nf; f++)
-                    bayes[f, s] = (bayes[f, s] - gammaStar[i, f]) / Math.Sqrt(deltaStar[i, f]);
-        }
-        for (var f = 0; f < nf; f++)
-            for (var s = 0; s < nSamples; s++)
-                bayes[f, s] = bayes[f, s] * stdPooled[f] + grandMean[f];
-
-        // Scatter active rows back; held-out features unchanged.
-        var result = new double[nFeatures, nSamples];
-        for (var f = 0; f < nFeatures; f++)
-            if (heldOut[f])
-                for (var s = 0; s < nSamples; s++)
-                    result[f, s] = data[f, s];
-        for (var a = 0; a < nf; a++)
-            for (var s = 0; s < nSamples; s++)
-                result[activeRows[a], s] = bayes[a, s];
-
-        if (diagnostics is not null)
-        {
-            diagnostics.HeldOutFeatures = nFeatures - nf;
-            diagnostics.UnestimableScales = unestimableScales;
-        }
-        return result;
+        return ComBatCore.Run(
+            data,
+            ComBatPlan.Standard(batches, batchOfSample, meanOnly, parPrior, varPooledDdof),
+            diagnostics);
     }
 
     /// <summary>
-    /// Whether ComBat can estimate anything for this feature: every batch must have observed it at
-    /// least once (otherwise that batch's location effect is undefined), and it must vary somewhere
-    /// (otherwise there is nothing to standardize by).
+    /// Batches in np.unique order (sorted unique labels), with each batch's sample indices ascending.
+    /// Shared so the two entry points cannot disagree about which batch is which.
     /// </summary>
-    private static bool IsCorrectable(
-        double[,] data, int f, int nSamples, IReadOnlyList<List<int>> batches, double[] scratch)
+    internal static (List<string> Unique, List<int>[] Batches, int[] BatchOfSample) SortedBatches(
+        IReadOnlyList<string> batchLabels)
     {
-        foreach (var batch in batches)
+        var unique = batchLabels.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var indexOf = unique.Select((b, i) => (b, i))
+            .ToDictionary(x => x.b, x => x.i, StringComparer.Ordinal);
+        var batches = new List<int>[unique.Count];
+        for (var i = 0; i < unique.Count; i++)
+            batches[i] = new List<int>();
+        var batchOfSample = new int[batchLabels.Count];
+        for (var s = 0; s < batchLabels.Count; s++)
         {
-            var seen = false;
-            foreach (var s in batch)
-            {
-                if (!double.IsNaN(data[f, s]))
-                {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen)
-                return false;
+            var b = indexOf[batchLabels[s]];
+            batchOfSample[s] = b;
+            batches[b].Add(s);
         }
-
-        var n = 0;
-        for (var s = 0; s < nSamples; s++)
-        {
-            var v = data[f, s];
-            if (!double.IsNaN(v))
-                scratch[n++] = v;
-        }
-        return n > 0 && Stats.Var(scratch.AsSpan(0, n), ddof: 0) != 0.0;
+        return (unique, batches, batchOfSample);
     }
 
     /// <summary>
@@ -380,33 +152,6 @@ public static class ComBat
         const double relativeFloor = 1e-12;
         var scale = Math.Max(Math.Abs(mean), 1.0);
         return Math.Sqrt(variance) > relativeFloor * scale;
-    }
-
-    /// <summary>
-    /// Copy a feature's OBSERVED values for the given samples into <paramref name="buffer"/> (in
-    /// sample order), returning how many there were. See the class remarks for why the compaction
-    /// happens here rather than inside the reductions.
-    /// </summary>
-    private static int Observed(double[,] m, int f, IReadOnlyList<int> samples, double[] buffer)
-    {
-        var n = 0;
-        for (var k = 0; k < samples.Count; k++)
-        {
-            var v = m[f, samples[k]];
-            if (!double.IsNaN(v))
-                buffer[n++] = v;
-        }
-        return n;
-    }
-
-    private static double[] EstimatedDeltas(double[,] deltaHat, bool[] estimable, int i, int nf)
-    {
-        var kept = new double[nf];
-        var n = 0;
-        for (var f = 0; f < nf; f++)
-            if (estimable[f])
-                kept[n++] = deltaHat[i, f];
-        return kept[..n];
     }
 
     internal static void ItSol(
@@ -541,14 +286,23 @@ public static class ComBat
         return r;
     }
 
-    internal static void ReplaceZeroWithMedianOfPositive(double[] v)
+    /// <summary>
+    /// A scale of zero (or a non-finite one) cannot be divided by. Substitute the median of the
+    /// scales that ARE usable, or 1.0 when not one feature has a usable scale - which leaves the
+    /// standardization a no-op instead of producing infinities.
+    /// <para>
+    /// Shared by the in-memory core and the streaming path so the two cannot disagree about which
+    /// scales are usable.
+    /// </para>
+    /// </summary>
+    internal static void ReplaceUnusableWithMedianOfPositive(double[] v)
     {
-        var positives = v.Where(x => x > 0).ToArray();
-        if (positives.Length == 0)
-            return;
-        var med = Stats.NanMedian(positives);
+        var positives = v.Where(Usable).ToArray();
+        var fill = positives.Length > 0 ? Stats.NanMedian(positives) : 1.0;
         for (var i = 0; i < v.Length; i++)
-            if (v[i] == 0.0)
-                v[i] = med;
+            if (!Usable(v[i]))
+                v[i] = fill;
+
+        static bool Usable(double x) => x > 0 && !double.IsNaN(x) && !double.IsInfinity(x);
     }
 }

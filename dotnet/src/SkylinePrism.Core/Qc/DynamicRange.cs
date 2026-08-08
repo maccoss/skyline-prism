@@ -68,13 +68,20 @@ public static class DynamicRange
     /// </summary>
     public static readonly string[] ProteinMetadataColumns = ProteinRollup.MetadataColumns;
 
+    /// <summary>
+    /// Non-sample columns of the peptide matrices that are NUMERIC, and so cannot be recognized by
+    /// type alone. Everything else is excluded by <see cref="ParquetTable.IsNumericColumn"/>.
+    /// <para>
+    /// The peptide identifier deliberately does not appear here: it keeps whatever name the Skyline
+    /// export used ("Peptide Modified Sequence", "Modified Sequence", ...), auto-detected per
+    /// document, so no list can be complete. Listing names was how this broke - an export whose
+    /// peptide column was not one of the four guessed names had its sequences read as abundances,
+    /// and the tab died with <c>The input string 'AAAAAGAGLK' was not in a correct format</c>.
+    /// </para>
+    /// </summary>
     public static readonly string[] PeptideMetadataColumns =
     {
-        "Peptide Modified Sequence Unimod Ids", "Peptide Modified Sequence", "Peptide", "Modified Sequence",
         "n_transitions", "mean_rt",
-        // Protein grouping stamped onto the corrected peptide output. These MUST be listed here or they
-        // would be mistaken for replicate columns and averaged as abundances.
-        "protein_group", "leading_protein", "leading_name", "leading_gene_name",
     };
 
     /// <summary>
@@ -92,13 +99,20 @@ public static class DynamicRange
         return string.IsNullOrWhiteSpace(first) ? null : first.Trim();
     }
 
-    /// <summary>Replicate columns of a corrected matrix: everything that is not a known metadata column.</summary>
+    /// <summary>
+    /// Replicate columns of a corrected matrix. Two filters, because neither alone is sufficient:
+    /// a column must hold NUMBERS (which rules out every text metadata column whatever it is named,
+    /// including the auto-detected peptide identifier) and must not be one of the numeric metadata
+    /// columns, which type cannot distinguish from an abundance.
+    /// </summary>
     public static List<string> SampleColumns(ParquetTable table, AbundanceLevel level)
     {
         var meta = new HashSet<string>(
             level == AbundanceLevel.Protein ? ProteinMetadataColumns : PeptideMetadataColumns,
             StringComparer.OrdinalIgnoreCase);
-        return table.ColumnNames.Where(c => !meta.Contains(c)).ToList();
+        return table.ColumnNames
+            .Where(c => !meta.Contains(c) && table.IsNumericColumn(c))
+            .ToList();
     }
 
     /// <summary>
@@ -206,7 +220,7 @@ public static class DynamicRange
             var protein = allNames.FirstOrDefault();
             var accession = FirstGroup(Value(peptideAccessions, row));
             var gene = FirstGroup(Value(peptideGenes, row));
-            // The label stays the sequence - a peptide plot labelled by gene would collide for every
+            // The label stays the sequence - a peptide plot labeled by gene would collide for every
             // peptide of the same protein.
             return new Identity(peptide, peptide, accession, gene, protein, allGroups, allNames);
         };

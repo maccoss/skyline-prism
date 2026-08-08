@@ -17,29 +17,169 @@ namespace SkylinePrism.App;
 /// <summary>
 /// The "Dynamic Range" tab: log10 abundance against abundance rank - Skyline's Relative Abundance shape -
 /// over the CORRECTED PRISM matrices. Clicking a point selects that protein/peptide in the Skyline
-/// document tree; user-defined protein lists highlight sets of interest in their own colours.
+/// document tree; user-defined protein lists highlight sets of interest in their own colors.
 /// </summary>
 public partial class MainWindow
 {
     private bool _rangeLoaded;
     private bool _suppressRangeRender;
+
+    /// <summary>
+    /// Whether the tab has ever been shown, i.e. whether a level change is a real user action rather
+    /// than the combo being populated at startup.
+    /// <para>
+    /// Kept separate from <see cref="_rangeLoaded"/> deliberately. Gating the level-change handler on
+    /// "a load succeeded" meant that once a load FAILED, switching level did nothing at all - the
+    /// handler returned before reloading and the previous level's error stayed on screen, so the
+    /// only way out was to leave the tab and come back.
+    /// </para>
+    /// </summary>
+    private bool _rangeTabShown;
     private string? _rangeOutputDir;
     private List<AbundanceEntry> _rangeEntries = new();
     private List<string> _rangeSampleColumns = new();
     private ProteinListSet _proteinLists = ProteinListSet.Load();
 
-    // Points as plotted, for the click hit-test, plus the current label mode.
+    // Points as plotted, for the click hit-test, plus what is currently labeled.
     private List<AbundanceEntry> _rangePlotted = new();
-    private RangeLabelMode _rangeLabels = RangeLabelMode.None;
     private AbundanceEntry? _rangeSelected;
 
-    /// <summary>What the plot labels, toggled from the right-click menu (as Skyline does).</summary>
-    private enum RangeLabelMode
+    /// <summary>
+    /// Whether to label the element selected in Skyline. Independent of the protein lists: which
+    /// LISTS are labeled is each list's own <c>ShowLabels</c>, set in the Protein lists editor.
+    /// </summary>
+    private bool _rangeLabelSelection;
+
+    // ---------------------------------------------------------------- follow Skyline's selection
+    //
+    // The other direction: picking a protein or peptide in Skyline highlights it here. Skyline's RPC
+    // is request/response and cannot push events, so this polls - one lightweight call, and only
+    // while this tab is actually on screen.
+    private System.Windows.Threading.DispatcherTimer? _rangeFollowTimer;
+    private string? _rangeFollowedLocator;
+    private bool _rangeFollowBusy;
+    private Dictionary<string, AbundanceEntry>? _rangeEntryByLocator;
+    private AbundanceLevel _rangeEntryByLocatorLevel = AbundanceLevel.Protein;
+
+    private static readonly TimeSpan RangeFollowInterval = TimeSpan.FromMilliseconds(750);
+
+    /// <summary>Start/stop following Skyline's selection as the tab comes into and out of view.</summary>
+    private void SetRangeFollowActive(bool active)
     {
-        None,
-        Selected,
-        Lists,
+        if (!active)
+        {
+            _rangeFollowTimer?.Stop();
+            return;
+        }
+        if (_session is null)
+            return; // standalone: nothing to follow
+
+        if (_rangeFollowTimer is null)
+        {
+            _rangeFollowTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = RangeFollowInterval,
+            };
+            _rangeFollowTimer.Tick += (_, _) => PollSkylineSelection();
+        }
+        _rangeFollowTimer.Start();
     }
+
+    /// <summary>
+    /// Ask Skyline what is selected and, when it has changed, highlight the matching point.
+    /// <para>
+    /// The RPC runs off the UI thread - it opens a pipe and waits on a busy application, which must
+    /// never freeze this window - and one poll is never allowed to overlap the next, so a Skyline
+    /// that has gone slow just makes this quieter rather than piling up requests.
+    /// </para>
+    /// </summary>
+    private async void PollSkylineSelection()
+    {
+        if (_rangeFollowBusy || _session is null || !_rangeLoaded || _rangeEntries.Count == 0)
+            return;
+        _rangeFollowBusy = true;
+        try
+        {
+            var level = RangeLevel;
+            // Skyline resolves the ancestor at this level, so a precursor or transition selection -
+            // or a row in the precursor document grid - still lands on the right point.
+            var elementType = level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule";
+            var session = _session;
+            var entries = _rangeEntries;
+            // The RPC and the index build both go off the UI thread: the call waits on a busy
+            // application, and the index resolves every entry - 150,000 of them at peptide level.
+            var found = await Task.Run<(string? Locator, AbundanceEntry? Entry)>(() =>
+            {
+                string? locator;
+                try
+                {
+                    locator = session.Execute(c => c.GetSelectedElementLocator(elementType));
+                }
+                catch (Exception)
+                {
+                    return (null, null); // busy, closed, or mid-document-change; retry next tick
+                }
+                if (locator is null)
+                    return (null, null);
+                return (locator, FindEntryByLocator(locator, level, entries));
+            });
+
+            if (found.Locator is null || found.Locator == _rangeFollowedLocator)
+                return;
+            _rangeFollowedLocator = found.Locator;
+
+            // Level or data may have changed while the call was in flight.
+            if (RangeLevel != level || !_rangeLoaded || !ReferenceEquals(entries, _rangeEntries))
+                return;
+
+            var entry = found.Entry;
+            if (entry is null || ReferenceEquals(entry, _rangeSelected))
+                return;
+
+            _rangeSelected = entry;
+            RenderDynamicRange();
+            RangeStatusText.Text =
+                $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
+                + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
+        }
+        finally
+        {
+            _rangeFollowBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// The plotted point a Skyline locator refers to. Built by resolving every entry through the same
+    /// locator map a click uses, so the two directions agree by construction rather than by two
+    /// separate pieces of string matching.
+    /// </summary>
+    private AbundanceEntry? FindEntryByLocator(
+        string locator, AbundanceLevel level, List<AbundanceEntry> entries)
+    {
+        // Called from the poll's worker thread while a click may be resolving on the UI thread, and
+        // both go through the same lazily-built locator map.
+        lock (_rangeLocatorLock)
+        {
+            if (_rangeEntryByLocator is null || _rangeEntryByLocatorLevel != level)
+            {
+                var map = new Dictionary<string, AbundanceEntry>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in entries)
+                {
+                    var entryLocator = ResolveLocator(entry, out _, out var unavailable);
+                    if (unavailable)
+                        return null; // could not read the tree; do not cache a half-built index
+                    if (entryLocator is not null)
+                        map.TryAdd(entryLocator, entry); // first wins, as the forward map does
+                }
+                _rangeEntryByLocator = map;
+                _rangeEntryByLocatorLevel = level;
+            }
+            return _rangeEntryByLocator.TryGetValue(locator, out var hit) ? hit : null;
+        }
+    }
+
+    /// <summary>Guards the locator map and its reverse index, which the click and the poll share.</summary>
+    private readonly object _rangeLocatorLock = new();
 
     private AbundanceLevel RangeLevel =>
         ComboText(RangeLevelCombo, "Protein").StartsWith("Pep", StringComparison.OrdinalIgnoreCase)
@@ -52,6 +192,9 @@ public partial class MainWindow
         _rangeEntries = new List<AbundanceEntry>();
         _rangePlotted = new List<AbundanceEntry>();
         _rangeSelected = null;
+        // The locator index is keyed to the entries it was built from.
+        _rangeEntryByLocator = null;
+        _rangeFollowedLocator = null;
     }
 
     private async void OnRangeReload(object sender, RoutedEventArgs e)
@@ -62,7 +205,9 @@ public partial class MainWindow
 
     private async void OnRangeLevelChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppressRangeRender || !_rangeLoaded)
+        // Not gated on a successful previous load: switching level after a failure has to try the
+        // other level, which is the natural way out of an error.
+        if (_suppressRangeRender || !_rangeTabShown)
             return;
         await LoadDynamicRangeAsync(force: true);
     }
@@ -114,6 +259,7 @@ public partial class MainWindow
             _rangeOutputDir = outputDir;
             _rangeSampleColumns = samples;
             _rangeEntries = entries;
+            _rangeEntryByLocator = null; // rebuilt against the entries just loaded
             _rangeLoaded = true;
             PopulateRangeSamples(samples);
             RenderDynamicRange();
@@ -185,6 +331,7 @@ public partial class MainWindow
         {
             _rangeEntries = await Task.Run(() =>
                 DynamicRange.Compute(ParquetTable.Load(path), level, chosen));
+            _rangeEntryByLocator = null; // new entry objects, so the locator index is stale
             RenderDynamicRange();
         }
         catch (Exception ex)
@@ -252,61 +399,87 @@ public partial class MainWindow
         return ticked > 0 ? ticked : _rangeSampleColumns.Count;
     }
 
-    // Labels: nothing, just the element selected in Skyline, or every member of the visible lists.
+    /// <summary>
+    /// Draw the point labels. Two independent controls, deliberately: a list is labeled when its own
+    /// <c>ShowLabels</c> is ticked in the Protein lists editor, and the Skyline selection is labeled
+    /// when the right-click menu says so.
+    /// <para>
+    /// The per-list tick used to be a FILTER on a right-click label MODE that defaulted to "none", so
+    /// ticking "Label this list's members on the plot" did nothing whatsoever until a mode was also
+    /// set from a menu the user had no reason to open. The checkbox states what it does, so it now
+    /// does it by itself.
+    /// </para>
+    /// </summary>
     private void AddRangeLabels(
         Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList)
     {
-        // Offsets in data units, from the plotted extents, so a leader line is the same visual length
-        // whatever the abundance range happens to be.
-        var xSpan = Math.Max(1, _rangeEntries.Count);
-        var ySpan = Math.Max(0.5, _rangeEntries[0].Log10Abundance - _rangeEntries[^1].Log10Abundance);
-        var dx = xSpan * 0.035;
-        var dy = ySpan * 0.045;
+        // The current selection always gets a marker, whether or not labels are on. Without it,
+        // following Skyline's selection would move a highlight nobody can see.
+        if (_rangeSelected is not null)
+            AddSelectionMarker(plt, _rangeSelected);
 
-        switch (_rangeLabels)
+        var wanted = new List<(AbundanceEntry Entry, Color Color)>();
+        if (_rangeLabelSelection && _rangeSelected is not null)
+            wanted.Add((_rangeSelected, Colors.Black));
+        foreach (var (list, entries) in byList)
         {
-            case RangeLabelMode.Selected when _rangeSelected is not null:
-                AddRangeLabel(plt, _rangeSelected, Colors.Black, xSpan, dx, dy);
-                break;
-
-            case RangeLabelMode.Lists:
-                // If any list opted into labels explicitly, label only those; otherwise label them all.
-                var opted = matcher.Lists.Any(l => l.ShowLabels);
-                foreach (var (list, entries) in byList)
-                {
-                    if (opted && !list.ShowLabels)
-                        continue;
-                    foreach (var entry in entries)
-                        AddRangeLabel(plt, entry, Color.FromHex(list.ColorHex), xSpan, dx, dy);
-                }
-                break;
+            if (!list.ShowLabels)
+                continue;
+            var color = Color.FromHex(list.ColorHex);
+            foreach (var entry in entries)
+                wanted.Add((entry, color));
         }
+        if (wanted.Count == 0)
+            return;
+
+        // Highest-abundance first, so when the curve is crowded the labels that get the roomiest
+        // positions are the ones at the top of the plot where the eye starts.
+        wanted.Sort((a, b) => b.Entry.Log10Abundance.CompareTo(a.Entry.Log10Abundance));
+
+        var placer = new RangeLabelPlacer(
+            _rangeEntries.Count,
+            _rangeEntries[0].Log10Abundance,
+            _rangeEntries[^1].Log10Abundance,
+            RangePlot.ActualWidth,
+            RangePlot.ActualHeight);
+
+        foreach (var (entry, color) in wanted)
+            AddRangeLabel(plt, entry, color, placer.Place(entry));
     }
 
     /// <summary>
-    /// A label offset from its point with a leader line back to it. Offsetting matters because the points
-    /// sit on a dense curve - a label centred on its point buries the very point it names.
+    /// A hollow ring around the selected point. Hollow so the point's own color still reads through
+    /// it, and drawn whatever the label mode is: this is the only thing that shows on screen when
+    /// the selection arrives FROM Skyline rather than from a click here.
+    /// </summary>
+    private static void AddSelectionMarker(Plot plt, AbundanceEntry entry)
+    {
+        var marker = plt.Add.Marker(entry.Rank, entry.Log10Abundance);
+        marker.MarkerShape = MarkerShape.OpenCircle;
+        marker.MarkerSize = 18;
+        marker.MarkerLineWidth = 3;
+        marker.MarkerLineColor = Colors.Black;
+    }
+
+    /// <summary>
+    /// A label offset from its point with a leader line back to it. Offsetting matters because the
+    /// points sit on a dense curve - a label centered on its point buries the very point it names.
     /// </summary>
     private static void AddRangeLabel(
-        Plot plt, AbundanceEntry entry, Color color, double xSpan, double dx, double dy)
+        Plot plt, AbundanceEntry entry, Color color, RangeLabelPlacer.Placement placement)
     {
-        // Labels go up-right, except near the right edge where they would run off the canvas.
-        var toLeft = entry.Rank > xSpan * 0.8;
-        var labelX = entry.Rank + (toLeft ? -dx : dx);
-        var labelY = entry.Log10Abundance + dy;
-
-        var leader = plt.Add.Line(entry.Rank, entry.Log10Abundance, labelX, labelY);
+        var leader = plt.Add.Line(entry.Rank, entry.Log10Abundance, placement.X, placement.Y);
         leader.LineColor = color.WithAlpha(0.75);
         leader.LineWidth = 1.5f;
         leader.MarkerSize = 0;
 
-        var text = plt.Add.Text(entry.Label, labelX, labelY);
+        var text = plt.Add.Text(entry.Label, placement.X, placement.Y);
         PlotRenderer.StyleTextLabel(text, 16, bold: true);
         text.LabelFontColor = color;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.75);
         text.LabelBorderColor = color.WithAlpha(0.4);
         text.LabelBorderWidth = 1;
-        text.LabelAlignment = toLeft ? Alignment.LowerRight : Alignment.LowerLeft;
+        text.LabelAlignment = placement.Alignment;
     }
 
     /// <summary>
@@ -343,8 +516,12 @@ public partial class MainWindow
             return;
 
         _rangeSelected = best;
+        // Redraw FIRST. RenderDynamicRange ends by rewriting the status line with the plot summary,
+        // so selecting before redrawing threw away everything SelectInSkyline had just reported -
+        // including the reason it could not select anything, which made a failure look identical to
+        // a click that did nothing at all.
+        RenderDynamicRange();
         SelectInSkyline(best);
-        RenderDynamicRange(); // redraw so a "label the selection" mode follows the click
     }
 
     private void SelectInSkyline(AbundanceEntry entry)
@@ -362,11 +539,16 @@ public partial class MainWindow
             return;
         }
 
-        var locator = ResolveLocator(entry, out var viaFallback);
+        var locator = ResolveLocatorLocked(entry, out var viaFallback, out var treeUnavailable);
         if (locator is null)
         {
-            RangeStatusText.Text = $"{entry.Label}{where} - no matching element in the Skyline document "
-                + "(PRISM's protein grouping can differ from the document's).";
+            // "Could not read the tree" and "this one is not in the tree" look the same to a user
+            // but need completely different actions, so they are never reported as the same thing.
+            RangeStatusText.Text = treeUnavailable
+                ? $"{entry.Label}{where} - could not read the document tree from Skyline "
+                  + "(it may be busy; see the Log tab). Click again to retry."
+                : $"{entry.Label}{where} - no matching element in the Skyline document "
+                  + "(PRISM's protein grouping can differ from the document's).";
             return;
         }
 
@@ -409,16 +591,28 @@ public partial class MainWindow
     /// sequence in the document tree. <paramref name="viaFallback"/> reports which happened, so the user
     /// is told when the tree's grouping decided it.</para>
     /// </summary>
-    private string? ResolveLocator(AbundanceEntry entry, out bool viaFallback)
+    private string? ResolveLocator(AbundanceEntry entry, out bool viaFallback, out bool treeUnavailable)
     {
         viaFallback = false;
+        treeUnavailable = false;
         if (_session is null)
             return null;
         var level = RangeLevel;
         if (_rangeLocatorMap is null || _rangeLocatorLevel != level)
         {
             var driver = new SkylineReportDriver(_session, Log);
-            _rangeLocatorMap = driver.GetLocatorMap(level == AbundanceLevel.Protein ? "group" : "molecule");
+            var map = driver.GetLocatorMap(level == AbundanceLevel.Protein ? "group" : "molecule");
+            // An empty map means the call failed (Skyline busy, RPC timed out) rather than that the
+            // document has no proteins. Do NOT cache that - the next click should try again, and
+            // caching it turned one slow moment into a tab that never worked until it was reopened.
+            if (map.Count == 0)
+            {
+                treeUnavailable = true;
+                Log($"Could not read the {level} tree from Skyline; selection is unavailable "
+                    + "until it responds.");
+                return null;
+            }
+            _rangeLocatorMap = map;
             _rangeLocatorLevel = level;
         }
 
@@ -440,10 +634,20 @@ public partial class MainWindow
             return null;
         }
 
-        foreach (var key in new[] { entry.Key, entry.ProteinName, entry.Accession, entry.Gene })
-            if (!string.IsNullOrWhiteSpace(key) && _rangeLocatorMap.TryGetValue(key!, out var locator))
+        foreach (var key in ProteinLocatorKeys.For(entry))
+            if (_rangeLocatorMap.TryGetValue(key, out var locator))
                 return locator;
         return null;
+    }
+
+    /// <summary>
+    /// <see cref="ResolveLocator"/> under the shared lock, for the UI thread. The poll's worker
+    /// already holds it while building the reverse index.
+    /// </summary>
+    private string? ResolveLocatorLocked(AbundanceEntry entry, out bool viaFallback, out bool unavailable)
+    {
+        lock (_rangeLocatorLock)
+            return ResolveLocator(entry, out viaFallback, out unavailable);
     }
 
     private static string? CorrectedMatrixPath(string outputDir, string stem)
@@ -463,19 +667,38 @@ public partial class MainWindow
             return;
         menu.Reset(); // start from ScottPlot's defaults (Save Image, Copy, Autoscale)
         menu.AddSeparator();
-        menu.Add(Tick("No labels", RangeLabelMode.None), _ => SetRangeLabels(RangeLabelMode.None));
-        menu.Add(Tick("Label the Skyline selection", RangeLabelMode.Selected),
-            _ => SetRangeLabels(RangeLabelMode.Selected));
-        menu.Add(Tick("Label protein lists", RangeLabelMode.Lists), _ => SetRangeLabels(RangeLabelMode.Lists));
+        menu.Add(Tick("Label the Skyline selection", _rangeLabelSelection),
+            _ => SetSelectionLabel(!_rangeLabelSelection));
+        // Bulk operations on the per-list ticks, so the menu and the Protein lists editor drive the
+        // same setting rather than two that have to be combined in the user's head.
+        menu.Add("Label all protein lists", _ => SetAllListLabels(true));
+        menu.Add("No labels", _ =>
+        {
+            _rangeLabelSelection = false;
+            SetAllListLabels(false);
+        });
         menu.AddSeparator();
         menu.Add("Protein lists...", _ => OnManageProteinLists(this, new RoutedEventArgs()));
 
-        string Tick(string label, RangeLabelMode mode) => (_rangeLabels == mode ? "✓ " : "    ") + label;
+        string Tick(string label, bool on) => (on ? "✓ " : "    ") + label;
     }
 
-    private void SetRangeLabels(RangeLabelMode mode)
+    private void SetSelectionLabel(bool on)
     {
-        _rangeLabels = mode;
+        _rangeLabelSelection = on;
+        if (_rangeLoaded)
+            RenderDynamicRange();
+    }
+
+    /// <summary>
+    /// Tick or clear every list's labels, and persist it - the same setting the Protein lists editor
+    /// writes, so the menu is a shortcut rather than a second, competing switch.
+    /// </summary>
+    private void SetAllListLabels(bool on)
+    {
+        foreach (var list in _proteinLists.Lists)
+            list.ShowLabels = on;
+        _proteinLists.Save();
         if (_rangeLoaded)
             RenderDynamicRange();
     }

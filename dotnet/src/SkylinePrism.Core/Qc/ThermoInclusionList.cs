@@ -21,7 +21,7 @@ namespace SkylinePrism.Core.Qc;
 /// <code>
 /// Compound, Formula, Adduct, m/z, z, t start (min), t stop (min), Isolation Window (m/z), HCD Collision Energy
 /// </code>
-/// <para>One row is one <i>slot</i>: <c>m/z</c> is the window centre, <c>Isolation Window (m/z)</c> its
+/// <para>One row is one <i>slot</i>: <c>m/z</c> is the window center, <c>Isolation Window (m/z)</c> its
 /// full width, and <c>t start</c>/<c>t stop</c> the interval it fires in. PRM writes one row per
 /// precursor; MTM writes one row per slot, with the members joined in <c>Compound</c> - which is why an
 /// MTM cell can legitimately count several precursors while a PRM cell counts one.</para>

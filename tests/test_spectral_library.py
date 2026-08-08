@@ -39,7 +39,7 @@ from skyline_prism.spectral_library import (
 
 @pytest.fixture
 def simple_spectrum():
-    """A simple fragment spectrum for testing."""
+    """Build a simple fragment spectrum for testing."""
     return FragmentSpectrum(
         modified_sequence="PEPTIDEK",
         stripped_sequence="PEPTIDEK",
@@ -453,7 +453,9 @@ class TestLeastSquaresInterference:
         # 10x should definitely detect outlier
         assert result_10x is not None
         # Higher interference should be more likely to be detected
-        assert len(result_10x.outlier_indices) >= len(result_2x.outlier_indices if result_2x else [])
+        assert len(result_10x.outlier_indices) >= len(
+            result_2x.outlier_indices if result_2x else []
+        )
 
 
 # =============================================================================
@@ -1138,7 +1140,6 @@ class TestLibraryMedianPolish:
     def test_basic_clean_data(self):
         """Test basic rollup with clean data (no interference)."""
         library = np.array([1.0, 0.8, 0.5, 0.3, 0.2])
-        n_samples = 5
 
         # Generate clean observations: obs = lib * scale
         scales = np.array([100, 500, 1000, 2000, 5000])
@@ -1234,6 +1235,14 @@ class TestLibraryMedianPolish:
         # Median polish error should be reasonable (< 15%)
         assert mp_error < 0.15, f"Median polish error {mp_error*100:.1f}% too high"
 
+        # The comparison this test is named for. It was computed but never asserted, so the test
+        # passed on the absolute bound alone and would not have noticed median polish losing its
+        # advantage over least squares - the whole point of preferring it under interference.
+        assert mp_error <= ls_error, (
+            f"median polish ({mp_error*100:.1f}%) did worse than least squares "
+            f"({ls_error*100:.1f}%) on an interfered fragment"
+        )
+
     def test_handles_all_zeros(self):
         """Test that all-zero observations return NaN."""
         library = np.array([1.0, 0.8, 0.6, 0.4])
@@ -1269,6 +1278,11 @@ class TestLibraryMedianPolish:
         # Then abundance = scale * sum(ALL library)
         assert not np.isnan(abundances[0])
         assert n_used[0] == 2
+
+        # The value that rule produces, which the test computed (lib_sum) but never checked: the
+        # zeroed transitions still contribute their LIBRARY share, so the recovered abundance is the
+        # full expected one rather than only the part that was observed.
+        np.testing.assert_allclose(abundances[0], true_scale * lib_sum, rtol=0.15)
 
     def test_insufficient_fragments(self):
         """Test that insufficient fragments returns NaN."""

@@ -60,14 +60,22 @@ public sealed class PrismPipeline
         {
             merge = DuckDbMerge.MergeAndSort(
                 inputs, mergedPath, replicateColumn: config.Data.SampleColumn,
+                sortBufferMb: config.Processing.MergeMemoryMb,
                 cancellationToken: cancellationToken);
             SourceFingerprint.Write(cachePath,
                 new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
-            report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows.");
+            report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows"
+                + (merge.SingleInputFastPath ? " (single input: sorted in one pass)." : "."));
             // The sort can spill many GB here. Worth naming: it is the first thing to look at when the
             // merge is slow or fills a disk, and it is not always beside the output.
             report($"  Sort scratch: {merge.TempDirectory} "
                 + $"(override with the {DuckDbMerge.TempDirEnvVar} environment variable).");
+            // Named because it is set from FREE memory: the same machine can pick a different budget
+            // on two runs, and that is the explanation when one of them spills and the other did not.
+            report($"  Memory budget: {merge.MemoryBudgetMb:N0} MB"
+                + (config.Processing.MergeMemoryMb > 0
+                    ? " (from processing.merge_memory_mb)."
+                    : " (auto, from free memory; set processing.merge_memory_mb to override)."));
         }
 
         // Schema-only read: never materialize the (potentially huge, 200-report) merged table

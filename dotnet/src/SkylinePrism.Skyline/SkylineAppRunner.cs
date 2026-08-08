@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -94,13 +95,19 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         return new SkylineAppRunner(installation);
     }
 
-    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken)
+    public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
         var suffix = "-" + Guid.NewGuid();
         var inPipeName = "SkylineInputPipe" + suffix;
         var outPipeName = "SkylineOutputPipe" + suffix;
 
         log($"  > {_installation.AppName} {string.Join(" ", args)}");
+
+        // Which Skyline processes existed BEFORE we launched, so the one we start can be identified
+        // and killed if we give up. It is not a child of ours - the cmd.exe that launches the
+        // ClickOnce shortcut exits immediately - so there is no handle to wait on or kill.
+        var preexisting = SkylineProcessIds();
 
         // cmd.exe /c is how the shortcut gets launched with an argument; .appref-ms is not directly
         // executable. Paths containing ^ or & must be escaped for cmd even though they are quoted.
@@ -150,20 +157,129 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 $"{_installation.AppName} started but never opened its output pipe.");
         }
 
-        using (var reader = new StreamReader(outPipe))
+        // Read on a worker and consume with a deadline. Reading inline would block in ReadLine with
+        // no way out: a Skyline that produces no output - stuck, or just slow on a huge file over a
+        // network share - hangs the caller forever, and the cancellation check after ReadLine never
+        // runs, so Stop cannot break it either.
+        var lines = new BlockingCollection<string>();
+        var readerThread = new Thread(() =>
         {
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                log("    " + line);
-                if (IsErrorLine(line))
-                    errors.AppendLine(line.Trim());
+                using var reader = new StreamReader(outPipe);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                    lines.Add(line);
             }
+            catch (Exception)
+            {
+                // Pipe closed or disposed under us (which is how we unblock it); nothing to add.
+            }
+            finally
+            {
+                lines.CompleteAdding();
+            }
+        }) { IsBackground = true, Name = "SkylineAppRunner output" };
+        readerThread.Start();
+
+        var deadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
+        try
+        {
+            while (true)
+            {
+                // Wake regularly even when Skyline is silent, so cancellation and the deadline are
+                // both observed while nothing is being printed - which is exactly the stuck case.
+                if (lines.TryTake(out var line, (int)PollInterval.TotalMilliseconds, cancellationToken))
+                {
+                    log("    " + line);
+                    if (IsErrorLine(line))
+                        errors.AppendLine(line.Trim());
+                    continue;
+                }
+                if (lines.IsCompleted)
+                    break;
+                if (deadline is not null && DateTime.UtcNow > deadline)
+                {
+                    KillSpawned(preexisting, log);
+                    throw new TimeoutException(
+                        $"{_installation.AppName} did not finish within "
+                        + $"{timeout!.Value.TotalMinutes:F0} min and was stopped.");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            KillSpawned(preexisting, log);
+            throw;
         }
 
         if (errors.Length > 0)
             throw new InvalidOperationException(errors.ToString().Trim());
+    }
+
+    /// <summary>How often the consumer wakes while Skyline is producing no output.</summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
+
+    private static HashSet<int> SkylineProcessIds()
+    {
+        var ids = new HashSet<int>();
+        foreach (var name in AppNames)
+        {
+            try
+            {
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    ids.Add(p.Id);
+                    p.Dispose();
+                }
+            }
+            catch (Exception)
+            {
+                // Enumeration can fail transiently; a missed PID only means we cannot kill that one.
+            }
+        }
+        return ids;
+    }
+
+    /// <summary>
+    /// Kill the Skyline this run started, and only that one. Two guards, because getting this wrong
+    /// means killing the user's open document: the process must not have existed before we launched,
+    /// AND it must have no main window - the headless instance has none, an interactive one always
+    /// does. A Skyline the user opens by hand mid-run fails the second test.
+    /// </summary>
+    private static void KillSpawned(HashSet<int> preexisting, Action<string> log)
+    {
+        foreach (var name in AppNames)
+        {
+            Process[] running;
+            try
+            {
+                running = Process.GetProcessesByName(name);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (var p in running)
+            {
+                try
+                {
+                    if (preexisting.Contains(p.Id) || p.MainWindowHandle != IntPtr.Zero)
+                        continue;
+                    log($"    Stopping the headless {name} started for this command (pid {p.Id}).");
+                    p.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // Already gone, or not ours to kill.
+                }
+                finally
+                {
+                    p.Dispose();
+                }
+            }
+        }
     }
 
     /// <summary>

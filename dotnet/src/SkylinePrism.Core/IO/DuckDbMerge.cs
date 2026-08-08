@@ -46,7 +46,14 @@ public static class DuckDbMerge
     };
 
     public sealed record MergeResult(
-        string OutputPath, string SortColumn, long TotalRows, string TempDirectory = "");
+        string OutputPath, string SortColumn, long TotalRows, string TempDirectory = "",
+        int MemoryBudgetMb = 0, bool SingleInputFastPath = false);
+
+    /// <summary>
+    /// Floor for the DuckDB budget. Below this the reader buffers alone do not fit and the merge
+    /// fails outright instead of spilling, so a busy machine gets a small budget, never a broken one.
+    /// </summary>
+    internal const int MinMemoryBudgetMb = 2048;
 
     /// <summary>
     /// Override for DuckDB's spill directory. Set it when the automatic choice picks badly - the
@@ -75,6 +82,36 @@ public static class DuckDbMerge
             : beside;
     }
 
+    /// <summary>
+    /// How much memory to let DuckDB use, when the caller has not said.
+    /// <para>
+    /// Two bounds, whichever is smaller. <b>75% of total RAM</b> leaves ~25% for the .NET host and
+    /// the OS; this is what sizes the merge on an otherwise idle machine, and it exists because the
+    /// original fixed 8 GB limit was smaller than the upfront per-thread read buffers when DuckDB ran
+    /// one thread per core - it died in seconds, before sorting anything. <b>80% of free RAM</b> then
+    /// caps that by what the machine can actually give right now: DuckDB's buffer pool is native
+    /// memory outside the GC's view, so a budget written against total RAM on a machine that is
+    /// already half full does not spill, it pages, and the run appears to hang with the system at
+    /// 100% memory.
+    /// </para>
+    /// <para>
+    /// Both are ceilings on the buffer pool, not reservations - work beyond the budget spills to
+    /// <see cref="ResolveTempDirectory"/>. So a small budget is slower, never wrong, which is why the
+    /// free-memory bound can be applied without knowing how big the cohort is.
+    /// </para>
+    /// </summary>
+    internal static int AutoMemoryBudgetMb()
+    {
+        const long mb = 1024L * 1024L;
+        var budgetMb = SystemMemory.TotalPhysicalBytes / mb * 3 / 4;
+
+        var available = SystemMemory.AvailablePhysicalBytes();
+        if (available is > 0)
+            budgetMb = Math.Min(budgetMb, available.Value / mb * 4 / 5);
+
+        return (int)Math.Max(MinMemoryBudgetMb, budgetMb);
+    }
+
     /// <summary>UNC path, or a drive the OS reports as a network mount.</summary>
     private static bool IsNetworkPath(string path)
     {
@@ -89,7 +126,7 @@ public static class DuckDbMerge
         }
         catch (Exception)
         {
-            // Unknown/unreachable volume: keep the old behaviour rather than refuse to merge.
+            // Unknown/unreachable volume: keep the old behavior rather than refuse to merge.
             return false;
         }
     }
@@ -106,17 +143,8 @@ public static class DuckDbMerge
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
 
-        // Use the machine: budget = 75% of RAM so all worker threads' read/decompress buffers fit, with
-        // ~25% headroom for the .NET host + OS (DuckDB runs in-process), and temp_directory spill for any
-        // sort working set beyond the budget - so we get full throughput without OOM. The original bug was
-        // a fixed 8 GB limit that was smaller than the upfront per-thread read buffers when DuckDB ran one
-        // thread per core, so it OOM'd in seconds before sorting - not too little memory for the data, just
-        // too little to hold the parallel read. 0 = auto.
         if (sortBufferMb <= 0)
-        {
-            var availableMb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024L * 1024L);
-            sortBufferMb = (int)Math.Max(2048, availableMb * 3 / 4);
-        }
+            sortBufferMb = AutoMemoryBudgetMb();
 
         batchNames ??= reportPaths.Select(p => Path.GetFileNameWithoutExtension(p)).ToList();
         if (batchNames.Count != reportPaths.Count)
@@ -160,38 +188,65 @@ public static class DuckDbMerge
         var unsortedPath = Path.ChangeExtension(outputPath, ".unsorted.parquet");
         var outputEsc = SqlEscape(Path.GetFullPath(outputPath));
         var unsortedEsc = SqlEscape(Path.GetFullPath(unsortedPath));
+        var singleInput = reportPaths.Count == 1;
 
         long totalRows;
         try
         {
             using var conn = new DuckDBConnection("Data Source=:memory:");
             conn.Open();
-            // Use all cores; the 75%-of-RAM budget above is sized so all threads' read buffers fit, and
-            // the sort spills to temp_directory beyond it.
+            // Use all cores; the budget above is sized so all threads' read buffers fit, and the sort
+            // spills to temp_directory beyond it.
             Exec(conn, $"SET memory_limit='{sortBufferMb}MB'");
             Exec(conn, $"SET temp_directory='{SqlEscape(tempDir)}'");
             Exec(conn, "SET preserve_insertion_order=false");
             Exec(conn, $"SET threads={Environment.ProcessorCount}");
 
-            // Stage A: union -> unsorted intermediate (snappy).
-            Exec(conn, cancellationToken, $@"
-                COPY (
-                    {unionQuery}
-                ) TO '{unsortedEsc}' (
-                    FORMAT PARQUET,
-                    COMPRESSION SNAPPY
-                )");
+            if (singleInput)
+            {
+                // One input: read it, sort it, write it - no intermediate. That saves a full write and
+                // a full read of the entire dataset, which on a report living on a network share is
+                // most of Stage 1's wall clock.
+                //
+                // The two-stage form below is NOT a general safety measure that this skips: it exists
+                // for a specific failure, a COPY over a UNION ALL of MANY parquet files, where N
+                // parallel readers feeding a sort and a writer could not be kept inside any budget.
+                // With one input there is no union and one reader, so that pressure is absent - and
+                // this is also what the Python engine already does for a single file
+                // (data_io.py:_sort_parquet_low_memory), so the fast path restores parity rather than
+                // introducing a difference.
+                Exec(conn, cancellationToken, $@"
+                    COPY (
+                        SELECT * FROM ({unionQuery})
+                        ORDER BY ""{sortColumn}""
+                    ) TO '{outputEsc}' (
+                        FORMAT PARQUET,
+                        COMPRESSION ZSTD,
+                        ROW_GROUP_SIZE 1000000
+                    )");
+            }
+            else
+            {
+                // Stage A: union -> unsorted intermediate (snappy).
+                Exec(conn, cancellationToken, $@"
+                    COPY (
+                        {unionQuery}
+                    ) TO '{unsortedEsc}' (
+                        FORMAT PARQUET,
+                        COMPRESSION SNAPPY
+                    )");
 
-            // Stage B: single-source ORDER BY -> zstd output.
-            Exec(conn, cancellationToken, $@"
-                COPY (
-                    SELECT * FROM read_parquet('{unsortedEsc}')
-                    ORDER BY ""{sortColumn}""
-                ) TO '{outputEsc}' (
-                    FORMAT PARQUET,
-                    COMPRESSION ZSTD,
-                    ROW_GROUP_SIZE 1000000
-                )");
+                // Stage B: single-source ORDER BY -> zstd output.
+                Exec(conn, cancellationToken, $@"
+                    COPY (
+                        SELECT * FROM read_parquet('{unsortedEsc}')
+                        ORDER BY ""{sortColumn}""
+                    ) TO '{outputEsc}' (
+                        FORMAT PARQUET,
+                        COMPRESSION ZSTD,
+                        ROW_GROUP_SIZE 1000000
+                    )");
+            }
 
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT COUNT(*) FROM read_parquet('{outputEsc}')";
@@ -205,7 +260,8 @@ public static class DuckDbMerge
             try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
         }
 
-        return new MergeResult(Path.GetFullPath(outputPath), sortColumn, totalRows, tempDir);
+        return new MergeResult(
+            Path.GetFullPath(outputPath), sortColumn, totalRows, tempDir, sortBufferMb, singleInput);
     }
 
     private static string BuildFileSelect(
