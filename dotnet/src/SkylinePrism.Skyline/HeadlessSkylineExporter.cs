@@ -64,13 +64,26 @@ public sealed class HeadlessSkylineExporter
     /// Prefers the installed Skyline application (parquet-capable) over SkylineCmd.
     /// </summary>
     /// <param name="preferCmd">
-    /// Prefer <see cref="SkylineCmdRunner"/> over the full application. The app runner exists because it
-    /// is the only one that can export parquet, so it is the default - but it pays for that by driving a
-    /// whole UI-less Skyline through a pair of named pipes, and for work that does not need parquet that
-    /// is cost without benefit. Reading DIA isolation windows out of a data file is the case in point:
-    /// the same command that SkylineCmd completes in <b>8.7 s</b> on a 4.9 GB Thermo .raw has been seen
-    /// to produce its first line through the app runner and then nothing at all, until it was killed
-    /// minutes later. Pass true for any settings-only probe.
+    /// Prefer <see cref="SkylineCmdRunner"/> over the full application.
+    /// <para>
+    /// <b>Pass true for anything that uses <c>--new</c>.</b> A scratch-document command HANGS through
+    /// the app runner: <c>SkylineDailyRunner --new=x.sky --overwrite --save</c> prints
+    /// <c>File x.sky opened.</c> and then nothing, forever, never writing the file - while SkylineCmd
+    /// runs the identical arguments in 0.9 s. Reproduced with the official runner (see the field
+    /// guide's <c>repro/</c>), so it is not something in our protocol implementation; root cause is
+    /// with the Skyline developers.
+    /// </para>
+    /// <para>
+    /// The default is the app runner because it is the only one that can write parquet, and that is
+    /// what report export needs. Report export opens an EXISTING document (<c>--in</c>), which the
+    /// same runner handles in ~1.6 s - so the two are not in conflict, and the rule is about
+    /// <c>--new</c> versus <c>--in</c>, NOT about "settings versus reports".
+    /// </para>
+    /// <para>
+    /// Note the trap this leaves: a future <c>--new</c> command that also wants parquet has no good
+    /// option, because SkylineCmd cannot write parquet at all. Reach for the live RPC session on an
+    /// open document, or wait for the runner fix.
+    /// </para>
     /// </param>
     public static HeadlessSkylineExporter Create(
         string? explicitCmdPath = null, Action<string>? log = null, string? reportsDir = null,
