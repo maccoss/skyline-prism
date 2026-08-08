@@ -33,6 +33,10 @@ public partial class MainWindow
     private List<string> _densitySampleIds = new();
     private List<DetectedPrecursor>? _densityPrecursors; // cache for the selected run (rebinning is free)
     private PrecursorDensityMap? _densityMap;
+    // Both summaries walk the whole grid, and the hover readout wants them on every mouse move, so they
+    // are computed once per map rather than per motion event. Always set through SetDensityMap.
+    private int[]? _densityHistogram;
+    private IReadOnlyList<(double TimeMin, double Mean, double Min, double Max)>? _densityLoad;
     private string _densityQValueApplied = "0.01"; // matches DensityQValueBox's initial text
     private int _densityRequest;                   // newest query wins if the user clicks ahead of it
     private IsolationSchemeCatalog? _densitySchemes;
@@ -55,7 +59,18 @@ public partial class MainWindow
     {
         _densityLoaded = false;
         _densityPrecursors = null;
-        _densityMap = null;
+        SetDensityMap(null);
+    }
+
+    /// <summary>
+    /// The map and its two summaries move together - a summary left over from the previous map would be
+    /// read out under the cursor of the new one.
+    /// </summary>
+    private void SetDensityMap(PrecursorDensityMap? map)
+    {
+        _densityMap = map;
+        _densityHistogram = map?.PrecursorsPerSpectrumHistogram();
+        _densityLoad = map?.LoadOverTime();
     }
 
     private async void OnMainTabChanged(object sender, SelectionChangedEventArgs e)
@@ -171,7 +186,7 @@ public partial class MainWindow
         {
             _densitySampleIds = sampleIds;
             _densityPrecursors = null;
-            _densityMap = null;
+            SetDensityMap(null);
             DensitySampleCombo.Items.Clear();
             foreach (var name in StripSharedBatchSuffix(sampleIds, sampleIds))
                 DensitySampleCombo.Items.Add(name);
@@ -277,7 +292,11 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>The uniform bin width only applies to the approximate fallback, so only show it there.</summary>
+    /// <summary>
+    /// The uniform bin width only applies to the approximate fallback, so only show it there. It stays
+    /// available on all three views: the fallback's bins are what a "spectrum" means for this map, so
+    /// changing them changes the histogram and the load curve as much as the heatmap.
+    /// </summary>
     private void UpdateSchemeControls()
     {
         var scheme = SelectedIsolationScheme();
@@ -443,8 +462,60 @@ public partial class MainWindow
 
     private void OnDensityColormapChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_suppressDensityRender && _densityMap is not null)
+        // IsInitialized: XAML preselects this combo too, so this runs once during InitializeComponent.
+        // It survived only because _densityMap happens to be null then - an accident, not a guard.
+        if (!IsInitialized || _suppressDensityRender || _densityMap is null)
+            return;
+        DrawDensity();
+    }
+
+    /// <summary>Which of the three readings of the map to draw.</summary>
+    private enum DensityView
+    {
+        /// <summary>Isolation window x retention time, color = precursors per spectrum.</summary>
+        Heatmap,
+
+        /// <summary>How many spectra had how many precursors.</summary>
+        Histogram,
+
+        /// <summary>Mean precursors per spectrum against retention time, with the min/max band.</summary>
+        LoadOverTime,
+    }
+
+    /// <summary>
+    /// The view the picker is on. Read from each item's Tag rather than its displayed text, so the label
+    /// can be reworded without silently falling back to the heatmap.
+    /// </summary>
+    private DensityView SelectedDensityView() =>
+        (DensityViewCombo.SelectedItem as ComboBoxItem)?.Tag is string tag
+        && Enum.TryParse<DensityView>(tag, out var view)
+            ? view
+            : DensityView.Heatmap;
+
+    // The view only changes how the same map is drawn - no re-query, no re-bin.
+    private void OnDensityViewChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // IsInitialized, not just the suppress flag: the XAML preselects this combo, so WPF raises
+        // SelectionChanged from the ComboBox's EndInit - part way through InitializeComponent, when the
+        // controls declared AFTER it (DensityColormapLabel, DensityHoverText) have not been created and
+        // their fields are still null. Touching one there threw an NRE out of the window's constructor,
+        // which is a startup crash, not a handler error.
+        if (_suppressDensityRender || !IsInitialized)
+            return;
+        UpdateViewControls();
+        if (_densityMap is not null)
             DrawDensity();
+    }
+
+    /// <summary>The colormap only applies to the heatmap; the other two views draw one series.</summary>
+    private void UpdateViewControls()
+    {
+        var forHeatmap = SelectedDensityView() == DensityView.Heatmap
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        DensityColormapLabel.Visibility = forHeatmap;
+        DensityColormapCombo.Visibility = forHeatmap;
+        DensityHoverText.Text = ""; // the readout belongs to the view that was showing
     }
 
     /// <summary>Query the selected run's precursors (off the UI thread), then bin and draw them.</summary>
@@ -493,10 +564,10 @@ public partial class MainWindow
         }
         var rtBin = DensityBin(DensityRtBinBox, PrecursorDensity.DefaultRtBinMin);
         var scheme = SelectedIsolationScheme();
-        _densityMap = scheme is not null
+        SetDensityMap(scheme is not null
             ? PrecursorDensity.Bin(_densityPrecursors, scheme, rtBin)
             : PrecursorDensity.Bin(
-                _densityPrecursors, DensityBin(DensityMzBinBox, UniformBinFallbackTh), rtBin);
+                _densityPrecursors, DensityBin(DensityMzBinBox, UniformBinFallbackTh), rtBin));
         DrawDensity();
     }
 
@@ -507,11 +578,23 @@ public partial class MainWindow
             return;
 
         // The ColorBar attaches as an axis panel and survives Plot.Clear(), so start from a fresh Plot
-        // on every draw rather than stacking one color bar per render. No title: the run is named in the
-        // drop-down and the color bar is labeled, so a title would only repeat them.
+        // on every draw rather than stacking one color bar per render - and so a color bar left by the
+        // heatmap does not follow the other two views. No title: the run is named in the drop-down and
+        // the color bar is labeled, so a title would only repeat them.
         DensityPlot.Reset();
-        PlotRenderer.DrawPrecursorDensity(
-            DensityPlot.Plot, map, DensityColormap(ComboText(DensityColormapCombo, "Viridis")));
+        switch (SelectedDensityView())
+        {
+            case DensityView.Histogram:
+                PlotRenderer.DrawPrecursorLoadHistogram(DensityPlot.Plot, map);
+                break;
+            case DensityView.LoadOverTime:
+                PlotRenderer.DrawPrecursorLoadOverTime(DensityPlot.Plot, map);
+                break;
+            default:
+                PlotRenderer.DrawPrecursorDensity(
+                    DensityPlot.Plot, map, DensityColormap(ComboText(DensityColormapCombo, "Viridis")));
+                break;
+        }
         DensityPlot.Refresh();
 
         // Say which windows the map is drawn on, and - crucially - flag precursors that fell outside them,
@@ -539,8 +622,10 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Read out the cell under the cursor. The color bar gives the scale; the question this plot is
-    /// asked ("how many precursors was THAT spectrum carrying") wants the number itself.
+    /// Read out whatever is under the cursor, in the terms of the view being shown. On the heatmap the
+    /// color bar gives the scale, but the question this plot is asked ("how many precursors was THAT
+    /// spectrum carrying") wants the number itself; the other two views need their own readout, or the
+    /// m/z and RT this one reports would be nonsense coordinates on a different pair of axes.
     /// </summary>
     private void OnDensityPlotMouseMove(object sender, MouseEventArgs e)
     {
@@ -551,19 +636,58 @@ public partial class MainWindow
         var pos = e.GetPosition(DensityPlot);
         var scale = DensityPlot.DisplayScale;
         var c = DensityPlot.Plot.GetCoordinates(new Pixel(pos.X * scale, pos.Y * scale));
+        DensityHoverText.Text = SelectedDensityView() switch
+        {
+            DensityView.Histogram => HistogramReadout(c.X),
+            DensityView.LoadOverTime => LoadOverTimeReadout(c.X),
+            _ => HeatmapReadout(map, c),
+        };
+    }
+
+    private static string HeatmapReadout(PrecursorDensityMap map, Coordinates c)
+    {
         var row = map.RowAt(c.Y);
         var col = (int)((c.X - map.RtLow) / map.RtBinMin);
-        DensityHoverText.Text = row < 0 || col < 0 || col >= map.RtBins
+        return row < 0 || col < 0 || col >= map.RtBins
             ? ""
             : $"m/z {map.Rows[row].Start:0.#}-{map.Rows[row].End:0.#} "
               + $"at {map.RtLow + col * map.RtBinMin:0.##} min: {map.Counts[row, col]:N0} precursors";
+    }
+
+    // The bars are at integer loads, so the bar under the cursor is the nearest whole number.
+    private string HistogramReadout(double x)
+    {
+        var histogram = _densityHistogram;
+        var load = (int)Math.Round(x);
+        if (histogram is null || load < 0 || load >= histogram.Length)
+            return "";
+        var acquired = histogram.Sum();
+        // The share is the reading the bar heights cannot give: "1,270 spectra" means nothing without
+        // knowing how many were acquired, and that total is nowhere on the plot.
+        return $"{load:N0} precursors: {histogram[load]:N0} spectra"
+             + (acquired > 0 ? $" ({100.0 * histogram[load] / acquired:0.##}%)" : "");
+    }
+
+    private string LoadOverTimeReadout(double x)
+    {
+        var load = _densityLoad;
+        var map = _densityMap;
+        if (load is null || map is null)
+            return "";
+        var bin = (int)((x - map.RtLow) / map.RtBinMin);
+        if (bin < 0 || bin >= load.Count)
+            return "";
+        var (time, mean, min, max) = load[bin];
+        return double.IsNaN(mean)
+            ? $"{time:0.##} min: nothing acquired"
+            : $"{time:0.##} min: mean {mean:0.00} precursors per spectrum (min {min:N0}, max {max:N0})";
     }
 
     // Message in place of a plot (an empty Plot with a title, as the QC tab does for its empty states).
     // Clears the map too, so the hover readout cannot report cells that are no longer drawn.
     private void ShowDensityMessage(string message)
     {
-        _densityMap = null;
+        SetDensityMap(null);
         DensityStatusText.Text = message;
         DensityHoverText.Text = "";
         DensityPlot.Reset();

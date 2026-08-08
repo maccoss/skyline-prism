@@ -238,7 +238,9 @@ public partial class MainWindow
         {
             // Not gated on a successful previous load: switching level after a failure has to try the
             // other level, which is the natural way out of an error.
-            if (_suppressRangeRender || !_rangeTabShown)
+            // IsInitialized: XAML preselects this combo, so this also runs once during
+            // InitializeComponent, when controls declared later do not exist yet.
+            if (!IsInitialized || _suppressRangeRender || !_rangeTabShown)
                 return;
             await LoadDynamicRangeAsync(force: true);
         }

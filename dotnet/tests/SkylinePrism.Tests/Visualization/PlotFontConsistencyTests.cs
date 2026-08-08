@@ -59,6 +59,8 @@ public class PlotFontConsistencyTests
     {
         new object[] { "correlation heatmap" },
         new object[] { "precursor density" },
+        new object[] { "precursor load histogram" },
+        new object[] { "precursor load over time" },
         new object[] { "dynamic range" },
         new object[] { "intensity density" },
     };
@@ -80,6 +82,14 @@ public class PlotFontConsistencyTests
 
             case "precursor density":
                 PlotRenderer.DrawPrecursorDensity(plt, DensityMap(), title: "A run");
+                break;
+
+            case "precursor load histogram":
+                PlotRenderer.DrawPrecursorLoadHistogram(plt, DensityMap(), title: "A run");
+                break;
+
+            case "precursor load over time":
+                PlotRenderer.DrawPrecursorLoadOverTime(plt, DensityMap(), title: "A run");
                 break;
 
             case "dynamic range":

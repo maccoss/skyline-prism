@@ -156,12 +156,32 @@ the right edge, because a label centred on its point buries the very point it na
 ### Spectrum density tab
 
 How many peptide precursors were detected in each DIA spectrum of a run: retention time across,
-precursor m/z up, colour = precursors per cell. Each map row is one **real isolation window**, so a cell
+precursor m/z up, color = precursors per cell. Each map row is one **real isolation window**, so a cell
 is a spectrum and its value is how many precursors that spectrum had to resolve. A precursor contributes
 a count to every window containing its m/z (more than one only for a staggered/overlapping scheme, where
 it genuinely was fragmented twice), for every RT bin its integrated peak `[Start Time, End Time]` spans.
-The **max q-value** control (`Detection Q Value`) decides what counts as detected; hovering reads out the
-window and count under the cursor.
+The **max q-value** control (`Detection Q Value`) decides what counts as detected; hovering reads out
+whatever is under the cursor, in the terms of the view being shown.
+
+**Three views of the same map**, chosen from the **View** drop-down (all read the same binning, so
+switching between them is instant - no re-query, no re-bin):
+
+| View | Shows | Reads |
+|---|---|---|
+| **Heatmap** | isolation window x retention time, color = precursors per spectrum | *where* the load is |
+| **Load histogram** | how many spectra had how many precursors | how the load is *distributed* |
+| **Load over time** | mean precursors per spectrum against RT, with min/max as dashed bounds around a filled band | how the load moves over the *gradient* |
+
+The map's color scale is set by its busiest cell, so the tail that actually limits identification - the
+few spectra carrying many co-isolated precursors - is exactly what the heatmap cannot show; that is the
+right-hand end of the histogram. On the load curve the *width of the band* is as informative as the mean:
+a wide one says the load is piled into a few windows at that time, a narrow one says it is spread evenly,
+and the mean alone cannot tell those apart.
+
+Both summaries count only cells that were **acquired**. For a scheduled method a window that was not
+firing is not a spectrum that found nothing, and counting it would pile a meaningless spike onto the
+histogram's bin 0 and drag every mean down. `LoadOverTime` returns NaN at such a time and each series is
+broken there rather than drawn through zero - a scheduled gap is not an idle instrument.
 
 **Where the windows come from.** This is the awkward part, and worth knowing:
 
@@ -240,8 +260,10 @@ it is added to the run's `isolation_schemes.xml`, so it is offered again next ti
 
 The map itself is built from `merged_data.parquet` - which the pipeline leaves in place and re-uses as
 its merge cache - so the tab works both right after a run and when the output box is simply pointed at a
-previous run's directory. Computation lives in `PrecursorDensity` / `IsolationScheme` (Core) and drawing
-in `PlotRenderer.DrawPrecursorDensity`; `MainWindow.Density.cs` is only the wiring. Real schemes are not
+previous run's directory. Computation lives in `PrecursorDensity` / `IsolationScheme` (Core) - including
+`PrecursorsPerSpectrumHistogram()` and `LoadOverTime()`, the two summaries - and drawing in
+`PlotRenderer.DrawPrecursorDensity` / `DrawPrecursorLoadHistogram` / `DrawPrecursorLoadOverTime`;
+`MainWindow.Density.cs` is only the wiring. Real schemes are not
 obliged to be uniform, gapless or non-overlapping, so the map keeps explicit `[Low, High)` rows and
 rasterizes onto a uniform grid at draw time (heatmap cells must be equal-height). This is a port of the
 m/z x RT heatmap in [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza), fed by the PRISM

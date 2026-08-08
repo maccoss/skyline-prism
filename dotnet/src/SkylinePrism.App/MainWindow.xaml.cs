@@ -100,6 +100,12 @@ public partial class MainWindow : Window
             AddOpenDocButton.IsEnabled = false; // re-enabled if a running instance turns up when clicked
             MainTabs.SelectedItem = InputsTab;  // standalone: the first thing to do is add an input
         }
+
+        // Last line of the constructor, and the ship gate's proof that the UI actually came up:
+        // App's "tool started" entry is written before this window is built, so it cannot tell a
+        // healthy launch from one that threw out of InitializeComponent. Keep this last, and keep the
+        // wording in step with verify-tool.ps1.
+        App.WriteLog("MainWindow loaded");
     }
 
     /// <summary>Seed the Inputs list with the document of the Skyline that launched the tool.</summary>
