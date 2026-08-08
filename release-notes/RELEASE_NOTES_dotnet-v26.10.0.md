@@ -66,11 +66,17 @@ its memory from what is actually free.
   Three separate faults, which together turned a ~9 second step into a five-minute stall before Stage 1
   had even started.
 
-  It was being driven through the full Skyline application. That is the right runner for exporting
-  reports - it is the only one that can write parquet - but this reads settings and writes no report,
-  and it hung there. Measured on the same 4.9 GB Thermo `.raw`: `SkylineCmd` returns all 167 windows in
-  **8.7 seconds**; the application runner printed one line and then nothing, still silent when it was
-  killed five minutes later. The probe now uses `SkylineCmd`, and report export is unchanged.
+  It was being driven through the **SkylineRunner** path (launch the installed Skyline and talk to it
+  over named pipes). That path hangs on `--new`, which is exactly what this probe uses: it works
+  against a throwaway document so your own is never touched. `SkylineDailyRunner.exe --new=x.sky
+  --overwrite --save` prints `File x.sky opened.` and then nothing, never writing the file, while
+  `SkylineCmd.exe` runs the identical arguments in **0.9 s**. The probe now uses `SkylineCmd`, which
+  returns all 167 windows in **8.7 s**.
+
+  This looks like a Skyline-daily issue rather than a PRISM one - it reproduces with MacCoss Lab's own
+  `SkylineDailyRunner.exe`, no PRISM code involved - and has been raised with them. **Report export is
+  unaffected**: it opens an existing document (`--in`), which the same runner handles in 1.6 s, so
+  runs that add closed `.sky` documents still get parquet exactly as before.
 
   PRISM also waited on Skyline's output with no deadline, and only checked for cancellation *after* a
   line arrived - so a Skyline that went quiet stopped the run for good and **Stop could not break it

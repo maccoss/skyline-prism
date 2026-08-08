@@ -25,6 +25,33 @@ an open document, and the two-way selection on the Dynamic Range plot).
 
 ---
 
+## How PRISM reaches Skyline
+
+Three different mechanisms, chosen by what each input is. Worth knowing, because they have different
+capabilities and only one of them is currently affected by a Skyline bug.
+
+| Input on the Inputs tab | Mechanism | Report format |
+|---|---|---|
+| **Open in Skyline** | Live JSON-RPC to the running instance | **parquet** |
+| **Skyline document (.sky)**, closed | `SkylineRunner` — launches the installed Skyline headlessly and opens the document with `--in` | **parquet** |
+| **Exported report** | Nothing; the file is used in place | as supplied |
+
+A run may mix all three freely: the merge reads parquet and CSV in the same pass, so ten closed
+documents, an open one and a report you exported last week combine into one cohort.
+
+`SkylineCmd.exe` is a fourth way to reach Skyline, used for one job only: reading a DIA acquisition's
+isolation windows out of a data file for the Spectrum density tab. That runs against a **throwaway**
+document (`--new`) so your own is never touched, and `--new` currently **hangs** through SkylineRunner —
+observed on Skyline-daily 26.1.1.209, reproducible with Skyline's own runner, and raised with the Skyline
+developers. `SkylineCmd` does the same work in ~9 s.
+
+> The reverse trade also exists: `SkylineCmd` cannot write parquet at all (its `.exe.config` lacks the
+> Parquet.Net binding), which is why report export uses SkylineRunner. Report export opens an existing
+> document, so it is unaffected by the `--new` stall. `PRISM_SKYLINECMD` forces `SkylineCmd` if you ever
+> need to — at the cost of CSV instead of parquet.
+
+---
+
 ## Dynamic Range
 
 Log10 abundance against abundance rank — the shape of Skyline's Relative Abundance plot — computed from

@@ -305,9 +305,11 @@ public sealed class PrismInput : INotifyPropertyChanged
             return null;
         }
 
-        // preferCmd: this reads settings, not a report, so it does not need the parquet-capable app
-        // runner - and driving the full application here is what made it hang. Measured on the same
-        // 4.9 GB Thermo .raw: SkylineCmd 8.7 s, the app runner still silent after 5 minutes.
+        // preferCmd because this probe uses --new (a throwaway document, so the user's is never
+        // touched), and --new hangs through the app runner - it prints the "opened" line and then
+        // nothing. SkylineCmd reads the same 4.9 GB Thermo .raw in 8.7 s. NOT because it is a
+        // "settings" command: report export goes through the app runner and is fine, because it
+        // opens an existing document with --in.
         var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, _ => { }, preferCmd: true);
         return SkylineIsolationImporter.ImportFromDataFile(
             dataFile, exporter.Runner, log, cancellationToken);
