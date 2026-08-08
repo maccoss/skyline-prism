@@ -99,6 +99,14 @@ jobs:
       - name: Package SkylinePrism.zip
         run: dotnet msbuild build/package.proj /p:Configuration=Release
 
+      # Extracts the zip and runs the exe: the only check that exercises what a user actually installs.
+      # The unit tests cannot see a startup crash - MainWindow needs a real dispatcher - and a
+      # "the zip is complete" file check cannot either. Added after a WPF initialization-order bug
+      # shipped through a green CI run: an NRE out of InitializeComponent, so the tool never opened.
+      - name: Launch-verify the packaged tool
+        shell: pwsh
+        run: ./build/verify-tool.ps1
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

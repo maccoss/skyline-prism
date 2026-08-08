@@ -16,7 +16,10 @@
 #>
 param(
     [string]$Zip = (Join-Path $PSScriptRoot '..\publish\SkylinePrism.zip'),
-    [int]$WaitSeconds = 8
+    # Upper bound, not a dwell time: the run below polls the log and stops as soon as the tool has
+    # either loaded its window or crashed, so the normal case takes about a second. The bound only has
+    # to cover a cold start on the slowest machine that runs this - a CI runner, not this laptop.
+    [int]$WaitSeconds = 40
 )
 $ErrorActionPreference = 'Stop'
 
@@ -33,19 +36,33 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $exe = Join-Path $dir 'SkylinePrism.exe'
 if (-not (Test-Path $exe)) { Write-Host 'VERIFY FAILED: SkylinePrism.exe not found in the zip'; exit 1 }
 
+# Only what THIS launch appended to the shared log. Opened share-write, because the tool still has it
+# open; the tool logs with a lock and appends per line, so a read mid-run is safe.
+function Get-LogTail {
+    if (-not (Test-Path $log)) { return '' }
+    $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+    try {
+        [void]$fs.Seek($startLen, 'Begin')
+        $sr = New-Object System.IO.StreamReader($fs)
+        try { return $sr.ReadToEnd() } finally { $sr.Close() }
+    } finally { $fs.Dispose() }
+}
+
 Write-Host "Launching (extracted) $exe ..."
 $p = Start-Process -FilePath $exe -ArgumentList 'verify-smoke-no-connection' -PassThru
-Start-Sleep -Seconds $WaitSeconds
-if (-not $p.HasExited) { $p.Kill(); [void]$p.WaitForExit(2000) }
 
-# Read only what this launch appended to the shared log.
-$tail = ''
-if (Test-Path $log) {
-    $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
-    [void]$fs.Seek($startLen, 'Begin')
-    $sr = New-Object System.IO.StreamReader($fs)
-    $tail = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+# Poll for a verdict rather than sleeping a fixed period. A fixed wait has to be long enough for the
+# slowest machine, which makes it slow everywhere and STILL flaky on a cold CI runner; polling is both
+# faster here and safe there. Either marker below is conclusive, so there is nothing to gain by waiting.
+$deadline = (Get-Date).AddSeconds($WaitSeconds)
+while ((Get-Date) -lt $deadline) {
+    if ((Get-LogTail) -match 'UNHANDLED \(|MainWindow loaded') { break }
+    if ($p.HasExited) { break }
+    Start-Sleep -Milliseconds 250
 }
+if (-not $p.HasExited) { $p.Kill(); [void]$p.WaitForExit(5000) }
+
+$tail = Get-LogTail   # final read, after the process has gone and flushed
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
 
 # ANY exception that escaped to App's global handlers fails the check. This deliberately replaces an
