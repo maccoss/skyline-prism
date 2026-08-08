@@ -76,6 +76,32 @@ public class PlotRendererSmokeTests
             PrecursorDensity.Bin(Array.Empty<DetectedPrecursor>()), title: "No detected precursors"));
     }
 
+    /// <summary>
+    /// The other two views of the same map. They are drawn into the tool's live plot rather than saved,
+    /// so there is no ...Png helper for them - but they still have to survive the SkiaSharp render path,
+    /// which is where a bad fill or an empty series shows up.
+    /// </summary>
+    [Fact]
+    public void PrecursorLoadSummaries_Render()
+    {
+        var precursors = new System.Collections.Generic.List<DetectedPrecursor>();
+        for (var i = 0; i < 200; i++)
+            precursors.Add(new DetectedPrecursor(400 + i % 60, 5 + i % 20 * 0.5, 5.4 + i % 20 * 0.5));
+        var map = PrecursorDensity.Bin(precursors, mzBinTh: 4.0, rtBinMin: 0.1);
+        var empty = PrecursorDensity.Bin(Array.Empty<DetectedPrecursor>());
+
+        foreach (var (m, title) in new[] { (map, "Precursor load"), (empty, "No detected precursors") })
+        {
+            var histogram = new ScottPlot.Plot();
+            PlotRenderer.DrawPrecursorLoadHistogram(histogram, m, title);
+            AssertPng(histogram.GetImageBytes(1400, 900, ScottPlot.ImageFormat.Png));
+
+            var overTime = new ScottPlot.Plot();
+            PlotRenderer.DrawPrecursorLoadOverTime(overTime, m, title);
+            AssertPng(overTime.GetImageBytes(1400, 900, ScottPlot.ImageFormat.Png));
+        }
+    }
+
     [Fact]
     public void CorrelationHeatmap_Renders()
     {

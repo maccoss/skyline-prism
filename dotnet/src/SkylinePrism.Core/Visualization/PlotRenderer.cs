@@ -183,9 +183,6 @@ public static class PlotRenderer
         Plot plt, PrecursorDensityMap map, IColormap? colormap = null, string? title = null,
         double fontScale = 1.0)
     {
-        // Publication-scale baselines (points at the default plot size), all scaled by fontScale.
-        float Pt(double points) => (float)(points * fontScale);
-
         if (map.IsEmpty)
         {
             plt.Title(title ?? "No precursors to map");
@@ -210,12 +207,7 @@ public static class PlotRenderer
         // the same treatment as the axes.
         StyleColorBar(plt.Add.ColorBar(heat), "Precursors per spectrum", fontScale);
 
-        if (title is not null)
-        {
-            // Run names are long and ScottPlot does not wrap titles, so shrink rather than clip.
-            plt.Title(title);
-            plt.Axes.Title.Label.FontSize = title.Length > 45 ? Pt(20) : Pt(26);
-        }
+        SetPlotTitle(plt, title, fontScale);
         plt.Axes.SetLimits(map.RtLow, map.RtHigh, map.MzLow, map.MzHigh);
     }
 
@@ -230,6 +222,189 @@ public static class PlotRenderer
         var plt = new Plot();
         DrawPrecursorDensity(plt, map, colormap, title, fontScale);
         return plt.GetImageBytes(width, height, ImageFormat.Png);
+    }
+
+    /// <summary>One color for both density summaries, so they read as views of the same thing.</summary>
+    private static readonly Color DensityLoadColor = Color.FromHex("#1a3c6e");
+
+    /// <summary>
+    /// How the precursor load is DISTRIBUTED across spectra: x = precursors a spectrum had to resolve,
+    /// y = how many spectra had that many. Summarizes the same map as
+    /// <see cref="DrawPrecursorDensity"/> along its other axis.
+    /// </summary>
+    /// <remarks>
+    /// The map's color scale is set by its busiest cell, so the tail that actually limits identification
+    /// - the handful of spectra carrying many co-isolated precursors - is exactly what the map cannot
+    /// show. Here it is the shape of the right-hand end.
+    /// <para>Bin 0 is spectra that were acquired and detected nothing, which is a real and useful reading
+    /// ("how much of the method was quiet"), and normally the tallest bar. The mean is drawn as a line
+    /// because a long-tailed distribution puts it well to the right of where the bars look heaviest.</para>
+    /// </remarks>
+    public static void DrawPrecursorLoadHistogram(
+        Plot plt, PrecursorDensityMap map, string? title = null, double fontScale = 1.0)
+    {
+        var histogram = map.PrecursorsPerSpectrumHistogram();
+        if (histogram.Length == 0)
+        {
+            plt.Title(title ?? "No spectra to summarize");
+            StyleQcPlot(plt, fontScale);
+            return;
+        }
+
+        var loads = new double[histogram.Length];
+        var spectra = new double[histogram.Length];
+        long acquired = 0, observations = 0;
+        var tallest = 0;
+        for (var n = 0; n < histogram.Length; n++)
+        {
+            loads[n] = n;
+            spectra[n] = histogram[n];
+            acquired += histogram[n];
+            observations += (long)histogram[n] * n;
+            if (histogram[n] > tallest)
+                tallest = histogram[n];
+        }
+
+        var bars = plt.Add.Bars(loads, spectra);
+        bars.Color = DensityLoadColor;
+
+        if (acquired > 0)
+        {
+            var mean = (double)observations / acquired;
+            var line = plt.Add.VerticalLine(mean);
+            line.Color = Colors.Black;
+            line.LineWidth = 4;
+            line.LinePattern = LinePattern.Dashed;
+            line.LegendText = $"mean {mean:0.0} of {acquired:N0} spectra";
+            plt.ShowLegend(Alignment.UpperRight);
+        }
+
+        plt.XLabel("Precursors in a spectrum");
+        plt.YLabel("Spectra");
+        StyleQcPlot(plt, fontScale);
+        SetPlotTitle(plt, title, fontScale);
+        // Explicit limits rather than ScottPlot's margins: the default padding puts ticks either side of
+        // the data, and a bar chart of counts has no negative loads and no spectra below zero to show.
+        plt.Axes.SetLimits(-0.5, histogram.Length - 0.5, 0, Math.Max(1, tallest * 1.05));
+    }
+
+    /// <summary>
+    /// How the precursor load moves over the gradient: mean precursors per spectrum against retention
+    /// time, with the minimum and maximum across that time's spectra as dashed lines around it.
+    /// </summary>
+    /// <remarks>
+    /// The band between min and max is the point of the plot as much as the mean is - a wide band says
+    /// the load is piled into a few isolation windows, a narrow one says it is spread evenly, and the
+    /// mean alone cannot tell those apart.
+    /// <para>A time when nothing was acquired (a gap in a scheduled PRM/MTM method) comes back as NaN,
+    /// and every series is BROKEN there rather than drawn through zero: a scheduled gap is not an idle
+    /// instrument, and a line dropping to the axis would say it was.</para>
+    /// </remarks>
+    public static void DrawPrecursorLoadOverTime(
+        Plot plt, PrecursorDensityMap map, string? title = null, double fontScale = 1.0)
+    {
+        var series = map.LoadOverTime();
+        var segments = AcquiredSegments(series);
+        if (segments.Count == 0)
+        {
+            plt.Title(title ?? "Nothing was acquired");
+            StyleQcPlot(plt, fontScale);
+            return;
+        }
+
+        // Every segment draws the same three series, so only the first one carries the legend entries.
+        var labeled = false;
+        var highest = 0.0;
+        foreach (var (times, mean, min, max) in segments)
+        {
+            foreach (var v in max)
+                if (v > highest)
+                    highest = v;
+
+            // Filled first so the three lines sit on top of the band rather than under it. A one-bin
+            // segment has no width to fill.
+            if (times.Length > 1)
+            {
+                var band = plt.Add.FillY(times, min, max);
+                band.FillColor = DensityLoadColor.WithAlpha((byte)45);
+                band.LineWidth = 0;
+                band.MarkerSize = 0;
+            }
+
+            AddLoadLine(plt, times, max, LinePattern.Dashed, 2, labeled ? null : "min / max");
+            AddLoadLine(plt, times, min, LinePattern.Dashed, 2, null);
+            AddLoadLine(plt, times, mean, LinePattern.Solid, 3, labeled ? null : "mean");
+            labeled = true;
+        }
+        plt.ShowLegend(Alignment.UpperRight);
+
+        plt.XLabel("Retention time (min)");
+        plt.YLabel("Precursors per spectrum");
+        StyleQcPlot(plt, fontScale);
+        SetPlotTitle(plt, title, fontScale);
+        // The full RT extent, not just the acquired parts: a schedule's gaps have to stay visible as
+        // gaps, which they cannot be if the axis closes up around them.
+        plt.Axes.SetLimits(map.RtLow, map.RtHigh, 0, Math.Max(1, highest * 1.05));
+    }
+
+    private static void AddLoadLine(
+        Plot plt, double[] xs, double[] ys, LinePattern pattern, float width, string? legendText)
+    {
+        var line = plt.Add.Scatter(xs, ys);
+        line.Color = DensityLoadColor;
+        line.LineWidth = width;
+        line.LinePattern = pattern;
+        // A segment of one RT bin has no line to draw, so mark it instead - otherwise a method whose
+        // slots are shorter than they are far apart renders as an empty plot.
+        line.MarkerSize = xs.Length == 1 ? 6 : 0;
+        if (legendText is not null)
+            line.LegendText = legendText;
+    }
+
+    /// <summary>
+    /// Split <see cref="PrecursorDensityMap.LoadOverTime"/> into contiguous runs of acquired time.
+    /// ScottPlot draws a scatter straight through a NaN, so the break has to be made by handing it
+    /// separate series rather than by leaving holes in one.
+    /// </summary>
+    private static List<(double[] Times, double[] Mean, double[] Min, double[] Max)> AcquiredSegments(
+        IReadOnlyList<(double TimeMin, double Mean, double Min, double Max)> series)
+    {
+        var segments = new List<(double[], double[], double[], double[])>();
+        List<(double TimeMin, double Mean, double Min, double Max)>? run = null;
+
+        void Close()
+        {
+            if (run is null)
+                return;
+            segments.Add((
+                run.Select(p => p.TimeMin).ToArray(), run.Select(p => p.Mean).ToArray(),
+                run.Select(p => p.Min).ToArray(), run.Select(p => p.Max).ToArray()));
+            run = null;
+        }
+
+        foreach (var point in series)
+        {
+            if (double.IsNaN(point.Mean) || double.IsNaN(point.Min) || double.IsNaN(point.Max))
+            {
+                Close();
+                continue;
+            }
+            (run ??= new()).Add(point);
+        }
+        Close();
+        return segments;
+    }
+
+    /// <summary>
+    /// Titles are optional on the interactive plots (the run is named in the drop-down above them) and
+    /// ScottPlot does not wrap, so a long run name shrinks rather than clipping.
+    /// </summary>
+    private static void SetPlotTitle(Plot plt, string? title, double fontScale)
+    {
+        if (title is null)
+            return;
+        plt.Title(title);
+        plt.Axes.Title.Label.FontSize = (float)((title.Length > 45 ? 20 : 26) * fontScale);
     }
 
     /// <summary>

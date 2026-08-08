@@ -124,6 +124,11 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       `PlotRenderer.DrawPrecursorDensity`. C#-only by design: the Python engine has no equivalent (this
       is a port of Skyline-Cadenza's m/z x RT heatmap, reading the merged PRISM report instead of a
       DIA-NN report)
+- [x] Two further views of that map, from a **View** picker on the same tab: the distribution of load
+      across spectra (`PrecursorsPerSpectrumHistogram` + `PlotRenderer.DrawPrecursorLoadHistogram`) and
+      load over the gradient as mean with a min/max band (`LoadOverTime` +
+      `PlotRenderer.DrawPrecursorLoadOverTime`). Both count only ACQUIRED cells, and the load curve
+      breaks at a scheduled method's gaps rather than drawing through zero
 - [x] Real DIA isolation windows for that map — `IsolationScheme` (parses both Skyline XML spellings) +
       `IsolationSchemeCatalog` (persisted to `isolation_schemes.xml` per run). Read from the document
       when it defines a scheme; for `Results only` documents Skyline keeps the windows only inside the

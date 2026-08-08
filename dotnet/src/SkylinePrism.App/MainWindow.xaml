@@ -252,6 +252,14 @@
                         <TextBlock Text="Run:" VerticalAlignment="Center" Margin="0,0,4,0" />
                         <ComboBox x:Name="DensitySampleCombo" Width="230" SelectionChanged="OnDensitySampleChanged"
                                   ToolTip="Which acquisition to map. Every run in the merged report is listed." />
+                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <ComboBox x:Name="DensityViewCombo" Width="150" SelectedIndex="0"
+                                  SelectionChanged="OnDensityViewChanged"
+                                  ToolTip="Three readings of the same map: where the load is (heatmap), how it is distributed across spectra (histogram), and how it moves over the gradient (load over time).">
+                            <ComboBoxItem Tag="Heatmap">Heatmap</ComboBoxItem>
+                            <ComboBoxItem Tag="Histogram">Load histogram</ComboBoxItem>
+                            <ComboBoxItem Tag="LoadOverTime">Load over time</ComboBoxItem>
+                        </ComboBox>
                         <TextBlock Text="Isolation scheme:" VerticalAlignment="Center" Margin="16,0,4,0" />
                         <ComboBox x:Name="DensitySchemeCombo" Width="200" SelectionChanged="OnDensitySchemeChanged"
                                   ToolTip="The acquisition's real isolation windows - one map row per window, so one cell is one DIA spectrum. Taken from the document when it defines a scheme; otherwise pick the scheme the data was acquired with." />
@@ -267,7 +275,8 @@
                         <TextBox x:Name="DensityQValueBox" Width="52" Text="0.01" VerticalAlignment="Center"
                                  LostFocus="OnDensityQValueChanged" KeyDown="OnDensityQValueKeyDown"
                                  ToolTip="Detection q-value cutoff: only precursors at or below it count as detected. Blank counts every integrated peak." />
-                        <TextBlock Text="Colors:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                        <TextBlock x:Name="DensityColormapLabel" Text="Colors:" VerticalAlignment="Center"
+                                   Margin="16,0,4,0" />
                         <ComboBox x:Name="DensityColormapCombo" Width="110" SelectedIndex="0"
                                   SelectionChanged="OnDensityColormapChanged">
                             <ComboBoxItem>Viridis</ComboBoxItem>
