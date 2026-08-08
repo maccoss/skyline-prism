@@ -210,6 +210,16 @@ public partial class MainWindow
                 DensitySchemeCombo.Items.Add(scheme.Name + (scheme.IsScheduled ? " (scheduled)" : ""));
                 _densitySchemeChoices.Add(scheme);
             }
+            // The built-in starting scheme: a modern narrow-window Astral cycle. Offered whenever the
+            // acquisition's own windows are not already listed, so the fallback is a realistic 3 Th
+            // grid rather than uniform bins or a 25 Th SWATH template from a different era.
+            if (documentScheme is null || !documentScheme.Name.Equals(
+                    IsolationScheme.AstralDefaultName, StringComparison.OrdinalIgnoreCase))
+            {
+                DensitySchemeCombo.Items.Add(IsolationScheme.AstralDefaultName + " (default)");
+                _densitySchemeChoices.Add(IsolationScheme.AstralDefault());
+            }
+
             DensitySchemeCombo.Items.Add(UniformSchemeItem);
             _densitySchemeChoices.Add(null);
             // Always offered: a scheduled PRM/MTM method's windows exist only in the inclusion list that
@@ -219,12 +229,22 @@ public partial class MainWindow
             _densitySchemeChoices.Add(null);
 
             // The document's scheme wins; otherwise keep the user's previous pick across runs (they are
-            // usually all the same acquisition), else fall back to the approximate grid.
+            // usually all the same acquisition), else the built-in Astral default - which is a far
+            // better guess for narrow-window DIA than a uniform grid.
             var index = 0;
             if (documentScheme is null)
             {
                 var keep = previous is null ? -1 : DensitySchemeCombo.Items.IndexOf(previous);
-                index = keep >= 0 ? keep : DensitySchemeCombo.Items.Count - 1;
+                if (keep >= 0)
+                {
+                    index = keep;
+                }
+                else
+                {
+                    var astral = DensitySchemeCombo.Items.IndexOf(
+                        IsolationScheme.AstralDefaultName + " (default)");
+                    index = astral >= 0 ? astral : DensitySchemeCombo.Items.Count - 1;
+                }
             }
             DensitySchemeCombo.SelectedIndex = index;
             DensitySchemeCombo.IsEnabled = documentScheme is null && DensitySchemeCombo.Items.Count > 1;

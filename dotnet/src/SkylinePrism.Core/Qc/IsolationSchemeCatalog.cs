@@ -43,7 +43,17 @@ public sealed class IsolationSchemeCatalog
     public bool IsNonDia(string batchLabel) =>
         AcquisitionFor(batchLabel) is { } m && !string.Equals(m, "DIA", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Schemes available to choose from - the Skyline library plus any document scheme.</summary>
+    /// <summary>
+    /// Extra schemes the USER supplied - currently only a Thermo inclusion list loaded for a scheduled
+    /// acquisition, whose windows exist nowhere else.
+    /// <para>
+    /// Skyline's saved isolation-scheme list is deliberately NOT collected here. Those are generic
+    /// templates (SWATH (25 m/z), SWATH (VW 64), ...) unrelated to how any given data was acquired, and
+    /// offering them invites picking one: binning a 3.0014 Th forbidden-zone acquisition on a 25 Th
+    /// SWATH grid gives a map that looks plausible and is wrong. The acquisition's own windows come
+    /// from its data file; where they cannot be read, labelled uniform bins are the honest fallback.
+    /// </para>
+    /// </summary>
     public List<IsolationScheme> Library { get; } = new();
 
     /// <summary>Library schemes that actually define windows, deduplicated by name, alphabetical.</summary>

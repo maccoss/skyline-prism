@@ -244,21 +244,13 @@ public sealed class PrismInput : INotifyPropertyChanged
                     catalog.AddDocumentScheme(label, documentScheme); // record the name for the UI to explain
             }
 
-            if (Kind == PrismInputKind.RunningSkyline && Session is not null)
-            {
-                var count = 0;
-                foreach (var xml in new SkylineReportDriver(Session, log).GetIsolationSchemeXml())
-                {
-                    var scheme = IsolationScheme.Parse(xml);
-                    if (scheme is { HasWindows: true })
-                    {
-                        catalog.AddLibraryScheme(scheme);
-                        count++;
-                    }
-                }
-                if (count > 0)
-                    log($"Read {count} saved isolation scheme(s) from Skyline for the density map.");
-            }
+            // The saved isolation schemes in Skyline's settings list are deliberately NOT collected.
+            // They are generic templates - SWATH (25 m/z), SWATH (VW 64) and the like - that have
+            // nothing to do with how this data was acquired, and offering them invites picking one:
+            // binning a 3.0014 Th forbidden-zone acquisition on a 25 Th SWATH grid produces a map that
+            // looks plausible and is wrong. The acquisition's own windows come from the data file
+            // (above), and where those cannot be read the tab says so and uses labelled uniform bins,
+            // which at least does not misrepresent itself.
         }
         catch (Exception ex)
         {
