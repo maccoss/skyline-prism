@@ -278,8 +278,19 @@ public partial class MainWindow
     }
 
     /// <summary>The uniform bin width only applies to the approximate fallback, so only show it there.</summary>
-    private void UpdateSchemeControls() =>
-        DensityMzBinBox.Visibility = SelectedIsolationScheme() is null ? Visibility.Visible : Visibility.Collapsed;
+    private void UpdateSchemeControls()
+    {
+        var scheme = SelectedIsolationScheme();
+        DensityMzBinBox.Visibility = scheme is null ? Visibility.Visible : Visibility.Collapsed;
+
+        // The picker shows names, and a name is nominal - "Astral 3 Th, 400-900 m/z" really runs to
+        // 901.66, because 167 windows of ~3.0014 Th from a forbidden-zone edge do not end on a round
+        // number (Skyline's own "SWATH (25 m/z)" is the same kind of label). Put the true extents where
+        // the choice is made, so the m/z axis never disagrees with the name for no visible reason.
+        DensitySchemeCombo.ToolTip = scheme?.Describe()
+            ?? "No real isolation windows available - the map is binned on a uniform m/z grid, which is "
+             + "approximate: a cell is not one spectrum.";
+    }
 
     private IsolationScheme? SelectedIsolationScheme()
     {

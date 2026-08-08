@@ -115,7 +115,16 @@ public sealed record IsolationScheme(string Name, IReadOnlyList<IsolationWindow>
         return (double)inside / precursorMz.Count;
     }
 
-    /// <summary>The built-in starting scheme's name, so the UI can mark it as the default.</summary>
+    /// <summary>
+    /// The built-in starting scheme's name, so the UI can mark it as the default.
+    /// <para>
+    /// The range in the name is NOMINAL, as it is in Skyline's own "SWATH (25 m/z)": the windows
+    /// actually run 400.43 to 901.66, because 167 windows of ~3.0014 Th starting at a forbidden-zone
+    /// edge do not land on a round number. Rounding the windows to make the label exact would defeat
+    /// the point of the scheme. The picker shows the real extents next to the name via
+    /// <see cref="Describe"/>, so nothing has to be inferred from the label.
+    /// </para>
+    /// </summary>
     public const string AstralDefaultName = "Astral 3 Th, 400-900 m/z";
 
     /// <summary>
