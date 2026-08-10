@@ -154,14 +154,19 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not done · **[-]** deferred 
       isolation window), so `SkylineIsolationImporter` has Skyline import them from a data file
       (`--full-scan-isolation-scheme=<data file>` against a throwaway `--new` document — never the user's).
       Saved schemes are the manual fallback, and precursors outside the chosen scheme are counted+warned
-- [x] Scheduled acquisitions (PRM / MTM / dynamic DIA) — `IsolationWindow` carries an optional RT firing interval
-      (Cadenza's `Slot` model: m/z range x RT range), so membership requires the peak to elute while the
-      window fired, unscheduled time renders as "not acquired" rather than zero, and the RT axis spans the
-      schedule. Windows come from the instrument's inclusion list (`ThermoInclusionList`, the columns
-      Cadenza's `ThermoCsvWriter` writes) since Skyline's importer needs a repeating cycle and a schedule
-      has none. Dynamic DIA (PMC10517878) is the same model with a cycle of windows per segment, so the
-      display rasterizer picks its source window per CELL, not per m/z row — a per-row choice renders one
-      segment and blanks the others
+- [-] PRM / MTM — **removed, deliberately.** Their windows were read from the Thermo inclusion list that
+      went to the instrument (`ThermoInclusionList`). Getting what an acquisition actually did means
+      walking the data file's scan headers, which belongs in Skyline or ProteoWizard rather than in an
+      external tool, and no Skyline CLI/RPC exposes acquired isolation windows
+      (`--exp-isolationlist-instrument` is the outbound direction). The density tab is DIA-only and now
+      warns when a document's acquisition method is not DIA
+- [x] Scheduled-window model kept for **dynamic DIA**, which is DIA (PMC10517878): `IsolationWindow`
+      carries an optional RT firing interval (m/z range x RT range), so membership requires the peak to
+      elute while the window fired, unscheduled time renders as "not acquired" rather than zero, and the
+      RT axis spans the schedule. Its distinguishing property — the same m/z covered by different windows
+      at different times — is why the display rasterizer picks its source window per CELL, not per m/z row
+      (a per-row choice renders one segment and blanks the others). Nothing produces a scheduled window
+      today; `ScheduledWindowTests` / `DynamicDiaTests` keep the primitives honest until something can
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
 - [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, PCA
       QC-reference distance collapse; RVR is reported as a note and decides nothing) — `ValidationStatus`

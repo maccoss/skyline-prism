@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Microsoft.Win32;
 using ScottPlot;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
@@ -46,12 +45,6 @@ public partial class MainWindow
 
     /// <summary>Label of the "no real windows available" entry - the only approximate option.</summary>
     private const string UniformSchemeItem = "(uniform bins - approximate)";
-
-    /// <summary>Opens a file dialog for a Thermo inclusion list (a scheduled PRM/MTM method).</summary>
-    private const string LoadInclusionItem = "Load inclusion list (PRM/MTM)...";
-
-    /// <summary>Inclusion lists the user has loaded this session, offered alongside the saved schemes.</summary>
-    private readonly List<IsolationScheme> _densityLoadedSchemes = new();
 
     /// <summary>Bin width used by the approximate fallback when the box is empty or unparseable.</summary>
     private const double UniformBinFallbackTh = 8.0;
@@ -246,7 +239,7 @@ public partial class MainWindow
                 DensitySchemeCombo.Items.Add($"{documentScheme.Name} (from document)");
                 _densitySchemeChoices.Add(documentScheme);
             }
-            foreach (var scheme in _densityLoadedSchemes.Concat(usable)
+            foreach (var scheme in usable
                          .Where(s => documentScheme is null
                              || !string.Equals(s.Name, documentScheme.Name, StringComparison.OrdinalIgnoreCase)))
             {
@@ -269,11 +262,6 @@ public partial class MainWindow
             }
 
             DensitySchemeCombo.Items.Add(UniformSchemeItem);
-            _densitySchemeChoices.Add(null);
-            // Always offered: a scheduled PRM/MTM method's windows exist only in the inclusion list that
-            // was loaded onto the instrument - Skyline cannot import them, because there is no repeating
-            // cycle to find.
-            DensitySchemeCombo.Items.Add(LoadInclusionItem);
             _densitySchemeChoices.Add(null);
 
             // The document's scheme wins; otherwise keep the user's previous pick across runs (they are
@@ -347,94 +335,8 @@ public partial class MainWindow
     {
         if (_suppressDensityRender)
             return;
-        if (ComboText(DensitySchemeCombo, "") == LoadInclusionItem)
-        {
-            LoadInclusionList();
-            return;
-        }
         UpdateSchemeControls();
         RebinAndDraw(); // the scheme only changes the binning, not the query
-    }
-
-    /// <summary>
-    /// Load a scheduled PRM/MTM method's inclusion list (the CSV that went to the instrument) and use its
-    /// slots as the map's rows. Each row is an m/z window crossed with the interval it fires in, so cells
-    /// outside a slot's schedule are drawn as "not acquired" rather than as an empty spectrum.
-    /// </summary>
-    private void LoadInclusionList()
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Open a Thermo inclusion list (scheduled PRM / MTM method)",
-            Filter = "Inclusion list (*.csv;*.tsv;*.txt)|*.csv;*.tsv;*.txt|All files (*.*)|*.*",
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
-            RestoreSchemeSelection();
-            return;
-        }
-
-        IsolationScheme scheme;
-        try
-        {
-            scheme = ThermoInclusionList.Load(dialog.FileName);
-        }
-        catch (Exception ex)
-        {
-            App.WriteLog("Inclusion list load failed: " + ex);
-            MessageBox.Show(this, ex.Message, "Could not read the inclusion list",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            RestoreSchemeSelection();
-            return;
-        }
-
-        _densityLoadedSchemes.RemoveAll(
-            s => string.Equals(s.Name, scheme.Name, StringComparison.OrdinalIgnoreCase));
-        _densityLoadedSchemes.Insert(0, scheme);
-        Log($"Inclusion list '{scheme.Name}': {scheme.Describe()}.");
-
-        // Keep it for next time: written into the run's catalog so reopening this output directory offers
-        // it again without re-browsing.
-        PersistLoadedScheme(scheme);
-
-        PopulateSchemeCombo();
-        _suppressDensityRender = true;
-        DensitySchemeCombo.SelectedIndex = _densitySchemeChoices.FindIndex(s => ReferenceEquals(s, scheme));
-        _suppressDensityRender = false;
-        UpdateSchemeControls();
-        RebinAndDraw();
-    }
-
-    // Put the picker back on a real scheme after a cancelled or failed load, so it never sits on the
-    // "Load..." action as though that were the current binning.
-    private void RestoreSchemeSelection()
-    {
-        _suppressDensityRender = true;
-        var fallback = _densitySchemeChoices.FindIndex(s => s is not null);
-        DensitySchemeCombo.SelectedIndex = fallback >= 0
-            ? fallback
-            : Math.Max(0, DensitySchemeCombo.Items.IndexOf(UniformSchemeItem));
-        _suppressDensityRender = false;
-        UpdateSchemeControls();
-    }
-
-    private void PersistLoadedScheme(IsolationScheme scheme)
-    {
-        var outputDir = OutputDirBox.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
-            return;
-        try
-        {
-            var path = Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
-            var catalog = IsolationSchemeCatalog.Load(path) ?? new IsolationSchemeCatalog();
-            catalog.AddLibraryScheme(scheme);
-            catalog.Save(path);
-            _densitySchemes = catalog;
-        }
-        catch (Exception ex)
-        {
-            App.WriteLog("Could not save the inclusion list to the run catalog: " + ex);
-        }
     }
 
     private async void OnDensityQValueChanged(object sender, RoutedEventArgs e)
@@ -615,19 +517,21 @@ public partial class MainWindow
         // which is what a wrong scheme looks like.
         var outside = map.PrecursorsOutsideRows;
         var total = _densityPrecursors?.Count ?? 0;
-        // "Busiest spectrum" only means co-fragmentation crowding for DIA. A targeted method isolates one
-        // (PRM) or a few (multiplexed) precursors per spectrum by design, and its windows are RT-scheduled
-        // rather than a repeating cycle, so say what the map is instead of implying the DIA reading.
+        // This tab is for DIA: a cell is a spectrum and its count is that spectrum's co-fragmentation
+        // load. A targeted method isolates one (PRM) or a few (multiplexed) precursors per spectrum by
+        // design, so that reading does not apply - and since PRISM has no way to obtain a targeted
+        // method's real windows, the rows below would be a DIA scheme it was not acquired with. Say so
+        // rather than letting the map be read as though it meant the same thing.
         var batch = BatchOfSelectedRun();
         var nonDia = batch is not null && _densitySchemes is not null && _densitySchemes.IsNonDia(batch)
             ? _densitySchemes.AcquisitionFor(batch)
             : null;
         DensityStatusText.Text =
-            $"{total:N0} precursors; busiest {(nonDia is null ? "spectrum" : "window")} {map.MaxCount:N0}; "
+            $"{total:N0} precursors; busiest spectrum {map.MaxCount:N0}; "
             + $"{map.RowSource}; {map.MzBins:N0} rows x {map.RtBins:N0} RT bins of {map.RtBinMin:0.###} min"
             + (nonDia is not null
-                ? $"; NOTE: {nonDia} acquisition - targets are isolated individually and scheduled by RT, "
-                  + "so a cell is a target x time bin, not a spectrum's co-fragmentation load"
+                ? $"; WARNING: this is a {nonDia} acquisition, and this map assumes DIA - the rows are not "
+                  + "the windows it was acquired with, and a cell is not a co-fragmentation load"
                 : "")
             + (outside > 0 && total > 0
                 ? $"; WARNING: {outside:N0} precursors ({100.0 * outside / total:0.#}%) fall outside every "
