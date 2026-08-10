@@ -246,14 +246,19 @@ public partial class MainWindow
                 DensitySchemeCombo.Items.Add(scheme.Name + (scheme.IsScheduled ? " (scheduled)" : ""));
                 _densitySchemeChoices.Add(scheme);
             }
-            // The built-in starting scheme: a modern narrow-window Astral cycle. Offered whenever the
-            // acquisition's own windows are not already listed, so the fallback is a realistic 3 Th
-            // grid rather than uniform bins or a 25 Th SWATH template from a different era.
-            if (documentScheme is null || !documentScheme.Name.Equals(
-                    IsolationScheme.AstralDefaultName, StringComparison.OrdinalIgnoreCase))
+            // The built-in schemes: modern narrow-window cycles. Enumerated from IsolationScheme.BuiltIns
+            // rather than named here, so adding one there is the only edit needed. Each is offered unless
+            // the document already declares a scheme by that name, so the fallback is a realistic grid
+            // rather than uniform bins or a 25 Th SWATH template from a different era. The first is
+            // marked "(default)" - it is what gets preselected below.
+            for (var i = 0; i < IsolationScheme.BuiltIns.Count; i++)
             {
-                DensitySchemeCombo.Items.Add(IsolationScheme.AstralDefaultName + " (default)");
-                _densitySchemeChoices.Add(IsolationScheme.AstralDefault());
+                var builtIn = IsolationScheme.BuiltIns[i];
+                if (documentScheme is not null && documentScheme.Name.Equals(
+                        builtIn.Name, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                DensitySchemeCombo.Items.Add(builtIn.Name + (i == 0 ? " (default)" : ""));
+                _densitySchemeChoices.Add(builtIn);
             }
 
             DensitySchemeCombo.Items.Add(UniformSchemeItem);
@@ -277,9 +282,11 @@ public partial class MainWindow
                 }
                 else
                 {
-                    var astral = DensitySchemeCombo.Items.IndexOf(
-                        IsolationScheme.AstralDefaultName + " (default)");
-                    index = astral >= 0 ? astral : DensitySchemeCombo.Items.Count - 1;
+                    // Whichever built-in is first in the list, found by the marker rather than by name
+                    // so reordering BuiltIns changes the default with no edit here.
+                    var preferred = _densitySchemeChoices.FindIndex(
+                        s => s is not null && ReferenceEquals(s, IsolationScheme.BuiltIns[0]));
+                    index = preferred >= 0 ? preferred : DensitySchemeCombo.Items.Count - 1;
                 }
             }
             DensitySchemeCombo.SelectedIndex = index;

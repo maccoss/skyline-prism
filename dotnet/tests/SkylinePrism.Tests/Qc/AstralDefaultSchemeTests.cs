@@ -105,4 +105,55 @@ public class AstralDefaultSchemeTests
 
         Assert.Equal(1.0, scheme.Coverage(probes), 3);
     }
+
+    // ---------------------------------------------------------------- the built-in list
+
+    /// <summary>
+    /// The default IS the first built-in. The picker preselects <c>BuiltIns[0]</c>, so if these two ever
+    /// name different schemes the tool would advertise one default and preselect another.
+    /// </summary>
+    [Fact]
+    public void TheDefaultIsTheFirstBuiltIn()
+    {
+        Assert.NotEmpty(IsolationScheme.BuiltIns);
+        Assert.Same(IsolationScheme.BuiltIns[0], IsolationScheme.AstralDefault());
+        Assert.Equal(IsolationScheme.AstralDefaultName, IsolationScheme.BuiltIns[0].Name);
+    }
+
+    /// <summary>
+    /// Whatever gets added to the list later has to be usable as map rows: named distinctly (the picker
+    /// keys on the name, and a duplicate would be unselectable) and carrying real windows.
+    /// </summary>
+    [Fact]
+    public void EveryBuiltInIsUsableAndDistinctlyNamed()
+    {
+        Assert.All(IsolationScheme.BuiltIns, s =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(s.Name));
+            Assert.True(s.HasWindows, $"built-in '{s.Name}' defines no windows");
+            Assert.All(s.Windows, w => Assert.True(w.End > w.Start,
+                $"built-in '{s.Name}' has a non-positive-width window at {w.Start}"));
+        });
+
+        var names = IsolationScheme.BuiltIns.Select(s => s.Name).ToList();
+        Assert.Equal(names.Count, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    /// <summary>
+    /// <see cref="IsolationScheme.Cycle"/> keeps step and width independent, which is what lets the list
+    /// hold a staggered scheme (width &gt; step) later without a second builder.
+    /// </summary>
+    [Fact]
+    public void CycleBuildsStaggeredWindowsWhenWidthExceedsStep()
+    {
+        var staggered = IsolationScheme.Cycle("test", start: 400, step: 4, width: 8, count: 3);
+
+        Assert.Equal(3, staggered.Windows.Count);
+        Assert.Equal(400, staggered.Windows[0].Start, 6);
+        Assert.Equal(408, staggered.Windows[0].End, 6);
+        Assert.Equal(404, staggered.Windows[1].Start, 6);
+        // The overlap is the point: an m/z in the seam is covered by two windows, so a precursor there
+        // really was fragmented twice and must count in both.
+        Assert.Equal(2, staggered.Windows.Count(w => w.Contains(405)));
+    }
 }
