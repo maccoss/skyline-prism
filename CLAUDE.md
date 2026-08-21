@@ -943,14 +943,15 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >   database) tearing an instance down under a live reader - but the later configurations rule that
 >   out, because they fail with no teardown possible and no shared instance at all. Parallel partition
 >   readers were built, crashed, and were reverted; see `TransitionRollup.RunParallel`.
->   <br>Related and still true: `memory_limit` is a **database**-level setting, not a connection one,
->   so connections sharing an instance share one budget.
+> - **`memory_limit` is a *database*-level setting, not a connection one.** Connections sharing an
+>   instance - which, per the above, means every `":memory:"` connection in the process - share one
+>   budget. Setting it per connection does not give each its own pool.
 >
 > Stage 2 is consequently single-threaded, and the largest stage: on a 2-plate cohort it is ~58% of
 > wall clock (1m21s of 2m20s). That is a measured ceiling, not a mystery.
 > **`dotnet/STAGE2_THROUGHPUT.md` carries the measurements and the remaining options** - including the
 > one that is measured to win (bypass the row-by-row reader entirely: DuckDB writes a partition's
-> narrow projection, Parquet.Net reads it back 2.9x faster in pure managed code, which parallelises
+> narrow projection, Parquet.Net reads it back 2.9x faster in pure managed code, which parallelizes
 > safely) - plus the verification bar anything touching concurrency has to clear.
 
 ## Release Process

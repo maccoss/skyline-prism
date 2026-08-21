@@ -74,7 +74,7 @@ that B1, which sorts AND writes to disk, beats A, which sorts and streams: the r
 really is that expensive. The prize is B2: **2.9x faster than A, and pure managed code**, so it can run
 on several threads with no concurrent DuckDB anywhere.
 
-Sketch: phase 1 `COPY`s partitions one at a time (DuckDB parallelises the sort internally), phase 2
+Sketch: phase 1 `COPY`s partitions one at a time (DuckDB parallelizes the sort internally), phase 2
 reads the temp files on K threads into the existing `BlockingCollection`. The two phases pipeline -
 partition k can be read while k+1 is being written - so the floor is roughly the phase-1 cost, about
 1.7x better than today on the read side. Temp files are deleted as they are consumed, so the extra disk

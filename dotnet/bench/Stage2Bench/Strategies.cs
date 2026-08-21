@@ -119,7 +119,7 @@ public static class Strategies
     /// <summary>
     /// C: the sketched two-phase design. DuckDB writes the sorted narrow projection to a temp parquet
     /// (phase 1), which is then read back a row group at a time (phase 2). Phase 2 is pure managed code
-    /// and parallelises; phase 1 is a DuckDB sort and does not, so it is the floor.
+    /// and parallelizes; phase 1 is a DuckDB sort and does not, so it is the floor.
     /// </summary>
     public static ReadResult CopyThenParquetRead(string glob, string scratch, int budgetMb)
     {
