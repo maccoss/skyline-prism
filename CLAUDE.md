@@ -1018,8 +1018,11 @@ Steps:
    `SkylinePrism.zip` -> extracts and launch-verifies the exe). Confirm `prism --version` prints
    `{version}.0`.
 4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml` + Python `ci.yml`), run
-   `/pw-self-review`, then merge with a **merge commit** (`--no-ff`).
-5. Tag the merge commit and push the tag:
+   `/pw-self-review`, then **squash-merge** it (`gh pr merge --squash --delete-branch`). Always squash,
+   for every PR, not just releases - `main` keeps one commit per change. Write the squash commit
+   message deliberately; it is the permanent record, and the default (a concatenation of the branch's
+   commits) is not.
+5. Tag the squashed commit on `main` and push the tag:
    ```bash
    git tag dotnet-v{version} origin/main
    git push origin dotnet-v{version}

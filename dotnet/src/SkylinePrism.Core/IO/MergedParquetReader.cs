@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.Rollup;
 
@@ -49,20 +50,30 @@ public static class MergedParquetReader
     /// guarantees a peptide never spans two of them, so a block is always complete when it is yielded.
     /// </summary>
     public static IEnumerable<PeptideBlock> StreamPeptideBlocks(
-        MergedDataset dataset, SkylineColumns cols, bool includeProductMz = false,
+        MergedDataset dataset, SkylineColumns cols, IReadOnlyList<string> samples, bool includeProductMz = false,
         bool includeShapeCorr = false, int memoryBudgetMb = 0)
     {
         var withMz = includeProductMz && cols.ProductMz is not null;
         var withShape = includeShapeCorr && cols.ShapeCorrelation is not null;
         var extra = "";
         if (withMz)
-            extra += $", \"{cols.ProductMz}\" AS mz";
+            extra += $", p.\"{cols.ProductMz}\" AS mz";
         if (withShape)
-            extra += $", \"{cols.ShapeCorrelation}\" AS shape";
+            extra += $", p.\"{cols.ShapeCorrelation}\" AS shape";
         var mzIdx = withMz ? 7 : -1;
         var shapeIdx = withShape ? (withMz ? 8 : 7) : -1;
 
         var pool = new StringPool();
+
+        // The transition id and the sample index are built by DuckDB rather than per row here. Both
+        // were pure allocation: a fragment-ion string, two charge strings and a ~45-character sample id
+        // per ROW, all of which the pool then deduplicated and threw away. Measured on a 15.5M-row
+        // partition, moving them into the query took the read from 5.0 s / 4.5 GB allocated to
+        // 3.3 s / 1.5 GB. (A fully allocation-free shape using dense_rank() to return ids and read the
+        // strings only on change was also measured, and was SLOWER - 6.3 s - because the window
+        // functions cost more than the strings they saved. Measure before assuming.)
+        var tidSql = TransitionIdSql(dataset, cols);
+        var sampleSql = SampleIndexSql(samples);
 
         foreach (var partition in dataset.Partitions)
         {
@@ -76,16 +87,19 @@ public static class MergedParquetReader
             using var conn = OpenBounded(dataset, memoryBudgetMb);
             using var cmd = DuckDbTuning.StreamingCommand(conn,
                 "SELECT " +
-                $"\"{cols.Peptide}\" AS pep, " +
-                $"\"{cols.Transition}\" AS ion, " +
-                $"\"{cols.PrecursorCharge}\" AS pz, " +
-                $"\"{cols.ProductCharge}\" AS zz, " +
-                $"\"{cols.Sample}\" AS samp, " +
-                $"\"{cols.Abundance}\" AS area, " +
-                $"\"{cols.RetentionTime}\" AS rt" +
+                $"p.\"{cols.Peptide}\" AS pep, " +
+                $"{tidSql} AS tid, " +
+                $"starts_with(p.\"{cols.Transition}\", 'precursor') AS isprec, " +
+                $"TRY_CAST(p.\"{cols.PrecursorCharge}\" AS INTEGER) AS pz, " +
+                "m.s_idx AS samp, " +
+                $"p.\"{cols.Abundance}\" AS area, " +
+                $"p.\"{cols.RetentionTime}\" AS rt" +
                 extra + " " +
-                $"FROM {Scan(partition)} " +
-                $"ORDER BY \"{cols.Peptide}\"");
+                $"FROM {Scan(partition)} p " +
+                // INNER join: a row whose sample is not in the run's sample list is dropped here,
+                // exactly as the old per-row dictionary lookup dropped it.
+                $"JOIN {sampleSql} m ON m.s_name = p.\"{cols.Sample}\" " +
+                $"ORDER BY p.\"{cols.Peptide}\"");
             using var reader = cmd.ExecuteReader();
 
             PeptideBlock? current = null;
@@ -99,10 +113,10 @@ public static class MergedParquetReader
                     current = new PeptideBlock { Peptide = pep };
                 }
 
-                current.Ion.Add(pool.Get(reader, 1));
-                current.PrecursorCharge.Add(pool.GetKey(reader.GetValue(2)));
-                current.ProductCharge.Add(pool.GetKey(reader.GetValue(3)));
-                current.Sample.Add(pool.Get(reader, 4));
+                current.TransitionId.Add(pool.Get(reader, 1));
+                current.IsPrecursor.Add(!reader.IsDBNull(2) && reader.GetBoolean(2));
+                current.PrecursorCharge.Add(reader.IsDBNull(3) ? 0 : reader.GetInt32(3));
+                current.SampleIndex.Add(reader.GetInt32(4));
                 current.Area.Add(ToDouble(reader.GetValue(5)));
                 current.RetentionTime.Add(ToDouble(reader.GetValue(6)));
                 if (withMz)
@@ -115,6 +129,86 @@ public static class MergedParquetReader
             if (current is not null)
                 yield return current;
         }
+    }
+
+    /// <summary>
+    /// SQL producing the transition id, <c>ion_z{precursor}_{product}</c>.
+    /// <para>
+    /// This string is written to <c>peptide_residuals.parquet</c>, so it is an output contract and has
+    /// to render byte-identically to the C# concatenation it replaces. It does for the types that
+    /// occur: charges are INTEGER in a Skyline export, and <c>CAST(2 AS VARCHAR)</c> is <c>"2"</c> just
+    /// as <c>2.ToString(InvariantCulture)</c> is; a VARCHAR charge column (Skyline writes <c>#N/A</c>
+    /// into numeric columns) casts to itself. A FLOATING-POINT charge column is the one that would not
+    /// match - DuckDB renders <c>2.0</c> where .NET renders <c>2</c> - so <see cref="ChargePart"/>
+    /// casts that case through BIGINT first. That is exact because charge states are whole numbers
+    /// whatever type an export stores them in; it is not a general double-to-string equivalence.
+    /// </para>
+    /// </summary>
+    private static string TransitionIdSql(MergedDataset dataset, SkylineColumns cols)
+    {
+        var ion = $"COALESCE(p.\"{cols.Transition}\", 'nan')";
+        var pz = ChargePart(dataset, cols.PrecursorCharge);
+        var zz = ChargePart(dataset, cols.ProductCharge);
+        return $"({ion} || '_z' || {pz} || '_' || {zz})";
+    }
+
+    private static string ChargePart(MergedDataset dataset, string column) =>
+        IsFloatingPoint(dataset, column)
+            // A floating-point charge column still holds whole numbers - charge states are integers,
+            // whatever type the export wrote them as. Going through BIGINT reproduces .NET's rendering
+            // ("2"); casting the double straight to VARCHAR would give "2.0" and silently change every
+            // transition id in peptide_residuals.parquet.
+            ? $"COALESCE(CAST(CAST(p.\"{column}\" AS BIGINT) AS VARCHAR), 'nan')"
+            : $"COALESCE(CAST(p.\"{column}\" AS VARCHAR), 'nan')";
+
+    private static bool IsFloatingPoint(MergedDataset dataset, string column)
+    {
+        try
+        {
+            using var conn = new DuckDBConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                $"SELECT column_type FROM (DESCRIBE SELECT * FROM {Scan(dataset.Partitions[0])}) "
+                + $"WHERE column_name = '{column.Replace("'", "''")}'";
+            var type = cmd.ExecuteScalar() as string ?? "";
+            return type.Contains("DOUBLE", StringComparison.OrdinalIgnoreCase)
+                || type.Contains("FLOAT", StringComparison.OrdinalIgnoreCase)
+                || type.Contains("DECIMAL", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            // Unreadable schema. Assume not floating point, which is the overwhelmingly common case and
+            // the same expression the pre-SQL code produced; if the dataset is genuinely broken, the
+            // read below fails with a better message than a schema probe could give.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// SQL mapping each sample name to its index in the run's sample list - the same list that becomes
+    /// the output columns, so the index IS the output column. Emitted as a literal VALUES table
+    /// (a few hundred to a few thousand rows) that DuckDB hash-joins once per partition, which is far
+    /// cheaper than materializing the ~45-character sample id on every transition row.
+    /// </summary>
+    private static string SampleIndexSql(IReadOnlyList<string> samples)
+    {
+        // An empty list would emit "VALUES )" and fail as a SQL syntax error deep in the read, which is
+        // a terrible way to learn that the merged data has no usable sample column. Say so here.
+        if (samples.Count == 0)
+            throw new InvalidOperationException(
+                "No samples were found in the merged data, so the transition rollup has nothing to roll "
+                + "up to. Check that the sample column was detected correctly (see the 'Columns:' line "
+                + "in the run log) and that the input reports contain replicate names.");
+
+        var sb = new StringBuilder("(SELECT * FROM (VALUES ");
+        for (var i = 0; i < samples.Count; i++)
+        {
+            if (i > 0)
+                sb.Append(", ");
+            sb.Append('(').Append('\'').Append(samples[i].Replace("'", "''")).Append("', ").Append(i).Append(')');
+        }
+        return sb.Append(") AS t(s_name, s_idx))").ToString();
     }
 
     /// <summary>

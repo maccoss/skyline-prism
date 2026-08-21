@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using DuckDB.NET.Data;
@@ -20,6 +21,9 @@ public class MergedParquetReaderTests
         PrecursorCharge = "pz", ProductCharge = "zz", RetentionTime = "rt",
         ProductMz = "mz", ShapeCorrelation = "shape",
     };
+
+    private static List<string> Samples(string path)
+        => MergedParquetReader.GetSortedSamples(MergedDataset.Open(path), Cols.Sample);
 
     // area is VARCHAR (mixes a number with "#N/A"); pz/zz are integers; rt/mz/shape are doubles.
     private static string WriteParquet()
@@ -57,7 +61,8 @@ public class MergedParquetReaderTests
         try
         {
             var blocks = MergedParquetReader
-                .StreamPeptideBlocks(MergedDataset.Open(path), Cols, includeProductMz: true, includeShapeCorr: true)
+                .StreamPeptideBlocks(MergedDataset.Open(path), Cols, Samples(path),
+                    includeProductMz: true, includeShapeCorr: true)
                 .ToList();
 
             Assert.Equal(2, blocks.Count);
@@ -81,7 +86,7 @@ public class MergedParquetReaderTests
         var path = WriteParquet();
         try
         {
-            var a = MergedParquetReader.StreamPeptideBlocks(MergedDataset.Open(path), Cols).First(x => x.Peptide == "PEPA");
+            var a = MergedParquetReader.StreamPeptideBlocks(MergedDataset.Open(path), Cols, Samples(path)).First(x => x.Peptide == "PEPA");
             Assert.Empty(a.ProductMz);
             Assert.Empty(a.ShapeCorrelation);
             Assert.Equal(2, a.Area.Count); // still reads the core columns

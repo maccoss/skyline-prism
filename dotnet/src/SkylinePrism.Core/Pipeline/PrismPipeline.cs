@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -26,6 +27,10 @@ public sealed class PrismPipeline
     public sealed record Result(
         int NPeptides, int NProteins, int NSamples, IReadOnlyList<string> Batches);
 
+    /// <summary>Compact elapsed: "3m 12s" or "4.8s".</summary>
+    private static string Fmt(TimeSpan t) =>
+        t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds:00}s" : $"{t.TotalSeconds:n1}s";
+
     /// <summary>
     /// Run the pipeline. <paramref name="cancellationToken"/> is honoured at every stage boundary and
     /// inside the long-running stages (the merge query, the transition rollup's producer, and the
@@ -39,7 +44,38 @@ public sealed class PrismPipeline
         bool forceReprocess = false, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(outputDir);
-        var report = log ?? (_ => { });
+        var reportRaw = log ?? (_ => { });
+
+        // Per-stage timing in the run log. Added because every performance conclusion about this
+        // pipeline so far came from an external sampler wrapped around the process: the log said what
+        // each stage DID but never what it COST, so a stage that doubled in time was invisible until
+        // someone happened to wall-clock the whole run. A stage that is slow on a user's cohort should
+        // be visible in the artifact they already send us.
+        var stageTimer = Stopwatch.StartNew();
+        var totalTimer = Stopwatch.StartNew();
+        var timings = new List<(string Stage, TimeSpan Elapsed)>();
+        var currentStage = "";
+
+        void EndStage()
+        {
+            if (currentStage.Length == 0)
+                return;
+            timings.Add((currentStage, stageTimer.Elapsed));
+            reportRaw($"  [{currentStage} took {Fmt(stageTimer.Elapsed)}]");
+        }
+
+        // Stage banners are the natural boundary, so timing hangs off them rather than off a parallel
+        // set of markers that could drift out of step with the stages themselves.
+        void report(string line)
+        {
+            if (line.StartsWith("Stage ", StringComparison.Ordinal))
+            {
+                EndStage();
+                currentStage = line.Split(':')[0];
+                stageTimer.Restart();
+            }
+            reportRaw(line);
+        }
 
         report("============================================================");
         report("Stage 1: Merge / prepare input");
@@ -470,6 +506,15 @@ public sealed class PrismPipeline
             report("Stage 5b: Generating QC report (qc_report.html)...");
             QcReport.Generate(outputDir, config, savePlots: config.QcReport.SavePlots);
         }
+
+        EndStage();
+        totalTimer.Stop();
+        reportRaw("============================================================");
+        reportRaw($"Stage timings (total {Fmt(totalTimer.Elapsed)})");
+        reportRaw("============================================================");
+        foreach (var (stage, elapsed) in timings.OrderByDescending(t => t.Elapsed))
+            reportRaw($"  {stage,-12} {Fmt(elapsed),9}  "
+                + $"{(totalTimer.Elapsed.TotalSeconds > 0 ? 100 * elapsed.TotalSeconds / totalTimer.Elapsed.TotalSeconds : 0),5:n1}%");
 
         report($"PRISM complete: {nPeptides:N0} peptides, {nProteins:N0} proteins, {samples.Count:N0} samples, "
             + $"{batches.Count} batch(es).");
