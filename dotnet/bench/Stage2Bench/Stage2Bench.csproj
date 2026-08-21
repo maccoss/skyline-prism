@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately NOT in SkylinePrism.sln. CI builds the solution files by name, so leaving this out
+    keeps a benchmark harness off the critical path and out of the shipped package while still keeping
+    it in the repo, reviewed, and runnable by anyone who needs to re-measure.
+
+    Package versions are pinned to match SkylinePrism.Core, so the harness measures the same engines the
+    pipeline actually uses. Keep them in step.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Stage2Bench</AssemblyName>
+    <RootNamespace>Stage2Bench</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.3" />
+    <PackageReference Include="Parquet.Net" Version="5.6.1" />
+  </ItemGroup>
+
+</Project>

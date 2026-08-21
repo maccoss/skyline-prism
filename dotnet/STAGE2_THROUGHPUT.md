@@ -104,6 +104,36 @@ ever passes, parallel readers are a small change: slice `dataset.Partitions`, on
 `StreamPeptideBlocks` per slice into the existing `BlockingCollection`, each with its own share of the
 budget. Do not ship it on one green run.
 
+## Running the measurements yourself
+
+`bench/Stage2Bench` compares the candidate read strategies on one partition of a real merged dataset:
+
+```bash
+prism merge <report1.parquet> <report2.parquet> -o D:/bench/merged     # build a dataset once
+dotnet run -c Release --project dotnet/bench/Stage2Bench -- D:/bench/merged 3
+```
+
+It runs three arms - `duckdb-stream` (what ships), `nosort-managed` (item 1's cheaper variant: no sort,
+group in a dictionary) and `copy-then-read` (item 1 as sketched) - and reports the median of interleaved
+repeats.
+
+Two properties matter more than the numbers it prints:
+
+- **Arms are interleaved**, not run in blocks, so machine-state drift shows up as variance *within* an
+  arm rather than as a fake difference *between* arms.
+- **Every run is watched for contention** and labelled, and the summary refuses to present contended
+  figures as fact. This exists because an identical configuration measured 2.07 min and 3.70 min hours
+  apart here; the cause was other software starting in between, and the first explanation reached for
+  was page-cache warmth. Hours of analysis were built on that gap before anyone read the process list.
+
+It also checks that the arms agree on rows and peptides before comparing their timings, because a
+faster arm that reads different data is not a faster arm.
+
+The project is deliberately **not** in `SkylinePrism.sln`: CI builds the solutions by name, so the
+harness stays out of the critical path and the shipped package while remaining in the repo and
+runnable. Its package versions are pinned to match `SkylinePrism.Core` — keep them in step, or it stops
+measuring the engines the pipeline actually uses.
+
 ## Verification bar (learned the hard way)
 
 - **Measure end to end, never one stage.** A change that improved Stage 1 by 2.7x regressed the
@@ -113,9 +143,14 @@ budget. Do not ship it on one green run.
 - **Exercise the paths the default config skips.** The transition id only appears with
   `median_polish` + `output.include_residuals`; a default run would have "verified" a change to it
   without ever producing one.
-- **Run the machine quiet.** Two measurement rounds here were invalidated by a concurrent experiment
-  competing for the same disk, and one "new binary" run silently used a stale build because a leftover
-  process held the DLL.
+- **Run the machine quiet, and verify it rather than assuming it.** Three measurement rounds here were
+  invalidated by competing load - twice by a concurrent experiment of my own, once by two Skyline
+  instances the user had started - and one "new binary" run silently used a stale build because a
+  leftover process held the DLL. `Stage2Bench` now records this; anything measured by hand should check
+  the process list first.
+- **Prefer ratios to absolute rates.** Contention hits interleaved arms roughly equally, so an A/B
+  comparison survives a busy machine. An absolute MB/s quoted across sessions does not - that is how a
+  13x "finding" turned out to be partly measurement conditions.
 - **Repeat anything touching concurrency.** The crash reproduced 2 runs in 3, not 3 in 3.
 
 ## Instrumentation
