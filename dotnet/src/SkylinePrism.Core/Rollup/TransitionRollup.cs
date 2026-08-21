@@ -13,11 +13,17 @@ namespace SkylinePrism.Core.Rollup;
 
 /// <summary>
 /// Stage 2 transition-&gt;peptide rollup driver, porting chunked_processing.rollup_transitions_sorted
-/// + _process_single_peptide. A single DuckDB reader streams the peptide-sorted merged parquet
-/// (one <see cref="PeptideBlock"/> per peptide); blocks are processed by a bounded pool of worker
-/// threads (per-peptide rollup is pure/thread-safe) and results are streamed to the wide LOG2
-/// parquet via a single writer thread that flushes row groups periodically. This keeps CPU busy
-/// while holding only a bounded number of in-flight peptides in memory (no accumulate-all-then-write).
+/// + _process_single_peptide. A DuckDB reader streams the merged dataset one partition at a time
+/// (one <see cref="PeptideBlock"/> per peptide); blocks are processed by a
+/// bounded pool of worker threads (per-peptide rollup is pure/thread-safe) and results are streamed to
+/// the wide LOG2 parquet via a single writer thread that flushes row groups periodically. This keeps
+/// CPU busy while holding only a bounded number of in-flight peptides in memory (no
+/// accumulate-all-then-write).
+/// <para>
+/// The single reader is this stage's bottleneck (62 minutes at 1.2 of 32 cores on a 20-document
+/// cohort). Reading partitions concurrently is the obvious fix and is blocked by a use-after-free in
+/// the DuckDB binding, not by anything in the data model - see RunParallel.
+/// </para>
 /// Output row order is not the input peptide order under parallelism; downstream stages key by
 /// peptide, so this is immaterial.
 /// </summary>
@@ -29,14 +35,14 @@ public sealed class TransitionRollup
         string Pep, long Nt, double Rt, double[] Vals, List<(string Tid, double[] Res)>? Residuals);
 
     public static Result Run(
-        string mergedParquet,
+        MergedDataset dataset,
         SkylineColumns cols,
         TransitionRollupConfig cfg,
         string outputPath,
         IReadOnlyList<string>? samples = null,
         CancellationToken cancellationToken = default)
     {
-        samples ??= MergedParquetReader.GetSortedSamples(mergedParquet, cols.Sample);
+        samples ??= MergedParquetReader.GetSortedSamples(dataset, cols.Sample, cfg.MemoryBudgetMb);
         var sampleIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < samples.Count; i++)
             sampleIndex[samples[i]] = i;
@@ -80,7 +86,8 @@ public sealed class TransitionRollup
 
         try
         {
-            var sink = new PeptideStreamSink(pepWriter, resWriter, samples.Count, Math.Max(1, cfg.FlushRows));
+            var sink = new PeptideStreamSink(
+                pepWriter, resWriter, samples.Count, FlushRowsFor(cfg.FlushRows, samples.Count));
             var nFiltered = 0;
             var dop = ResolveDop(cfg.MaxDegreeOfParallelism);
 
@@ -93,7 +100,8 @@ public sealed class TransitionRollup
             if (dop <= 1)
             {
                 foreach (var block in MergedParquetReader.StreamPeptideBlocks(
-                    mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
+                    dataset, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
+                    memoryBudgetMb: cfg.MemoryBudgetMb))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var r = Process(block);
@@ -105,8 +113,8 @@ public sealed class TransitionRollup
             }
             else
             {
-                RunParallel(mergedParquet, cols, isLibrary, topNCorr, dop, Process, sink,
-                    ref nFiltered, cancellationToken);
+                RunParallel(dataset, cols, isLibrary, topNCorr, dop, cfg.MemoryBudgetMb,
+                    Process, sink, ref nFiltered, cancellationToken);
             }
 
             sink.FlushAll();
@@ -120,12 +128,29 @@ public sealed class TransitionRollup
     }
 
     private static void RunParallel(
-        string mergedParquet, SkylineColumns cols, bool isLibrary, bool topNCorr, int dop,
-        Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink, ref int nFiltered,
-        CancellationToken cancellationToken)
+        MergedDataset dataset, SkylineColumns cols, bool isLibrary, bool topNCorr, int dop,
+        int memoryBudgetMb, Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink,
+        ref int nFiltered, CancellationToken cancellationToken)
     {
-        // Single producer -> bounded queue -> N consumers -> single writer (this thread). The
-        // bounded capacities cap the number of in-flight peptides so RAM stays flat.
+        // ONE producer -> bounded queue -> N consumers -> single writer (this thread). The bounded
+        // capacities cap the number of in-flight peptides so RAM stays flat.
+        //
+        // The single producer is the stage's bottleneck and is known to be so: reading a partition is a
+        // DuckDB sort followed by a row-at-a-time walk of the result, and that walk is serial, so on a
+        // 20-document cohort this stage ran 62 minutes at 1.2 of 32 cores with the workers starved.
+        // Partitions are independent, so reading several at once is the obvious fix and was tried.
+        //
+        // It is NOT SAFE with this DuckDB binding, and the failure is memory corruption rather than an
+        // exception. DuckDB.NET hands out refcounted references to a cached database instance keyed by
+        // connection string (Connection.ConnectionManager), so every "Data Source=:memory:" in the
+        // process is the same instance. When one reader thread closes its connection the refcount can
+        // reach zero and the instance is torn down while another thread is still streaming from it -
+        // an AccessViolationException within seconds, surfacing at whatever allocated next. A distinct
+        // instance per reader would avoid it, but the binding has no in-memory naming (":memory:name"
+        // is parsed as a file path), leaving only file-backed databases as a workaround. Working around
+        // a use-after-free in a dependency, in the stage that computes the quantities, is not worth a
+        // wall-clock win: the failure mode is wrong numbers as readily as a crash. Revisit if the
+        // binding gains real instance isolation, and re-verify with repeated full runs, not one.
         using var inputQ = new BlockingCollection<PeptideBlock>(dop * 4);
         using var outputQ = new BlockingCollection<PeptideResult>(dop * 4);
         Exception? error = null;
@@ -136,7 +161,8 @@ public sealed class TransitionRollup
             try
             {
                 foreach (var b in MergedParquetReader.StreamPeptideBlocks(
-                    mergedParquet, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr))
+                    dataset, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
+                    memoryBudgetMb: memoryBudgetMb))
                 {
                     // Stopping the producer drains the queue and ends the consumers, so one check here
                     // stops the whole stage rather than needing one per worker.
@@ -187,6 +213,23 @@ public sealed class TransitionRollup
     {
         var cores = Math.Max(1, Environment.ProcessorCount);
         return configured <= 0 ? cores : Math.Min(configured, cores);
+    }
+
+    /// <summary>
+    /// Peptides to buffer per output row group. <c>processing.peptide_batch_size</c> counts PEPTIDES,
+    /// but the buffer is peptides x samples doubles, so its size also depends on how many runs were
+    /// merged - and the sample count is exactly what grows when a cohort goes from two documents to a
+    /// hundred. Capping the product keeps the write buffer flat instead of letting a batch size chosen
+    /// for a small cohort turn into hundreds of MB on a large one. Small cohorts are unaffected: 2,000
+    /// peptides x 192 samples is well under the cap, so the configured value stands.
+    /// </summary>
+    internal static int FlushRowsFor(int configured, int sampleCount)
+    {
+        const int maxCellsPerFlush = 4_000_000; // ~32 MB of doubles
+        var requested = Math.Max(1, configured);
+        if (sampleCount <= 0)
+            return requested;
+        return Math.Max(1, Math.Min(requested, maxCellsPerFlush / sampleCount));
     }
 
     private static PeptideResult? ProcessPeptide(

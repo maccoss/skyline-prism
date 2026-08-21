@@ -80,6 +80,23 @@ internal sealed class ParquetColumnReader : IDisposable
         return result;
     }
 
+    /// <summary>One whole string column (null -&gt; empty), concatenated across row groups.</summary>
+    public string[] ReadStrings(string name)
+    {
+        var field = Field(name);
+        var result = new string[RowCount];
+        var offset = 0;
+        for (var rg = 0; rg < _reader.RowGroupCount; rg++)
+        {
+            using var rgReader = _reader.OpenRowGroupReader(rg);
+            var data = rgReader.ReadColumnAsync(field).GetAwaiter().GetResult().Data;
+            for (var i = 0; i < data.Length; i++)
+                result[offset + i] = data.GetValue(i) as string ?? string.Empty;
+            offset += data.Length;
+        }
+        return result;
+    }
+
     /// <summary>A row group's columns, read on demand. Dispose before opening the next one.</summary>
     public RowGroup OpenRowGroup(int index) => new(_reader.OpenRowGroupReader(index), this);
 

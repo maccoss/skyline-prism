@@ -19,16 +19,18 @@ namespace SkylinePrism.App;
 /// as an (isolation window x retention time) map. Ported from the same plot in Skyline-Cadenza, but fed
 /// by the merged PRISM report (Precursor Mz + peak Start/End Time) instead of a DIA-NN report.
 ///
-/// Reads merged_data.parquet from the output directory, so it works for a run that just finished AND for
-/// any previous run the output box is pointed at - no Skyline connection needed.
+/// Reads the merged dataset from the output directory, so it works for a run that just finished AND for
+/// any previous run the output box is pointed at - no Skyline connection needed. Accepts both the
+/// partitioned merged_data/ directory and the single merged_data.parquet older releases wrote.
 /// </summary>
 public partial class MainWindow
 {
-    private const string MergedParquetName = "merged_data.parquet";
+    private const string MergedName = "merged_data";
+    private const string LegacyMergedName = "merged_data.parquet";
 
     private bool _densityLoaded;               // sample list matches the current output directory
     private bool _suppressDensityRender;       // set while populating combos
-    private string? _densityParquetPath;
+    private MergedDataset? _densityDataset;
     private PrecursorDensity.Columns? _densityColumns;
     private List<string> _densitySampleIds = new();
     private List<DetectedPrecursor>? _densityPrecursors; // cache for the selected run (rebinning is free)
@@ -115,39 +117,44 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Find merged_data.parquet under the current output directory and list its runs. Both the schema
-    /// probe and the DISTINCT scan touch the (possibly very large) parquet, so they run off the UI thread.
+    /// Find the merged dataset under the current output directory and list its runs. Both the schema probe
+    /// and the DISTINCT scan touch the (possibly very large) dataset, so they run off the UI thread.
     /// </summary>
     private async Task LoadDensitySamplesAsync()
     {
         var outputDir = OutputDirBox.Text?.Trim();
-        var path = string.IsNullOrWhiteSpace(outputDir)
+        // Either layout: the partitioned directory this release writes, or the single file older ones did.
+        var root = string.IsNullOrWhiteSpace(outputDir)
             ? null
-            : Path.Combine(outputDir, MergedParquetName);
+            : new[] { MergedName, LegacyMergedName }
+                .Select(n => Path.Combine(outputDir, n))
+                .FirstOrDefault(MergedDataset.Exists);
 
-        if (path is null || !File.Exists(path))
+        if (root is null)
         {
             _densityLoaded = false;
             SetDensitySamples(new List<string>());
-            ShowDensityMessage($"No {MergedParquetName} in the output directory. Run PRISM, or point the "
+            ShowDensityMessage($"No {MergedName} in the output directory. Run PRISM, or point the "
                 + "output directory at a previous run.");
             return;
         }
 
-        DensityStatusText.Text = "Reading " + MergedParquetName + "...";
+        DensityStatusText.Text = "Reading " + MergedName + "...";
         try
         {
             var schemePath = Path.Combine(outputDir!, IsolationSchemeCatalog.FileName);
-            var (columns, samples, schemes) = await Task.Run(() =>
+            var (dataset, columns, samples, schemes) = await Task.Run(() =>
             {
-                var cols = PrecursorDensity.Resolve(ParquetTable.ReadColumnNames(path).ToHashSet());
+                var ds = MergedDataset.Open(root);
+                var cols = PrecursorDensity.Resolve(
+                    ParquetTable.ReadColumnNames(ds.RepresentativeFile()).ToHashSet());
                 var ids = cols is null
                     ? new List<string>()
-                    : MergedParquetReader.GetSortedSamples(path, cols.Sample);
-                return (cols, ids, IsolationSchemeCatalog.Load(schemePath));
+                    : MergedParquetReader.GetSortedSamples(ds, cols.Sample);
+                return (ds, cols, ids, IsolationSchemeCatalog.Load(schemePath));
             });
 
-            _densityParquetPath = path;
+            _densityDataset = dataset;
             _densityColumns = columns;
             _densitySchemes = schemes;
             _densityLoaded = true;
@@ -164,7 +171,7 @@ public partial class MainWindow
             SetDensitySamples(samples);
             if (samples.Count == 0)
             {
-                ShowDensityMessage("No runs found in " + MergedParquetName + ".");
+                ShowDensityMessage("No runs found in " + MergedName + ".");
                 return;
             }
             PopulateSchemeCombo();
@@ -174,7 +181,7 @@ public partial class MainWindow
         {
             _densityLoaded = false;
             App.WriteLog("Spectrum density load failed: " + ex);
-            ShowDensityMessage("Could not read " + MergedParquetName + ": " + ex.Message);
+            ShowDensityMessage("Could not read " + MergedName + ": " + ex.Message);
         }
     }
 
@@ -528,13 +535,13 @@ public partial class MainWindow
     /// <summary>Query the selected run's precursors (off the UI thread), then bin and draw them.</summary>
     private async Task RenderDensityAsync()
     {
-        if (_densityParquetPath is null || _densityColumns is null)
+        if (_densityDataset is null || _densityColumns is null)
             return;
         var index = DensitySampleCombo.SelectedIndex;
         if (index < 0 || index >= _densitySampleIds.Count)
             return;
 
-        var path = _densityParquetPath;
+        var dataset = _densityDataset;
         var cols = _densityColumns;
         var sample = _densitySampleIds[index];
         var qCutoff = DensityQValue();
@@ -545,7 +552,7 @@ public partial class MainWindow
         DensityStatusText.Text = "Loading " + DensitySampleCombo.SelectedItem + "...";
         try
         {
-            var precursors = await Task.Run(() => PrecursorDensity.Load(path, cols, sample, qCutoff));
+            var precursors = await Task.Run(() => PrecursorDensity.Load(dataset, cols, sample, qCutoff));
             if (request != _densityRequest)
                 return;
             _densityPrecursors = precursors;

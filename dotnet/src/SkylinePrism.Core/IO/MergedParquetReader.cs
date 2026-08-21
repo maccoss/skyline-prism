@@ -7,22 +7,35 @@ using SkylinePrism.Core.Rollup;
 namespace SkylinePrism.Core.IO;
 
 /// <summary>
-/// Streams the merged transition-level parquet grouped by peptide, using DuckDB.NET to
-/// read rows ordered by the peptide column (mirroring chunked_processing.rollup_transitions_sorted,
-/// which sorts by peptide then streams peptide-by-peptide). Genuinely streaming: the
-/// DuckDB data reader yields rows without materializing the whole file.
+/// Streams the merged transition-level data grouped by peptide, one <see cref="PeptideBlock"/> at a
+/// time (mirroring chunked_processing.rollup_transitions_sorted).
+/// <para>
+/// Grouping comes from sorting each <see cref="MergedDataset"/> partition separately, never the cohort
+/// as a whole. The merge has already hashed every row of a peptide into the same bucket, so a
+/// per-partition <c>ORDER BY</c> produces exactly the same blocks a global one would - at a fraction of
+/// the footprint, and a fraction that does not grow when more documents are added. Sorting the whole
+/// dataset here instead would reintroduce the blocking operator the partitioning exists to remove.
+/// </para>
+/// <para>
+/// Streaming is also <b>opt-in and easy to lose</b>: <c>DuckDBCommand.UseStreamingMode</c> defaults to
+/// <c>false</c>, and without it <c>ExecuteReader</c> materializes the entire result set before the
+/// first <c>Read()</c> returns - resident all at once, outside the buffer pool where neither
+/// <c>memory_limit</c> nor <c>temp_directory</c> can touch it. Every query below therefore goes through
+/// <see cref="DuckDbTuning.StreamingCommand"/>, and the connections are bounded by
+/// <see cref="DuckDbTuning.Apply"/>. This class is the producer for the whole rollup, so a regression
+/// here is a regression in PRISM's peak memory, whatever the rest of the stage does.
+/// </para>
 /// </summary>
 public static class MergedParquetReader
 {
     /// <summary>Distinct, sorted, non-null values of the sample column (the wide output columns).</summary>
-    public static List<string> GetSortedSamples(string parquetPath, string sampleCol)
+    public static List<string> GetSortedSamples(
+        MergedDataset dataset, string sampleCol, int memoryBudgetMb = 0)
     {
-        using var conn = new DuckDBConnection("Data Source=:memory:");
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"SELECT DISTINCT \"{sampleCol}\" AS s FROM read_parquet('{Esc(parquetPath)}') " +
-            "WHERE s IS NOT NULL ORDER BY s";
+        using var conn = OpenBounded(dataset, memoryBudgetMb);
+        using var cmd = DuckDbTuning.StreamingCommand(conn,
+            $"SELECT DISTINCT \"{sampleCol}\" AS s FROM {Scan(dataset.ScanTarget)} " +
+            "WHERE s IS NOT NULL ORDER BY s");
         using var reader = cmd.ExecuteReader();
         var samples = new List<string>();
         while (reader.Read())
@@ -31,11 +44,13 @@ public static class MergedParquetReader
     }
 
     /// <summary>
-    /// Stream <see cref="PeptideBlock"/>s ordered by peptide. Consecutive rows sharing a
-    /// peptide value are grouped into one block.
+    /// Stream <see cref="PeptideBlock"/>s grouped by peptide. Consecutive rows sharing a peptide value
+    /// are grouped into one block, and partitions are processed in turn - safe because the merge
+    /// guarantees a peptide never spans two of them, so a block is always complete when it is yielded.
     /// </summary>
     public static IEnumerable<PeptideBlock> StreamPeptideBlocks(
-        string parquetPath, SkylineColumns cols, bool includeProductMz = false, bool includeShapeCorr = false)
+        MergedDataset dataset, SkylineColumns cols, bool includeProductMz = false,
+        bool includeShapeCorr = false, int memoryBudgetMb = 0)
     {
         var withMz = includeProductMz && cols.ProductMz is not null;
         var withShape = includeShapeCorr && cols.ShapeCorrelation is not null;
@@ -47,47 +62,120 @@ public static class MergedParquetReader
         var mzIdx = withMz ? 7 : -1;
         var shapeIdx = withShape ? (withMz ? 8 : 7) : -1;
 
-        using var conn = new DuckDBConnection("Data Source=:memory:");
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            "SELECT " +
-            $"\"{cols.Peptide}\" AS pep, " +
-            $"\"{cols.Transition}\" AS ion, " +
-            $"\"{cols.PrecursorCharge}\" AS pz, " +
-            $"\"{cols.ProductCharge}\" AS zz, " +
-            $"\"{cols.Sample}\" AS samp, " +
-            $"\"{cols.Abundance}\" AS area, " +
-            $"\"{cols.RetentionTime}\" AS rt" +
-            extra + " " +
-            $"FROM read_parquet('{Esc(parquetPath)}') " +
-            $"ORDER BY \"{cols.Peptide}\"";
-        using var reader = cmd.ExecuteReader();
+        var pool = new StringPool();
 
-        PeptideBlock? current = null;
-        while (reader.Read())
+        foreach (var partition in dataset.Partitions)
         {
-            var pep = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-            if (current is null || !string.Equals(current.Peptide, pep, StringComparison.Ordinal))
+            // A connection PER PARTITION, deliberately - not one reused for the whole stage.
+            // Running a second streaming command on a connection whose previous streaming reader has
+            // been disposed corrupts the managed heap: it crashed ~2 runs in 3 with an
+            // AccessViolationException, surfacing at whatever allocated next (String.Concat building
+            // the very SQL below), always at the first partition boundary. Opening a connection is
+            // milliseconds against the ~15 s a partition takes, and one command per connection is the
+            // pattern every other reader here already used.
+            using var conn = OpenBounded(dataset, memoryBudgetMb);
+            using var cmd = DuckDbTuning.StreamingCommand(conn,
+                "SELECT " +
+                $"\"{cols.Peptide}\" AS pep, " +
+                $"\"{cols.Transition}\" AS ion, " +
+                $"\"{cols.PrecursorCharge}\" AS pz, " +
+                $"\"{cols.ProductCharge}\" AS zz, " +
+                $"\"{cols.Sample}\" AS samp, " +
+                $"\"{cols.Abundance}\" AS area, " +
+                $"\"{cols.RetentionTime}\" AS rt" +
+                extra + " " +
+                $"FROM {Scan(partition)} " +
+                $"ORDER BY \"{cols.Peptide}\"");
+            using var reader = cmd.ExecuteReader();
+
+            PeptideBlock? current = null;
+            while (reader.Read())
             {
-                if (current is not null)
-                    yield return current;
-                current = new PeptideBlock { Peptide = pep };
+                var pep = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                if (current is null || !string.Equals(current.Peptide, pep, StringComparison.Ordinal))
+                {
+                    if (current is not null)
+                        yield return current;
+                    current = new PeptideBlock { Peptide = pep };
+                }
+
+                current.Ion.Add(pool.Get(reader, 1));
+                current.PrecursorCharge.Add(pool.GetKey(reader.GetValue(2)));
+                current.ProductCharge.Add(pool.GetKey(reader.GetValue(3)));
+                current.Sample.Add(pool.Get(reader, 4));
+                current.Area.Add(ToDouble(reader.GetValue(5)));
+                current.RetentionTime.Add(ToDouble(reader.GetValue(6)));
+                if (withMz)
+                    current.ProductMz.Add(ToDouble(reader.GetValue(mzIdx)));
+                if (withShape)
+                    current.ShapeCorrelation.Add(ToDouble(reader.GetValue(shapeIdx)));
             }
 
-            current.Ion.Add(reader.IsDBNull(1) ? string.Empty : reader.GetString(1));
-            current.PrecursorCharge.Add(FormatKey(reader.GetValue(2)));
-            current.ProductCharge.Add(FormatKey(reader.GetValue(3)));
-            current.Sample.Add(reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
-            current.Area.Add(ToDouble(reader.GetValue(5)));
-            current.RetentionTime.Add(ToDouble(reader.GetValue(6)));
-            if (withMz)
-                current.ProductMz.Add(ToDouble(reader.GetValue(mzIdx)));
-            if (withShape)
-                current.ShapeCorrelation.Add(ToDouble(reader.GetValue(shapeIdx)));
+            // End of partition ends the peptide: nothing in a later partition can extend this block.
+            if (current is not null)
+                yield return current;
         }
-        if (current is not null)
-            yield return current;
+    }
+
+    /// <summary>
+    /// A <c>read_parquet</c> call for a dataset or partition target. <c>hive_partitioning=false</c>
+    /// keeps the bucket column out of the result, so the schema PRISM sees is exactly the schema it saw
+    /// when the merge wrote a single file.
+    /// </summary>
+    internal static string Scan(string target) =>
+        $"read_parquet('{Esc(target)}', hive_partitioning=false)";
+
+    /// <summary>
+    /// A connection whose buffer pool is bounded and which can spill, sharing the merge's budget
+    /// (<c>processing.merge_memory_mb</c>, 0 = auto) and scratch directory. The DISTINCT and the
+    /// per-partition ORDER BY are both blocking operators: bounded, they spill; unbounded, they take
+    /// whatever the machine has.
+    /// </summary>
+    private static DuckDBConnection OpenBounded(MergedDataset dataset, int memoryBudgetMb)
+    {
+        // Note for anyone adding concurrency here: DuckDB.NET keys a static
+        // Connection.ConnectionManager cache by connection string, so every "Data Source=:memory:" in
+        // the process is refcounted references to ONE database instance - one buffer pool, one
+        // memory_limit (a database-level setting, not a connection one). Two threads opening and
+        // closing these independently can tear the instance down under each other. See
+        // TransitionRollup.RunParallel.
+        var conn = new DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        DuckDbTuning.Apply(
+            conn,
+            memoryBudgetMb > 0 ? memoryBudgetMb : DuckDbMerge.AutoMemoryBudgetMb(),
+            DuckDbMerge.ResolveTempDirectory(dataset.Root));
+        return conn;
+    }
+
+    /// <summary>
+    /// Hands back one shared instance per distinct string instead of a fresh allocation per row.
+    /// <para>
+    /// These three columns are drawn from tiny domains - the sample id is one of N replicates, the
+    /// fragment ion one of a few hundred names, the charges single digits - but the reader sees them
+    /// once per TRANSITION ROW, and a block spans every sample. Without pooling, one peptide's block on
+    /// a 100-document cohort is ~60,000 rows x 4 freshly allocated strings; the sample id alone is a
+    /// 45-character "<c>replicate__@__document</c>". With <c>dop*4</c> blocks in flight that is the
+    /// difference between ~1 GB of live strings and a few MB. The pool is per-stream, so it dies with
+    /// the enumeration rather than living as a static cache.
+    /// </para>
+    /// </summary>
+    private sealed class StringPool
+    {
+        private readonly Dictionary<string, string> _byValue = new(StringComparer.Ordinal);
+
+        public string Get(DuckDBDataReader reader, int ordinal)
+            => reader.IsDBNull(ordinal) ? string.Empty : Intern(reader.GetString(ordinal));
+
+        public string GetKey(object? value) => Intern(FormatKey(value));
+
+        private string Intern(string value)
+        {
+            if (_byValue.TryGetValue(value, out var existing))
+                return existing;
+            _byValue[value] = value;
+            return value;
+        }
     }
 
     // Format a charge value for the transition-id key. Only distinctness matters for the

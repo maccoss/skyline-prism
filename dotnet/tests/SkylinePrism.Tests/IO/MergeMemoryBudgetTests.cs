@@ -6,17 +6,24 @@ using Xunit;
 namespace SkylinePrism.Tests.IO;
 
 /// <summary>
-/// The Stage 1 memory budget. DuckDB runs in-process and its buffer pool is native memory the GC
+/// The DuckDB memory budget. DuckDB runs in-process and its buffer pool is native memory the GC
 /// cannot see, so a budget written against TOTAL RAM on a machine that is already busy does not
 /// spill - it pages, and the run looks like a hang with the system at 100% memory. These pin that
-/// the budget is bounded by what is actually free, and that it can never come out unusably small.
+/// the budget stays modest, is bounded by what is actually free, and can never come out unusably
+/// small.
+/// <para>
+/// The bounds are deliberately tight (they were 75% of total / 80% of free while this stage sorted
+/// the whole cohort). Nothing in the merge scales with cohort size any more, so a large budget buys
+/// nothing - and it is taken from the Skyline instance PRISM was launched from, which is holding the
+/// documents being processed. Loosening these is a regression, not a tuning choice.
+/// </para>
 /// </summary>
 public class MergeMemoryBudgetTests
 {
     private const long Mb = 1024L * 1024L;
 
     [Fact]
-    public void Budget_NeverExceedsThreeQuartersOfTotal()
+    public void Budget_NeverExceedsAQuarterOfTotal()
     {
         var totalMb = SystemMemory.TotalPhysicalBytes / Mb;
 
@@ -24,8 +31,8 @@ public class MergeMemoryBudgetTests
 
         // The floor wins on a machine with very little RAM; above it, the total bound must hold.
         Assert.True(
-            budget <= totalMb * 3 / 4 || budget == DuckDbMerge.MinMemoryBudgetMb,
-            $"budget {budget} MB exceeds 75% of {totalMb} MB total");
+            budget <= totalMb / 4 || budget == DuckDbMerge.MinMemoryBudgetMb,
+            $"budget {budget} MB exceeds 25% of {totalMb} MB total");
     }
 
     [Fact]
@@ -38,9 +45,19 @@ public class MergeMemoryBudgetTests
         var budget = DuckDbMerge.AutoMemoryBudgetMb();
 
         Assert.True(
-            budget <= available.Value / Mb * 4 / 5 || budget == DuckDbMerge.MinMemoryBudgetMb,
-            $"budget {budget} MB exceeds 80% of the {available.Value / Mb} MB free");
+            budget <= available.Value / Mb / 2 || budget == DuckDbMerge.MinMemoryBudgetMb,
+            $"budget {budget} MB exceeds 50% of the {available.Value / Mb} MB free");
     }
+
+    /// <summary>
+    /// The flat ceiling, which is what actually binds on a big machine: 25% of 512 GB would be
+    /// 128 GB of buffer pool for a streaming copy that needs a few GB.
+    /// </summary>
+    [Fact]
+    public void Budget_NeverExceedsTheFlatCeiling()
+        => Assert.True(
+            DuckDbMerge.AutoMemoryBudgetMb() <= DuckDbMerge.MaxAutoMemoryBudgetMb,
+            $"budget exceeds the {DuckDbMerge.MaxAutoMemoryBudgetMb} MB automatic ceiling");
 
     /// <summary>
     /// Below the floor DuckDB cannot even hold its reader buffers and fails outright rather than

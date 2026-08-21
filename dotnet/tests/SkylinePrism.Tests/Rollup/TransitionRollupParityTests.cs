@@ -41,7 +41,7 @@ public class TransitionRollupParityTests
             Path.GetTempPath(), "prism_rollup_" + Guid.NewGuid().ToString("N"), "peptides_rollup.parquet");
         try
         {
-            var result = TransitionRollup.Run(merged, cols, cfg, tempOut);
+            var result = TransitionRollup.Run(MergedDataset.Open(merged), cols, cfg, tempOut);
             Assert.Equal(1, result.NFiltered); // precursor-only peptide dropped
             var actual = ParquetTable.Load(tempOut);
 
@@ -111,7 +111,7 @@ public class TransitionRollupParityTests
             };
             var outPath = Path.Combine(
                 Path.GetTempPath(), "prism_dop_" + Guid.NewGuid().ToString("N"), "p.parquet");
-            TransitionRollup.Run(merged, cols, cfg, outPath);
+            TransitionRollup.Run(MergedDataset.Open(merged), cols, cfg, outPath);
             return outPath;
         }
 

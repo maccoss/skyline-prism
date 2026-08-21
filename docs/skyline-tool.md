@@ -118,8 +118,10 @@ Scheduled acquisitions (PRM, MTM, dynamic DIA) are handled as scheduled — a wi
 with the retention-time interval it fires in — and their windows come from the **Thermo inclusion list**
 that was loaded onto the instrument, via **Load inclusion list (PRM/MTM)…**.
 
-The tab reads `merged_data.parquet` from the output directory, so it works for a run that has just
-finished *and* for any previous run's output directory, with no Skyline connection.
+The tab reads the merged data from the output directory, so it works for a run that has just
+finished *and* for any previous run's output directory, with no Skyline connection. Either layout
+opens: the partitioned `merged_data/` directory, or the single `merged_data.parquet` written before
+dotnet-v26.12.0.
 
 ---
 

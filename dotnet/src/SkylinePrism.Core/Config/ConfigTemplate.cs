@@ -106,9 +106,10 @@ protein_normalization:
   method: "median"
 
 # Parallelism / memory. n_workers: 0 = all cores, 1 = serial, N = cap at N.
-# merge_memory_mb caps DuckDB's buffer pool during the Stage 1 merge; 0 sizes it from the
-# machine's FREE memory. Anything beyond the cap spills to the sort scratch directory, so a
-# smaller value is slower, never wrong.
+# merge_memory_mb caps DuckDB's buffer pool, in MB; 0 sizes it from the machine (a modest
+# fraction of free memory, capped at 8 GB - the merge streams, so nothing here scales with
+# the size of the cohort). Anything beyond the cap spills to the scratch directory, so a
+# smaller value is slower, never wrong. Lower it to leave more room for Skyline alongside.
 processing:
   n_workers: 0
   peptide_batch_size: 2000

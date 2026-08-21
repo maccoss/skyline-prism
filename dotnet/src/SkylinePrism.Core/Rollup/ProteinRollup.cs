@@ -67,19 +67,23 @@ public sealed class ProteinRollup
         IReadOnlyDictionary<string, int>? theoreticalCounts = null,
         int maxDegreeOfParallelism = 0)
     {
-        var table = ParquetTable.Load(peptideLog2Parquet);
+        // Column-at-a-time rather than ParquetTable.Load: the whole-table load holds every sample
+        // column as a nullable double?[], 16 bytes per cell against the 8 these need - 11 GB versus
+        // 6 GB on a 100-document cohort, for the same values. Reading straight into double[] also
+        // spares the per-cell null check in the inner loop below.
+        using var reader = ParquetColumnReader.Open(peptideLog2Parquet);
 
         var meta = new HashSet<string>(MetaCols, StringComparer.Ordinal) { peptideCol };
         var sampleCols = samples?.ToList()
-            ?? table.ColumnNames.Where(c => !meta.Contains(c)).ToList();
+            ?? reader.ColumnNames.Where(c => !meta.Contains(c)).ToList();
 
         // Peptide matrix: peptide -> row of sample values.
-        var pepKeys = table.GetString(peptideCol);
+        var pepKeys = reader.ReadStrings(peptideCol);
         var pepIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < pepKeys.Length; i++)
-            pepIndex[pepKeys[i]!] = i;
+            pepIndex[pepKeys[i]] = i;
 
-        var sampleData = sampleCols.Select(table.GetDouble).ToList();
+        var sampleData = sampleCols.Select(reader.ReadDoubles).ToList();
 
         // Per-group rollup is pure (reads the shared peptide matrix read-only, allocates its own
         // submatrix), so groups run in parallel; results are written into a preallocated array by
@@ -112,7 +116,7 @@ public sealed class ProteinRollup
             {
                 var ri = pepIndex[available[a]];
                 for (var j = 0; j < sampleCols.Count; j++)
-                    sub[a, j] = sampleData[j][ri] ?? double.NaN;
+                    sub[a, j] = sampleData[j][ri];
             }
 
             var nTheo = -1;

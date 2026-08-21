@@ -46,12 +46,16 @@ public class PipelineParityTests
 
             foreach (var f in new[]
                      {
-                         "merged_data.parquet", "peptides_rollup.parquet",
+                         "peptides_rollup.parquet",
                          "peptides_log2_internal.parquet", "corrected_peptides.parquet",
                          "protein_groups.csv", "proteins_raw.parquet", "corrected_proteins.parquet",
                          "sample_metadata.csv",
                      })
                 Assert.True(File.Exists(Path.Combine(tempOut, f)), $"missing output: {f}");
+
+            // The merged data is a partition directory, not a file - checked through MergedDataset so
+            // this test says which layout it expects rather than just that "something" is there.
+            Assert.True(MergedDataset.Exists(Path.Combine(tempOut, "merged_data")), "missing merged_data");
 
             // peptides_rollup: exact (pre-ComBat).
             CompareWide(Path.Combine(GoldenOut, "peptides_rollup.parquet"),

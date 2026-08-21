@@ -427,11 +427,15 @@ public sealed class PrismConfig
         public int PeptideBatchSize { get; set; } = 2000;
 
         /// <summary>
-        /// Ceiling on DuckDB's buffer pool during the Stage 1 merge, in MB. 0 = size it from the
-        /// machine (see <c>DuckDbMerge.AutoMemoryBudgetMb</c>). Work beyond the ceiling spills to
-        /// the sort scratch directory, so this trades speed for footprint and cannot cause a wrong
-        /// answer. Raise it when the merge spills on a machine with RAM to spare; lower it to leave
-        /// room for something else running alongside.
+        /// Ceiling on DuckDB's buffer pool, in MB. 0 = size it from the machine (see
+        /// <c>DuckDbMerge.AutoMemoryBudgetMb</c>). Work beyond the ceiling spills to the scratch
+        /// directory, so this trades speed for footprint and cannot cause a wrong answer. Lower it
+        /// to leave room for something else running alongside - typically the Skyline instance the
+        /// tool was launched from.
+        /// <para>
+        /// Named for the merge, but it also bounds the transition rollup's reader, which is the
+        /// other place a blocking DuckDB operator runs over the whole cohort.
+        /// </para>
         /// </summary>
         public int MergeMemoryMb { get; set; }
     }

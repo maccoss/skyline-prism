@@ -248,10 +248,10 @@ public class PrecursorDensityTests
         var cols = PrecursorDensity.Resolve(ParquetTable.ReadColumnNames(MergedGolden).ToHashSet());
         Assert.NotNull(cols);
 
-        var samples = MergedParquetReader.GetSortedSamples(MergedGolden, cols!.Sample);
+        var samples = MergedParquetReader.GetSortedSamples(MergedDataset.Open(MergedGolden), cols!.Sample);
         Assert.NotEmpty(samples);
 
-        var precursors = PrecursorDensity.Load(MergedGolden, cols, samples[0], qValueCutoff: null);
+        var precursors = PrecursorDensity.Load(MergedDataset.Open(MergedGolden), cols, samples[0], qValueCutoff: null);
         Assert.NotEmpty(precursors);
         Assert.All(precursors, p =>
         {
@@ -278,11 +278,11 @@ public class PrecursorDensityTests
         var cols = PrecursorDensity.Resolve(ParquetTable.ReadColumnNames(MergedGolden).ToHashSet());
         Assert.NotNull(cols);
         Assert.NotNull(cols!.DetectionQValue);
-        var sample = MergedParquetReader.GetSortedSamples(MergedGolden, cols.Sample)[0];
+        var sample = MergedParquetReader.GetSortedSamples(MergedDataset.Open(MergedGolden), cols.Sample)[0];
 
-        var all = PrecursorDensity.Load(MergedGolden, cols, sample, qValueCutoff: null);
-        var confident = PrecursorDensity.Load(MergedGolden, cols, sample, qValueCutoff: 0.01);
-        var none = PrecursorDensity.Load(MergedGolden, cols, sample, qValueCutoff: -1);
+        var all = PrecursorDensity.Load(MergedDataset.Open(MergedGolden), cols, sample, qValueCutoff: null);
+        var confident = PrecursorDensity.Load(MergedDataset.Open(MergedGolden), cols, sample, qValueCutoff: 0.01);
+        var none = PrecursorDensity.Load(MergedDataset.Open(MergedGolden), cols, sample, qValueCutoff: -1);
 
         Assert.True(confident.Count <= all.Count);
         Assert.Empty(none); // no q-value is below -1, so nothing counts as detected
@@ -292,7 +292,7 @@ public class PrecursorDensityTests
     public void Load_UnknownSampleGivesNoPrecursors()
     {
         var cols = PrecursorDensity.Resolve(ParquetTable.ReadColumnNames(MergedGolden).ToHashSet());
-        Assert.Empty(PrecursorDensity.Load(MergedGolden, cols!, "no such replicate'; --", null));
+        Assert.Empty(PrecursorDensity.Load(MergedDataset.Open(MergedGolden), cols!, "no such replicate'; --", null));
     }
 
     private static int[] Row(PrecursorDensityMap map, int row)

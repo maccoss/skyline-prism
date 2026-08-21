@@ -9,7 +9,7 @@
          manifest version lives separately in
          src/SkylinePrism.App/tool-inf/info.properties and must be kept in sync
          at release time; dotnet-release.yml verifies the match before publishing. -->
-    <Version>26.11.0</Version>
+    <Version>26.12.0</Version>
 
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -23,5 +23,35 @@
          guaranteed by using CultureInfo.InvariantCulture explicitly in all data-output
          formatting paths (parquet is binary; CSV/TSV writers pass InvariantCulture). -->
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Make the GC prefer collecting over growing the heap.
+
+         PRISM allocates a handful of very large, short-lived feature x sample matrices per stage, all
+         on the large object heap. Left to itself the runtime services those by committing more memory
+         rather than collecting - the Stage 5b QC report on a 20-document cohort sat at a 19.6 GB
+         working set while completing quite happily in 4.0 GB when memory was actually scarce, and
+         FASTER at that (3.6 min against 4.6), because the matrices stay in cache instead of sprawling
+         across freshly committed pages. On the workstation PRISM normally runs on, the memory it is
+         choosing not to reclaim is the memory the Skyline instance holding these documents needs.
+
+         ConserveMemory rather than a heap hard limit, deliberately:
+           - a hard limit turns "this cohort is bigger than expected" into an OutOfMemoryException,
+             and the 100-document case is extrapolated, not measured;
+           - HeapHardLimitPercent also redefines GC.GetGCMemoryInfo().TotalAvailableMemoryBytes to be
+             the limit rather than physical RAM, and SystemMemory.TotalPhysicalBytes reads exactly that
+             to size DuckDB - whose buffer pool is NATIVE and unaffected by any managed limit. Setting
+             it therefore silently shrank the merge's budget for no reason. (MergeMemoryBudgetTests
+             caught this: free physical memory came out larger than "total".)
+         This knob has neither effect: it only biases the existing collector toward reclaiming.
+
+         9 (the most aggressive setting) because it measured strictly better with no cost: the QC stage
+         on the 20-document cohort ran in 4.1 min at every setting tried, at 22.9 GB with conserving
+         off, 8.7 GB at 5 and 6.5 GB at 9. The documentation warns 9 can cost throughput - it does not
+         here, because PRISM's garbage is a handful of enormous short-lived matrices rather than a high
+         rate of small objects, which is the case aggressive conserving handles well. Re-measure before
+         assuming that still holds if the allocation pattern changes. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
+  </ItemGroup>
 
 </Project>

@@ -24,7 +24,7 @@ public class ParsimonyParityTests
         var golden = ProteinGroupsCsv.Read(Path.Combine(E2eDir, "protein_groups.csv"));
 
         var cols = SkylineColumns.Detect(ParquetTable.Load(merged).ColumnNames.ToHashSet());
-        var actual = ParsimonyEngine.Run(merged, cols);
+        var actual = ParsimonyEngine.Run(MergedDataset.Open(merged), cols);
 
         var goldenById = golden.ToDictionary(g => g.GroupId, StringComparer.Ordinal);
         var actualById = actual.ToDictionary(g => g.GroupId, StringComparer.Ordinal);
@@ -52,7 +52,7 @@ public class ParsimonyParityTests
     {
         var merged = Path.Combine(E2eDir, "merged_data.parquet");
         var cols = SkylineColumns.Detect(ParquetTable.Load(merged).ColumnNames.ToHashSet());
-        var groups = ParsimonyEngine.Run(merged, cols);
+        var groups = ParsimonyEngine.Run(MergedDataset.Open(merged), cols);
 
         var tempCsv = Path.Combine(Path.GetTempPath(), "pg_" + Guid.NewGuid().ToString("N") + ".csv");
         try

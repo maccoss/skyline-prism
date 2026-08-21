@@ -22,8 +22,11 @@ output_dir/
 ├── peptides_rollup.parquet         # Peptide quantities before normalization (LOG2 scale)
 ├── peptides_log2_internal.parquet  # Peptide quantities after normalization (LOG2 scale, internal use)
 ├── proteins_raw.parquet            # Protein quantities before normalization (LOG2 scale)
-├── merged_data.parquet             # Merged transition-level data from all input files
-├── merged_data.fingerprints.json   # Fingerprints for detecting when re-merge is needed
+├── merged_data/                    # Merged transition-level data (C#: partitioned by peptide bucket)
+│   ├── _pep_bucket=0/*.parquet     #   one directory per bucket; count scales with cohort size
+│   └── ...                         #   (Python writes a single merged_data.parquet instead)
+├── merged_data.cache.json          # C#: fingerprints for detecting when re-merge is needed
+├── merged_data.fingerprints.json   # Python: same purpose
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── metadata.json                   # Complete provenance and processing parameters
@@ -151,15 +154,34 @@ These are the main files you will use for downstream analysis.
 
 These files are useful for debugging, custom analysis, or re-running specific stages.
 
-### merged_data.parquet
+### merged_data (C#) / merged_data.parquet (Python)
 
-**Purpose**: Transition-level data merged from all input CSV files, sorted by peptide.
+**Purpose**: Transition-level data merged from all input files.
 
 **Scale**: LINEAR (raw peak areas from Skyline)
 
-**On-disk format**: zstd-compressed parquet with ~1,000,000 rows per row group. Sorted by the peptide column so the chunked transition rollup (Stage 2) can stream peptide-by-peptide via column-pruned row-group reads.
+**On-disk format — C#**: a **directory** of zstd-compressed parquet, hive-partitioned into
+`_pep_bucket=N/` subdirectories by a hash of the peptide column, ~122,880 rows per row group. Read it
+as one table with a glob:
 
-**Note on intermediate file**: During a Stage 1 run with multiple parquet inputs, you may briefly see a `merged_data.unsorted.parquet` file in the output directory. This is the streaming-concat intermediate written by Stage A; it is deleted automatically after the Stage B sort completes.
+```sql
+SELECT * FROM read_parquet('output/merged_data/**/*.parquet', hive_partitioning=false);
+```
+
+Rows are **not** sorted. All of a peptide's rows are guaranteed to be in exactly one bucket, which is
+what lets the transition rollup (Stage 2) sort and stream one partition at a time instead of sorting
+the whole cohort — the difference between peak memory that is flat in cohort size and one that is not.
+The bucket count is chosen from the row count (~12M rows per partition, capped at 256), so it grows
+with the number of documents merged while each partition stays the same size. `hive_partitioning=false`
+keeps `_pep_bucket` out of the result, so the columns are exactly those listed below.
+
+**On-disk format — Python**: a single zstd-compressed `merged_data.parquet`, **sorted** by the peptide
+column, which its chunked rollup consumes positionally.
+
+> [!NOTE]
+> Output directories written by C# releases before dotnet-v26.12.0 hold a single sorted
+> `merged_data.parquet`. These are still read (the QC report and the Spectrum density tab open either
+> layout); only a re-run rebuilds them as partitions.
 
 **Columns**:
 
@@ -316,11 +338,16 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/metadata.j
 
 ---
 
-### merged_data.fingerprints.json
+### merged_data.cache.json (C#) / merged_data.fingerprints.json (Python)
 
 **Purpose**: Stores fingerprints (file sizes, modification times, row counts) of input files to detect when re-merging is needed.
 
 **Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged.
+
+> [!NOTE]
+> A C# output directory from before dotnet-v26.12.0 has a `merged_data.parquet.cache.json` beside its
+> single-file merge. The name moved with the artifact, so the first run against such a directory
+> re-merges once (into `merged_data/`) and caches under the new name from then on.
 
 ---
 
@@ -428,7 +455,7 @@ GROUP BY "Peptide Modified Sequence Unimod Ids";
 
 | File | Scale | Notes |
 |------|-------|-------|
-| `merged_data.parquet` | LINEAR | Raw peak areas from Skyline |
+| `merged_data/` (C#), `merged_data.parquet` (Python) | LINEAR | Raw peak areas from Skyline |
 | `peptides_rollup.parquet` | LOG2 | After rollup, before normalization |
 | `peptides_log2_internal.parquet` | LOG2 | Internal use only |
 | `proteins_raw.parquet` | LOG2 | After rollup, before normalization |

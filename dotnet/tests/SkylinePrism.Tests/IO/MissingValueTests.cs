@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Rollup;
+using SkylinePrism.Tests.TestSupport;
 using Xunit;
 
 namespace SkylinePrism.Tests.IO;
@@ -28,9 +29,9 @@ public class MissingValueTests
                 "sp|P1|P1_HUMAN,P1,GeneA,PEPTIDER,y4,2,1,500.1,#N/A,10.6,Sample1\n");
 
             var merged = Path.Combine(dir, "merged.parquet");
-            DuckDbMerge.MergeAndSort(new[] { csv }, merged);
+            DuckDbMerge.Merge(new[] { csv }, merged);
 
-            var cols = SkylineColumns.Detect(ParquetTable.Load(merged).ColumnNames.ToHashSet());
+            var cols = SkylineColumns.Detect(Fixtures.LoadMerged(merged).ColumnNames.ToHashSet());
             var cfg = new TransitionRollupConfig
             {
                 Method = TransitionRollupMethod.Sum,
@@ -38,7 +39,7 @@ public class MissingValueTests
                 UseMs1 = false,
             };
             var outPath = Path.Combine(dir, "peptides_rollup.parquet");
-            var result = TransitionRollup.Run(merged, cols, cfg, outPath);
+            var result = TransitionRollup.Run(MergedDataset.Open(merged), cols, cfg, outPath);
 
             Assert.Equal(1, result.NPeptides);
             var table = ParquetTable.Load(outPath);
