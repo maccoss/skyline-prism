@@ -149,8 +149,10 @@ public sealed class TransitionRollup
         // instance per reader would avoid it, but the binding has no in-memory naming (":memory:name"
         // is parsed as a file path), leaving only file-backed databases as a workaround. Working around
         // a use-after-free in a dependency, in the stage that computes the quantities, is not worth a
-        // wall-clock win: the failure mode is wrong numbers as readily as a crash. Revisit if the
-        // binding gains real instance isolation, and re-verify with repeated full runs, not one.
+        // wall-clock win: the failure mode is wrong numbers as readily as a crash.
+        //
+        // dotnet/STAGE2_THROUGHPUT.md has the plan for lifting this ceiling - including the cheap
+        // measurement that should come before any of it, and the bar this has to clear to ship.
         using var inputQ = new BlockingCollection<PeptideBlock>(dop * 4);
         using var outputQ = new BlockingCollection<PeptideResult>(dop * 4);
         Exception? error = null;

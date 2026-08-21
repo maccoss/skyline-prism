@@ -940,6 +940,11 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >   torn down under the others, which is an `AccessViolationException`, not an exception you can catch.
 >   Parallel partition readers were built, crashed this way, and were reverted - see
 >   `TransitionRollup.RunParallel`.
+>
+> Stage 2 is consequently ~75% of the pipeline's wall clock at roughly one core - a known, measured
+> ceiling rather than a mystery. **`dotnet/STAGE2_THROUGHPUT.md` is the plan for lifting it**: the
+> options, what each risks, the cheap measurement that must come first, and the verification bar
+> anything touching concurrency has to clear.
 
 ## Release Process
 
