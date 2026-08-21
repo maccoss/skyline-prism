@@ -59,23 +59,50 @@ That is why it is not worked around.
 
 ## What is actually left
 
-**1. Watch upstream.** Re-run the concurrency harness (three configurations, several iterations each,
-outputs compared to a serial baseline) against each new DuckDB.NET. If it ever passes, parallel readers
-are a small change: slice `dataset.Partitions`, one `StreamPeptideBlocks` per slice into the existing
-`BlockingCollection`, each with its own share of the budget. Do not ship it on one green run.
+**1. Sidestep the row API - MEASURED, and it wins.** Have DuckDB `COPY` a partition's narrow
+projection to a temp parquet, then read that with Parquet.Net a row group at a time (whole column
+vectors, no per-cell marshalling). On one 15.5M-row partition:
 
-**2. Sidestep the row API (the real remaining option).** Have DuckDB `COPY` each partition's narrow
-projection to a temp parquet, then read it with `ParquetColumnReader`, which reads whole column vectors
-instead of cells. Parallelism then becomes a managed-code question with no concurrent DuckDB at all.
-Open question that decides it: the extra write + read is of the narrow projection only, but at the
-current per-partition read cost (~3.3 s for 15.5M rows) that extra I/O may cost more than the
-vectorized read saves. Measure one partition both ways before building it.
+| path | sec | Mrow/s |
+|---|---|---|
+| A: DuckDB streaming read (what ships today) | 4.7 | 3.30 |
+| B1: `COPY` narrow projection to parquet | 2.7 | 5.74 |
+| B2: Parquet.Net row-group read + block assembly | **1.6** | **9.57** |
 
-**3. Re-tune partition sizing.** Partitions are pinned small (an eighth of the budget) because large
-ones made the rollup dramatically slower - 66M-row partitions cut the merge from 39.4 to 14.7 min but
-pushed the rollup from 26.0 to 62.2, a net loss. That trade is a property of the reader's speed, so it
-should be re-measured now that the reader is ~1.5x faster, and again after any of the above. See
-`MergedDataset.PartitionCountFor`.
+B is already slightly cheaper than A end to end (4.3 s against 4.7 s) *before* any parallelism - note
+that B1, which sorts AND writes to disk, beats A, which sorts and streams: the row-by-row marshalling
+really is that expensive. The prize is B2: **2.9x faster than A, and pure managed code**, so it can run
+on several threads with no concurrent DuckDB anywhere.
+
+Sketch: phase 1 `COPY`s partitions one at a time (DuckDB parallelises the sort internally), phase 2
+reads the temp files on K threads into the existing `BlockingCollection`. The two phases pipeline -
+partition k can be read while k+1 is being written - so the floor is roughly the phase-1 cost, about
+1.7x better than today on the read side. Temp files are deleted as they are consumed, so the extra disk
+is one partition's narrow projection at a time, not a second copy of the cohort.
+
+Not yet implemented; it is a real change to Stage 2's structure and deserves its own PR and its own
+end-to-end verification.
+
+**2. Re-tune partition sizing - MEASURED, no change warranted.** Full pipeline on the 2-plate cohort,
+varying `processing.merge_memory_mb` (which is what sets partition size):
+
+| budget | partitions | total | Stage 1 | Stage 2 | peak |
+|---|---|---|---|---|---|
+| 2048 MB | 16 | 2.46 min | 47.7 s | 1m 26s | 2.18 GB |
+| **8192 MB (current default)** | **12** | **2.33 min** | 44.8 s | 1m 21s | 2.37 GB |
+| 32768 MB | 3 | 2.49 min | 46.5 s | 1m 29s | 6.42 GB |
+
+The current setting is already the optimum, and large partitions now cost 2.7x the peak memory for
+slightly worse wall clock. The faster reader did not move the trade enough to justify changing it.
+Re-measure after item 1, which changes the reader's cost model again. (This is a 2-document cohort; the
+earlier catastrophic case - 66M-row partitions taking the rollup from 26 to 62 minutes - was at 20
+documents, so the penalty for over-large partitions grows with the cohort, not shrinks.)
+
+**3. Watch upstream - nothing to do today.** DuckDB.NET 1.5.5 is the latest published version and is
+already known to segfault (see above). Re-run the concurrency harness against each new release. If one
+ever passes, parallel readers are a small change: slice `dataset.Partitions`, one
+`StreamPeptideBlocks` per slice into the existing `BlockingCollection`, each with its own share of the
+budget. Do not ship it on one green run.
 
 ## Verification bar (learned the hard way)
 
