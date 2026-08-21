@@ -270,6 +270,26 @@ rasterizes onto a uniform grid at draw time (heatmap cells must be equal-height)
 m/z x RT heatmap in [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza), fed by the PRISM
 report instead of a DIA-NN report, and has no Python-engine equivalent.
 
+## Performance and memory
+
+The pipeline is built to keep peak memory flat as a cohort grows, because it normally runs on the same
+workstation as the Skyline instance holding the documents. Two things carry that:
+
+- **Stage 1 partitions instead of sorting.** `merged_data/` is hive-partitioned on a hash of the peptide
+  column, so the rollup sorts and streams one partition at a time rather than ordering the whole cohort.
+  See `MergedDataset` for the sizing trade — it was measured in both directions and the intuitive answer
+  was wrong.
+- **Every DuckDB connection is bounded, and every large read streams.** See `DuckDbTuning`; the defaults
+  it overrides are individually capable of consuming the machine.
+
+Stage 2 (the transition rollup) is single-threaded and the largest stage, because concurrent DuckDB
+reads corrupt memory in this binding. **[`STAGE2_THROUGHPUT.md`](STAGE2_THROUGHPUT.md)** has the
+measurements, the configurations that were tried and crashed, and the remaining options — read it before
+optimising anything here, and before assuming a plausible theory about where the time goes.
+
+Runs report per-stage elapsed time and a sorted summary in the run log, so a slow cohort can be
+diagnosed from the artifact a user already has.
+
 ## Package the Skyline external tool
 
 Use the ship gate, which tests -> packages -> launch-verifies (always test before shipping):

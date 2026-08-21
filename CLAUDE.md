@@ -933,18 +933,25 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >   scales with the data must set it.
 > - **A connection with no `memory_limit`/`temp_directory` takes 80% of RAM and cannot spill.** Set
 >   both, always together: a bounded pool with nowhere to spill fails outright instead of spilling.
-> - **`Connection.ConnectionManager` caches *refcounted* database instances keyed by connection
->   string**, so every `"Data Source=:memory:"` in the process is the SAME database - one buffer pool,
->   one `memory_limit` (it is a database-level setting, not a connection one). Do not read from it on
->   several threads: when one closes its connection the refcount can reach zero and the instance is
->   torn down under the others, which is an `AccessViolationException`, not an exception you can catch.
->   Parallel partition readers were built, crashed this way, and were reverted - see
->   `TransitionRollup.RunParallel`.
+> - **Never read from DuckDB on more than one thread.** Concurrent streaming readers corrupt memory -
+>   an `AccessViolationException` or a bare segfault, not an exception you can catch. This was tested
+>   to destruction and fails in every configuration: a connection per partition; every connection
+>   opened up front with none closed mid-stage and a keepalive pinning the instance refcount;
+>   genuinely isolated **file-backed** databases; and on DuckDB.NET **1.5.5** as well as 1.5.3. The
+>   first failure looked like `Connection.ConnectionManager` (a static cache of *refcounted* database
+>   instances keyed by connection string, so every `"Data Source=:memory:"` in the process is the same
+>   database) tearing an instance down under a live reader - but the later configurations rule that
+>   out, because they fail with no teardown possible and no shared instance at all. Parallel partition
+>   readers were built, crashed, and were reverted; see `TransitionRollup.RunParallel`.
+>   <br>Related and still true: `memory_limit` is a **database**-level setting, not a connection one,
+>   so connections sharing an instance share one budget.
 >
-> Stage 2 is consequently ~75% of the pipeline's wall clock at roughly one core - a known, measured
-> ceiling rather than a mystery. **`dotnet/STAGE2_THROUGHPUT.md` is the plan for lifting it**: the
-> options, what each risks, the cheap measurement that must come first, and the verification bar
-> anything touching concurrency has to clear.
+> Stage 2 is consequently single-threaded, and the largest stage: on a 2-plate cohort it is ~58% of
+> wall clock (1m21s of 2m20s). That is a measured ceiling, not a mystery.
+> **`dotnet/STAGE2_THROUGHPUT.md` carries the measurements and the remaining options** - including the
+> one that is measured to win (bypass the row-by-row reader entirely: DuckDB writes a partition's
+> narrow projection, Parquet.Net reads it back 2.9x faster in pure managed code, which parallelises
+> safely) - plus the verification bar anything touching concurrency has to clear.
 
 ## Release Process
 
