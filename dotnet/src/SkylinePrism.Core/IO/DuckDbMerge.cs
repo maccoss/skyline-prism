@@ -299,7 +299,13 @@ public static class DuckDbMerge
         {
             // In a finally because the spill directory may live outside the output directory, where a
             // failed run would otherwise leave gigabytes behind with nothing pointing at it.
-            try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
+            //
+            // Catching broadly is deliberate: this runs on the failure path, so anything thrown here
+            // would REPLACE the merge's own exception with a cleanup error - hiding the thing the user
+            // needs to see. Delete can throw UnauthorizedAccessException (a file still mapped, or
+            // read-only) or DirectoryNotFoundException (a concurrent run already cleaned up) as
+            // readily as IOException. Leftover scratch is a nuisance; a swallowed root cause is not.
+            try { Directory.Delete(tempDir, recursive: true); } catch (Exception) { }
         }
 
         return new MergeResult(

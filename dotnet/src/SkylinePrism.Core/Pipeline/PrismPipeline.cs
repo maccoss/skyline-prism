@@ -52,6 +52,9 @@ public sealed class PrismPipeline
         var cached = forceReprocess ? null : SourceFingerprint.TryRead(cachePath);
         if (cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath))
         {
+            // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before the
+            // merge stopped sorting; what it holds is the PEPTIDE column (the partition key). Nothing
+            // about a cached merge is sorted.
             merge = new DuckDbMerge.MergeResult(mergedPath, cached.SortColumn, cached.TotalRows);
             report($"  Reusing cached merge ({merge.TotalRows:N0} rows; inputs unchanged - "
                 + "pass --force-reprocess to rebuild).");

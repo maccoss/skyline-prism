@@ -133,8 +133,12 @@ public static class Program
         Console.WriteLine(
             $"Merged {inputs.Count} file(s) -> {result.OutputPath}{Path.DirectorySeparatorChar} "
             + $"({result.TotalRows} rows in {result.Partitions} peptide partition(s))");
+        // hive_partitioning=false matters: without it DuckDB reads the _pep_bucket=N directory names
+        // back as an extra column, so the caller gets a schema PRISM itself never sees. Every read
+        // inside PRISM passes it (MergedParquetReader.Scan) and so must the advice we print.
         Console.WriteLine(
-            $"  Read it as a single table with: read_parquet('{result.OutputPath.Replace('\\', '/')}/**/*.parquet')");
+            $"  Read it as a single table with: read_parquet('{result.OutputPath.Replace('\\', '/')}"
+            + "/**/*.parquet', hive_partitioning=false)");
         return 0;
     }
 
