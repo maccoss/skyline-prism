@@ -50,4 +50,40 @@ public class PcaTests
                 anyNonZero = true;
         Assert.True(anyNonZero, "expected non-degenerate PCA scores");
     }
+
+    /// <summary>
+    /// The transpose-free entry point must be bit-identical to transposing first. It exists purely to
+    /// avoid a second full copy of the biggest matrix in the pipeline, so "same answer" is the whole
+    /// contract - and NaN handling, dropped constant features and the sign of each component all have
+    /// to come out the same, not merely close.
+    /// </summary>
+    [Fact]
+    public void Fit2DOfFeaturesBySamples_MatchesTransposingFirst()
+    {
+        const int nSamples = 6, nFeatures = 25;
+        var rand = new Random(20260820);
+        var featuresBySamples = new double[nFeatures, nSamples];
+        var samplesByFeatures = new double[nSamples, nFeatures];
+        for (var f = 0; f < nFeatures; f++)
+            for (var s = 0; s < nSamples; s++)
+            {
+                // Include a constant feature, an all-NaN feature and scattered NaNs - the branches
+                // where a transposed read could diverge.
+                var v = f == 3 ? 1.0
+                    : f == 7 ? double.NaN
+                    : (s % 5 == 4 && f % 6 == 0) ? double.NaN
+                    : (s < nSamples / 2 ? 0.0 : 4.0) + rand.NextDouble();
+                featuresBySamples[f, s] = v;
+                samplesByFeatures[s, f] = v;
+            }
+
+        var viaTranspose = Pca.Fit2D(samplesByFeatures);
+        var direct = Pca.Fit2DOfFeaturesBySamples(featuresBySamples);
+
+        Assert.Equal(viaTranspose.GetLength(0), direct.GetLength(0));
+        Assert.Equal(viaTranspose.GetLength(1), direct.GetLength(1));
+        for (var i = 0; i < viaTranspose.GetLength(0); i++)
+            for (var j = 0; j < viaTranspose.GetLength(1); j++)
+                Assert.Equal(viaTranspose[i, j], direct[i, j]);
+    }
 }

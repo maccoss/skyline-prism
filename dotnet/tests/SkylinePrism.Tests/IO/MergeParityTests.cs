@@ -19,7 +19,7 @@ public class MergeParityTests
     private static string MergeDir => Fixtures.Path2("mini", "merge");
 
     [Fact]
-    public void MergeAndSort_HandlesManyReports_Streaming()
+    public void Merge_HandlesManyReports_Streaming()
     {
         // Proxy for the ~200-PRISM-report command-line case: N distinct report files stream
         // through one UNION ALL -> COPY, giving N x the single-file row count.
@@ -39,8 +39,8 @@ public class MergeParityTests
                 paths.Add(p);
             }
 
-            var singleRows = DuckDbMerge.MergeAndSort(new[] { input1 }, Path.Combine(dir, "single.parquet")).TotalRows;
-            var result = DuckDbMerge.MergeAndSort(paths, Path.Combine(dir, "many.parquet"));
+            var singleRows = DuckDbMerge.Merge(new[] { input1 }, Path.Combine(dir, "single.parquet")).TotalRows;
+            var result = DuckDbMerge.Merge(paths, Path.Combine(dir, "many.parquet"));
 
             Assert.Equal(singleRows * n, result.TotalRows);
         }
@@ -64,10 +64,10 @@ public class MergeParityTests
         try
         {
             // Default batch names = file stems (mini_plate1, mini_plate2), matching Python.
-            var result = DuckDbMerge.MergeAndSort(new[] { input1, input2 }, tempOut);
+            var result = DuckDbMerge.Merge(new[] { input1, input2 }, tempOut);
 
             var goldenTable = ParquetTable.Load(golden);
-            var actualTable = ParquetTable.Load(result.OutputPath);
+            var actualTable = Fixtures.LoadMerged(result.OutputPath);
 
             // Same columns (as a set) and same row count.
             Assert.Equal(

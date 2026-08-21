@@ -44,10 +44,10 @@ public static class ParsimonyEngine
     /// site; it is ignored on the Skyline-column path (already enzyme-aware).
     /// </summary>
     public static List<ProteinGroup> Run(
-        string mergedParquet, SkylineColumns cols, bool applyParsimony = true, string? fastaPath = null,
-        string enzyme = "trypsin", string enzymeSpecificity = "full")
+        MergedDataset dataset, SkylineColumns cols, bool applyParsimony = true, string? fastaPath = null,
+        string enzyme = "trypsin", string enzymeSpecificity = "full", int memoryBudgetMb = 0)
     {
-        var records = ReadRecords(mergedParquet, cols);
+        var records = ReadRecords(dataset, cols, memoryBudgetMb);
         var map = string.IsNullOrWhiteSpace(fastaPath)
             ? BuildMap(records)
             : FastaParser.BuildMap(
@@ -91,7 +91,7 @@ public static class ParsimonyEngine
 
     public record Record(string Peptide, string ProteinAccession, string Name, string Gene, string Description);
 
-    private static List<Record> ReadRecords(string mergedParquet, SkylineColumns cols)
+    private static List<Record> ReadRecords(MergedDataset dataset, SkylineColumns cols, int memoryBudgetMb)
     {
         var protAcc = cols.Protein ?? cols.ProteinName ?? "Protein";
         var protName = cols.ProteinName ?? protAcc;
@@ -105,11 +105,18 @@ public static class ParsimonyEngine
             protGene != null ? $"\"{protGene}\" AS gene" : "'' AS gene",
         };
 
+        // Bounded + streaming: the DISTINCT is a blocking aggregation over every transition row, and
+        // its result is one row per (peptide, protein) - large enough on a big cohort to be worth not
+        // materializing client-side. See DuckDbTuning for why neither is the default.
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"SELECT DISTINCT {string.Join(", ", select)} FROM read_parquet('{mergedParquet.Replace("'", "''")}')";
+        DuckDbTuning.Apply(
+            conn,
+            memoryBudgetMb > 0 ? memoryBudgetMb : DuckDbMerge.AutoMemoryBudgetMb(),
+            DuckDbMerge.ResolveTempDirectory(dataset.Root));
+        using var cmd = DuckDbTuning.StreamingCommand(conn,
+            $"SELECT DISTINCT {string.Join(", ", select)} "
+            + $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)}");
         using var reader = cmd.ExecuteReader();
         var records = new List<Record>();
         while (reader.Read())

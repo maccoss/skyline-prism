@@ -258,9 +258,10 @@ columns Cadenza's `ThermoCsvWriter` emits (`m/z`, `t start (min)`, `t stop (min)
 variants. Load it from the Spectrum density tab's scheme drop-down (**Load inclusion list (PRM/MTM)…**);
 it is added to the run's `isolation_schemes.xml`, so it is offered again next time without re-browsing.
 
-The map itself is built from `merged_data.parquet` - which the pipeline leaves in place and re-uses as
-its merge cache - so the tab works both right after a run and when the output box is simply pointed at a
-previous run's directory. Computation lives in `PrecursorDensity` / `IsolationScheme` (Core) - including
+The map itself is built from the merged data (`merged_data/`, or the single `merged_data.parquet` of a
+pre-dotnet-v26.12.0 run - `MergedDataset` opens either) - which the pipeline leaves in place and re-uses
+as its merge cache - so the tab works both right after a run and when the output box is simply pointed
+at a previous run's directory. Computation lives in `PrecursorDensity` / `IsolationScheme` (Core) - including
 `PrecursorsPerSpectrumHistogram()` and `LoadOverTime()`, the two summaries - and drawing in
 `PlotRenderer.DrawPrecursorDensity` / `DrawPrecursorLoadHistogram` / `DrawPrecursorLoadOverTime`;
 `MainWindow.Density.cs` is only the wiring. Real schemes are not

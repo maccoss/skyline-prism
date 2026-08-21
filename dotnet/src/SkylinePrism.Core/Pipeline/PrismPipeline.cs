@@ -44,51 +44,58 @@ public sealed class PrismPipeline
         report("============================================================");
         report("Stage 1: Merge / prepare input");
         report("============================================================");
-        var mergedPath = Path.Combine(outputDir, "merged_data.parquet");
+        var mergedPath = Path.Combine(outputDir, "merged_data");
         var cachePath = mergedPath + ".cache.json";
         var fingerprint = SourceFingerprint.Compute(inputs);
 
         DuckDbMerge.MergeResult merge;
         var cached = forceReprocess ? null : SourceFingerprint.TryRead(cachePath);
-        if (cached is not null && cached.Fingerprint == fingerprint && File.Exists(mergedPath))
+        if (cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath))
         {
+            // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before the
+            // merge stopped sorting; what it holds is the PEPTIDE column (the partition key). Nothing
+            // about a cached merge is sorted.
             merge = new DuckDbMerge.MergeResult(mergedPath, cached.SortColumn, cached.TotalRows);
             report($"  Reusing cached merge ({merge.TotalRows:N0} rows; inputs unchanged - "
                 + "pass --force-reprocess to rebuild).");
         }
         else
         {
-            merge = DuckDbMerge.MergeAndSort(
+            merge = DuckDbMerge.Merge(
                 inputs, mergedPath, replicateColumn: config.Data.SampleColumn,
-                sortBufferMb: config.Processing.MergeMemoryMb,
+                memoryBudgetMb: config.Processing.MergeMemoryMb,
                 cancellationToken: cancellationToken);
             SourceFingerprint.Write(cachePath,
-                new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.SortColumn));
-            report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows"
-                + (merge.SingleInputFastPath ? " (single input: sorted in one pass)." : "."));
-            // The sort can spill many GB here. Worth naming: it is the first thing to look at when the
-            // merge is slow or fills a disk, and it is not always beside the output.
-            report($"  Sort scratch: {merge.TempDirectory} "
+                new SourceFingerprint.CacheEntry(fingerprint, merge.TotalRows, merge.PeptideColumn));
+            report($"  Merged {inputs.Count} report(s) -> {merge.TotalRows:N0} transition rows "
+                + $"across {merge.Partitions} peptide partition(s).");
+            // Worth naming: it is the first thing to look at when a stage is slow or fills a disk,
+            // and it is not always beside the output.
+            report($"  Scratch: {merge.TempDirectory} "
                 + $"(override with the {DuckDbMerge.TempDirEnvVar} environment variable).");
-            // Named because it is set from FREE memory: the same machine can pick a different budget
-            // on two runs, and that is the explanation when one of them spills and the other did not.
+            // Named because the automatic value is set partly from FREE memory: the same machine can
+            // pick a different budget on two runs, and that is the explanation when one of them
+            // spills and the other did not. It bounds the rollup's reader too, not just the merge.
             report($"  Memory budget: {merge.MemoryBudgetMb:N0} MB"
                 + (config.Processing.MergeMemoryMb > 0
                     ? " (from processing.merge_memory_mb)."
-                    : " (auto, from free memory; set processing.merge_memory_mb to override)."));
+                    : " (auto; set processing.merge_memory_mb to override)."));
         }
 
         // Schema-only read: never materialize the (potentially huge, 200-report) merged table
         // just to detect column names.
+        var dataset = merge.Dataset();
         var cols = SkylineColumns.Detect(
-            ParquetTable.ReadColumnNames(mergedPath).ToHashSet(), config.Data.ToOverrides());
-        var samples = MergedParquetReader.GetSortedSamples(mergedPath, cols.Sample);
+            ParquetTable.ReadColumnNames(dataset.RepresentativeFile()).ToHashSet(),
+            config.Data.ToOverrides());
+        var samples = MergedParquetReader.GetSortedSamples(
+            dataset, cols.Sample, config.Processing.MergeMemoryMb);
         report($"  Columns: peptide='{cols.Peptide}', sample='{cols.Sample}', abundance='{cols.Abundance}'.");
         report($"  Samples: {samples.Count}.");
 
         // Resolve per-sample batch and type: prefer the Replicates metadata (Batch annotation /
         // Skyline Sample Type), else fall back to the Source Document batch + name patterns.
-        var sourceBatchMap = GetBatchMap(mergedPath, cols);
+        var sourceBatchMap = GetBatchMap(dataset, cols);
         // Metadata files are matched to inputs positionally so each file's rows can be qualified by its
         // source document ("<replicate>__@__<document>"). Without that, a replicate name reused across
         // documents (every plate has a "Ref_01") would take the LAST file's type/batch for every document.
@@ -120,7 +127,7 @@ public sealed class PrismPipeline
             && cols.AcquiredTime is not null)
         {
             var est = BatchEstimator.Estimate(
-                mergedPath, cols.Sample, cols.AcquiredTime, estMethod,
+                dataset, cols.Sample, cols.AcquiredTime, estMethod,
                 config.BatchEstimation.NBatches, config.BatchEstimation.GapIqrMultiplier, report);
             var nEst = est.Values.Distinct().Count();
             if (nEst > 1)
@@ -187,6 +194,7 @@ public sealed class PrismPipeline
                 : null,
             MaxDegreeOfParallelism = config.Processing.NWorkers,
             FlushRows = config.Processing.PeptideBatchSize,
+            MemoryBudgetMb = config.Processing.MergeMemoryMb,
         };
         if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
             report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
@@ -196,22 +204,26 @@ public sealed class PrismPipeline
         report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
             + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
         var t2 = TransitionRollup.Run(
-            mergedPath, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
+            dataset, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
             report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
 
         // Stage 2a: peptide-matrix density diagnostic + optional sample outlier detection.
         {
-            var pepTable = ParquetTable.Load(peptidesRollupPath);
-            var m = new double[pepTable.RowCount, samples.Count];
+            // Column-at-a-time, not ParquetTable.Load: the whole-table load materializes every sample
+            // column as a nullable double?[] (16 bytes per cell) and then this matrix copies it into
+            // 8 more, so both are live at ~24 bytes per cell - 17 GB on a 100-document cohort, for a
+            // diagnostic. Reading one column at a time costs the matrix plus a single column.
+            using var pepReader = ParquetColumnReader.Open(peptidesRollupPath);
+            var m = new double[pepReader.RowCount, samples.Count];
             long nanCells = 0;
             for (var j = 0; j < samples.Count; j++)
             {
-                var col = pepTable.GetDouble(samples[j]);
-                for (var i = 0; i < pepTable.RowCount; i++)
+                var col = pepReader.ReadDoubles(samples[j]);
+                for (var i = 0; i < col.Length; i++)
                 {
-                    m[i, j] = col[i] ?? double.NaN;
+                    m[i, j] = col[i];
                     if (double.IsNaN(m[i, j]))
                         nanCells++;
                 }
@@ -220,7 +232,7 @@ public sealed class PrismPipeline
             // its export is already complete; PRISM only floors the rare 0 / #N/A to a small value
             // before rollup. A non-trivial count therefore flags a real data issue (a report
             // missing transitions, a bad column mapping, etc.), not normal missingness.
-            var totalCells = (long)pepTable.RowCount * samples.Count;
+            var totalCells = (long)pepReader.RowCount * samples.Count;
             report($"  Peptide matrix: {nanCells:N0} missing of {totalCells:N0} cells "
                 + $"({(totalCells > 0 ? 100.0 * nanCells / totalCells : 0):0.###}%) "
                 + (nanCells == 0 ? "- fully dense, as expected." : "- unexpected; investigate."));
@@ -294,8 +306,9 @@ public sealed class PrismPipeline
         // and a peptide can be navigated to in Skyline). Its banner and CSV stay at Stage 3 below, where
         // the grouping is reported; only the computation moved.
         var groups = ParsimonyEngine.Run(
-            mergedPath, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
-            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity);
+            dataset, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
+            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity,
+            config.Processing.MergeMemoryMb);
         var peptideGroups = PeptideGroupIndex(groups);
         // Counted now so the index itself can be dropped as soon as the peptide output is written,
         // rather than staying alive through the protein rollup for the sake of one number.
@@ -511,14 +524,16 @@ public sealed class PrismPipeline
         };
     }
 
-    private static Dictionary<string, string> GetBatchMap(string mergedPath, SkylineColumns cols)
+    private static Dictionary<string, string> GetBatchMap(MergedDataset dataset, SkylineColumns cols)
     {
         var batchCol = cols.Batch ?? "Batch";
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"SELECT DISTINCT \"{cols.Sample}\" AS s, \"{batchCol}\" AS b FROM read_parquet('{mergedPath.Replace("'", "''")}')";
+        DuckDbTuning.Apply(
+            conn, DuckDbMerge.AutoMemoryBudgetMb(), DuckDbMerge.ResolveTempDirectory(dataset.Root));
+        using var cmd = DuckDbTuning.StreamingCommand(conn,
+            $"SELECT DISTINCT \"{cols.Sample}\" AS s, \"{batchCol}\" AS b "
+            + $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)}");
         using var reader = cmd.ExecuteReader();
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         while (reader.Read())

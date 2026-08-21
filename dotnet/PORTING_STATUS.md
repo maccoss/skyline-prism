@@ -15,7 +15,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] Column auto-detection (`find_column`) — `SkylineColumns`
 - [x] Sample metadata generation + sample-type detection — pipeline + `ReplicateMetadata`
 - [x] Tolerant numeric parsing (`#N/A` → NaN) — `MergedParquetReader`
-- [x] Source-fingerprint caching (`SourceFingerprint`; reuse merged_data.parquet when inputs
+- [x] Source-fingerprint caching (`SourceFingerprint`; reuse the merged dataset when inputs
       unchanged, `--force-reprocess` to rebuild)
 - [x] Batch estimation from acquisition-time gaps (`BatchEstimator`, IQR-based; auto/gap/fixed) —
       used only when neither metadata nor Source Document distinguishes batches
@@ -163,7 +163,7 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `compare` (control-CV comparison of two runs + ranked per-peptide CV differences) —
       `RollupComparison`. (The Python's per-peptide library-fit visualization is not ported.)
 - [x] Timestamped `prism_run_<ts>.log` in the output dir, tee'd with the console — `Program.cs`
-- [x] Source-fingerprint cache + `--force-reprocess` (reuse merged_data.parquet when inputs unchanged) —
+- [x] Source-fingerprint cache + `--force-reprocess` (reuse the merged dataset when inputs unchanged) —
       `PrismPipeline` + `SourceFingerprint`
 - [x] Unknown-config-key warnings — `PrismConfig.FindUnknownKeys` reports any key the pipeline doesn't
       read (Python-only or typo) on stderr; `PrismConfig.Validate` aborts on unported method choices
@@ -301,3 +301,12 @@ schema sync).
       convergence is hardcoded to the Python defaults
 - [-] niche / no-op: `sample_annotations.experimental_pattern`, `batch_estimation.{min,max}_samples_per_batch`,
       `transition_rollup.enabled`, `output.compress`
+
+**Deliberate engine divergence — Stage 1 output layout (not a config key):**
+- Python writes one `merged_data.parquet`, **sorted by peptide**, because `rollup_transitions_sorted`
+  consumes it positionally. C# writes `merged_data/` **hash-partitioned by peptide and unsorted**,
+  because its rollup re-sorts anyway (`MergedParquetReader`) and a global sort is the one operator whose
+  cost scales with cohort size — ~600 GB of spill at 100 documents. Row CONTENT is still the parity
+  contract and `MergeParityTests` still compares against the Python golden; row ORDER and file layout
+  are explicitly not. Do not "restore parity" here without first removing the reader's `ORDER BY`, and
+  see `MergedDataset` for why the partitioning is load-bearing rather than cosmetic.

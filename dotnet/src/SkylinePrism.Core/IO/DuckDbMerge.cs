@@ -8,16 +8,44 @@ using DuckDB.NET.Data;
 namespace SkylinePrism.Core.IO;
 
 /// <summary>
-/// Streaming CSV/parquet merge + sort, ported from data_io.py:merge_and_sort_streaming.
-/// Issues the SAME DuckDB SQL as the Python pipeline (via the DuckDB.NET binding to the
-/// same libduckdb engine), so the merged parquet has identical row content: the
+/// Streaming CSV/parquet merge, ported from data_io.py:merge_and_sort_streaming.
+/// Issues the same DuckDB SQL as the Python pipeline (via the DuckDB.NET binding to the
+/// same libduckdb engine), so the merged parquet has identical row CONTENT: the
 /// synthesized Batch / Source Document / Sample ID columns (with the "__@__" join),
-/// UNION ALL of all files, ORDER BY the peptide column, zstd output.
+/// UNION ALL of all files, zstd output. Row content is the parity contract; row ORDER
+/// is not, and deliberately differs from Python - see below.
 ///
-/// Row TIE order under ORDER BY is engine/thread dependent, but that only affects the
-/// downstream pivot aggfunc="first" when a (peptide, transition, sample) key is
-/// duplicated -- which clean Skyline exports never are -- so the merged CONTENT is the
-/// parity contract.
+/// <para>
+/// <b>This stage does not sort, by design.</b> It used to close with
+/// <c>ORDER BY &lt;peptide column&gt;</c> over the full union, on the theory that the
+/// downstream transition rollup needs to see one peptide at a time. It does - but it gets
+/// that from its OWN <c>ORDER BY</c> in
+/// <see cref="MergedParquetReader.StreamPeptideBlocks"/>, which DuckDB issues regardless of
+/// how the file is laid out (parquet carries no sortedness the optimizer will trust). So the
+/// rows were being sorted twice, and the sort here was the expensive one: it is a blocking
+/// operator over EVERY column of a transition-level report - ~26 of them, half wide repeated
+/// strings (protein name, accession, gene, peptide, modified sequence, fragment ion,
+/// replicate, file name, and the synthesized Sample ID) - while the reader's sort projects
+/// the 8 narrow columns the rollup actually reads. Measured on a 2-plate cohort
+/// (3.7 GB of parquet in): the wide sort peaked at ~35 GB RSS and spilled 31 GB; the
+/// identical ordering, done narrow in the reader, fits in ~8 GB.
+/// </para>
+/// <para>
+/// Dropping it makes this stage a single streaming <c>COPY</c> - readers feed the parquet
+/// writer with no pipeline breaker in between - so memory is bounded by the reader and
+/// writer buffers rather than by the size of the cohort, and the unsorted intermediate
+/// (a full extra write plus a full extra read of the whole dataset) disappears with it.
+/// Python still sorts here because its rollup consumes the file positionally
+/// (<c>rollup_transitions_sorted(pre_sorted=True)</c>) and so genuinely depends on the
+/// order; the C# reader does not. Do not "restore parity" by adding the sort back without
+/// first removing the reader's.
+/// </para>
+/// <para>
+/// What the write DOES do is hash each row into a peptide bucket and let parquet
+/// <c>PARTITION_BY</c> fan it out - free here, since it rides on a pass that was happening
+/// anyway, and it is what removes the last unbounded operator downstream. See
+/// <see cref="MergedDataset"/> for why the rollup needs it.
+/// </para>
 /// </summary>
 public static class DuckDbMerge
 {
@@ -45,15 +73,36 @@ public static class DuckDbMerge
         "Batch", "Source Document", "Sample ID",
     };
 
+    /// <param name="PeptideColumn">
+    /// The peptide column, which rows are hashed on to choose a partition. Nothing SORTS by it here
+    /// (see the type remarks) - but it is what makes the partitioning correct, since every row of a
+    /// peptide must land in the same bucket for the rollup to see them together.
+    /// </param>
+    /// <param name="Partitions">Number of buckets written; 1 on a cohort small enough not to need more.</param>
     public sealed record MergeResult(
-        string OutputPath, string SortColumn, long TotalRows, string TempDirectory = "",
-        int MemoryBudgetMb = 0, bool SingleInputFastPath = false);
+        string OutputPath, string PeptideColumn, long TotalRows, string TempDirectory = "",
+        int MemoryBudgetMb = 0, int Partitions = 1)
+    {
+        /// <summary>The merged data, ready to scan whole or one partition at a time.</summary>
+        public MergedDataset Dataset() => MergedDataset.Open(OutputPath);
+    }
 
     /// <summary>
     /// Floor for the DuckDB budget. Below this the reader buffers alone do not fit and the merge
     /// fails outright instead of spilling, so a busy machine gets a small budget, never a broken one.
     /// </summary>
     internal const int MinMemoryBudgetMb = 2048;
+
+    /// <summary>
+    /// Ceiling for the AUTOMATIC budget (an explicit <c>processing.merge_memory_mb</c> is honoured
+    /// above it). Since the merge stopped sorting, nothing here scales with the size of the cohort:
+    /// the buffer pool holds per-thread reader buffers and the parquet writer's in-flight row groups,
+    /// which a few GB covers on any machine. Handing DuckDB a fraction of a large machine's RAM would
+    /// just let it cache the whole scan for no benefit - and at real cost, because that memory is
+    /// taken from the Skyline instance PRISM was launched from, which is sitting right there holding
+    /// the documents being processed.
+    /// </summary>
+    internal const int MaxAutoMemoryBudgetMb = 8192;
 
     /// <summary>
     /// Override for DuckDB's spill directory. Set it when the automatic choice picks badly - the
@@ -85,30 +134,35 @@ public static class DuckDbMerge
     /// <summary>
     /// How much memory to let DuckDB use, when the caller has not said.
     /// <para>
-    /// Two bounds, whichever is smaller. <b>75% of total RAM</b> leaves ~25% for the .NET host and
-    /// the OS; this is what sizes the merge on an otherwise idle machine, and it exists because the
-    /// original fixed 8 GB limit was smaller than the upfront per-thread read buffers when DuckDB ran
-    /// one thread per core - it died in seconds, before sorting anything. <b>80% of free RAM</b> then
-    /// caps that by what the machine can actually give right now: DuckDB's buffer pool is native
-    /// memory outside the GC's view, so a budget written against total RAM on a machine that is
-    /// already half full does not spill, it pages, and the run appears to hang with the system at
-    /// 100% memory.
+    /// Three bounds, whichever is smallest: <b>25% of total RAM</b>, <b>50% of free RAM</b>, and the
+    /// flat <see cref="MaxAutoMemoryBudgetMb"/> ceiling - floored at <see cref="MinMemoryBudgetMb"/>
+    /// so a busy machine gets a small budget, never a broken one. The free-RAM bound is what keeps a
+    /// half-full machine honest: DuckDB's buffer pool is native memory outside the GC's view, so a
+    /// budget written against total RAM alone does not spill on a loaded machine, it pages.
     /// </para>
     /// <para>
-    /// Both are ceilings on the buffer pool, not reservations - work beyond the budget spills to
-    /// <see cref="ResolveTempDirectory"/>. So a small budget is slower, never wrong, which is why the
-    /// free-memory bound can be applied without knowing how big the cohort is.
+    /// These fractions used to be 75% of total / 80% of free, from when this stage sorted the whole
+    /// cohort and a bigger buffer pool meant less spilling. It no longer sorts (see the type
+    /// remarks), so there is nothing here for a large budget to buy - and the old one actively hurt:
+    /// on a 62 GB workstation with Skyline holding two 13 GB documents, it let the merge take ~35 GB,
+    /// which Windows found by paging Skyline out. The whole system swapped for 40 minutes.
+    /// </para>
+    /// <para>
+    /// All three are ceilings on the buffer pool, not reservations - work beyond the budget spills to
+    /// <see cref="ResolveTempDirectory"/>. So a small budget is slower, never wrong, which is why
+    /// they can be applied without knowing how big the cohort is.
     /// </para>
     /// </summary>
     internal static int AutoMemoryBudgetMb()
     {
         const long mb = 1024L * 1024L;
-        var budgetMb = SystemMemory.TotalPhysicalBytes / mb * 3 / 4;
+        var budgetMb = SystemMemory.TotalPhysicalBytes / mb / 4;
 
         var available = SystemMemory.AvailablePhysicalBytes();
         if (available is > 0)
-            budgetMb = Math.Min(budgetMb, available.Value / mb * 4 / 5);
+            budgetMb = Math.Min(budgetMb, available.Value / mb / 2);
 
+        budgetMb = Math.Min(budgetMb, MaxAutoMemoryBudgetMb);
         return (int)Math.Max(MinMemoryBudgetMb, budgetMb);
     }
 
@@ -131,20 +185,27 @@ public static class DuckDbMerge
         }
     }
 
-    public static MergeResult MergeAndSort(
+    /// <param name="partitionsOverride">
+    /// Force the bucket count instead of deriving it from the cohort size and budget. For tests: the
+    /// mini fixtures are a few thousand rows, so the real sizing gives them one partition, and the
+    /// invariants that matter most - a peptide never split across partitions, blocks still whole across
+    /// a partition boundary - are vacuous unless several can be forced. 0 = derive normally.
+    /// </param>
+    public static MergeResult Merge(
         IReadOnlyList<string> reportPaths,
         string outputPath,
-        string? sortColumn = null,
+        string? peptideColumn = null,
         IReadOnlyList<string>? batchNames = null,
-        int sortBufferMb = 0,
+        int memoryBudgetMb = 0,
         string? replicateColumn = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int partitionsOverride = 0)
     {
         if (reportPaths.Count == 0)
             throw new ArgumentException("No report paths provided.", nameof(reportPaths));
 
-        if (sortBufferMb <= 0)
-            sortBufferMb = AutoMemoryBudgetMb();
+        if (memoryBudgetMb <= 0)
+            memoryBudgetMb = AutoMemoryBudgetMb();
 
         batchNames ??= reportPaths.Select(p => Path.GetFileNameWithoutExtension(p)).ToList();
         if (batchNames.Count != reportPaths.Count)
@@ -156,10 +217,11 @@ public static class DuckDbMerge
         var fileHeaders = reportPaths.Select(ReadHeader).ToList();
         var firstHeader = fileHeaders[0];
 
-        // Auto-detect sort (peptide) column.
-        sortColumn ??= PeptideColumnNames.FirstOrDefault(firstHeader.Contains)
+        // Auto-detect the peptide column. Nothing here sorts by it, but a transition report without
+        // one cannot be rolled up, and failing now beats failing after a full merge.
+        peptideColumn ??= PeptideColumnNames.FirstOrDefault(firstHeader.Contains)
             ?? throw new InvalidOperationException(
-                "Could not find a peptide column for sorting. Looked for: "
+                "Could not find a peptide column. Looked for: "
                 + string.Join(", ", PeptideColumnNames));
 
         // Validate data columns match across files (synth metadata cols allowed to differ).
@@ -185,84 +247,138 @@ public static class DuckDbMerge
         var tempDir = ResolveTempDirectory(outputPath);
         Directory.CreateDirectory(tempDir);
 
-        var unsortedPath = Path.ChangeExtension(outputPath, ".unsorted.parquet");
-        var outputEsc = SqlEscape(Path.GetFullPath(outputPath));
-        var unsortedEsc = SqlEscape(Path.GetFullPath(unsortedPath));
-        var singleInput = reportPaths.Count == 1;
+        var fullOutput = Path.GetFullPath(outputPath);
+        var outputEsc = SqlEscape(fullOutput);
+        // A stale layout underneath would be read back as extra partitions, so the target is always
+        // cleared rather than written over. Callers only reach here when they mean to rebuild.
+        MergedDataset.Delete(fullOutput);
 
         long totalRows;
+        int partitions;
         try
         {
             using var conn = new DuckDBConnection("Data Source=:memory:");
             conn.Open();
-            // Use all cores; the budget above is sized so all threads' read buffers fit, and the sort
-            // spills to temp_directory beyond it.
-            Exec(conn, $"SET memory_limit='{sortBufferMb}MB'");
-            Exec(conn, $"SET temp_directory='{SqlEscape(tempDir)}'");
-            Exec(conn, "SET preserve_insertion_order=false");
-            Exec(conn, $"SET threads={Environment.ProcessorCount}");
+            DuckDbTuning.Apply(conn, memoryBudgetMb, tempDir);
 
-            if (singleInput)
-            {
-                // One input: read it, sort it, write it - no intermediate. That saves a full write and
-                // a full read of the entire dataset, which on a report living on a network share is
-                // most of Stage 1's wall clock.
-                //
-                // The two-stage form below is NOT a general safety measure that this skips: it exists
-                // for a specific failure, a COPY over a UNION ALL of MANY parquet files, where N
-                // parallel readers feeding a sort and a writer could not be kept inside any budget.
-                // With one input there is no union and one reader, so that pressure is absent - and
-                // this is also what the Python engine already does for a single file
-                // (data_io.py:_sort_parquet_low_memory), so the fast path restores parity rather than
-                // introducing a difference.
-                Exec(conn, cancellationToken, $@"
-                    COPY (
-                        SELECT * FROM ({unionQuery})
-                        ORDER BY ""{sortColumn}""
-                    ) TO '{outputEsc}' (
-                        FORMAT PARQUET,
-                        COMPRESSION ZSTD,
-                        ROW_GROUP_SIZE 1000000
-                    )");
-            }
-            else
-            {
-                // Stage A: union -> unsorted intermediate (snappy).
-                Exec(conn, cancellationToken, $@"
-                    COPY (
-                        {unionQuery}
-                    ) TO '{unsortedEsc}' (
-                        FORMAT PARQUET,
-                        COMPRESSION SNAPPY
-                    )");
+            partitions = partitionsOverride > 0
+                ? partitionsOverride
+                : MergedDataset.PartitionCountFor(
+                    EstimateTotalRows(conn, reportPaths, fileHeaders), memoryBudgetMb);
+            DuckDbTuning.ApplyPartitionedWrite(conn, partitions);
 
-                // Stage B: single-source ORDER BY -> zstd output.
-                Exec(conn, cancellationToken, $@"
-                    COPY (
-                        SELECT * FROM read_parquet('{unsortedEsc}')
-                        ORDER BY ""{sortColumn}""
-                    ) TO '{outputEsc}' (
-                        FORMAT PARQUET,
-                        COMPRESSION ZSTD,
-                        ROW_GROUP_SIZE 1000000
-                    )");
-            }
+            // Hash on the peptide column so all of a peptide's rows share a bucket - that is what lets
+            // the rollup process one partition at a time. COALESCE because a NULL peptide would
+            // otherwise land in DuckDB's default-partition directory rather than a numbered bucket.
+            var bucket = $"(hash(COALESCE(CAST(\"{peptideColumn}\" AS VARCHAR), '')) % {partitions})"
+                       + $" AS \"{MergedDataset.BucketColumn}\"";
 
+            // One streaming pass: readers -> partitioned parquet writer, no pipeline breaker between
+            // them, so peak memory is the reader buffers plus the writer's in-flight row groups no
+            // matter how big the cohort is. DuckDB bounds the partition writers itself (it keeps a
+            // fixed number open and rotates the rest), so a high partition count costs files, not RAM.
+            Exec(conn, cancellationToken, $@"
+                COPY (
+                    SELECT *, {bucket} FROM ({unionQuery})
+                ) TO '{outputEsc}' (
+                    FORMAT PARQUET,
+                    COMPRESSION ZSTD,
+                    ROW_GROUP_SIZE {RowGroupSize},
+                    PARTITION_BY ({MergedDataset.BucketColumn})
+                )");
+
+            // Cheap: parquet row counts come from the file footers, so this reads metadata rather
+            // than scanning the data back.
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"SELECT COUNT(*) FROM read_parquet('{outputEsc}')";
+            cmd.CommandText =
+                $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(MergedDataset.Open(fullOutput).ScanTarget)}', "
+                + "hive_partitioning=false)";
             totalRows = Convert.ToInt64(cmd.ExecuteScalar());
         }
         finally
         {
-            // In a finally because the spill directory may now live outside the output directory,
-            // where a failed run would otherwise leave gigabytes behind with nothing pointing at it.
-            try { File.Delete(unsortedPath); } catch (IOException) { }
-            try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
+            // In a finally because the spill directory may live outside the output directory, where a
+            // failed run would otherwise leave gigabytes behind with nothing pointing at it.
+            //
+            // Catching broadly is deliberate: this runs on the failure path, so anything thrown here
+            // would REPLACE the merge's own exception with a cleanup error - hiding the thing the user
+            // needs to see. Delete can throw UnauthorizedAccessException (a file still mapped, or
+            // read-only) or DirectoryNotFoundException (a concurrent run already cleaned up) as
+            // readily as IOException. Leftover scratch is a nuisance; a swallowed root cause is not.
+            try { Directory.Delete(tempDir, recursive: true); } catch (Exception) { }
         }
 
         return new MergeResult(
-            Path.GetFullPath(outputPath), sortColumn, totalRows, tempDir, sortBufferMb, singleInput);
+            fullOutput, peptideColumn, totalRows, tempDir, memoryBudgetMb, partitions);
     }
+
+    /// <summary>
+    /// Roughly how many rows the merge is about to write, to choose a partition count. Parquet inputs
+    /// answer exactly from their footers; text inputs are estimated from file size over the mean length
+    /// of a sample of lines. Only the order of magnitude matters - the partition count is clamped, and
+    /// being one bucket out changes the rollup's footprint by a few percent, so an estimate that costs
+    /// nothing beats an exact count that costs a full scan.
+    /// </summary>
+    private static long EstimateTotalRows(
+        DuckDBConnection conn, IReadOnlyList<string> reportPaths, IReadOnlyList<List<string>> headers)
+    {
+        long total = 0;
+        for (var i = 0; i < reportPaths.Count; i++)
+        {
+            var path = reportPaths[i];
+            try
+            {
+                if (Path.GetExtension(path).Equals(".parquet", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(Path.GetFullPath(path))}')";
+                    total += Convert.ToInt64(cmd.ExecuteScalar());
+                }
+                else
+                {
+                    total += EstimateTextRows(path);
+                }
+            }
+            catch (Exception)
+            {
+                // An unreadable input fails properly in the COPY below, with a better message than
+                // anything an estimator could raise. Here it just means one fewer input counted.
+            }
+        }
+        return total;
+    }
+
+    private static long EstimateTextRows(string path)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length == 0)
+            return 0;
+
+        using var sr = new StreamReader(path);
+        long sampled = 0;
+        var lines = 0;
+        for (; lines < 200; lines++)
+        {
+            var line = sr.ReadLine();
+            if (line is null)
+                break;
+            sampled += line.Length + 1; // + the newline the reader stripped
+        }
+        if (lines == 0 || sampled == 0)
+            return 0;
+        return info.Length / Math.Max(1, sampled / lines);
+    }
+
+    /// <summary>
+    /// Rows per parquet row group. DuckDB buffers a whole row group per writing thread before it
+    /// flushes, so this is multiplied by the thread count in peak memory: at the previous 1,000,000
+    /// it was ~26 columns x 1M rows in flight per thread, which on a many-core box is gigabytes of
+    /// write buffer on its own. DuckDB's default is a deliberate balance for exactly this reason, and
+    /// smaller groups also give the downstream per-sample scans (the density map) finer row-group
+    /// skipping, so nothing downstream wants the larger value either.
+    /// </summary>
+    private const int RowGroupSize = 122880;
 
     private static string BuildFileSelect(
         string filePath, string batchName, IReadOnlyList<string> header, string? replicateColumn = null)

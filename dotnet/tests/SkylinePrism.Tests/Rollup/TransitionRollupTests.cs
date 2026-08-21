@@ -99,4 +99,19 @@ public class TransitionRollupTests
         var rollup = new MedianPolishRollup(addLog2NOffset: true, minTransitions: 2).Aggregate(matrix);
         Assert.All(rollup, v => Assert.True(double.IsNaN(v)));
     }
+
+    /// <summary>
+    /// The output write buffer is peptides x samples doubles, so the configured peptide batch size has
+    /// to give way once a cohort has enough runs - otherwise a value chosen for two documents becomes
+    /// hundreds of MB at a hundred. Small cohorts must be left exactly as configured.
+    /// </summary>
+    [Theory]
+    [InlineData(2000, 192, 2000)]       // 2 documents: the configured value stands
+    [InlineData(2000, 1920, 2000)]      // 20 documents: still under the cap
+    [InlineData(2000, 9600, 416)]       // 100 documents: capped to hold the buffer flat
+    [InlineData(2000, 0, 2000)]         // sample count unknown: nothing to scale by
+    [InlineData(0, 192, 1)]             // a nonsense batch size still yields a usable one
+    [InlineData(2000, 100_000_000, 1)]  // never zero, however wide the matrix
+    public void FlushRows_ScaleDownWithSampleCount(int configured, int samples, int expected)
+        => Assert.Equal(expected, TransitionRollup.FlushRowsFor(configured, samples));
 }

@@ -49,6 +49,14 @@ public sealed class TransitionRollupConfig
     /// <summary>Peptides buffered per streamed parquet row group (flush granularity).</summary>
     public int FlushRows { get; init; } = 2000;
 
+    /// <summary>
+    /// Ceiling on the buffer pool of the DuckDB connection this stage reads through, in MB
+    /// (<c>processing.merge_memory_mb</c>); 0 = size it from the machine. The reader's ORDER BY is a
+    /// blocking operator over every transition row, so this is the same kind of knob as it is for the
+    /// merge - and the same one, so that bounding PRISM's footprint takes one setting rather than two.
+    /// </summary>
+    public int MemoryBudgetMb { get; init; }
+
     // --- Library-assisted rollup (method == LibraryAssist) ---
 
     /// <summary>Path to the spectral library (.blib) used for library-assisted rollup.</summary>

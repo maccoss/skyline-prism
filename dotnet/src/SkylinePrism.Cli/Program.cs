@@ -121,8 +121,24 @@ public static class Program
             Console.Error.WriteLine("Usage: prism merge <input...> -o <output.parquet>");
             return 2;
         }
-        var result = DuckDbMerge.MergeAndSort(inputs, output);
-        Console.WriteLine($"Merged {inputs.Count} file(s) -> {result.OutputPath} ({result.TotalRows} rows)");
+        // The merge writes peptide-hash partitions, so the output is a DIRECTORY of parquet files, not
+        // one file. Accept a "-o something.parquet" anyway - it is the natural thing to type, and it was
+        // the contract until this release - but drop the extension rather than create a directory called
+        // "x.parquet", and say plainly where the data actually went.
+        var root = output.EndsWith(".parquet", StringComparison.OrdinalIgnoreCase)
+            ? output[..^".parquet".Length]
+            : output;
+
+        var result = DuckDbMerge.Merge(inputs, root);
+        Console.WriteLine(
+            $"Merged {inputs.Count} file(s) -> {result.OutputPath}{Path.DirectorySeparatorChar} "
+            + $"({result.TotalRows} rows in {result.Partitions} peptide partition(s))");
+        // hive_partitioning=false matters: without it DuckDB reads the _pep_bucket=N directory names
+        // back as an extra column, so the caller gets a schema PRISM itself never sees. Every read
+        // inside PRISM passes it (MergedParquetReader.Scan) and so must the advice we print.
+        Console.WriteLine(
+            $"  Read it as a single table with: read_parquet('{result.OutputPath.Replace('\\', '/')}"
+            + "/**/*.parquet', hive_partitioning=false)");
         return 0;
     }
 

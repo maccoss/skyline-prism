@@ -21,11 +21,11 @@ public static class BatchEstimator
     /// acquisition order.
     /// </summary>
     public static Dictionary<string, string> Estimate(
-        string mergedParquet, string sampleCol, string acqCol,
+        MergedDataset dataset, string sampleCol, string acqCol,
         string method = "auto", int? nBatches = null, double gapIqrMultiplier = 1.5,
         Action<string>? log = null)
     {
-        var rows = ReadSampleTimes(mergedParquet, sampleCol, acqCol);
+        var rows = ReadSampleTimes(dataset, sampleCol, acqCol);
         return AssignBatches(rows, method, nBatches, gapIqrMultiplier, log);
     }
 
@@ -115,15 +115,17 @@ public static class BatchEstimator
     }
 
     private static List<(string Sample, DateTime Time)> ReadSampleTimes(
-        string parquet, string sampleCol, string acqCol)
+        MergedDataset dataset, string sampleCol, string acqCol)
     {
         var rows = new List<(string, DateTime)>();
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"SELECT DISTINCT \"{sampleCol}\" AS s, \"{acqCol}\" AS t FROM read_parquet('{parquet.Replace("'", "''")}') "
-            + "WHERE t IS NOT NULL";
+        DuckDbTuning.Apply(
+            conn, DuckDbMerge.AutoMemoryBudgetMb(), DuckDbMerge.ResolveTempDirectory(dataset.Root));
+        using var cmd = DuckDbTuning.StreamingCommand(conn,
+            $"SELECT DISTINCT \"{sampleCol}\" AS s, \"{acqCol}\" AS t "
+            + $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} "
+            + "WHERE t IS NOT NULL");
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

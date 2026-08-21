@@ -154,7 +154,7 @@ for details.
 | Command | Purpose |
 |---|---|
 | `prism run` | Run the full pipeline (rollup → normalize → batch-correct → QC) |
-| `prism merge` | Merge Skyline transition reports into one sorted parquet |
+| `prism merge` | Merge Skyline transition reports into one peptide-partitioned parquet dataset |
 | `prism qc` | (Re)generate `qc_report.html` from an existing output directory |
 | `prism compare` | Compare control-sample CVs between two runs |
 | `prism config-template` | Emit an annotated configuration template (`--minimal` for common options) |

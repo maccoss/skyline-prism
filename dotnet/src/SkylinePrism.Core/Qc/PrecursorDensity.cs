@@ -238,15 +238,15 @@ public static class PrecursorDensity
 
     /// <summary>Load one replicate's precursors, then bin them. See <see cref="Load"/> / <see cref="Bin"/>.</summary>
     public static PrecursorDensityMap Build(
-        string mergedParquetPath, Columns cols, string sample,
+        MergedDataset dataset, Columns cols, string sample,
         double mzBinTh = DefaultMzBinTh, double rtBinMin = DefaultRtBinMin, double? qValueCutoff = null)
-        => Bin(Load(mergedParquetPath, cols, sample, qValueCutoff), mzBinTh, rtBinMin);
+        => Bin(Load(dataset, cols, sample, qValueCutoff), mzBinTh, rtBinMin);
 
     /// <summary>Load one replicate's precursors, then bin them on a real isolation scheme.</summary>
     public static PrecursorDensityMap Build(
-        string mergedParquetPath, Columns cols, string sample, IsolationScheme scheme,
+        MergedDataset dataset, Columns cols, string sample, IsolationScheme scheme,
         double rtBinMin = DefaultRtBinMin, double? qValueCutoff = null)
-        => Bin(Load(mergedParquetPath, cols, sample, qValueCutoff), scheme, rtBinMin);
+        => Bin(Load(dataset, cols, sample, qValueCutoff), scheme, rtBinMin);
 
     /// <summary>
     /// One row per detected precursor in <paramref name="sample"/>. The report is transition-level, so
@@ -258,7 +258,7 @@ public static class PrecursorDensity
     /// not detected in this run.
     /// </summary>
     public static List<DetectedPrecursor> Load(
-        string mergedParquetPath, Columns cols, string sample, double? qValueCutoff = null)
+        MergedDataset dataset, Columns cols, string sample, double? qValueCutoff = null)
     {
         var qFilter = qValueCutoff is { } q && cols.DetectionQValue is not null
             ? $" AND TRY_CAST(\"{cols.DetectionQValue}\" AS DOUBLE) <= {Num(q)}"
@@ -266,19 +266,20 @@ public static class PrecursorDensity
 
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = $@"
+        DuckDbTuning.Apply(
+            conn, DuckDbMerge.AutoMemoryBudgetMb(), DuckDbMerge.ResolveTempDirectory(dataset.Root));
+        using var cmd = DuckDbTuning.StreamingCommand(conn, $@"
             SELECT mz, rt0, rt1 FROM (
                 SELECT
                     MIN(TRY_CAST(""{cols.PrecursorMz}"" AS DOUBLE)) AS mz,
                     MIN(TRY_CAST(""{cols.StartTime}"" AS DOUBLE)) AS rt0,
                     MAX(TRY_CAST(""{cols.EndTime}"" AS DOUBLE)) AS rt1
-                FROM read_parquet('{Esc(mergedParquetPath)}')
+                FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
                 WHERE ""{cols.Sample}"" = '{Esc(sample)}'{qFilter}
                 GROUP BY ""{cols.Peptide}"", ""{cols.PrecursorCharge}"", ""{cols.PrecursorMz}""
             )
             WHERE mz IS NOT NULL AND rt0 IS NOT NULL AND rt1 IS NOT NULL
-              AND isfinite(mz) AND isfinite(rt0) AND isfinite(rt1) AND rt1 >= rt0";
+              AND isfinite(mz) AND isfinite(rt0) AND isfinite(rt1) AND rt1 >= rt0");
 
         using var reader = cmd.ExecuteReader();
         var result = new List<DetectedPrecursor>();

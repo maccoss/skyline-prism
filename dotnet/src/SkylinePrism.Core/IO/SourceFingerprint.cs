@@ -15,6 +15,12 @@ namespace SkylinePrism.Core.IO;
 /// </summary>
 public static class SourceFingerprint
 {
+    /// <param name="SortColumn">
+    /// The PEPTIDE column, despite the name. The merge stopped sorting in dotnet-v26.12.0 and now
+    /// hash-partitions on this column instead; the field keeps its old name so sidecars written by
+    /// earlier releases still deserialize rather than forcing a needless re-merge of a cohort that has
+    /// not changed. Rename it only together with a cache-version bump.
+    /// </param>
     public sealed record CacheEntry(string Fingerprint, long TotalRows, string SortColumn);
 
     public static string Compute(IReadOnlyList<string> inputs)

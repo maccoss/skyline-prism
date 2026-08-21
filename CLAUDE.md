@@ -913,6 +913,38 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
      exists to keep that honest - it emits the exact `prism run` invocation for the current settings.
    - The one thing still worth extracting from `MainWindow` is a view-model for **testability**
      (it is ~1000 lines of code-behind at 0% coverage), not for portability.
+6. **C# Stage 1 partitions, and does NOT sort** (measured, not stylistic). `merged_data/` is a
+   hive-partitioned parquet directory (`_pep_bucket=N/`), hashed on the peptide column and unsorted;
+   Python still writes one sorted file because its rollup consumes the file positionally. Every row of
+   a peptide is in exactly one partition, which is what lets the rollup sort and stream one partition
+   at a time instead of ordering the whole cohort - the only operator whose cost grew with the number
+   of documents merged. See `MergedDataset` for the sizing trade (it was measured in both directions,
+   and the intuitive answer was wrong) and `docs/output_files.md` for the layout. Row CONTENT remains
+   the cross-engine parity contract; row ORDER and file layout explicitly are not.
+
+> [!CAUTION]
+> **DuckDB.NET has three defaults that will silently cost you memory or correctness.** All three were
+> hit for real; each is documented at its call site, and `DuckDbTuning` exists to centralize the fixes.
+>
+> - **`DuckDBCommand.UseStreamingMode` defaults to `false`.** A non-streaming `ExecuteReader` runs the
+>   query to completion and materializes *every* row client-side before the first `Read()` returns -
+>   outside the buffer pool, so neither `memory_limit` nor `temp_directory` applies. This made the
+>   "streaming" rollup reader hold an entire 186M-row cohort in memory. Any query whose result set
+>   scales with the data must set it.
+> - **A connection with no `memory_limit`/`temp_directory` takes 80% of RAM and cannot spill.** Set
+>   both, always together: a bounded pool with nowhere to spill fails outright instead of spilling.
+> - **`Connection.ConnectionManager` caches *refcounted* database instances keyed by connection
+>   string**, so every `"Data Source=:memory:"` in the process is the SAME database - one buffer pool,
+>   one `memory_limit` (it is a database-level setting, not a connection one). Do not read from it on
+>   several threads: when one closes its connection the refcount can reach zero and the instance is
+>   torn down under the others, which is an `AccessViolationException`, not an exception you can catch.
+>   Parallel partition readers were built, crashed this way, and were reverted - see
+>   `TransitionRollup.RunParallel`.
+>
+> Stage 2 is consequently ~75% of the pipeline's wall clock at roughly one core - a known, measured
+> ceiling rather than a mystery. **`dotnet/STAGE2_THROUGHPUT.md` is the plan for lifting it**: the
+> options, what each risks, the cheap measurement that must come first, and the verification bar
+> anything touching concurrency has to clear.
 
 ## Release Process
 

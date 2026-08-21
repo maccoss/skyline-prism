@@ -37,7 +37,7 @@ public class BatchEstimatorParquetTests
         var path = WriteParquet(TimestampRows);
         try
         {
-            var map = BatchEstimator.Estimate(path, "sample", "acq", method: "auto");
+            var map = BatchEstimator.Estimate(MergedDataset.Open(path), "sample", "acq", method: "auto");
             Assert.Equal("batch_1", map["S1"]);
             Assert.Equal("batch_1", map["S3"]);
             Assert.Equal("batch_2", map["S4"]);
@@ -52,7 +52,7 @@ public class BatchEstimatorParquetTests
         var path = WriteParquet(TimestampRows);
         try
         {
-            var map = BatchEstimator.Estimate(path, "sample", "acq", method: "fixed", nBatches: 3);
+            var map = BatchEstimator.Estimate(MergedDataset.Open(path), "sample", "acq", method: "fixed", nBatches: 3);
             Assert.Equal("batch_1", map["S1"]);
             Assert.Equal("batch_1", map["S2"]);
             Assert.Equal("batch_2", map["S3"]);
@@ -71,7 +71,7 @@ public class BatchEstimatorParquetTests
         var path = WriteParquet(stringRows);
         try
         {
-            var map = BatchEstimator.Estimate(path, "sample", "acq", method: "auto");
+            var map = BatchEstimator.Estimate(MergedDataset.Open(path), "sample", "acq", method: "auto");
             Assert.Equal("batch_1", map["S1"]);
             Assert.Equal("batch_2", map["S4"]);
         }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using MathNet.Numerics.LinearAlgebra;
 using MathNet.Numerics.LinearAlgebra.Double;
 
@@ -18,28 +17,71 @@ namespace SkylinePrism.Core.Numerics;
 /// </summary>
 public static class Pca
 {
+    /// <summary>Features per Gram-accumulation block; bounds the working matrix to nSamples x this.</summary>
+    private const int FeatureBlock = 4096;
+
     /// <summary>
     /// Compute 2-D PCA scores from a [nSamples, nFeatures] matrix. NaN cells are imputed to the
     /// feature mean (0 after standardization); constant / all-NaN features are dropped. Returns
     /// [nSamples, 2] scores (zeros if too few usable features).
     /// </summary>
     public static double[,] Fit2D(double[,] samplesByFeatures)
-    {
-        var nSamples = samplesByFeatures.GetLength(0);
-        var nFeatures = samplesByFeatures.GetLength(1);
+        => Fit2D(samplesByFeatures, transposed: false);
 
-        // Standardize each feature over its observed (non-NaN) values; impute NaN to the mean
-        // (=> 0 after centering) rather than dropping the whole feature, which would discard
+    /// <summary>
+    /// The same PCA on a <b>[nFeatures, nSamples]</b> matrix - the orientation every PRISM matrix is
+    /// already in - without materializing its transpose.
+    /// <para>
+    /// Worth having rather than calling <c>Transpose</c> first: the transpose is a full second copy of
+    /// the biggest object in the pipeline (5.7 GB on a 100-document peptide matrix), it lands on the
+    /// large object heap where it inflates the working set well past the point it is dropped, and the
+    /// loop below reads the matrix one FEATURE at a time anyway - which is the untransposed layout.
+    /// </para>
+    /// </summary>
+    public static double[,] Fit2DOfFeaturesBySamples(double[,] featuresBySamples)
+        => Fit2D(featuresBySamples, transposed: true);
+
+    private static double[,] Fit2D(double[,] matrix, bool transposed)
+    {
+        var nSamples = transposed ? matrix.GetLength(1) : matrix.GetLength(0);
+        var nFeatures = transposed ? matrix.GetLength(0) : matrix.GetLength(1);
+        var samplesByFeatures = matrix;
+
+        // Each feature is standardized over its observed (non-NaN) values below, imputing NaN to the
+        // mean (=> 0 after centering) rather than dropping the whole feature, which would discard
         // almost everything once there are many samples.
-        var keptCols = new List<double[]>();
+        //
+        // The Gram matrix is accumulated a BLOCK OF FEATURES at a time rather than by materializing
+        // the standardized matrix. X is nSamples x nFeatures, and on a 100-document cohort that is
+        // 9,600 x 75,000 - 5.7 GB, which used to be built twice over (a list of per-feature arrays,
+        // then a DenseMatrix copy of it) purely to produce a Gram matrix of nSamples x nSamples, a few
+        // tens of MB. Blocking keeps the optimized multiply while holding only
+        // nSamples x FeatureBlock at a time (~150 MB at 9,600 samples).
+        var gram = new DenseMatrix(nSamples, nSamples);
+        var block = new DenseMatrix(nSamples, FeatureBlock);
+        var col = new double[nSamples];
+        var kept = 0;
+        var inBlock = 0;
+
+        void FlushBlock()
+        {
+            if (inBlock == 0)
+                return;
+            // Xb.Xbᵀ summed over blocks IS X.Xᵀ - the product is a sum over features either way.
+            var used = inBlock == FeatureBlock
+                ? (Matrix<double>)block
+                : block.SubMatrix(0, nSamples, 0, inBlock);
+            gram.Add(used.TransposeAndMultiply(used), gram);
+            inBlock = 0;
+        }
+
         for (var j = 0; j < nFeatures; j++)
         {
-            var col = new double[nSamples];
             double sum = 0;
             var cnt = 0;
             for (var i = 0; i < nSamples; i++)
             {
-                col[i] = samplesByFeatures[i, j];
+                col[i] = transposed ? samplesByFeatures[j, i] : samplesByFeatures[i, j];
                 if (!double.IsNaN(col[i]))
                 {
                     sum += col[i];
@@ -62,22 +104,22 @@ public static class Pca
                 continue;
 
             for (var i = 0; i < nSamples; i++)
-                col[i] = double.IsNaN(col[i]) ? 0.0 : (col[i] - mean) / std;
-            keptCols.Add(col);
+            {
+                var v = double.IsNaN(col[i]) ? 0.0 : (col[i] - mean) / std;
+                block[i, inBlock] = v;
+            }
+            kept++;
+            if (++inBlock == FeatureBlock)
+                FlushBlock();
         }
+        FlushBlock();
 
         var scores = new double[nSamples, 2];
-        if (keptCols.Count < 2 || nSamples < 2)
+        if (kept < 2 || nSamples < 2)
             return scores;
-
-        var x = new DenseMatrix(nSamples, keptCols.Count);
-        for (var j = 0; j < keptCols.Count; j++)
-            for (var i = 0; i < nSamples; i++)
-                x[i, j] = keptCols[j][i];
 
         // Gram matrix X.Xᵀ (nSamples x nSamples). X = U S Vᵀ  =>  X.Xᵀ = U S² Uᵀ, so the symmetric
         // eigendecomposition gives U (eigenvectors) and S² (eigenvalues); scores = U * S.
-        var gram = x.TransposeAndMultiply(x);
         var evd = gram.Evd(Symmetricity.Symmetric);
         var evals = evd.EigenValues;   // ascending
         var evecs = evd.EigenVectors;  // columns are the eigenvectors (= U)

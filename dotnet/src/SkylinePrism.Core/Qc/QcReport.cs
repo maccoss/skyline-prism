@@ -133,9 +133,11 @@ public static class QcReport
         sections.Add(new PlotSection($"{cap} PCA: Before vs After", new List<PlotImage>
         {
             Img("Before (raw rollup)", $"{level}_pca_before",
-                () => PlotRenderer.PcaScatter(Pca.Fit2D(Transpose(raw.Values)), typeLabels, "Before")),
+                () => PlotRenderer.PcaScatter(
+                    Pca.Fit2DOfFeaturesBySamples(raw.Values), typeLabels, "Before")),
             Img("After (normalized + corrected)", $"{level}_pca_after",
-                () => PlotRenderer.PcaScatter(Pca.Fit2D(Transpose(corrected.Values)), typeLabels, "After")),
+                () => PlotRenderer.PcaScatter(
+                    Pca.Fit2DOfFeaturesBySamples(corrected.Values), typeLabels, "After")),
         }));
 
         if (refIdx.Count >= 2)
@@ -361,28 +363,32 @@ td:first-child, th:first-child { text-align: left; }
 
     private sealed record Matrix(double[,] Values, List<string> SampleCols, int RowCount, double[]? MeanRt);
 
+    /// <summary>
+    /// The feature x sample matrix, read one column at a time.
+    /// <para>
+    /// Deliberately NOT <see cref="ParquetTable.Load"/>: that materializes every sample column as a
+    /// nullable <c>double?[]</c> - 16 bytes per cell - and the matrix below then copies it into 8 more,
+    /// so both are live at ~24 bytes per cell. On a 100-document cohort (75k peptides x ~9,600 runs)
+    /// that is ~17 GB for a report. Column-at-a-time costs the matrix plus one column.
+    /// </para>
+    /// </summary>
     private static Matrix LoadMatrix(string path, IReadOnlyList<string> metaCols)
     {
-        var table = ParquetTable.Load(path);
+        using var reader = ParquetColumnReader.Open(path);
         var meta = new HashSet<string>(metaCols, StringComparer.Ordinal);
-        var sampleCols = table.ColumnNames.Where(c => !meta.Contains(c)).ToList();
-        var n = table.RowCount;
+        var sampleCols = reader.ColumnNames.Where(c => !meta.Contains(c)).ToList();
+        var n = reader.RowCount;
         var m = new double[n, sampleCols.Count];
         for (var j = 0; j < sampleCols.Count; j++)
         {
-            var col = table.GetDouble(sampleCols[j]);
+            var col = reader.ReadDoubles(sampleCols[j]);
             for (var i = 0; i < n; i++)
-                m[i, j] = col[i] ?? double.NaN;
+                m[i, j] = col[i];
         }
 
         double[]? meanRt = null;
-        if (table.HasColumn(PepMetaRt))
-        {
-            var rt = table.GetDouble(PepMetaRt);
-            meanRt = new double[n];
-            for (var i = 0; i < n; i++)
-                meanRt[i] = rt[i] ?? double.NaN;
-        }
+        if (reader.ColumnNames.Contains(PepMetaRt, StringComparer.Ordinal))
+            meanRt = reader.ReadDoubles(PepMetaRt);
         return new Matrix(m, sampleCols, n, meanRt);
     }
 
@@ -395,17 +401,6 @@ td:first-child, th:first-child { text-align: left; }
             for (var j = 0; j < c; j++)
                 m[i, j] = Math.Log2(linear.Values[i, j]);
         return new Matrix(m, linear.SampleCols, n, linear.MeanRt);
-    }
-
-    private static double[,] Transpose(double[,] a)
-    {
-        var n = a.GetLength(0);
-        var c = a.GetLength(1);
-        var t = new double[c, n];
-        for (var i = 0; i < n; i++)
-            for (var j = 0; j < c; j++)
-                t[j, i] = a[i, j];
-        return t;
     }
 
     /// <summary>Spread (max - min) of the per-sample median LOG2 abundance; 0 when no data.</summary>

@@ -1,3 +1,4 @@
+using SkylinePrism.Core.IO;
 using System;
 using System.IO;
 using System.Linq;
@@ -85,12 +86,17 @@ public class CliIntegrationTests
     public void Merge_ProducesParquet()
     {
         var outDir = TempDir();
-        var merged = Path.Combine(outDir, "merged.parquet");
+        // A ".parquet" -o is still accepted (it was the contract before the merge partitioned), but the
+        // data lands in a directory of that name without the extension.
+        var requested = Path.Combine(outDir, "merged.parquet");
+        var actual = Path.Combine(outDir, "merged");
         try
         {
-            var (code, output) = Invoke("merge", Input1, Input2, "-o", merged);
+            var (code, output) = Invoke("merge", Input1, Input2, "-o", requested);
             Assert.Equal(0, code);
-            Assert.True(File.Exists(merged));
+            Assert.False(File.Exists(requested));
+            Assert.True(MergedDataset.Exists(actual), "merge produced no dataset");
+            Assert.NotEmpty(MergedDataset.Open(actual).Partitions);
             Assert.Contains("rows", output);
         }
         finally { Cleanup(outDir); }

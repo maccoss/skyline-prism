@@ -45,7 +45,7 @@ public class MergedParquetReaderTests
         var path = WriteParquet();
         try
         {
-            Assert.Equal(new[] { "S1", "S2" }, MergedParquetReader.GetSortedSamples(path, "samp"));
+            Assert.Equal(new[] { "S1", "S2" }, MergedParquetReader.GetSortedSamples(MergedDataset.Open(path), "samp"));
         }
         finally { File.Delete(path); }
     }
@@ -57,7 +57,7 @@ public class MergedParquetReaderTests
         try
         {
             var blocks = MergedParquetReader
-                .StreamPeptideBlocks(path, Cols, includeProductMz: true, includeShapeCorr: true)
+                .StreamPeptideBlocks(MergedDataset.Open(path), Cols, includeProductMz: true, includeShapeCorr: true)
                 .ToList();
 
             Assert.Equal(2, blocks.Count);
@@ -81,7 +81,7 @@ public class MergedParquetReaderTests
         var path = WriteParquet();
         try
         {
-            var a = MergedParquetReader.StreamPeptideBlocks(path, Cols).First(x => x.Peptide == "PEPA");
+            var a = MergedParquetReader.StreamPeptideBlocks(MergedDataset.Open(path), Cols).First(x => x.Peptide == "PEPA");
             Assert.Empty(a.ProductMz);
             Assert.Empty(a.ShapeCorrelation);
             Assert.Equal(2, a.Area.Count); // still reads the core columns
