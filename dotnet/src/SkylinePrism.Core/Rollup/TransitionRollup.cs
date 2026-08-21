@@ -43,10 +43,6 @@ public sealed class TransitionRollup
         CancellationToken cancellationToken = default)
     {
         samples ??= MergedParquetReader.GetSortedSamples(dataset, cols.Sample, cfg.MemoryBudgetMb);
-        var sampleIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var i = 0; i < samples.Count; i++)
-            sampleIndex[samples[i]] = i;
-
         var isLibrary = cfg.Method == TransitionRollupMethod.LibraryAssist;
         IRollupMethod? method = cfg.Method switch
         {
@@ -92,10 +88,10 @@ public sealed class TransitionRollup
             var dop = ResolveDop(cfg.MaxDegreeOfParallelism);
 
             PeptideResult? Process(PeptideBlock block) => isLibrary
-                ? ProcessPeptideLibrary(block, cfg, samples.Count, sampleIndex, library!)
+                ? ProcessPeptideLibrary(block, cfg, samples.Count, library!)
                 : topNCorr
-                    ? ProcessPeptideTopNCorr(block, cfg, samples.Count, sampleIndex)
-                    : ProcessPeptide(block, cfg, samples.Count, sampleIndex, method!, captureResiduals);
+                    ? ProcessPeptideTopNCorr(block, cfg, samples.Count)
+                    : ProcessPeptide(block, cfg, samples.Count, method!, captureResiduals);
 
             if (dop <= 1)
             {
@@ -141,15 +137,20 @@ public sealed class TransitionRollup
         // Partitions are independent, so reading several at once is the obvious fix and was tried.
         //
         // It is NOT SAFE with this DuckDB binding, and the failure is memory corruption rather than an
-        // exception. DuckDB.NET hands out refcounted references to a cached database instance keyed by
-        // connection string (Connection.ConnectionManager), so every "Data Source=:memory:" in the
-        // process is the same instance. When one reader thread closes its connection the refcount can
-        // reach zero and the instance is torn down while another thread is still streaming from it -
-        // an AccessViolationException within seconds, surfacing at whatever allocated next. A distinct
-        // instance per reader would avoid it, but the binding has no in-memory naming (":memory:name"
-        // is parsed as a file path), leaving only file-backed databases as a workaround. Working around
-        // a use-after-free in a dependency, in the stage that computes the quantities, is not worth a
-        // wall-clock win: the failure mode is wrong numbers as readily as a crash.
+        // exception. Four configurations were tried and all crash:
+        //   * a connection per partition, concurrent      -> AccessViolationException, ~2 runs in 3
+        //   * every connection opened up front and none closed mid-stage, with a keepalive connection
+        //     pinning the instance refcount above zero    -> segfault
+        //   * genuinely isolated FILE-BACKED databases,
+        //     one per reader (distinct cache keys)        -> segfault
+        //   * DuckDB.NET 1.5.5 rather than 1.5.3          -> segfault
+        // The first suggested the cause was Connection.ConnectionManager tearing a shared refcounted
+        // instance down under a live reader; the second and third rule that out, since it fails with no
+        // teardown possible and no shared instance at all. Concurrent streaming readers are simply
+        // unsafe here, and a version bump does not fix it.
+        //
+        // Not worked around, because this is the stage that computes the reported quantities and the
+        // failure mode is wrong numbers as readily as a crash.
         //
         // dotnet/STAGE2_THROUGHPUT.md has the plan for lifting this ceiling - including the cheap
         // measurement that should come before any of it, and the bar this has to clear to ship.
@@ -238,7 +239,6 @@ public sealed class TransitionRollup
         PeptideBlock block,
         TransitionRollupConfig cfg,
         int nSamples,
-        IReadOnlyDictionary<string, int> sampleIndex,
         IRollupMethod method,
         bool captureResiduals)
     {
@@ -316,7 +316,7 @@ public sealed class TransitionRollup
     /// top-N transitions by median shape correlation.
     /// </summary>
     private static PeptideResult? ProcessPeptideTopNCorr(
-        PeptideBlock block, TransitionRollupConfig cfg, int nSamples, IReadOnlyDictionary<string, int> sampleIndex)
+        PeptideBlock block, TransitionRollupConfig cfg, int nSamples)
     {
         var tidIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         var rowIdxs = new List<int>(block.RowCount);
@@ -381,7 +381,6 @@ public sealed class TransitionRollup
         PeptideBlock block,
         TransitionRollupConfig cfg,
         int nSamples,
-        IReadOnlyDictionary<string, int> sampleIndex,
         SpectralLibrary library)
     {
         var tidIndex = new Dictionary<string, int>(StringComparer.Ordinal);

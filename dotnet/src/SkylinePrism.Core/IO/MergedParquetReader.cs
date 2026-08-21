@@ -138,10 +138,10 @@ public static class MergedParquetReader
     /// to render byte-identically to the C# concatenation it replaces. It does for the types that
     /// occur: charges are INTEGER in a Skyline export, and <c>CAST(2 AS VARCHAR)</c> is <c>"2"</c> just
     /// as <c>2.ToString(InvariantCulture)</c> is; a VARCHAR charge column (Skyline writes <c>#N/A</c>
-    /// into numeric columns) casts to itself. A FLOATING-POINT charge column would NOT match -
-    /// DuckDB renders <c>2.0</c> where .NET renders <c>2</c> - so that case falls back to composing in
-    /// C#, at the old cost. Charges are not floating point in any export seen, but "not seen" is not
-    /// "cannot happen", and a silently changed identifier is worse than a slower read.
+    /// into numeric columns) casts to itself. A FLOATING-POINT charge column is the one that would not
+    /// match - DuckDB renders <c>2.0</c> where .NET renders <c>2</c> - so <see cref="ChargePart"/>
+    /// casts that case through BIGINT first. That is exact because charge states are whole numbers
+    /// whatever type an export stores them in; it is not a general double-to-string equivalence.
     /// </para>
     /// </summary>
     private static string TransitionIdSql(MergedDataset dataset, SkylineColumns cols)
@@ -178,7 +178,10 @@ public static class MergedParquetReader
         }
         catch (Exception)
         {
-            return false; // unreadable schema: the COPY below will fail with a better message
+            // Unreadable schema. Assume not floating point, which is the overwhelmingly common case and
+            // the same expression the pre-SQL code produced; if the dataset is genuinely broken, the
+            // read below fails with a better message than a schema probe could give.
+            return false;
         }
     }
 
@@ -190,6 +193,14 @@ public static class MergedParquetReader
     /// </summary>
     private static string SampleIndexSql(IReadOnlyList<string> samples)
     {
+        // An empty list would emit "VALUES )" and fail as a SQL syntax error deep in the read, which is
+        // a terrible way to learn that the merged data has no usable sample column. Say so here.
+        if (samples.Count == 0)
+            throw new InvalidOperationException(
+                "No samples were found in the merged data, so the transition rollup has nothing to roll "
+                + "up to. Check that the sample column was detected correctly (see the 'Columns:' line "
+                + "in the run log) and that the input reports contain replicate names.");
+
         var sb = new StringBuilder("(SELECT * FROM (VALUES ");
         for (var i = 0; i < samples.Count; i++)
         {
