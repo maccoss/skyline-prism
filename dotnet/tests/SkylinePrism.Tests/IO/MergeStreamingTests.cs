@@ -178,7 +178,8 @@ public class MergeStreamingTests
             var cols = SkylineColumns.Detect(
                 ParquetTable.ReadColumnNames(dataset.RepresentativeFile()).ToHashSet());
 
-            var blocks = MergedParquetReader.StreamPeptideBlocks(dataset, cols).ToList();
+            var blocks = MergedParquetReader.StreamPeptideBlocks(
+                dataset, cols, MergedParquetReader.GetSortedSamples(dataset, cols.Sample)).ToList();
 
             Assert.NotEmpty(blocks);
             // One block per peptide - the failure a split peptide would produce.
@@ -235,7 +236,8 @@ public class MergeStreamingTests
             Assert.Equal(legacy, dataset.RepresentativeFile());
             var cols = SkylineColumns.Detect(
                 ParquetTable.ReadColumnNames(dataset.RepresentativeFile()).ToHashSet());
-            Assert.NotEmpty(MergedParquetReader.StreamPeptideBlocks(dataset, cols).ToList());
+            Assert.NotEmpty(MergedParquetReader.StreamPeptideBlocks(
+                dataset, cols, MergedParquetReader.GetSortedSamples(dataset, cols.Sample)).ToList());
         }
         finally
         {

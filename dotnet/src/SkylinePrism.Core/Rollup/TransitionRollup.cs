@@ -100,7 +100,7 @@ public sealed class TransitionRollup
             if (dop <= 1)
             {
                 foreach (var block in MergedParquetReader.StreamPeptideBlocks(
-                    dataset, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
+                    dataset, cols, samples, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
                     memoryBudgetMb: cfg.MemoryBudgetMb))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -113,7 +113,7 @@ public sealed class TransitionRollup
             }
             else
             {
-                RunParallel(dataset, cols, isLibrary, topNCorr, dop, cfg.MemoryBudgetMb,
+                RunParallel(dataset, cols, samples, isLibrary, topNCorr, dop, cfg.MemoryBudgetMb,
                     Process, sink, ref nFiltered, cancellationToken);
             }
 
@@ -128,9 +128,9 @@ public sealed class TransitionRollup
     }
 
     private static void RunParallel(
-        MergedDataset dataset, SkylineColumns cols, bool isLibrary, bool topNCorr, int dop,
-        int memoryBudgetMb, Func<PeptideBlock, PeptideResult?> process, PeptideStreamSink sink,
-        ref int nFiltered, CancellationToken cancellationToken)
+        MergedDataset dataset, SkylineColumns cols, IReadOnlyList<string> samples, bool isLibrary,
+        bool topNCorr, int dop, int memoryBudgetMb, Func<PeptideBlock, PeptideResult?> process,
+        PeptideStreamSink sink, ref int nFiltered, CancellationToken cancellationToken)
     {
         // ONE producer -> bounded queue -> N consumers -> single writer (this thread). The bounded
         // capacities cap the number of in-flight peptides so RAM stays flat.
@@ -163,7 +163,7 @@ public sealed class TransitionRollup
             try
             {
                 foreach (var b in MergedParquetReader.StreamPeptideBlocks(
-                    dataset, cols, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
+                    dataset, cols, samples, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
                     memoryBudgetMb: memoryBudgetMb))
                 {
                     // Stopping the producer drains the queue and ends the consumers, so one check here
@@ -247,10 +247,10 @@ public sealed class TransitionRollup
         var rowIdxs = new List<int>(block.RowCount);
         for (var i = 0; i < block.RowCount; i++)
         {
-            if (cfg.ExcludePrecursor && block.Ion[i].StartsWith("precursor", StringComparison.Ordinal))
+            if (cfg.ExcludePrecursor && block.IsPrecursor[i])
                 continue;
             rowIdxs.Add(i);
-            var tid = TransitionId(block, i);
+            var tid = block.TransitionId[i];
             if (!tidIndex.ContainsKey(tid))
             {
                 tidIndex[tid] = tidIndex.Count;
@@ -271,15 +271,13 @@ public sealed class TransitionRollup
         var rtBuf = new List<double>(rowIdxs.Count);
         foreach (var i in rowIdxs)
         {
-            var ti = tidIndex[TransitionId(block, i)];
-            if (sampleIndex.TryGetValue(block.Sample[i], out var si))
+            var ti = tidIndex[block.TransitionId[i]];
+            var si = block.SampleIndex[i];
+            var area = block.Area[i];
+            if (!filled[ti, si] && !double.IsNaN(area))
             {
-                var area = block.Area[i];
-                if (!filled[ti, si] && !double.IsNaN(area))
-                {
-                    matrix[ti, si] = area;
-                    filled[ti, si] = true;
-                }
+                matrix[ti, si] = area;
+                filled[ti, si] = true;
             }
             rtBuf.Add(block.RetentionTime[i]);
         }
@@ -324,10 +322,10 @@ public sealed class TransitionRollup
         var rowIdxs = new List<int>(block.RowCount);
         for (var i = 0; i < block.RowCount; i++)
         {
-            if (cfg.ExcludePrecursor && block.Ion[i].StartsWith("precursor", StringComparison.Ordinal))
+            if (cfg.ExcludePrecursor && block.IsPrecursor[i])
                 continue;
             rowIdxs.Add(i);
-            var tid = TransitionId(block, i);
+            var tid = block.TransitionId[i];
             if (!tidIndex.ContainsKey(tid))
                 tidIndex[tid] = tidIndex.Count;
         }
@@ -347,23 +345,21 @@ public sealed class TransitionRollup
         var rtBuf = new List<double>(rowIdxs.Count);
         foreach (var i in rowIdxs)
         {
-            var ti = tidIndex[TransitionId(block, i)];
-            if (sampleIndex.TryGetValue(block.Sample[i], out var si))
+            var ti = tidIndex[block.TransitionId[i]];
+            var si = block.SampleIndex[i];
+            var area = block.Area[i];
+            if (!filled[ti, si] && !double.IsNaN(area))
             {
-                var area = block.Area[i];
-                if (!filled[ti, si] && !double.IsNaN(area))
+                matrix[ti, si] = area;
+                filled[ti, si] = true;
+            }
+            if (i < block.ShapeCorrelation.Count)
+            {
+                var sc = block.ShapeCorrelation[i];
+                if (!shapeFilled[ti, si] && !double.IsNaN(sc))
                 {
-                    matrix[ti, si] = area;
-                    filled[ti, si] = true;
-                }
-                if (i < block.ShapeCorrelation.Count)
-                {
-                    var sc = block.ShapeCorrelation[i];
-                    if (!shapeFilled[ti, si] && !double.IsNaN(sc))
-                    {
-                        shape[ti, si] = sc;
-                        shapeFilled[ti, si] = true;
-                    }
+                    shape[ti, si] = sc;
+                    shapeFilled[ti, si] = true;
                 }
             }
             rtBuf.Add(block.RetentionTime[i]);
@@ -394,14 +390,14 @@ public sealed class TransitionRollup
         var rowIdxs = new List<int>(block.RowCount);
         for (var i = 0; i < block.RowCount; i++)
         {
-            if (cfg.ExcludePrecursor && block.Ion[i].StartsWith("precursor", StringComparison.Ordinal))
+            if (cfg.ExcludePrecursor && block.IsPrecursor[i])
                 continue;
             rowIdxs.Add(i);
-            var tid = TransitionId(block, i);
+            var tid = block.TransitionId[i];
             if (!tidIndex.ContainsKey(tid))
             {
                 tidIndex[tid] = tidIndex.Count;
-                tidCharge.Add(ParseChargeOrDefault(block.PrecursorCharge[i]));
+                tidCharge.Add(block.PrecursorCharge[i]);
                 tidMz.Add(i < block.ProductMz.Count ? block.ProductMz[i] : double.NaN);
             }
         }
@@ -419,15 +415,13 @@ public sealed class TransitionRollup
         var rtBuf = new List<double>(rowIdxs.Count);
         foreach (var i in rowIdxs)
         {
-            var ti = tidIndex[TransitionId(block, i)];
-            if (sampleIndex.TryGetValue(block.Sample[i], out var si))
+            var ti = tidIndex[block.TransitionId[i]];
+            var si = block.SampleIndex[i];
+            var area = block.Area[i];
+            if (!filled[ti, si] && !double.IsNaN(area))
             {
-                var area = block.Area[i];
-                if (!filled[ti, si] && !double.IsNaN(area))
-                {
-                    matrix[ti, si] = area;
-                    filled[ti, si] = true;
-                }
+                matrix[ti, si] = area;
+                filled[ti, si] = true;
             }
             rtBuf.Add(block.RetentionTime[i]);
         }
@@ -484,15 +478,10 @@ public sealed class TransitionRollup
         return new PeptideResult(block.Peptide, nt, meanRt, vals, null);
     }
 
-    private static int ParseChargeOrDefault(string s)
-    {
-        if (int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var c))
-            return c;
-        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (int)d : 0;
-    }
-
-    private static string TransitionId(PeptideBlock block, int i)
-        => block.Ion[i] + "_z" + block.PrecursorCharge[i] + "_" + block.ProductCharge[i];
+    // ParseChargeOrDefault and TransitionId used to live here, composing the id and parsing the charge
+    // from three string columns on every transition row. Both moved into the reader's SQL, where they
+    // cost one expression per row instead of three string allocations - see
+    // MergedParquetReader.TransitionIdSql for why the rendering has to stay byte-identical.
 
     /// <summary>
     /// Batches peptide (and residual) rows and flushes them to the streaming writers every
