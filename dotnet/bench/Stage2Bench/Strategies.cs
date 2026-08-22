@@ -176,11 +176,17 @@ public static class Strategies
                 for (var i = 0; i < pep.Length; i++)
                 {
                     rows++;
-                    if (cur is null || !string.Equals(cur, pep[i], StringComparison.Ordinal))
+                    // Normalize null exactly as the other arms do. Left as-is, a null peptide would set
+                    // `cur` back to null, which is also this loop's first-row sentinel - so every row
+                    // after it would count as a new peptide and this arm would silently disagree with
+                    // the others on peptides and values. That would break the cross-arm check rather
+                    // than be caught by it.
+                    var key = pep[i] ?? "";
+                    if (cur is null || !string.Equals(cur, key, StringComparison.Ordinal))
                     {
                         values += Close(block);
                         peptides++;
-                        cur = pep[i];
+                        cur = key;
                     }
                     block.Tid.Add(tid[i] ?? "");
                     block.Samp.Add(samp[i] ?? "");
