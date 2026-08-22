@@ -2,8 +2,9 @@
 
 Status: unreleased, on top of dotnet-v26.12.0. Stage 2 (transition -> peptide rollup) is bounded in memory and no longer
 the pathological case it was, but it is **single-threaded, and will stay that way until the DuckDB
-binding can be read from concurrently**. This records what was measured, so the next person does not
-re-derive it.
+binding can be read from concurrently**. Two candidate replacements for its reader were built and
+measured, and **both lose to what ships** - see the verdict below. This records what was measured, so
+the next person does not re-derive it.
 
 ## What changed since v26.12.0
 
@@ -57,31 +58,77 @@ This is a segfault, not an exception - it cannot be caught, retried or contained
 computes the reported quantities, the same corruption could produce wrong numbers as easily as a crash.
 That is why it is not worked around.
 
-## What is actually left
+## Verdict: leave Stage 2 as it is
 
-**1. Sidestep the row API - MEASURED, and it wins.** Have DuckDB `COPY` a partition's narrow
-projection to a temp parquet, then read that with Parquet.Net a row group at a time (whole column
-vectors, no per-cell marshalling). On one 15.5M-row partition:
+Both candidate replacements were built as benchmark arms and **both lose to what ships**. Measured with
+`bench/Stage2Bench` on an 11.4M-row partition, three interleaved repeats, all arms accumulating the same
+11,400,000 values into per-peptide blocks:
+
+| arm | median | spread | allocated | vs today |
+|---|---|---|---|---|
+| **duckdb-stream (ships today)** | **3.3 s** | 22% | **2.37 GB** | **1.00x** |
+| nosort-managed | 9.1 s | 6% | 5.49 GB | 0.36x - **2.8x slower** |
+| copy-then-read (the sketch) | 3.5 s | 22% | 2.45 GB | 0.94x |
+
+Read those honestly: `copy-then-read`'s 0.94x sits inside both arms' run-to-run spread, so against what
+ships it is a **tie**, not a loss - it simply does not win, which is enough to reject a structural
+change. The no-sort gap is far outside the spread (and that arm had the *tightest* spread of the three,
+6%), so its 2.8x penalty is real and not a contention artefact.
+
+Why the no-sort idea fails is worth keeping, because it looks so attractive on paper: with no SQL in the
+path, it has to compose the transition id **in C# per row** - precisely the cost that was moved into the
+query in dotnet-v26.13.0. Bypassing DuckDB means giving up the SQL-side preprocessing that makes the
+current reader fast, and the dictionary of live per-peptide blocks costs 2.3x the allocation on top.
+That is structural, not a tuning problem.
+
+> [!WARNING]
+> The first run of this comparison reported the no-sort arm at **3.12x faster**. That was wrong: the arm
+> stored a row-group-local index and discarded the values, so it was not doing the work the other arms
+> were. Rows and peptides matched, so the correctness check passed. The harness now also counts
+> **values accumulated**, which is what caught it - and any new arm must keep that figure equal or it is
+> not measuring the same thing. A faster arm that does less work is the easiest benchmark mistake to
+> make and the hardest to notice, because the number it produces is exactly the number you were hoping
+> for.
+
+The earlier per-stage figures below (4.7 s / 2.7 s / 1.6 s) came from that flawed comparison, where no
+arm accumulated anything. They are kept for the decomposition they show - the sort costs ~2.7 s and the
+marshalling ~2 s - but the conclusion drawn from them was wrong.
+
+## The options, and why none of them are open
+
+**1. Sidestep the row API - MEASURED, and it does not pay.** Two variants were tried. Both are described
+here because both looked compelling on paper and the reasons they fail are not obvious.
+
+*Two-phase (`copy-then-read`).* Have DuckDB `COPY` a partition's narrow projection to a temp parquet,
+then read that back with Parquet.Net a row group at a time - whole column vectors, no per-cell
+marshalling. Decomposed on one 15.5M-row partition:
 
 | path | sec | Mrow/s |
 |---|---|---|
 | A: DuckDB streaming read (what ships today) | 4.7 | 3.30 |
 | B1: `COPY` narrow projection to parquet | 2.7 | 5.74 |
-| B2: Parquet.Net row-group read + block assembly | **1.6** | **9.57** |
+| B2: Parquet.Net row-group read + block assembly | 1.6 | 9.57 |
 
-B is already slightly cheaper than A end to end (4.3 s against 4.7 s) *before* any parallelism - note
-that B1, which sorts AND writes to disk, beats A, which sorts and streams: the row-by-row marshalling
-really is that expensive. The prize is B2: **2.9x faster than A, and pure managed code**, so it can run
-on several threads with no concurrent DuckDB anywhere.
+The B2 line is what made this attractive: pure managed code, so it could run on several threads with no
+concurrent DuckDB anywhere. But **B1 + B2 together measure 0.94x of A** once both arms build the same
+blocks - the `COPY` gives back everything the faster read wins. Parallelising phase 2 would still help
+in principle, but it would be parallelising the *cheap* half: phase 1 is serial and is now most of the
+cost, so the ceiling is ~1.06x even with infinite threads. That is not worth a structural change to
+Stage 2, and it doubles transient disk.
 
-Sketch: phase 1 `COPY`s partitions one at a time (DuckDB parallelizes the sort internally), phase 2
-reads the temp files on K threads into the existing `BlockingCollection`. The two phases pipeline -
-partition k can be read while k+1 is being written - so the floor is roughly the phase-1 cost, about
-1.7x better than today on the read side. Temp files are deleted as they are consumed, so the extra disk
-is one partition's narrow projection at a time, not a second copy of the cohort.
+*No sort (`nosort-managed`).* Skip the `ORDER BY` entirely, read the partition as it lies and group rows
+by peptide in a dictionary. This removes the sort - the single most expensive operation in the arm - so
+it should be the fastest thing available. It is **2.8x slower**, for two reasons that only show up when
+it is made to do the real work:
 
-Not yet implemented; it is a real change to Stage 2's structure and deserves its own PR and its own
-end-to-end verification.
+- With no SQL in the path, the transition id must be composed in C# per row. That is exactly the cost
+  moved into the query in dotnet-v26.13.0, being paid again.
+- Without a sort, **every** peptide's block is live until the partition finishes, where the sorted arms
+  hold one. 5.49 GB allocated against 2.37 GB, and the dictionary and its 4,549 x 4 growing lists cost
+  more than the sort they replaced.
+
+Both are dead ends, and the second is a useful reminder that removing the obviously expensive operation
+can cost more than it saves.
 
 **2. Re-tune partition sizing - MEASURED, no change warranted.** Full pipeline on the 2-plate cohort,
 varying `processing.merge_memory_mb` (which is what sets partition size):
@@ -113,9 +160,9 @@ prism merge <report1.parquet> <report2.parquet> -o D:/bench/merged     # build a
 dotnet run -c Release --project dotnet/bench/Stage2Bench -- D:/bench/merged 3
 ```
 
-It runs three arms - `duckdb-stream` (what ships), `nosort-managed` (item 1's cheaper variant: no sort,
-group in a dictionary) and `copy-then-read` (item 1 as sketched) - and reports the median of interleaved
-repeats.
+It runs three arms - `duckdb-stream` (what ships), `nosort-managed` (no sort, group in a dictionary) and
+`copy-then-read` (DuckDB `COPY` to a temp parquet, then Parquet.Net) - and reports the median of
+interleaved repeats.
 
 Two properties matter more than the numbers it prints:
 
@@ -126,12 +173,14 @@ Two properties matter more than the numbers it prints:
   apart here; the cause was other software starting in between, and the first explanation reached for
   was page-cache warmth. Hours of analysis were built on that gap before anyone read the process list.
 
-It also checks that the arms agree on rows and peptides before comparing their timings, because a
-faster arm that reads different data is not a faster arm.
+It also checks that the arms agree on rows, peptides **and values accumulated** before comparing their
+timings. A faster arm that reads different data is not a faster arm - and neither is one that reads the
+same rows but does less with them, which is the mistake the values column exists to catch. Any new arm
+must build the same per-peptide blocks as the others.
 
 The project is deliberately **not** in `SkylinePrism.sln`: CI builds the solutions by name, so the
 harness stays out of the critical path and the shipped package while remaining in the repo and
-runnable. Its package versions are pinned to match `SkylinePrism.Core` — keep them in step, or it stops
+runnable. Its package versions are pinned to match `SkylinePrism.Core` - keep them in step, or it stops
 measuring the engines the pipeline actually uses.
 
 ## Verification bar (learned the hard way)

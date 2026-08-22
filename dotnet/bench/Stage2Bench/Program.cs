@@ -112,7 +112,7 @@ public static class Program
     private static void Report(List<Timing> timings, int repeats)
     {
         Console.WriteLine();
-        Console.WriteLine($"{"arm",-18} {"median s",9} {"spread",9} {"alloc GB",9} {"rows",14} {"peptides",10}");
+        Console.WriteLine($"{"arm",-18} {"median s",9} {"spread",9} {"alloc GB",9} {"rows",14} {"peptides",10} {"values",14}");
         var baseline = double.NaN;
         foreach (var g in timings.GroupBy(t => t.Arm))
         {
@@ -123,24 +123,25 @@ public static class Program
             var spread = secs.Count > 1 ? (secs[^1] - secs[0]) / median : 0;
             var first = g.First();
             Console.WriteLine($"{g.Key,-18} {median,9:n1} {spread,8:p0} {g.Max(t => t.AllocGb),9:n2} "
-                + $"{first.Result.Rows,14:n0} {first.Result.Peptides,10:n0}"
+                + $"{first.Result.Rows,14:n0} {first.Result.Peptides,10:n0} {first.Result.Values,14:n0}"
                 + (median > 0 && !double.IsNaN(baseline) ? $"   {baseline / median,5:n2}x" : ""));
         }
 
         // Correctness before speed: arms that disagree on the data are not comparable.
         var rows = timings.Select(t => t.Result.Rows).Distinct().ToList();
         var peps = timings.Select(t => t.Result.Peptides).Distinct().ToList();
+        var vals = timings.Select(t => t.Result.Values).Distinct().ToList();
         Console.WriteLine();
-        if (rows.Count > 1 || peps.Count > 1)
+        if (rows.Count > 1 || peps.Count > 1 || vals.Count > 1)
         {
             Console.WriteLine("*** ARMS DISAGREE — timings are not comparable ***");
             foreach (var g in timings.GroupBy(t => t.Arm))
                 Console.WriteLine($"    {g.Key,-18} rows {g.First().Result.Rows:n0}  "
-                    + $"peptides {g.First().Result.Peptides:n0}");
+                    + $"peptides {g.First().Result.Peptides:n0}  values {g.First().Result.Values:n0}");
         }
         else
         {
-            Console.WriteLine($"arms agree: {rows[0]:n0} rows, {peps[0]:n0} peptides");
+            Console.WriteLine($"arms agree: {rows[0]:n0} rows, {peps[0]:n0} peptides, {vals[0]:n0} values accumulated");
         }
 
         var contended = timings.Count(t => t.Load.Contended);

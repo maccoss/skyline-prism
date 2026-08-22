@@ -31,4 +31,13 @@ as the GitHub Release description and fails if it is missing.
   `peptides_rollup.parquet`, `proteins_raw.parquet` and `corrected_proteins.parquet` bit-identical and
   all 662,339 `peptide_residuals` transition ids unchanged.
 
+- **The transition rollup stays single-threaded, and that is now a measured result rather than an open
+  question.** It is the largest stage of a run (~58% of wall clock on a 2-plate cohort), so two ways of
+  replacing its reader were built and benchmarked against the shipping one on a real 11.4M-row
+  partition: skipping the sort and grouping rows in memory, and writing a narrow projection to a temp
+  parquet to read back in bulk. Grouping without a sort measured **2.8x slower** and used 2.3x the
+  memory; the two-phase read tied with what ships. Neither justified the change, so the rollup is
+  unchanged - but large-cohort users can now take its single-threadedness as a known ceiling rather
+  than an oversight. `dotnet/STAGE2_THROUGHPUT.md` records the numbers.
+
 ## Breaking Changes
