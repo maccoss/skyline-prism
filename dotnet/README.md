@@ -290,6 +290,23 @@ optimizing anything here, and before assuming a plausible theory about where the
 Runs report per-stage elapsed time and a sorted summary in the run log, so a slow cohort can be
 diagnosed from the artifact a user already has.
 
+### Measuring
+
+`bench/Stage2Bench` compares the candidate Stage 2 read strategies on one partition of a real merged
+dataset. It is intentionally outside `SkylinePrism.sln`, so it never reaches CI or the shipped package:
+
+```bash
+prism merge <report1.parquet> <report2.parquet> -o D:/bench/merged
+dotnet run -c Release --project dotnet/bench/Stage2Bench -- D:/bench/merged 3
+```
+
+It interleaves its arms rather than running them in blocks, checks that they agree on rows and peptides
+before comparing timings, and labels any run during which other software was competing for the machine.
+That last part is not decoration: an identical configuration measured 2.07 min and 3.70 min hours apart
+here, the cause was two Skyline instances that had started in between, and several hours of analysis
+were built on the gap before anyone read the process list. **Ratios survive a busy machine; absolute
+throughput numbers do not.**
+
 ## Package the Skyline external tool
 
 Use the ship gate, which tests -> packages -> launch-verifies (always test before shipping):

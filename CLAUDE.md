@@ -949,6 +949,20 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >
 > Stage 2 is consequently single-threaded, and the largest stage: on a 2-plate cohort it is ~58% of
 > wall clock (1m21s of 2m20s). That is a measured ceiling, not a mystery.
+
+> [!IMPORTANT]
+> **Benchmarking here: check the machine before believing a number.** Absolute throughput figures from
+> this repo have been wrong more than once because other software was running - an identical
+> configuration measured 2.07 min and 3.70 min hours apart, and the first explanation reached for was
+> page-cache warmth rather than the process list. Two rules follow:
+>
+> - **Prefer ratios to absolute rates.** Contention hits interleaved A/B arms roughly equally, so a
+>   comparison survives a busy machine; a MB/s quoted across sessions does not.
+> - **Compare against the previous release's binary**, built from its tag in a `git worktree`, rather
+>   than against remembered numbers. It takes two minutes and removes the doubt entirely.
+>
+> `dotnet/bench/Stage2Bench` does both automatically (interleaved arms, load sampling, contention
+> labelling, and a cross-arm correctness check) - use it rather than hand-rolling a timer.
 > **`dotnet/STAGE2_THROUGHPUT.md` carries the measurements and the remaining options** - including the
 > one that is measured to win (bypass the row-by-row reader entirely: DuckDB writes a partition's
 > narrow projection, Parquet.Net reads it back 2.9x faster in pure managed code, which parallelizes
