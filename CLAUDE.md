@@ -961,12 +961,18 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 > - **Compare against the previous release's binary**, built from its tag in a `git worktree`, rather
 >   than against remembered numbers. It takes two minutes and removes the doubt entirely.
 >
-> `dotnet/bench/Stage2Bench` does both automatically (interleaved arms, load sampling, contention
-> labelling, and a cross-arm correctness check) - use it rather than hand-rolling a timer.
-> **`dotnet/STAGE2_THROUGHPUT.md` carries the measurements and the remaining options** - including the
-> one that is measured to win (bypass the row-by-row reader entirely: DuckDB writes a partition's
-> narrow projection, Parquet.Net reads it back 2.9x faster in pure managed code, which parallelizes
-> safely) - plus the verification bar anything touching concurrency has to clear.
+> - **Make the arms do the same WORK, and assert it.** Equal row counts are not enough. An arm here
+>   once looked 3.12x faster because it accumulated an index instead of the values; rows and peptides
+>   matched, so the correctness check passed it. `Stage2Bench` now counts values accumulated as well -
+>   any new arm must keep that figure equal. A faster arm that does less work produces exactly the
+>   number you were hoping for, which is what makes this the easiest benchmark mistake to miss.
+>
+> `dotnet/bench/Stage2Bench` does all of this automatically (interleaved arms, load sampling, contention
+> labelling, and a cross-arm rows/peptides/values check) - use it rather than hand-rolling a timer.
+> **`dotnet/STAGE2_THROUGHPUT.md` carries the measurements** - including the two candidate replacements
+> for the Stage 2 reader (skip the sort and group in a dictionary; `COPY` a narrow projection and read
+> it back with Parquet.Net) that were built, measured, and **both rejected** - plus the verification bar
+> anything touching concurrency has to clear. Do not re-propose either without reading why they lost.
 
 ## Release Process
 

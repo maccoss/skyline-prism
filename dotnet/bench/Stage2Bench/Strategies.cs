@@ -7,11 +7,18 @@ using Parquet;
 namespace Stage2Bench;
 
 /// <summary>What a strategy produced, so arms can be checked against each other rather than just timed.</summary>
-public readonly record struct ReadResult(long Rows, long Peptides, long Transitions);
+public readonly record struct ReadResult(long Rows, long Peptides, long Values);
 
 /// <summary>
-/// The candidate ways Stage 2 could read one partition. Every arm must return the same
-/// <see cref="ReadResult"/>; a faster arm that reads different data is not a faster arm.
+/// The candidate ways Stage 2 could read one partition.
+/// <para>
+/// Every arm must not only return the same <see cref="ReadResult"/> but do the same WORK: accumulate
+/// each peptide's transition values into per-peptide lists, exactly as <c>PeptideBlock</c> does. An
+/// earlier version of this file had the no-sort arm store a row-group-local index and throw the values
+/// away, which made it look 3.12x faster than a path that was materializing everything. A faster arm
+/// that reads the same rows but does less with them is not a faster arm either - <see cref="ReadResult.Values"/>
+/// is counted so that shortcut cannot pass unnoticed again.
+/// </para>
 /// </summary>
 public static class Strategies
 {
@@ -23,7 +30,16 @@ public static class Strategies
     public const string Area = "Area";
     public const string Rt = "RetentionTime";
 
-    /// <summary>Narrow projection, in the shape Stage 2 actually consumes.</summary>
+    /// <summary>One peptide's rows, as the rollup would consume them.</summary>
+    private sealed class Block
+    {
+        public readonly List<string> Tid = new();
+        public readonly List<string> Samp = new();
+        public readonly List<double> Area = new();
+        public readonly List<double> Rt = new();
+        public int Count => Tid.Count;
+    }
+
     private static string Select(string scan, bool ordered) =>
         $"SELECT \"{Peptide}\" AS pep, "
         + $"(COALESCE(\"{Ion}\",'nan') || '_z' || COALESCE(CAST(\"{PrecursorCharge}\" AS VARCHAR),'nan')"
@@ -34,8 +50,8 @@ public static class Strategies
     private static string Scan(string glob) => $"read_parquet('{glob}', hive_partitioning=false)";
 
     /// <summary>
-    /// A: what ships today. DuckDB sorts the partition, the result is walked a row at a time through
-    /// the ADO.NET reader, and blocks close when the peptide changes.
+    /// A: what ships today. DuckDB sorts, the result is walked a row at a time through the ADO.NET
+    /// reader, and a block closes when the peptide changes - so only one block is ever live.
     /// </summary>
     public static ReadResult DuckDbSortedStream(string glob, string scratch, int budgetMb)
     {
@@ -45,41 +61,42 @@ public static class Strategies
         cmd.UseStreamingMode = true;
         using var r = cmd.ExecuteReader();
 
-        long rows = 0, peptides = 0;
+        long rows = 0, peptides = 0, values = 0;
         string? cur = null;
-        var tids = new HashSet<string>(StringComparer.Ordinal);
+        var block = new Block();
         while (r.Read())
         {
             rows++;
             var pep = r.IsDBNull(0) ? "" : r.GetString(0);
             if (cur is null || !string.Equals(cur, pep, StringComparison.Ordinal))
             {
-                cur = pep;
+                values += Close(block);
                 peptides++;
+                cur = pep;
             }
-            tids.Add(r.IsDBNull(1) ? "" : r.GetString(1));
-            _ = r.IsDBNull(2) ? "" : r.GetString(2);
-            _ = r.IsDBNull(3) ? double.NaN : r.GetDouble(3);
-            _ = r.IsDBNull(4) ? double.NaN : r.GetDouble(4);
+            block.Tid.Add(r.IsDBNull(1) ? "" : r.GetString(1));
+            block.Samp.Add(r.IsDBNull(2) ? "" : r.GetString(2));
+            block.Area.Add(r.IsDBNull(3) ? double.NaN : r.GetDouble(3));
+            block.Rt.Add(r.IsDBNull(4) ? double.NaN : r.GetDouble(4));
         }
-        return new ReadResult(rows, peptides, tids.Count);
+        values += Close(block);
+        return new ReadResult(rows, peptides, values);
     }
 
     /// <summary>
-    /// B: no sort at all. Parquet.Net reads the partition as it lies - parquet is columnar, so only the
-    /// narrow columns are touched - and rows are grouped by peptide in a dictionary.
+    /// B: no sort. Parquet.Net reads the partition as it lies and rows are grouped by peptide in a
+    /// dictionary.
     /// <para>
-    /// The hypothesis worth testing: the sort is ~2.7 s of A's ~4.7 s, so removing it should beat both
-    /// other arms, with no temp file and nothing to clean up. The risk is that the grouping dictionary
-    /// allocates as badly as the per-row strings that PR #40 just removed, which is exactly what this
-    /// measures - watch the allocated column, not only the seconds.
+    /// The trade this measures is not only speed. Without a sort, every peptide's block is live at once
+    /// - the whole partition sits in managed memory until the partition is finished - where the sorted
+    /// arms hold exactly one. Watch peak working set alongside the seconds; partition size is the knob
+    /// that would bound it.
     /// </para>
     /// </summary>
     public static ReadResult ParquetNoSortGrouped(string glob, string scratch, int budgetMb)
     {
-        long rows = 0;
-        var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        var tids = new HashSet<string>(StringComparer.Ordinal);
+        long rows = 0, values = 0;
+        var groups = new Dictionary<string, Block>(StringComparer.Ordinal);
 
         foreach (var file in ResolveFiles(glob))
         {
@@ -94,32 +111,38 @@ public static class Strategies
                 using var g = reader.OpenRowGroupReader(rg);
                 var pep = (string?[])g.ReadColumnAsync(byName[Peptide]).GetAwaiter().GetResult().Data;
                 var ion = (string?[])g.ReadColumnAsync(byName[Ion]).GetAwaiter().GetResult().Data;
+                var pz = g.ReadColumnAsync(byName[PrecursorCharge]).GetAwaiter().GetResult().Data;
+                var zz = g.ReadColumnAsync(byName[ProductCharge]).GetAwaiter().GetResult().Data;
                 var samp = (string?[])g.ReadColumnAsync(byName[Sample]).GetAwaiter().GetResult().Data;
-                _ = g.ReadColumnAsync(byName[Area]).GetAwaiter().GetResult().Data;
-                _ = g.ReadColumnAsync(byName[Rt]).GetAwaiter().GetResult().Data;
+                var area = g.ReadColumnAsync(byName[Area]).GetAwaiter().GetResult().Data;
+                var rt = g.ReadColumnAsync(byName[Rt]).GetAwaiter().GetResult().Data;
 
                 for (var i = 0; i < pep.Length; i++)
                 {
                     rows++;
                     var key = pep[i] ?? "";
-                    if (!groups.TryGetValue(key, out var list))
+                    if (!groups.TryGetValue(key, out var block))
                     {
-                        list = new List<int>();
-                        groups[key] = list;
+                        block = new Block();
+                        groups[key] = block;
                     }
-                    list.Add(i);
-                    tids.Add(ion[i] ?? "");
-                    _ = samp[i];
+                    // The transition id is composed here rather than in SQL, because there is no SQL in
+                    // this arm - that composition is part of its cost and must not be omitted.
+                    block.Tid.Add((ion[i] ?? "nan") + "_z" + Str(pz, i) + "_" + Str(zz, i));
+                    block.Samp.Add(samp[i] ?? "");
+                    block.Area.Add(Dbl(area, i));
+                    block.Rt.Add(Dbl(rt, i));
                 }
             }
         }
-        return new ReadResult(rows, groups.Count, tids.Count);
+        foreach (var b in groups.Values)
+            values += b.Count;
+        return new ReadResult(rows, groups.Count, values);
     }
 
     /// <summary>
     /// C: the sketched two-phase design. DuckDB writes the sorted narrow projection to a temp parquet
-    /// (phase 1), which is then read back a row group at a time (phase 2). Phase 2 is pure managed code
-    /// and parallelizes; phase 1 is a DuckDB sort and does not, so it is the floor.
+    /// (phase 1), read back a row group at a time (phase 2). Sorted, so one block is live at a time.
     /// </summary>
     public static ReadResult CopyThenParquetRead(string glob, string scratch, int budgetMb)
     {
@@ -135,9 +158,9 @@ public static class Strategies
             cmd.ExecuteNonQuery();
         }
 
-        long rows = 0, peptides = 0;
+        long rows = 0, peptides = 0, values = 0;
         string? cur = null;
-        var tids = new HashSet<string>(StringComparer.Ordinal);
+        var block = new Block();
         using (var fs = File.OpenRead(tmp))
         {
             using var reader = ParquetReader.CreateAsync(fs).GetAwaiter().GetResult();
@@ -147,30 +170,52 @@ public static class Strategies
                 using var g = reader.OpenRowGroupReader(rg);
                 var pep = (string?[])g.ReadColumnAsync(f[0]).GetAwaiter().GetResult().Data;
                 var tid = (string?[])g.ReadColumnAsync(f[1]).GetAwaiter().GetResult().Data;
-                _ = g.ReadColumnAsync(f[2]).GetAwaiter().GetResult().Data;
-                _ = g.ReadColumnAsync(f[3]).GetAwaiter().GetResult().Data;
-                _ = g.ReadColumnAsync(f[4]).GetAwaiter().GetResult().Data;
+                var samp = (string?[])g.ReadColumnAsync(f[2]).GetAwaiter().GetResult().Data;
+                var area = g.ReadColumnAsync(f[3]).GetAwaiter().GetResult().Data;
+                var rt = g.ReadColumnAsync(f[4]).GetAwaiter().GetResult().Data;
                 for (var i = 0; i < pep.Length; i++)
                 {
                     rows++;
                     if (cur is null || !string.Equals(cur, pep[i], StringComparison.Ordinal))
                     {
-                        cur = pep[i];
+                        values += Close(block);
                         peptides++;
+                        cur = pep[i];
                     }
-                    tids.Add(tid[i] ?? "");
+                    block.Tid.Add(tid[i] ?? "");
+                    block.Samp.Add(samp[i] ?? "");
+                    block.Area.Add(Dbl(area, i));
+                    block.Rt.Add(Dbl(rt, i));
                 }
             }
         }
+        values += Close(block);
         try { File.Delete(tmp); } catch (IOException) { }
-        return new ReadResult(rows, peptides, tids.Count);
+        return new ReadResult(rows, peptides, values);
     }
 
-    /// <summary>
-    /// B and C count transitions from different columns (raw ion vs composed id), so the arms are
-    /// comparable on rows and peptides but not on that third figure. Kept separate rather than fudged.
-    /// </summary>
-    public static bool ComparableTransitions(string arm) => arm != "nosort-managed";
+    /// <summary>Count a finished block's values and reset it, as emitting to the rollup would.</summary>
+    private static long Close(Block b)
+    {
+        var n = b.Count;
+        b.Tid.Clear();
+        b.Samp.Clear();
+        b.Area.Clear();
+        b.Rt.Clear();
+        return n;
+    }
+
+    private static string Str(Array a, int i)
+    {
+        var v = a.GetValue(i);
+        return v?.ToString() ?? "nan";
+    }
+
+    private static double Dbl(Array a, int i)
+    {
+        var v = a.GetValue(i);
+        return v is null ? double.NaN : Convert.ToDouble(v);
+    }
 
     private static IEnumerable<string> ResolveFiles(string glob)
     {

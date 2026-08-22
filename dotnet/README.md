@@ -283,9 +283,11 @@ workstation as the Skyline instance holding the documents. Two things carry that
   it overrides are individually capable of consuming the machine.
 
 Stage 2 (the transition rollup) is single-threaded and the largest stage, because concurrent DuckDB
-reads corrupt memory in this binding. **[`STAGE2_THROUGHPUT.md`](STAGE2_THROUGHPUT.md)** has the
-measurements, the configurations that were tried and crashed, and the remaining options — read it before
-optimizing anything here, and before assuming a plausible theory about where the time goes.
+reads corrupt memory in this binding. Two ways of replacing its reader were built and measured, and
+**both lose to what ships** — so this is a measured ceiling, not an unexplored one.
+**[`STAGE2_THROUGHPUT.md`](STAGE2_THROUGHPUT.md)** has those numbers, the concurrency configurations
+that were tried and crashed, and why each option is closed — read it before optimizing anything here,
+and before assuming a plausible theory about where the time goes.
 
 Runs report per-stage elapsed time and a sorted summary in the run log, so a slow cohort can be
 diagnosed from the artifact a user already has.
@@ -300,8 +302,11 @@ prism merge <report1.parquet> <report2.parquet> -o D:/bench/merged
 dotnet run -c Release --project dotnet/bench/Stage2Bench -- D:/bench/merged 3
 ```
 
-It interleaves its arms rather than running them in blocks, checks that they agree on rows and peptides
-before comparing timings, and labels any run during which other software was competing for the machine.
+It interleaves its arms rather than running them in blocks, checks that they agree on rows, peptides and
+**values accumulated** before comparing timings, and labels any run during which other software was
+competing for the machine. The values check exists because an arm here once looked 3.12x faster by
+accumulating an index instead of the values — same rows, same peptides, less work — so any new arm must
+build the same per-peptide blocks as the others.
 That last part is not decoration: an identical configuration measured 2.07 min and 3.70 min hours apart
 here, the cause was two Skyline instances that had started in between, and several hours of analysis
 were built on the gap before anyone read the process list. **Ratios survive a busy machine; absolute
