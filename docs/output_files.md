@@ -27,6 +27,7 @@ output_dir/
 │   └── ...                         #   (Python writes a single merged_data.parquet instead)
 ├── merged_data.cache.json          # C#: fingerprints for detecting when re-merge is needed
 ├── merged_data.fingerprints.json   # Python: same purpose
+├── peptide_residuals.parquet       # Per-transition median-polish residuals (if include_residuals)
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── metadata.json                   # Complete provenance and processing parameters
@@ -335,6 +336,31 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/metadata.j
 - `reference`: Inter-experiment reference samples (pooled QC). Used for fitting normalization models.
 - `qc`: Intra-experiment QC samples. Used for validation (held-out from fitting).
 - `experimental`: Study samples (default if not matching reference/qc patterns).
+
+---
+
+### peptide_residuals.parquet
+
+**Purpose**: the per-transition residuals left over from the transition → peptide median polish, kept
+rather than discarded. Following Plubell et al. 2022, a transition with a consistently large residual is
+evidence about the data — interference, a PTM, protein processing — not just noise to throw away.
+
+**Written when**: `transition_rollup.method: median_polish` **and** `output.include_residuals: true`
+(the default). Other rollup methods do not produce residuals, so the file is simply absent.
+
+**Scale**: LOG2 (residuals of the log2-scale polish).
+
+**Columns**: the peptide column, `transition_id`, then one column per sample.
+
+`transition_id` is `{fragment ion}_z{precursor charge}_{product charge}` — e.g. `y7_z2_2`. It exists to
+distinguish a peptide's transitions from each other; it is not a Skyline identifier and nothing joins on
+it. Its exact rendering is nonetheless an output contract, which is why the C# engine composes it in SQL
+with the casts chosen to match .NET's formatting exactly (see `MergedParquetReader.TransitionIdSql`).
+
+> [!NOTE]
+> This file is one row per (peptide × transition) and one column per sample, so it is much larger than
+> the peptide matrix — roughly the transition count over the peptide count times bigger, commonly 6–10x.
+> Set `output.include_residuals: false` if you do not use it.
 
 ---
 

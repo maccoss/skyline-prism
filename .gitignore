@@ -114,3 +114,7 @@ bug-fix/
 !dotnet/build/
 !dotnet/build/package.proj
 dotnet/build/staging/
+
+# Benchmark harness build output (dotnet/bench is intentionally outside the solution)
+dotnet/bench/**/bin/
+dotnet/bench/**/obj/
