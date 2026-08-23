@@ -225,8 +225,12 @@ public sealed class PrismPipeline
             LibraryMzTolerance = config.TransitionRollup.LibraryMzTolerance,
             LibraryOutlierThreshold = config.TransitionRollup.LibraryOutlierThreshold,
             LibraryRemoveOutliers = config.TransitionRollup.LibraryRemoveOutliers,
+            // Residual files are named for the value file they explain and sit beside, matching
+            // the Python engine: peptides_rollup.parquet -> peptides_rollup_residuals.parquet.
+            // (Through dotnet-v26.13.0 this was "peptide_residuals.parquet", which collided with
+            // the peptide-row residuals the protein rollup now writes.) Rows here are TRANSITIONS.
             ResidualsPath = config.Output.IncludeResiduals
-                ? Path.Combine(outputDir, "peptide_residuals.parquet")
+                ? Path.Combine(outputDir, "peptides_rollup_residuals.parquet")
                 : null,
             MaxDegreeOfParallelism = config.Processing.NWorkers,
             FlushRows = config.Processing.PeptideBatchSize,
@@ -243,7 +247,7 @@ public sealed class PrismPipeline
             dataset, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
         report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
         if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
-            report("  Wrote peptide_residuals.parquet (per-transition median-polish residuals).");
+            report("  Wrote peptides_rollup_residuals.parquet (per-transition median-polish residuals).");
 
         // Stage 2a: peptide-matrix density diagnostic + optional sample outlier detection.
         {
@@ -423,6 +427,12 @@ public sealed class PrismPipeline
             TopN = config.ProteinRollup.Topn.N,
             TopNSelection = config.ProteinRollup.Topn.Selection,
             SharedPeptideHandling = config.Parsimony.SharedPeptideHandling,
+            // proteins_raw_residuals.parquet: rows are PEPTIDES - each peptide's deviation from
+            // its protein group's fitted profile, beside the proteins_raw.parquet it explains.
+            // Stage 4c derives corrected_proteins_residuals.parquet from it.
+            ResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "proteins_raw_residuals.parquet")
+                : null,
         };
 
         // iBAQ needs a theoretical peptide count per leading protein (from an in-silico FASTA digest).

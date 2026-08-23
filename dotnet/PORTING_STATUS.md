@@ -105,7 +105,12 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [x] `protein_groups.csv`, `sample_metadata.csv`
 - [x] `parameters.json` provenance (embeds the full config; named to avoid clashing with
       scientific sample metadata) — `Provenance.Write`
-- [x] residuals output (`peptide_residuals.parquet`, per-transition median-polish residuals)
+- [x] residuals output, both stages: `peptides_rollup_residuals.parquet` (per-transition, from the
+      transition -> peptide polish) and `proteins_raw_residuals.parquet` (per-peptide, from the
+      peptide -> protein polish). The protein-stage file was missing until dotnet-v26.14.0 - the entry
+      here read as complete while describing only the transition one, and Python had been writing
+      both since before the port. Verified bit-for-bit against a real Python run (SEA-AD MTG pilot,
+      7,803,038 residual cells, 0 differing).
 - [x] `--from-provenance` re-run (CLI) + "Open provenance" in the tool — `Provenance.LoadConfig`
 
 ## QC report (Stage 5b)

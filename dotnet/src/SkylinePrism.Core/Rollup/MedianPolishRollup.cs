@@ -26,11 +26,24 @@ public sealed class MedianPolishRollup : IRollupMethod
         _minTransitions = minTransitions;
     }
 
-    public double[] Aggregate(double[,] log2Matrix)
+    public double[] Aggregate(double[,] log2Matrix) => Aggregate(log2Matrix, out _);
+
+    /// <summary>
+    /// As <see cref="Aggregate(double[,])"/>, additionally handing back the polish residuals
+    /// (<c>[nRows, nCols]</c>) that the decomposition already computes.
+    /// <para>
+    /// Following Plubell et al. 2022 these are evidence, not waste - a row with a consistently
+    /// large residual indicates interference, a PTM, or protein processing - so callers that want
+    /// to persist them can, rather than the value being computed and dropped. <c>null</c> when the
+    /// row count is below the minimum, since no polish ran.
+    /// </para>
+    /// </summary>
+    public double[] Aggregate(double[,] log2Matrix, out double[,]? residuals)
     {
         var nRows = log2Matrix.GetLength(0);
         var nCols = log2Matrix.GetLength(1);
 
+        residuals = null;
         if (nRows < _minTransitions)
         {
             var nan = new double[nCols];
@@ -40,6 +53,7 @@ public sealed class MedianPolishRollup : IRollupMethod
         }
 
         var polish = TukeyMedianPolish.Run(log2Matrix);
+        residuals = polish.Residuals;
         var abundances = new double[nCols];
 
         // scale_factor = log2(n_used) for the peptide stage; 0 for the protein stage.

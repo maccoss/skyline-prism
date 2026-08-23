@@ -20,7 +20,7 @@ public sealed class PeptideBlock
     /// <summary>
     /// Transition identity per row - <c>ion_z{precursor}_{product}</c> - composed once per distinct
     /// value rather than per row. Only distinctness matters to the rollup, but the string itself is
-    /// written to <c>peptide_residuals.parquet</c>, so its exact form is an output contract.
+    /// written to <c>peptides_rollup_residuals.parquet</c>, so its exact form is an output contract.
     /// </summary>
     public List<string> TransitionId { get; } = new();
 
