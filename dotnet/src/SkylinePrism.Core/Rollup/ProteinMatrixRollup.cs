@@ -25,10 +25,29 @@ public static class ProteinMatrixRollup
     public static double[] Aggregate(
         double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN = 3,
         int nTheoretical = -1, string topNSelection = "median_abundance")
+        => Aggregate(log2Matrix, method, minPeptides, topN, nTheoretical, topNSelection, out _);
+
+    /// <summary>
+    /// As <see cref="Aggregate(double[,], ProteinRollupMethod, int, int, int, string)"/>, also
+    /// returning the per-peptide median-polish residuals (<c>[nPeptides, nSamples]</c>).
+    /// <para>
+    /// Residuals exist only where a polish actually ran: <c>median_polish</c> with at least
+    /// <paramref name="minPeptides"/> peptides. Every earlier branch here - no peptides, a single
+    /// peptide passed through as-is, or a below-threshold group falling back to a linear sum -
+    /// returns <c>null</c>, because no decomposition was performed and there is nothing a residual
+    /// could be measured against. The other methods (sum, topN, maxLFQ, iBAQ) do not decompose at
+    /// all. This mirrors the Python engine, which likewise attaches residuals only to the
+    /// median_polish branch.
+    /// </para>
+    /// </summary>
+    public static double[] Aggregate(
+        double[,] log2Matrix, ProteinRollupMethod method, int minPeptides, int topN,
+        int nTheoretical, string topNSelection, out double[,]? residuals)
     {
         var nPep = log2Matrix.GetLength(0);
         var nCols = log2Matrix.GetLength(1);
 
+        residuals = null;
         if (nPep == 0)
         {
             var nan = new double[nCols];
@@ -51,8 +70,10 @@ public static class ProteinMatrixRollup
 
         return method switch
         {
+            // Note the residual-returning overload: the single-argument one discards the polish
+            // residuals, which is what this whole out-parameter exists to surface.
             ProteinRollupMethod.MedianPolish =>
-                new MedianPolishRollup(addLog2NOffset: false).Aggregate(log2Matrix),
+                new MedianPolishRollup(addLog2NOffset: false).Aggregate(log2Matrix, out residuals),
             ProteinRollupMethod.Sum => new SumRollup().Aggregate(log2Matrix),
             ProteinRollupMethod.TopN => TopN(log2Matrix, topN, topNSelection),
             ProteinRollupMethod.MaxLfq => MaxLfq(log2Matrix),

@@ -25,6 +25,17 @@ public sealed class ProteinRollupConfig
     /// group), "unique_only" (unique peptides only), or "razor" (parsimony-assigned = unique + razor).
     /// </summary>
     public string SharedPeptideHandling { get; init; } = "all_groups";
+
+    /// <summary>
+    /// Where to write the per-peptide median-polish residuals, or null to not write them.
+    /// <para>
+    /// Only <see cref="ProteinRollupMethod.MedianPolish"/> produces residuals, and only for groups
+    /// that actually reach the polish - see
+    /// <see cref="ProteinMatrixRollup.Aggregate(double[,], ProteinRollupMethod, int, int, int, string, out double[,])"/>.
+    /// The file is one row per (protein group x peptide), one column per sample, on the LOG2 scale.
+    /// </para>
+    /// </summary>
+    public string? ResidualsPath { get; init; }
 }
 
 /// <summary>
@@ -122,7 +133,8 @@ public sealed class ProteinRollup
             var nTheo = -1;
             if (theoreticalCounts is not null && theoreticalCounts.TryGetValue(group.LeadingProtein, out var c))
                 nTheo = c;
-            var vals = ProteinMatrixRollup.Aggregate(sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo, cfg.TopNSelection);
+            var vals = ProteinMatrixRollup.Aggregate(
+                sub, cfg.Method, cfg.MinPeptides, cfg.TopN, nTheo, cfg.TopNSelection, out var resid);
 
             results[gi] = new ProteinRow
             {
@@ -131,12 +143,57 @@ public sealed class ProteinRollup
                 NUniquePeptides = group.UniquePeptides.Count,
                 LowConfidence = available.Count < cfg.MinPeptides,
                 Values = vals,
+                // Held per group and written after the parallel loop: residuals are [nPeptides x
+                // nSamples], so the peptide names are needed alongside them to key the output rows.
+                ResidualPeptides = resid is null ? null : available,
+                Residuals = cfg.ResidualsPath is null ? null : resid,
             };
         });
 
         var rows = results.Where(r => r is not null).Select(r => r!).ToList();
         WriteOutput(outputPath, sampleCols, rows);
+        // Only write when something was actually decomposed. A method that does not polish (sum,
+        // topN, maxLFQ, iBAQ) would otherwise leave a zero-row file behind, which reads as "no
+        // peptide deviated" rather than "residuals were never computed" - the more misleading of
+        // the two. Python guards this the same way (`if save_residuals and residual_rows`).
+        if (cfg.ResidualsPath is not null && rows.Any(r => r.Residuals is not null))
+            WriteResiduals(cfg.ResidualsPath, peptideCol, sampleCols, rows);
         return new Result(rows.Count, nSkipped, sampleCols);
+    }
+
+    /// <summary>
+    /// Write the per-peptide polish residuals: one row per (protein group x peptide), one column
+    /// per sample, LOG2. Groups that never reached a polish contribute nothing, so the file is
+    /// shorter than the peptide count whenever some groups fall below <c>min_peptides</c>.
+    /// </summary>
+    private static void WriteResiduals(
+        string path, string peptideCol, IReadOnlyList<string> samples, List<ProteinRow> rows)
+    {
+        var meta = new (string, Type)[] { ("protein_group", typeof(string)), (peptideCol, typeof(string)) };
+        using var writer = StreamingWideWriter.Create(path, meta, samples);
+
+        var n = rows.Sum(r => r.Residuals is null ? 0 : r.ResidualPeptides!.Count);
+        var groupIds = new string[n];
+        var peptides = new string[n];
+        var sampleColumns = new double[samples.Count][];
+        for (var j = 0; j < samples.Count; j++)
+            sampleColumns[j] = new double[n];
+
+        var at = 0;
+        foreach (var row in rows)
+        {
+            if (row.Residuals is null)
+                continue;
+            for (var p = 0; p < row.ResidualPeptides!.Count; p++, at++)
+            {
+                groupIds[at] = row.Group.GroupId;
+                peptides[at] = row.ResidualPeptides[p];
+                for (var j = 0; j < samples.Count; j++)
+                    sampleColumns[j][at] = row.Residuals[p, j];
+            }
+        }
+
+        writer.WriteRowGroup(new Array[] { groupIds, peptides }, sampleColumns);
     }
 
     private sealed class ProteinRow
@@ -146,6 +203,12 @@ public sealed class ProteinRollup
         public required int NUniquePeptides { get; init; }
         public required bool LowConfidence { get; init; }
         public required double[] Values { get; init; }
+
+        /// <summary>Peptide names for <see cref="Residuals"/>' rows; null when no polish ran.</summary>
+        public List<string>? ResidualPeptides { get; init; }
+
+        /// <summary>[nPeptides, nSamples] polish residuals, or null when not captured.</summary>
+        public double[,]? Residuals { get; init; }
     }
 
     private static void WriteOutput(string outputPath, IReadOnlyList<string> samples, List<ProteinRow> rows)

@@ -134,7 +134,7 @@ public static class MergedParquetReader
     /// <summary>
     /// SQL producing the transition id, <c>ion_z{precursor}_{product}</c>.
     /// <para>
-    /// This string is written to <c>peptide_residuals.parquet</c>, so it is an output contract and has
+    /// This string is written to <c>peptides_rollup_residuals.parquet</c>, so it is an output contract and has
     /// to render byte-identically to the C# concatenation it replaces. It does for the types that
     /// occur: charges are INTEGER in a Skyline export, and <c>CAST(2 AS VARCHAR)</c> is <c>"2"</c> just
     /// as <c>2.ToString(InvariantCulture)</c> is; a VARCHAR charge column (Skyline writes <c>#N/A</c>
@@ -157,7 +157,7 @@ public static class MergedParquetReader
             // A floating-point charge column still holds whole numbers - charge states are integers,
             // whatever type the export wrote them as. Going through BIGINT reproduces .NET's rendering
             // ("2"); casting the double straight to VARCHAR would give "2.0" and silently change every
-            // transition id in peptide_residuals.parquet.
+            // transition id in peptides_rollup_residuals.parquet.
             ? $"COALESCE(CAST(CAST(p.\"{column}\" AS BIGINT) AS VARCHAR), 'nan')"
             : $"COALESCE(CAST(p.\"{column}\" AS VARCHAR), 'nan')";
 

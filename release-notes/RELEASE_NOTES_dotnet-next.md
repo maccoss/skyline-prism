@@ -6,6 +6,15 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **The peptide->protein median polish now writes its residuals.** `proteins_raw_residuals.parquet`
+  gives each peptide's deviation from its protein group's fitted profile - one row per (protein group
+  x peptide), one column per sample, LOG2 - which is the evidence for proteoform variation, PTMs and
+  protein processing in the sense of Plubell et al. 2022. The Python engine has written this file
+  since before the port; the C# engine silently did not, so `output.include_residuals: true` produced
+  only half of what Python produced and an analysis built on it could not be reproduced on the C#
+  engine. Verified bit-for-bit against a real Python run (SEA-AD MTG pilot, 82 samples): **7,803,038
+  residual values, zero differences.**
+
 - **CI now fails if any reported quantity changes, to the last bit.** Every peptide and protein
   value the pipeline writes is fingerprinted per column from its exact IEEE-754 bits and compared
   against a committed reference across the six end-to-end fixtures, so a refactor that shifts a
@@ -31,3 +40,10 @@ as the GitHub Release description and fails if it is missing.
 ## Performance
 
 ## Breaking Changes
+
+- **`peptide_residuals.parquet` is now `peptides_rollup_residuals.parquet`.** The old name described
+  the stage's output while its rows are transitions, and it collided with the peptide-row residuals the
+  protein rollup now writes. Residual files are now named for the value file they explain and sit
+  beside - `peptides_rollup.parquet` -> `peptides_rollup_residuals.parquet`, `proteins_raw.parquet` ->
+  `proteins_raw_residuals.parquet` - which also matches the Python engine's names. **Update scripts that
+  read the old filename**; nothing in the file's contents or schema changed.

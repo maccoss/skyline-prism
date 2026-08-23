@@ -28,12 +28,23 @@ namespace SkylinePrism.Tests.TestSupport;
 /// </summary>
 public static class QuantityDigest
 {
-    /// <summary>Outputs fingerprinted for every fixture, in a fixed order.</summary>
+    /// <summary>
+    /// Outputs fingerprinted for every fixture, in a fixed order.
+    /// <para>
+    /// The residual files are here because leaving them out let an output contract change
+    /// unnoticed: renaming them passed all 706 tests, since every fixture had
+    /// <c>include_residuals: false</c> and so never produced one. A file absent from a fixture is
+    /// simply skipped, which is how the non-median-polish fixtures behave - they write no residuals
+    /// at all.
+    /// </para>
+    /// </summary>
     public static readonly string[] Files =
     {
         "peptides_rollup.parquet",
+        "peptides_rollup_residuals.parquet",
         "peptides_log2_internal.parquet",
         "proteins_raw.parquet",
+        "proteins_raw_residuals.parquet",
         "corrected_peptides.parquet",
         "corrected_proteins.parquet",
     };
@@ -72,9 +83,16 @@ public static class QuantityDigest
     /// </summary>
     public static int[] RowOrder(ParquetTable table)
     {
-        var key = table.Column(table.ColumnNames[0]);
+        // Sort on the first TWO columns, not just the first. The value tables are keyed by one
+        // column (peptide, or protein_group), but the residual tables need both - they are keyed by
+        // (peptide, transition_id) and (protein_group, peptide), and the leading column repeats
+        // across every row of a group. Ordering on it alone would leave the tie-break to physical
+        // row order, which is not a parity contract.
+        var k0 = table.Column(table.ColumnNames[0]);
+        var k1 = table.ColumnNames.Count > 1 ? table.Column(table.ColumnNames[1]) : null;
         return Enumerable.Range(0, table.RowCount)
-            .OrderBy(i => Fixtures.FormatCell(key.GetValue(i)), StringComparer.Ordinal)
+            .OrderBy(i => Fixtures.FormatCell(k0.GetValue(i)), StringComparer.Ordinal)
+            .ThenBy(i => k1 is null ? "" : Fixtures.FormatCell(k1.GetValue(i)), StringComparer.Ordinal)
             .ThenBy(i => i)
             .ToArray();
     }

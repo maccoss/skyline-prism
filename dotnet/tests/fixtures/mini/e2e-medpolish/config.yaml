@@ -33,7 +33,7 @@ protein_normalization:
 
 output:
   format: "parquet"
-  include_residuals: false
+  include_residuals: true
 
 qc_report:
   enabled: false

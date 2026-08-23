@@ -132,7 +132,7 @@ batch_estimation:
 # Output.
 output:
   format: "parquet"
-  include_residuals: true   # write peptide_residuals.parquet for outlier/proteoform analysis
+  include_residuals: true   # write median-polish residuals (peptides_rollup_residuals + proteins_raw_residuals)
 
 # QC report (self-contained HTML + before/after plots).
 qc_report:

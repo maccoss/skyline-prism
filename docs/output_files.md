@@ -27,7 +27,8 @@ output_dir/
 │   └── ...                         #   (Python writes a single merged_data.parquet instead)
 ├── merged_data.cache.json          # C#: fingerprints for detecting when re-merge is needed
 ├── merged_data.fingerprints.json   # Python: same purpose
-├── peptide_residuals.parquet       # Per-transition median-polish residuals (if include_residuals)
+├── peptides_rollup_residuals.parquet  # Per-TRANSITION median-polish residuals (if include_residuals)
+├── proteins_raw_residuals.parquet  # Per-PEPTIDE median-polish residuals (if include_residuals)
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── metadata.json                   # Complete provenance and processing parameters
@@ -339,7 +340,7 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/metadata.j
 
 ---
 
-### peptide_residuals.parquet
+### peptides_rollup_residuals.parquet
 
 **Purpose**: the per-transition residuals left over from the transition → peptide median polish, kept
 rather than discarded. Following Plubell et al. 2022, a transition with a consistently large residual is
@@ -361,6 +362,42 @@ with the casts chosen to match .NET's formatting exactly (see `MergedParquetRead
 > This file is one row per (peptide × transition) and one column per sample, so it is much larger than
 > the peptide matrix — roughly the transition count over the peptide count times bigger, commonly 6–10x.
 > Set `output.include_residuals: false` if you do not use it.
+
+> [!IMPORTANT]
+> **Renamed in dotnet-v26.14.0.** This file was `peptide_residuals.parquet` through dotnet-v26.13.0,
+> which named it for the stage's *output* while its rows are transitions — and collided with the
+> peptide-row residuals the protein rollup now writes. Residual files are now named for the value file
+> they explain and sit beside, matching the Python engine. Update scripts that read the old name.
+
+---
+
+### proteins_raw_residuals.parquet
+
+**Purpose**: the per-**peptide** residuals left over from the peptide → protein median polish. Where
+`peptides_rollup_residuals.parquet` says which *transitions* deviate from their peptide, this says which
+*peptides* deviate from their protein group — the evidence for proteoform variation, PTMs, or protein
+processing, in the sense of Plubell et al. 2022.
+
+**Written when**: `protein_rollup.method: median_polish` **and** `output.include_residuals: true` (the
+default). No other protein method decomposes, so the file is simply absent for them — deliberately, since
+an empty file would read as "no peptide deviated" rather than "residuals were never computed".
+
+**Scale**: LOG2 (residuals of the log2-scale polish). Note this differs from `corrected_proteins.parquet`,
+which is LINEAR: a residual is a log-scale deviation, and 2^residual would be a fold-ratio, not a residual.
+
+**Columns**: `protein_group`, the peptide column, then one column per sample.
+
+**Rows**: one per (protein group × peptide), over the **polished groups only**. A group with fewer than
+`protein_rollup.min_peptides` peptides falls back to a linear sum and contributes no rows, so the row
+count is not the peptide count. Shared peptides appear once per group they belong to under
+`parsimony.shared_peptide_handling: all_groups`, so the total can exceed the peptide count too.
+
+> [!CAUTION]
+> **`protein_groups.csv` is not sufficient to reproduce an `all_groups` run.** It persists the
+> parsimony-assigned peptides (unique ∪ razor); the full all-mapped set that `all_groups` actually
+> polishes survives only as the `NAllMappedPeptides` **count**. Rebuilding groups from that CSV and
+> re-running the rollup gives a different peptide set per group, and therefore different abundances and
+> residuals. Re-run from the source report instead.
 
 ---
 
