@@ -105,20 +105,29 @@ public class QuantityRegressionTests
     /// </summary>
     private static void AssertSame(string fixture, List<string> expected, List<string> actual)
     {
-        static Dictionary<string, string> Index(IEnumerable<string> lines)
+        // Reject a malformed digest rather than skipping the bad lines. Silently dropping them
+        // would shrink the set of columns being checked, so a truncated or hand-edited file would
+        // make this gate quietly weaker - or pass outright - at exactly the moment it should shout.
+        static Dictionary<string, string> Index(IEnumerable<string> lines, string what)
         {
             var d = new Dictionary<string, string>(StringComparer.Ordinal);
+            var n = 0;
             foreach (var line in lines)
             {
+                n++;
                 var parts = line.Split('\t');
-                if (parts.Length == 3)
-                    d[parts[0] + "\t" + parts[1]] = parts[2];
+                Assert.True(parts.Length == 3,
+                    $"Malformed {what} digest at line {n}: expected 'file<TAB>column<TAB>sha256', got '{line}'.");
+                var key = parts[0] + "\t" + parts[1];
+                Assert.False(d.ContainsKey(key),
+                    $"Duplicate entry in {what} digest at line {n}: {key.Replace('\t', ' ')}.");
+                d[key] = parts[2];
             }
             return d;
         }
 
-        var e = Index(expected);
-        var a = Index(actual);
+        var e = Index(expected, "committed");
+        var a = Index(actual, "computed");
         var problems = new List<string>();
 
         foreach (var (key, hash) in e.OrderBy(kv => kv.Key, StringComparer.Ordinal))

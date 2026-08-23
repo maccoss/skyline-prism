@@ -63,8 +63,14 @@ public static class QuantityDigest
     /// Row indices ordered by the first column's value. The outputs are keyed tables (peptide or
     /// protein group), so that is a total order; ties fall back to the original index to stay
     /// deterministic if a key ever repeats.
+    /// <para>
+    /// Every comparison of two output tables must go through this. Row ORDER is explicitly not a
+    /// parity contract - Stage 1 writes hash partitions and does not sort (CLAUDE.md, "C# Stage 1
+    /// partitions, and does NOT sort") - so comparing by raw row index is a latent flake that
+    /// happens to pass whenever two runs coincide.
+    /// </para>
     /// </summary>
-    private static int[] RowOrder(ParquetTable table)
+    public static int[] RowOrder(ParquetTable table)
     {
         var key = table.Column(table.ColumnNames[0]);
         return Enumerable.Range(0, table.RowCount)

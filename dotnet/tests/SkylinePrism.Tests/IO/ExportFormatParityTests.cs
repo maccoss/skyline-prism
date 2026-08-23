@@ -118,24 +118,38 @@ public class ExportFormatParityTests
     }
 
     /// <summary>
-    /// Compare two tables column by column, by POSITION. Values must match bit-for-bit; only the
-    /// key column's name is allowed to differ (see above).
+    /// Compare two tables column by column, by POSITION, with rows aligned by KEY.
+    /// <para>
+    /// Rows are matched through <see cref="QuantityDigest.RowOrder"/> rather than by raw index,
+    /// because row order is not a parity contract: Stage 1 writes hash partitions and does not sort,
+    /// so two runs may legitimately emit the same rows in a different order. Comparing by index
+    /// would pass only for as long as the two orders happened to coincide.
+    /// </para>
+    /// <para>
+    /// Columns ARE compared by position, because the key column's name legitimately differs between
+    /// the two input formats (see the class remarks); every other column name is asserted equal by
+    /// <see cref="ParquetExport_YieldsTheSameSampleColumns"/>.
+    /// </para>
     /// </summary>
     private static void AssertBitIdentical(string file, ParquetTable a, ParquetTable b)
     {
         Assert.Equal(a.ColumnNames.Count, b.ColumnNames.Count);
         Assert.Equal(a.RowCount, b.RowCount);
 
+        var orderA = QuantityDigest.RowOrder(a);
+        var orderB = QuantityDigest.RowOrder(b);
+
         for (var c = 0; c < a.ColumnNames.Count; c++)
         {
             var colA = a.Column(a.ColumnNames[c]);
             var colB = b.Column(b.ColumnNames[c]);
-            for (var r = 0; r < a.RowCount; r++)
+            for (var i = 0; i < orderA.Length; i++)
             {
-                var x = colA.GetValue(r);
-                var y = colB.GetValue(r);
+                var x = colA.GetValue(orderA[i]);
+                var y = colB.GetValue(orderB[i]);
                 Assert.True(BitEqual(x, y),
-                    $"{file} column {c} ('{a.ColumnNames[c]}' / '{b.ColumnNames[c]}') row {r}: "
+                    $"{file} column {c} ('{a.ColumnNames[c]}' / '{b.ColumnNames[c]}') "
+                    + $"key-ordered row {i} (csv row {orderA[i]}, parquet row {orderB[i]}): "
                     + $"csv={Fixtures.FormatCell(x)} parquet={Fixtures.FormatCell(y)}");
             }
         }
