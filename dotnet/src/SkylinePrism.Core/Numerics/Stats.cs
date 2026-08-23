@@ -161,6 +161,38 @@ public static class Stats
         return n == 0 ? double.NaN : sum / n;
     }
 
+    /// <summary>
+    /// <see cref="NanMean"/> that does not depend on the order of <paramref name="values"/>.
+    /// <para>
+    /// A mean is permutation-invariant in exact arithmetic but not in floating point, because
+    /// addition is not associative. That matters wherever the input order is not guaranteed: the
+    /// rollup's per-peptide rows come out of DuckDB with no ordering promised WITHIN a peptide, so
+    /// a plain sequential sum made <c>mean_rt</c> vary in the last bits between two runs of the
+    /// same binary on the same input. Summing a sorted copy makes the evaluation order a function
+    /// of the multiset alone, so the result is reproducible however the rows arrive.
+    /// </para>
+    /// <para>Sorting also sums small magnitudes first, so this is no less accurate than the
+    /// sequential version. Inputs here are one peptide's values, so the cost is negligible.</para>
+    /// </summary>
+    public static double NanMeanOrderInvariant(ReadOnlySpan<double> values)
+    {
+        var buf = new double[values.Length];
+        var n = 0;
+        foreach (var v in values)
+        {
+            if (!double.IsNaN(v))
+                buf[n++] = v;
+        }
+        if (n == 0)
+            return double.NaN;
+
+        Array.Sort(buf, 0, n);
+        double sum = 0.0;
+        for (var i = 0; i < n; i++)
+            sum += buf[i];
+        return sum / n;
+    }
+
     /// <summary>Arithmetic mean over all values (numpy.mean), pairwise summation.</summary>
     public static double Mean(ReadOnlySpan<double> values)
     {

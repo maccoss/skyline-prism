@@ -24,8 +24,14 @@ namespace SkylinePrism.Core.Rollup;
 /// cohort). Reading partitions concurrently is the obvious fix and is blocked by a use-after-free in
 /// the DuckDB binding, not by anything in the data model - see RunParallel.
 /// </para>
-/// Output row order is not the input peptide order under parallelism; downstream stages key by
-/// peptide, so this is immaterial.
+/// Output row order IS the input peptide order, at any worker count, and that is a correctness
+/// requirement rather than tidiness. This comment used to say the opposite - that order did not
+/// matter because downstream stages key by peptide. They do, but ComBat's cross-feature reductions
+/// sum over rows in FILE order, and floating-point addition is not associative, so a varying row
+/// order changed the reported quantities in their last bits: on a 2-plate cohort only 17% of
+/// corrected_proteins cells were bit-identical between two runs of the same binary on the same
+/// input. See the reorder buffer in RunParallel, and Stats.NanMeanOrderInvariant for the matching
+/// hazard WITHIN a peptide (DuckDB promises no row order there either).
 /// </summary>
 public sealed class TransitionRollup
 {
@@ -154,8 +160,16 @@ public sealed class TransitionRollup
         //
         // dotnet/STAGE2_THROUGHPUT.md has the plan for lifting this ceiling - including the cheap
         // measurement that should come before any of it, and the bar this has to clear to ship.
-        using var inputQ = new BlockingCollection<PeptideBlock>(dop * 4);
-        using var outputQ = new BlockingCollection<PeptideResult>(dop * 4);
+        // Results are emitted in the PRODUCER's order, not in completion order, via the reorder
+        // buffer below. This is a correctness requirement, not tidiness: consumers finish out of
+        // order, so writing as they finish made peptides_rollup.parquet's row order vary run to run.
+        // Values were stable, but ComBat's cross-feature reductions sum over rows in file order and
+        // floating-point addition is not associative, so identical inputs produced outputs that
+        // differed in the last bits - and through two ComBat passes only 17% of corrected_proteins
+        // cells were bit-identical between two runs of the same binary on the same input. Measured
+        // on a 2-plate cohort; n_workers=1 was byte-identical, which is what localized it here.
+        using var inputQ = new BlockingCollection<(long Seq, PeptideBlock Block)>(dop * 4);
+        using var outputQ = new BlockingCollection<(long Seq, PeptideResult? Result)>(dop * 4);
         Exception? error = null;
         var filtered = 0;
 
@@ -163,6 +177,7 @@ public sealed class TransitionRollup
         {
             try
             {
+                long seq = 0;
                 foreach (var b in MergedParquetReader.StreamPeptideBlocks(
                     dataset, cols, samples, includeProductMz: isLibrary, includeShapeCorr: topNCorr,
                     memoryBudgetMb: memoryBudgetMb))
@@ -170,7 +185,7 @@ public sealed class TransitionRollup
                     // Stopping the producer drains the queue and ends the consumers, so one check here
                     // stops the whole stage rather than needing one per worker.
                     cancellationToken.ThrowIfCancellationRequested();
-                    inputQ.Add(b);
+                    inputQ.Add((seq++, b));
                 }
             }
             catch (Exception ex) { Interlocked.CompareExchange(ref error, ex, null); }
@@ -184,13 +199,14 @@ public sealed class TransitionRollup
             {
                 try
                 {
-                    foreach (var block in inputQ.GetConsumingEnumerable())
+                    foreach (var (seq, block) in inputQ.GetConsumingEnumerable())
                     {
                         var r = process(block);
                         if (r is null)
                             Interlocked.Increment(ref filtered);
-                        else
-                            outputQ.Add(r);
+                        // Filtered peptides still carry their sequence number through, so the
+                        // reorder buffer can advance past them instead of waiting forever.
+                        outputQ.Add((seq, r));
                     }
                 }
                 catch (Exception ex) { Interlocked.CompareExchange(ref error, ex, null); }
@@ -203,10 +219,26 @@ public sealed class TransitionRollup
             finally { outputQ.CompleteAdding(); }
         });
 
-        foreach (var r in outputQ.GetConsumingEnumerable())
-            sink.Add(r);
+        // Reorder buffer: emit strictly in producer order. Bounded by the in-flight count, which the
+        // two queue capacities already cap at (dop * 4) + dop, so this cannot grow with the cohort.
+        var pending = new Dictionary<long, PeptideResult?>();
+        long next = 0;
+        foreach (var (seq, result) in outputQ.GetConsumingEnumerable())
+        {
+            pending[seq] = result;
+            while (pending.Remove(next, out var ready))
+            {
+                if (ready is not null)
+                    sink.Add(ready);
+                next++;
+            }
+        }
 
         Task.WaitAll(producer, closer);
+        if (pending.Count > 0 && error is null)
+            throw new InvalidOperationException(
+                $"Transition rollup lost ordering: {pending.Count} result(s) never became emittable "
+                + $"(next expected sequence {next}). This would silently reorder the output.");
         nFiltered += filtered;
         if (error is not null)
             throw new InvalidOperationException("Transition rollup failed: " + error.Message, error);
@@ -282,7 +314,7 @@ public sealed class TransitionRollup
             rtBuf.Add(block.RetentionTime[i]);
         }
 
-        var meanRt = Stats.NanMean(rtBuf.ToArray());
+        var meanRt = Stats.NanMeanOrderInvariant(rtBuf.ToArray());
         var pre = RollupPreprocess.ImputeAndLog2(matrix, cfg.LogTransform);
 
         if (captureResiduals)
@@ -365,7 +397,7 @@ public sealed class TransitionRollup
             rtBuf.Add(block.RetentionTime[i]);
         }
 
-        var meanRt = Stats.NanMean(rtBuf.ToArray());
+        var meanRt = Stats.NanMeanOrderInvariant(rtBuf.ToArray());
         var pre = RollupPreprocess.ImputeAndLog2(matrix, cfg.LogTransform);
         var vals = TopNRollup.Compute(
             pre.Log2Matrix, shape, cfg.TopNCount, cfg.MinTransitions, "correlation", cfg.TopNWeighting);
@@ -424,7 +456,7 @@ public sealed class TransitionRollup
             }
             rtBuf.Add(block.RetentionTime[i]);
         }
-        var meanRt = Stats.NanMean(rtBuf.ToArray());
+        var meanRt = Stats.NanMeanOrderInvariant(rtBuf.ToArray());
 
         var pre = RollupPreprocess.ImputeAndLog2(matrix, logTransform: true);
         var linear = new double[nt, nSamples];
