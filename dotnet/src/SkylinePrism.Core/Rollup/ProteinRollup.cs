@@ -145,7 +145,9 @@ public sealed class ProteinRollup
                 Values = vals,
                 // Held per group and written after the parallel loop: residuals are [nPeptides x
                 // nSamples], so the peptide names are needed alongside them to key the output rows.
-                ResidualPeptides = resid is null ? null : available,
+                // BOTH are gated on the output path - retaining either when no residual file will be
+                // written keeps per-group state alive for the whole stage and buys nothing.
+                ResidualPeptides = cfg.ResidualsPath is null || resid is null ? null : available,
                 Residuals = cfg.ResidualsPath is null ? null : resid,
             };
         });
@@ -172,29 +174,51 @@ public sealed class ProteinRollup
         var meta = new (string, Type)[] { ("protein_group", typeof(string)), (peptideCol, typeof(string)) };
         using var writer = StreamingWideWriter.Create(path, meta, samples);
 
-        var n = rows.Sum(r => r.Residuals is null ? 0 : r.ResidualPeptides!.Count);
-        var groupIds = new string[n];
-        var peptides = new string[n];
-        var sampleColumns = new double[samples.Count][];
+        // Flush in bounded batches rather than building the whole file first. This table is one row
+        // per (group x peptide) and one column per sample, so materializing it costs about as much
+        // as the peptide matrix itself - 62 MB on an 82-sample cohort, and unbounded as documents
+        // are added. Each group's residuals are also released as they are written, so the peak is
+        // one batch plus the groups not yet reached, rather than every group at once.
+        var batchRows = Math.Max(1, MaxResidualCellsPerBatch / Math.Max(1, samples.Count));
+        var groupIds = new List<string>(batchRows);
+        var peptides = new List<string>(batchRows);
+        var cols = new List<double>[samples.Count];
         for (var j = 0; j < samples.Count; j++)
-            sampleColumns[j] = new double[n];
+            cols[j] = new List<double>(batchRows);
 
-        var at = 0;
+        void Flush()
+        {
+            if (groupIds.Count == 0)
+                return;
+            writer.WriteRowGroup(
+                new Array[] { groupIds.ToArray(), peptides.ToArray() },
+                cols.Select(c => c.ToArray()).ToList());
+            groupIds.Clear();
+            peptides.Clear();
+            foreach (var c in cols)
+                c.Clear();
+        }
+
         foreach (var row in rows)
         {
             if (row.Residuals is null)
                 continue;
-            for (var p = 0; p < row.ResidualPeptides!.Count; p++, at++)
+            for (var p = 0; p < row.ResidualPeptides!.Count; p++)
             {
-                groupIds[at] = row.Group.GroupId;
-                peptides[at] = row.ResidualPeptides[p];
+                groupIds.Add(row.Group.GroupId);
+                peptides.Add(row.ResidualPeptides[p]);
                 for (var j = 0; j < samples.Count; j++)
-                    sampleColumns[j][at] = row.Residuals[p, j];
+                    cols[j].Add(row.Residuals[p, j]);
             }
+            row.Release();
+            if (groupIds.Count >= batchRows)
+                Flush();
         }
-
-        writer.WriteRowGroup(new Array[] { groupIds, peptides }, sampleColumns);
+        Flush();
     }
+
+    /// <summary>Residual cells buffered before a row group is flushed; mirrors the transition stage's cap.</summary>
+    private const int MaxResidualCellsPerBatch = 4_000_000;
 
     private sealed class ProteinRow
     {
@@ -204,11 +228,21 @@ public sealed class ProteinRollup
         public required bool LowConfidence { get; init; }
         public required double[] Values { get; init; }
 
-        /// <summary>Peptide names for <see cref="Residuals"/>' rows; null when no polish ran.</summary>
-        public List<string>? ResidualPeptides { get; init; }
+        /// <summary>Peptide names for <see cref="Residuals"/>' rows; null when not captured.</summary>
+        public List<string>? ResidualPeptides { get; set; }
 
         /// <summary>[nPeptides, nSamples] polish residuals, or null when not captured.</summary>
-        public double[,]? Residuals { get; init; }
+        public double[,]? Residuals { get; set; }
+
+        /// <summary>
+        /// Drop the residuals once written. They are the largest thing a row holds - [nPeptides x
+        /// nSamples] doubles - and every group's are live at once until the writer reaches them.
+        /// </summary>
+        public void Release()
+        {
+            Residuals = null;
+            ResidualPeptides = null;
+        }
     }
 
     private static void WriteOutput(string outputPath, IReadOnlyList<string> samples, List<ProteinRow> rows)
