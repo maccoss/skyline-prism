@@ -12,6 +12,45 @@ Tiny byte-faithful slices of two real plate exports (`mini_plate1.csv`, `mini_pl
 `example-files/subset/2025-IRType-Plasma-PRISM-Plate{1,2}_subset.csv`) plus the golden
 `merged_data.parquet` from `data_io.merge_and_sort_streaming`. Drives `MergeParityTests`.
 
+`mini_plate1.parquet` / `mini_plate2.parquet` are **the same 2000 rows in Skyline's parquet
+export convention** (~24 KB each - a fifth the size of the merged golden, and 1/20th of the
+CSVs). They drive `ExportFormatParityTests`.
+
+### Skyline's two export conventions (why the parquet fixtures exist)
+
+Skyline's CSV and parquet exports of the same report are **not** the same table, and the tool
+prefers parquet in production - so before these fixtures, the branch of `DuckDbMerge` that
+production actually takes (`read_parquet`, and `DESCRIBE` for the header) had no coverage at all.
+
+| | CSV export | parquet export |
+|---|---|---|
+| names | spaced English (`Protein Accession`) | PascalCase, no spaces (`ProteinAccession`) |
+| TIC column | `Total Ion Current Area` | `TicArea` |
+| charges | DuckDB infers (Int64 here) | Int32 |
+| `Area` | DuckDB infers - **Int64** for these slices, whose areas are all whole numbers | **Double** |
+
+`SkylineColumns.FindColumn` normalizes case, spaces and underscores, which covers every one of
+these except `TicArea` - and nothing in Core reads TIC or `Coeluting`. The type differences are
+real though: the rollup sees integer columns on the CSV path and floating-point ones on the
+parquet path, which is exactly what the parity test pins down.
+
+One difference is expected and asserted rather than fixed: the **key column's name is inherited
+from the input schema**, so `peptides_rollup.parquet` is keyed by `Peptide Modified Sequence
+Unimod Ids` from a CSV cohort and `PeptideModifiedSequenceUnimodIds` from a parquet one. Every
+value is bit-identical; only that one column name differs.
+
+Regenerate with `Convert.cs`'s mapping (DuckDB, casting each CSV column to the parquet export's
+type and renaming it):
+
+```sql
+COPY (SELECT CAST("Protein Accession" AS VARCHAR) AS "ProteinAccession",
+             CAST("Precursor Charge"  AS INTEGER) AS "PrecursorCharge",
+             CAST("Area"              AS DOUBLE ) AS "Area",
+             CAST("Total Ion Current Area" AS DOUBLE) AS "TicArea", ... -- all 24 columns
+      FROM read_csv('mini_plate1.csv', header=true, delim=',', all_varchar=true))
+TO 'mini_plate1.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)
+```
+
 ## `mini/e2e-sum/`
 `config.yaml` is a fully deterministic pipeline config (sum transition rollup, median
 global normalization, standard ComBat, median-polish protein rollup, median protein
@@ -33,6 +72,31 @@ The dataset: 6 peptides across 3 proteins, 2 batches, 13 reference (`-Pool_`) + 
   name, so order is not itself asserted.
 - Intermediate parquet (`peptides_rollup`, `peptides_log2_internal`, `proteins_raw`) are
   LOG2; final `corrected_peptides`/`corrected_proteins` are LINEAR.
+
+## `mini/*/quantities.sha256` - the bit-exact regression gate
+
+One line per output column - `file<TAB>column<TAB>sha256` - hashing the **exact IEEE-754 bits** of
+every value in that column, rows ordered by the key column. Drives `QuantityRegressionTests`.
+
+These exist because the parity tests above cannot catch what they are for. Those compare C#
+against the **Python** goldens with a tolerance (1e-9 for the deterministic core, 3e-2 relative
+for ComBat), which is the right bar for two independent implementations - but it means a C#
+change that moves a quantity by less than the tolerance passes them in silence. The digests
+compare C# against **its own** committed reference, so any change to any value fails and names
+the column that moved.
+
+Bits, not formatted text, so signed zero, NaN payloads and last-ulp drift are all caught. Rows
+are sorted by key because output row order is explicitly not a parity contract (see CLAUDE.md,
+"C# Stage 1 partitions, and does NOT sort").
+
+> [!CAUTION]
+> **A failure here is the test working.** Do not regenerate to make it pass. Establish which
+> quantity moved and why. If the change is intended and correct, regenerate deliberately and say
+> so in the release notes - it means users' numbers change too.
+
+```bash
+PRISM_UPDATE_DIGESTS=1 dotnet test dotnet/tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj   --filter "FullyQualifiedName~QuantityRegressionTests"
+```
 
 ## Regenerating
 
