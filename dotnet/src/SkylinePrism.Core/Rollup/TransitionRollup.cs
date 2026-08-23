@@ -170,6 +170,16 @@ public sealed class TransitionRollup
         // on a 2-plate cohort; n_workers=1 was byte-identical, which is what localized it here.
         using var inputQ = new BlockingCollection<(long Seq, PeptideBlock Block)>(dop * 4);
         using var outputQ = new BlockingCollection<(long Seq, PeptideResult? Result)>(dop * 4);
+
+        // Sliding window over IN-FLIGHT peptides. The queue capacities alone do NOT bound the
+        // reorder buffer: if the block holding the next sequence number is a straggler, the writer
+        // keeps draining outputQ into `pending` (it must - the missing result may be behind others
+        // in the queue), which frees consumers to keep running, which lets the producer keep
+        // reading. Nothing then stops `pending` from growing to the whole cohort, and each entry is
+        // a peptide x samples row. The producer takes a slot per block and the writer returns it
+        // once that sequence has been emitted, so in-flight work - and therefore `pending` - is
+        // capped regardless of how uneven the per-peptide cost is.
+        using var window = new SemaphoreSlim(dop * 8);
         Exception? error = null;
         var filtered = 0;
 
@@ -185,6 +195,15 @@ public sealed class TransitionRollup
                     // Stopping the producer drains the queue and ends the consumers, so one check here
                     // stops the whole stage rather than needing one per worker.
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    // Poll rather than block outright: if a consumer has died, no slot will ever be
+                    // returned, and waiting forever would hang the stage instead of surfacing the
+                    // error the consumer recorded.
+                    while (!window.Wait(100, cancellationToken))
+                    {
+                        if (Volatile.Read(ref error) is not null)
+                            return;
+                    }
                     inputQ.Add((seq++, b));
                 }
             }
@@ -231,6 +250,7 @@ public sealed class TransitionRollup
                 if (ready is not null)
                     sink.Add(ready);
                 next++;
+                window.Release();
             }
         }
 
