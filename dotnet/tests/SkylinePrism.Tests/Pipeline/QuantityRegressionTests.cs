@@ -21,6 +21,18 @@ namespace SkylinePrism.Tests.Pipeline;
 /// column that moved.
 /// </para>
 /// <para>
+/// <b>Inputs are parquet, not CSV.</b> Skyline's CSV PRISM report was large and slow to export, so
+/// the report moved to parquet and the tool now exports that by default; new cohorts arrive as
+/// parquet, so that is the path this gate watches. The CSV path is not abandoned -
+/// <see cref="SkylinePrism.Tests.IO.ExportFormatParityTests"/> proves the two exports yield
+/// bit-identical quantities, and the cross-language parity tests still drive CSV against the
+/// Python goldens.
+/// </para>
+/// <para>
+/// <b>Windows only</b>, see <see cref="ReferencePlatformTheoryAttribute"/>: bit equality is only
+/// meaningful against a fixed libm, and the other platforms keep their 1e-9 parity coverage.
+/// </para>
+/// <para>
 /// <b>When this fails, that is the test doing its job.</b> Do not regenerate the digests to make it
 /// pass. Find out which quantity moved and why; if the change is intended and correct, regenerate
 /// deliberately (see <c>dotnet/tests/fixtures/README.md</c>) and say so in the release notes,
@@ -42,7 +54,7 @@ public class QuantityRegressionTests
         new object[] { "e2e-consensus" },
     };
 
-    [Theory]
+    [ReferencePlatformTheory]
     [MemberData(nameof(Fixtures2))]
     public void Quantities_AreBitIdenticalToCommittedReference(string fixture)
     {
@@ -50,8 +62,8 @@ public class QuantityRegressionTests
         var dir = TestSupport.Fixtures.Path2("mini", fixture);
         var inputs = new[]
         {
-            Path.Combine(mergeDir, "mini_plate1.csv"),
-            Path.Combine(mergeDir, "mini_plate2.csv"),
+            Path.Combine(mergeDir, "mini_plate1.parquet"),
+            Path.Combine(mergeDir, "mini_plate2.parquet"),
         };
         var config = PrismConfig.Load(Path.Combine(dir, "config.yaml"));
 

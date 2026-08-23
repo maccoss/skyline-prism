@@ -94,9 +94,38 @@ are sorted by key because output row order is explicitly not a parity contract (
 > quantity moved and why. If the change is intended and correct, regenerate deliberately and say
 > so in the release notes - it means users' numbers change too.
 
+### Inputs are parquet
+
+Skyline's CSV PRISM report was large and slow to export, so the report moved to **parquet** and the
+tool now exports that by default - new cohorts arrive as parquet, so that is the path this gate
+watches. The digests are therefore keyed on the parquet schema's column names
+(`PeptideModifiedSequenceUnimodIds`). CSV is still covered: `ExportFormatParityTests` proves the two
+exports give bit-identical quantities, and the cross-language parity tests still drive CSV against
+the Python goldens.
+
+### Windows only, and why
+
+Measured on this repo's CI: a commit that is bit-exact on Windows differs on **ubuntu and macOS** -
+in 5-6 columns for the ComBat-disabled fixtures, and in **389** columns for `e2e-sum`, the one
+fixture with ComBat enabled, whose empirical-Bayes estimation is dense in `exp`/`log`.
+
+That is not a defect. IEEE-754 pins `+ - * / sqrt`, so those agree everywhere, but `Math.Log`,
+`Math.Exp` and `Math.Pow` delegate to the platform's libm and are not required to return identical
+bits. So the gate is pinned to Windows - the platform the Skyline external tool runs on, and the one
+PRISM's numbers are most often produced on. Linux and macOS keep the 1e-9 cross-language parity
+tests, which catch any change big enough to alter a reported result; what the digest adds on top is
+sub-tolerance drift, which is inherently platform-specific and will show up on Windows anyway.
+
+### Regenerating
+
 ```bash
 PRISM_UPDATE_DIGESTS=1 dotnet test dotnet/tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj   --filter "FullyQualifiedName~QuantityRegressionTests"
+dotnet build dotnet/tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj   # <- required
 ```
+
+The rebuild is not optional. Regeneration writes to the **source** tree, but the test reads the copy
+made next to the test assembly at build time - skip it and the very next run compares fresh output
+against the stale digests and fails everywhere.
 
 ## Regenerating
 
