@@ -268,6 +268,36 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
 - [~] End-to-end `output-lib-sum` parity gate — the Carafe-TSV loader now exists; the golden fixture
       still needs to be wired as a `PipelineMethodParityTests` case
 
+## Deliberate behavioural divergence: where ComBat is applied
+
+Since dotnet-v26.15.0 the two engines **intentionally disagree on the protein output whenever ComBat is
+enabled**, and this is the one place where "the engines produce the same numbers" is no longer the goal.
+
+- **Python**: the protein arm consumes the ComBat-corrected peptide matrix and is then corrected again
+  at Stage 4c, so protein quantities are batch-corrected twice.
+- **C#**: the arms split after peptide normalization and before any ComBat, so each output is corrected
+  exactly once at its own reporting level.
+
+C# is the better of the two, measured on a 4-batch AD cohort with 5 held-out QC injections: correcting
+twice moved protein-level held-out QC CV 12.7% -> 13.0% and tripped the overfitting heuristic (the
+reference improved 3x more than the QC); correcting once gives 16.3% -> 12.4% with no warning. The
+published protein output moves by a median 2.7% between the two behaviours (two independent cohorts
+agree at 2.7% and 2.9%).
+
+Consequences for the test suite, so nobody reads them as gaps:
+
+- `PipelineParityTests` no longer compares `corrected_proteins` on `e2e-sum`, the only ComBat-enabled
+  fixture, and says why at the assertion. Structural agreement (same groups, same leading proteins) is
+  still asserted.
+- Protein-arm NUMERIC parity with Python is still exact where it is meaningful: the five ComBat-disabled
+  fixtures in `PipelineMethodParityTests` compare `proteins_raw` and `corrected_proteins` at 1e-9. What
+  is uncompared is only the interaction with ComBat - the thing the engines no longer share.
+- `peptides_rollup` and `corrected_peptides` remain bit-identical between the engines; the peptide arm
+  is untouched by this.
+
+Python is legacy and slated for retirement, so it was not changed to match. If it ever is, this section
+and that assertion both come back.
+
 ## Config surface & parity (parameter exposure)
 
 Audited the full C# config against Python's `KNOWN_CONFIG_KEYS` + `config-template`. Policy: every Python
