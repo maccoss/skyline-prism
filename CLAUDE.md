@@ -768,11 +768,33 @@ This section tracks what's currently working, what needs attention, and what's n
 
 ### [ISSUE] Known Issues / Needs Attention
 
-**ComBat Evaluation:**
+**Reference-anchored ComBat degrades held-out QC on a real cohort - unexplained, do not
+recommend it until this is understood.**
 
-- **Automatic fallback not implemented**: QC-based decision to revert correction if quality degrades
-- **Reference-anchored evaluation**: Method exists but automatic QC evaluation not active
-- **Current behavior**: Always applies ComBat when enabled; need to add quality checks
+Measured on AD-Clean-SMTG (4 batches; 62 experimental, 5 `TRPR` reference, 5 `HADT` held-out QC,
+biology balanced across batches):
+
+| ComBat mode | peptide-level QC CV | protein-level QC CV |
+|---|---|---|
+| standard | 23.9% -> **19.8%** (helps) | see the two-arm note below |
+| reference-anchored (`TRPR`) | 20.3% -> **25.7%** (worse, auto-reverted) | 16.2% -> **18.3%** (worse, auto-reverted) |
+
+So on this cohort the anchored estimator is worse than the unanchored one, at both levels, and
+`auto_revert` backed it out both times. The leading hypothesis is that **one reference injection per
+batch is too thin an anchor**: with n=1 the scale term is not estimable at all (the run reports
+`UnestimableScales`), and the location term is pinned to a single injection's idiosyncrasies rather
+than to the batch. That is a hypothesis, not a diagnosis - it has not been confirmed, and the
+alternative (a defect in the anchored estimator) has not been ruled out. `RefAnchoredCrossEngineTests`
+pins C# to Python across five scenarios, so if it is a defect it is one both engines share.
+
+To investigate: whether the degradation tracks the reference count per batch (compare against a cohort
+with >= 2 references per batch), and whether `no_reference_batch` policy or the location-only path
+behaves differently. Until then, prefer standard ComBat and keep `auto_revert` on.
+
+**`auto_revert` is implemented and works** (`BatchCorrectionEvaluator`, `batch_correction.auto_revert`,
+C# only, default `false`). It reverts when the control CV worsens by >10% and warns separately on
+reference/QC overfitting. It caught both reversions above. This entry previously claimed the automatic
+fallback was not implemented; that was stale.
 
 ### [DISABLED] Implemented but Disabled by Default
 
