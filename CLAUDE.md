@@ -789,7 +789,7 @@ pins C# to Python across five scenarios, so if it is a defect it is one both eng
 
 To investigate: whether the degradation tracks the reference count per batch (compare against a cohort
 with >= 2 references per batch), and whether `no_reference_batch` policy or the location-only path
-behaves differently. Until then, prefer standard ComBat and keep `auto_revert` on.
+behaves differently. Until then, prefer standard ComBat. On C# also set `auto_revert: true` - it is what caught both reversions above - but note it is **C# only**: a Python run has no equivalent and will apply the worse correction silently, which makes this finding more consequential there, not less.
 
 **`auto_revert` is implemented and works** (`BatchCorrectionEvaluator`, `batch_correction.auto_revert`,
 C# only, default `false`). It reverts when the control CV worsens by >10% and warns separately on
