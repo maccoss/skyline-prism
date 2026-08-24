@@ -224,6 +224,12 @@ internal static class NormalizeCorrectStage
         // Writing it here rather than holding the normalized matrix until after ComBat also keeps
         // peak memory unchanged - `normalized` is still freed as soon as correction produces a
         // distinct matrix.
+        // Built once here, before the first of the two writes that need it. Both the internal LOG2
+        // file (written next, pre-ComBat) and the corrected output (written after correction) take the
+        // same filtered metadata, and materializing it twice would allocate a full set of columns for
+        // nothing.
+        var metaCols = BuildMetaCols();
+
         if (r.InternalLog2Path is not null)
         {
             var normCols = new double[samples.Count][];
@@ -233,7 +239,7 @@ internal static class NormalizeCorrectStage
                 for (var row = 0; row < n; row++)
                     normCols[j][row] = normalized[row, j];
             }
-            ParquetWideWriter.Write(r.InternalLog2Path, BuildMetaCols(), samples, normCols, n);
+            ParquetWideWriter.Write(r.InternalLog2Path, metaCols, samples, normCols, n);
         }
 
         double[,] corrected;
@@ -285,9 +291,8 @@ internal static class NormalizeCorrectStage
             report($"  QC CV (median): {beforeQcCv:F1}% -> {CvMetrics.MedianCv(corrected, r.QcIdx):F1}% (before -> after)");
 
         // Meta columns (filtered to kept rows). A local function because the internal LOG2 file is
-        // written BEFORE correction (see below) and the corrected file after, so both need them.
-        var metaCols = BuildMetaCols();
-
+        // written BEFORE correction and the corrected file after, so both need them; it is called
+        // once, above, and the result reused.
         List<ParquetWideWriter.MetaColumn> BuildMetaCols()
         {
         var metaCols = new List<ParquetWideWriter.MetaColumn>();
