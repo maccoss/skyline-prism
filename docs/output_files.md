@@ -20,7 +20,7 @@ output_dir/
 ├── corrected_peptides.parquet      # Final peptide quantities (LINEAR scale)
 ├── corrected_proteins.parquet      # Final protein quantities (LINEAR scale)
 ├── peptides_rollup.parquet         # Peptide quantities before normalization (LOG2 scale)
-├── peptides_log2_internal.parquet  # Peptide quantities after normalization (LOG2 scale, internal use)
+├── peptides_log2_internal.parquet  # Peptide quantities after normalization, BEFORE ComBat (LOG2, internal)
 ├── proteins_raw.parquet            # Protein quantities before normalization (LOG2 scale)
 ├── merged_data/                    # Merged transition-level data (C#: partitioned by peptide bucket)
 │   ├── _pep_bucket=0/*.parquet     #   one directory per bucket; count scales with cohort size
@@ -231,7 +231,20 @@ column, which its chunked rollup consumes positionally.
 
 ### peptides_log2_internal.parquet
 
-**Purpose**: Peptide quantities after normalization and batch correction, in log2 scale. Used internally for protein rollup.
+**Purpose**: Peptide quantities after normalization and **before** batch correction, in log2 scale.
+Consumed by the protein rollup.
+
+The "before batch correction" is the point of the file, not an accident of ordering. The protein arm
+branches here so that the protein output is ComBat-corrected exactly once, at its own reporting level
+(Stage 4c), rather than inheriting the peptide correction and then being corrected again. Measured on a
+4-batch AD cohort, correcting twice moved held-out QC CV the wrong way (12.7% -> 13.0%) and tripped the
+overfitting heuristic; correcting once gives 16.3% -> 12.4%.
+
+> [!NOTE]
+> Through dotnet-v26.14.1 this file held post-ComBat values, despite this page always describing it as
+> "after normalization". If you compare a cohort across that boundary, `proteins_raw` and
+> `corrected_proteins` move - median ~2.7% on the published protein output, with a long tail - while
+> `peptides_rollup` and `corrected_peptides` are bit-identical.
 
 **Scale**: LOG2
 
