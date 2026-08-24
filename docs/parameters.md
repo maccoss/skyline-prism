@@ -201,7 +201,7 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 | Key | Default | Description | Availability |
 |-----|---------|-------------|--------------|
 | `format` | `parquet` | `parquet`, `csv`, `tsv` | **Both** |
-| `include_residuals` | `true` | Write median-polish residuals for outlier/proteoform analysis: `peptides_rollup_residuals.parquet` (per transition) and `proteins_raw_residuals.parquet` (per peptide), each written only when its stage uses `median_polish` | **Both** |
+| `include_residuals` | `true` | Write median-polish residuals for outlier/proteoform analysis: `peptides_rollup_residuals.parquet` (per transition) and `proteins_raw_residuals.parquet` (per peptide), each written only when its stage uses `median_polish`. C# additionally writes `corrected_peptides_residuals.parquet` / `corrected_proteins_residuals.parquet` - the same residuals rescaled by the ComBat that applied to the output they accompany, so they are comparable across batches | **Both** (the `corrected_*` pair is **C# only**) |
 | `compress` | — | Compress output files | **Python only** (parquet is already compressed) |
 
 ---

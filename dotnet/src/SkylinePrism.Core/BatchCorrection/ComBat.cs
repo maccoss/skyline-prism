@@ -23,6 +23,37 @@ public sealed class ComBatDiagnostics
     /// unscaled; see <see cref="ComBat"/> remarks.
     /// </summary>
     public long UnestimableScales { get; internal set; }
+
+    /// <summary>
+    /// The per-batch scale ComBat applied, and the maps needed to index it. Set only when a caller
+    /// asks for it, because it is the one diagnostic that costs memory (nBatch x nFeatures doubles).
+    /// <para>
+    /// This exists so residuals can be corrected consistently with the values they belong to. A
+    /// residual is a deviation, so ComBat's location terms cancel from it and only the scale
+    /// survives - see <see cref="SkylinePrism.Core.Pipeline.ResidualScaler"/>.
+    /// </para>
+    /// </summary>
+    public ComBatScaling? Scaling { get; internal set; }
+}
+
+/// <summary>
+/// ComBat's per-(batch, feature) scale, plus the two maps required to use it.
+/// <para>
+/// <see cref="DeltaStar"/> is indexed by ComBat's ACTIVE feature index, not by the caller's feature
+/// row: features ComBat cannot estimate are held out and the rest compacted. Indexing it by row
+/// would silently apply a neighbouring feature's scale, so go through <see cref="ActiveOfRow"/>.
+/// </para>
+/// </summary>
+public sealed class ComBatScaling
+{
+    /// <summary>[batch, active feature] variance ratio. Divide deviations by its square root.</summary>
+    public required double[,] DeltaStar { get; init; }
+
+    /// <summary>Feature row -&gt; active index, or -1 for a row ComBat held out and passed through.</summary>
+    public required int[] ActiveOfRow { get; init; }
+
+    /// <summary>Sample -&gt; batch index, or -1 for a sample no batch corrected.</summary>
+    public required int[] BatchOfSample { get; init; }
 }
 
 /// <summary>

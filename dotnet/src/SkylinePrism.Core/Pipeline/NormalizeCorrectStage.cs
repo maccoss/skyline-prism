@@ -41,6 +41,19 @@ internal sealed record NormalizeCorrectRequest
     /// <summary>LOG2 intermediate to write (peptide stage), or null to write only the corrected output.</summary>
     public string? InternalLog2Path { get; init; }
 
+    /// <summary>
+    /// The raw (uncorrected) residual file this stage's features came from, and where to write the
+    /// batch-corrected version of it. Both must be set for either to be used.
+    /// <para>
+    /// The corrected file is derived rather than recomputed: a residual is a deviation, so ComBat's
+    /// location terms cancel and only its per-batch scale applies. See <see cref="ResidualScaler"/>.
+    /// </para>
+    /// </summary>
+    public string? RawResidualsPath { get; init; }
+
+    /// <summary>Where to write the batch-corrected residuals; see <see cref="RawResidualsPath"/>.</summary>
+    public string? CorrectedResidualsPath { get; init; }
+
     /// <summary>Published output, always LINEAR. .parquet, else delimited by extension.</summary>
     public required string CorrectedLinearPath { get; init; }
 
@@ -243,13 +256,14 @@ internal static class NormalizeCorrectStage
         }
 
         double[,] corrected;
+        ComBatDiagnostics? diagnostics = null;
         if (!r.CombatEnabled)
         {
             corrected = normalized;
         }
         else
         {
-            var diagnostics = new ComBatDiagnostics();
+            diagnostics = new ComBatDiagnostics();
             var combatOut = r.ReferenceAnchored && r.ReferenceMask is not null && r.ReferenceMask.Any(m => m)
                 ? ReferenceAnchoredComBat.Run(
                     normalized, r.BatchLabels, r.ReferenceMask,
@@ -280,6 +294,23 @@ internal static class NormalizeCorrectStage
                 corrected = combatOut;
             }
         }
+        // Corrected residuals, before `normalized` is released. Scaling is null when no correction
+        // survived - disabled, or reverted by auto_revert - in which case the corrected file is a
+        // faithful copy, so it is always present for a reader.
+        // File.Exists, not just a configured path: the raw residual file is only written by a
+        // median-polish stage, so for sum/topN/maxLFQ/iBAQ there is nothing to scale and building
+        // featureKeys for every kept feature would allocate for a file that will never be read.
+        if (r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null
+            && File.Exists(r.RawResidualsPath))
+        {
+            var keyName = r.MetaSpec[0].Name;
+            var keyAll = table.GetString(keyName);
+            var featureKeys = keep.Select(i => keyAll[i] ?? string.Empty).ToList();
+            ResidualScaler.Write(
+                r.RawResidualsPath, r.CorrectedResidualsPath, samples, featureKeys,
+                ReferenceEquals(corrected, normalized) ? null : diagnostics?.Scaling);
+        }
+
         if (!ReferenceEquals(corrected, normalized))
             normalized = null!; // dead after correction
 

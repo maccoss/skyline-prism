@@ -6,6 +6,25 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **Residuals now come in a batch-corrected form too**, so they can be compared across batches.
+  `corrected_peptides_residuals.parquet` and `corrected_proteins_residuals.parquet` sit beside the raw
+  `peptides_rollup_residuals.parquet` / `proteins_raw_residuals.parquet` and carry the same rows and
+  columns, rescaled by the ComBat that applied to the output each one accompanies.
+
+  Only ComBat's **scale** is applied, and that is exact rather than an approximation: a residual is a
+  deviation from a fitted profile, so ComBat's location terms cancel out of it and
+  `e* = e / sqrt(delta[batch, feature])` is the whole transform. Normalization needs no handling at all -
+  peptide and protein normalization are absorbed into the median polish's column effect, so residuals
+  are already invariant to them.
+
+  The files are written even when ComBat is disabled or reverted, as faithful copies, so a script can
+  read the corrected file unconditionally instead of branching on whether correction ran. Features
+  ComBat held out, samples in no corrected batch, and (batch, feature) pairs whose scale was not
+  estimable - common when a batch carries a single reference injection - are scaled by exactly 1.0,
+  because ComBat did nothing to them either.
+
+  Both new files are covered by the bit-parity gate.
+
 ## Bug Fixes
 
 ## Performance

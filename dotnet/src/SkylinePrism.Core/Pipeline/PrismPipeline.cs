@@ -368,6 +368,13 @@ public sealed class PrismPipeline
             },
             Samples = samples,
             BatchLabels = batchLabels,
+            // Corrected residuals for the peptide arm: rows are transitions, features are peptides.
+            RawResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "peptides_rollup_residuals.parquet")
+                : null,
+            CorrectedResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "corrected_peptides_residuals.parquet")
+                : null,
             CombatEnabled = peptideCombat,
             NormMethod = config.GlobalNormalization.Method,
             InternalLog2Path = internalPath,
@@ -478,6 +485,13 @@ public sealed class PrismPipeline
             MetaSpec = proteinMeta,
             Samples = samples,
             BatchLabels = batchLabels,
+            // Corrected residuals for the protein arm: rows are peptides, features are groups.
+            RawResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "proteins_raw_residuals.parquet")
+                : null,
+            CorrectedResidualsPath = config.Output.IncludeResiduals
+                ? Path.Combine(outputDir, "corrected_proteins_residuals.parquet")
+                : null,
             CombatEnabled = proteinCombat,
             NormMethod = config.ProteinNormalization.Method,
             InternalLog2Path = null,

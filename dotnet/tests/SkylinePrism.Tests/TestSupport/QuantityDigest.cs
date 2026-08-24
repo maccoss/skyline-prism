@@ -46,7 +46,9 @@ public static class QuantityDigest
         "proteins_raw.parquet",
         "proteins_raw_residuals.parquet",
         "corrected_peptides.parquet",
+        "corrected_peptides_residuals.parquet",
         "corrected_proteins.parquet",
+        "corrected_proteins_residuals.parquet",
     };
 
     /// <summary>
