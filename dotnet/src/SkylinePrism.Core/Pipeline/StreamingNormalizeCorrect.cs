@@ -334,6 +334,13 @@ internal static class StreamingNormalizeCorrect
             ? r.DerivedMeta
             : null;
 
+        // Feature keys of the KEPT rows, in matrix order - the residual scaler needs them to map a
+        // residual row back to the feature ComBat corrected. Collected here rather than in a separate
+        // pass, and only when a corrected residual file was asked for.
+        var wantResiduals = r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null;
+        var featureKeys = wantResiduals ? new List<string>() : null;
+        var keyColName = r.MetaSpec[0].Name;
+
         using var internalWriter = r.InternalLog2Path is null
             ? null
             : StreamingWideWriter.Create(r.InternalLog2Path, metaTypes, samples);
@@ -425,6 +432,17 @@ internal static class StreamingNormalizeCorrect
             for (var m = 0; m < r.MetaSpec.Count; m++)
                 meta.Add(FilterMeta(metaRaw[m], keptRows, r.MetaSpec[m].Type));
 
+            if (featureKeys is not null)
+            {
+                var keyIdx = 0;
+                for (var m = 0; m < r.MetaSpec.Count; m++)
+                    if (r.MetaSpec[m].Name == keyColName)
+                        keyIdx = m;
+                if (meta[keyIdx] is string?[] keyCol)
+                    foreach (var v in keyCol)
+                        featureKeys.Add(v ?? string.Empty);
+            }
+
             internalWriter?.WriteRowGroup(meta, log2Out);
 
             // Derived (parsimony) columns go on the CORRECTED output only: the internal log2 file
@@ -443,6 +461,38 @@ internal static class StreamingNormalizeCorrect
             }
             correctedWriter.WriteRowGroup(correctedMeta, linearOut);
             written += keptRows.Count;
+        }
+
+        if (featureKeys is not null)
+        {
+            // `batching` is null here when no correction was applied - either disabled, or reverted by
+            // auto_revert, since the caller passes null in both cases. Null scaling then makes the
+            // corrected residual file a faithful copy, so it is always present for a reader.
+            ComBatScaling? scaling = null;
+            if (batching is not null && deltaStar is not null && activeOfKept is not null)
+            {
+                var nBatch = deltaStar.Length;
+                var nActive = nBatch > 0 ? deltaStar[0].Length : 0;
+                var delta = new double[nBatch, nActive];
+                for (var i = 0; i < nBatch; i++)
+                    for (var f = 0; f < nActive; f++)
+                        delta[i, f] = deltaStar[i][f];
+
+                var batchOfSample = new int[nS];
+                Array.Fill(batchOfSample, -1);
+                for (var i = 0; i < batching.Plan.Apply.Count; i++)
+                    foreach (var sample in batching.Plan.Apply[i])
+                        batchOfSample[sample] = i;
+
+                scaling = new ComBatScaling
+                {
+                    DeltaStar = delta,
+                    ActiveOfRow = activeOfKept,
+                    BatchOfSample = batchOfSample,
+                };
+            }
+            ResidualScaler.Write(
+                r.RawResidualsPath!, r.CorrectedResidualsPath!, samples, featureKeys, scaling);
         }
 
         return written;

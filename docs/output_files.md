@@ -29,6 +29,8 @@ output_dir/
 ├── merged_data.fingerprints.json   # Python: same purpose
 ├── peptides_rollup_residuals.parquet  # Per-TRANSITION median-polish residuals (if include_residuals)
 ├── proteins_raw_residuals.parquet  # Per-PEPTIDE median-polish residuals (if include_residuals)
+├── corrected_peptides_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
+├── corrected_proteins_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── metadata.json                   # Complete provenance and processing parameters
@@ -411,6 +413,60 @@ count is not the peptide count. Shared peptides appear once per group they belon
 > polishes survives only as the `NAllMappedPeptides` **count**. Rebuilding groups from that CSV and
 > re-running the rollup gives a different peptide set per group, and therefore different abundances and
 > residuals. Re-run from the source report instead.
+
+---
+
+### corrected_peptides_residuals.parquet / corrected_proteins_residuals.parquet
+
+**Purpose**: the residuals above, on the same scale as the corrected output they accompany. Use these
+whenever you are comparing residuals **across batches**; use the raw ones to see what the polish itself
+found, before any batch correction.
+
+**Written when**: `output.include_residuals: true` and the corresponding raw residual file exists. They
+are always written when their raw counterpart is - including when ComBat is disabled or reverted, in
+which case they are faithful copies. That is deliberate: a script can read the corrected file
+unconditionally without branching on whether correction ran.
+
+**Scale**: LOG2, like the raw files.
+
+**Columns / rows**: identical to their raw counterparts -
+`corrected_peptides_residuals` mirrors `peptides_rollup_residuals` (one row per peptide x transition),
+`corrected_proteins_residuals` mirrors `proteins_raw_residuals` (one row per protein group x peptide).
+
+#### What "corrected" means here
+
+Only ComBat's **scale** is applied, not its location terms, and that is not an approximation - it falls
+out of what a residual is. ComBat's transform on a value is
+
+```
+y* = y / sqrt(delta[batch, feature]) + c(batch, feature)
+```
+
+and a residual is a deviation from a fitted profile, so the constant `c` cancels and only the scale
+survives:
+
+```
+e* = e / sqrt(delta[batch, feature])
+```
+
+`delta` is a **variance** ratio, hence the square root. Three cases scale by exactly 1.0, each because
+ComBat itself did nothing there: a feature ComBat held out (no variance, or absent from a batch), a
+sample in no corrected batch, and a (batch, feature) whose scale was not estimable - fewer than two
+observations, or no spread among them, which is common when a batch carries a single reference
+injection.
+
+> [!NOTE]
+> Normalization is **not** applied, and does not need to be. Peptide normalization shifts each peptide
+> by a per-(peptide, sample) amount and protein normalization by a per-sample amount, and both are
+> absorbed into the median polish's column effect - so residuals are already invariant to them. Only
+> ComBat's scale changes a deviation. This is why there is no "normalized residuals" file.
+
+> [!IMPORTANT]
+> The two files can use **different** per-batch scales, because each is corrected by the ComBat that
+> applied to the output it accompanies: `corrected_peptides_residuals` by the peptide-level delta,
+> `corrected_proteins_residuals` by the protein-level one. Since the arms are corrected independently
+> (see `peptides_log2_internal.parquet`), that is the correct behaviour rather than an inconsistency -
+> but it does mean the two files are not on a common scale and should not be pooled.
 
 ---
 

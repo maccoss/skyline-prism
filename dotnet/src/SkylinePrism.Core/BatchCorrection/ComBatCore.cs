@@ -375,6 +375,26 @@ internal static class ComBatCore
         {
             diagnostics.HeldOutFeatures = nFeatures - nf;
             diagnostics.UnestimableScales = unestimableScales;
+
+            // Both estimators reach here - standard and reference-anchored differ only in the plan -
+            // so populating this once covers both.
+            var activeOfRow = new int[nFeatures];
+            Array.Fill(activeOfRow, -1);
+            for (var a = 0; a < activeRows.Count; a++)
+                activeOfRow[activeRows[a]] = a;
+
+            var batchOfSample = new int[nSamples];
+            Array.Fill(batchOfSample, -1);
+            for (var i = 0; i < nBatch; i++)
+                foreach (var sample in plan.Apply[i])
+                    batchOfSample[sample] = i;
+
+            diagnostics.Scaling = new ComBatScaling
+            {
+                DeltaStar = deltaStar,
+                ActiveOfRow = activeOfRow,
+                BatchOfSample = batchOfSample,
+            };
         }
         return result;
     }
