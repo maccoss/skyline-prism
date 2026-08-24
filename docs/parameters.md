@@ -79,7 +79,7 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 |-----|---------|-------------|--------------|
 | `enabled` | `true` | Master switch (skipped automatically with < 2 batches) | **Both** |
 | `method` | `combat` | Only `combat` is implemented. Other values **abort** in C#. | **Both** (C# validates) |
-| `reference_anchored` | `false` | Estimate batch effects from reference samples across batches | **Both** |
+| `reference_anchored` | `false` | Estimate batch effects from reference samples across batches. **Measured worse than standard ComBat on a real 4-batch cohort with one reference per batch** (held-out QC CV 20.3% -> 25.7%). Prefer standard ComBat until that is understood; on C# also set `auto_revert: true`, which caught and reverted it (Python has no equivalent, so a Python run will apply the worse correction silently) | **Both** |
 | `reference_type` | `reference` | Sample type used as the inter-batch reference | **Both** |
 | `auto_revert` | `false` | Safety net: if ComBat worsens the control (QC, else reference) median CV by >10%, keep the uncorrected data | **C# only** — Python has the revert only in its legacy `normalize_pipeline`, not its production CLI |
 | `peptide_level` | `true` | Apply ComBat at the peptide level. Corrects the peptide output only - the protein arm branches before this, so it is never applied to proteins | **C# only** (Python always both levels) |
