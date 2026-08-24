@@ -27,7 +27,7 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 - **Reference-anchored ComBat batch correction**: Uses inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality
 - **Dual-control validation**: Uses intra-experiment QC samples to validate corrections without overfitting
 - **Sample outlier detection**: Automatic detection of samples with abnormally low signal (one-sided, on LINEAR scale). Can report or exclude outliers.
-- **Two-arm pipeline**: Pipeline splits at peptide level - batch correction is applied at the reporting level (peptide or protein)
+- **Two-arm pipeline**: the arms split after peptide normalization and BEFORE any batch correction, so each output is ComBat-corrected exactly once, at its own reporting level (peptide or protein)
 - **Optional RT correction**: RT-dependent correction is implemented but DISABLED by default (search engine RT calibration may not generalize between samples)
 
 ### Scale Conventions
@@ -163,11 +163,11 @@ Stage 2: Transition → Peptide rollup (Tukey median polish)
     ↓
 Stage 2b: Peptide Global Normalization (median or VSN)
     ↓ [Optional: RT correction - disabled by default]
-Stage 2c: Peptide ComBat Batch Correction
-    ↓
-    ├──────────────────────────────┐
+    ├──────────────────────────────┐   <- the arms split HERE, before any ComBat
     ↓                              ↓
-Stage 3: Protein Parsimony    PEPTIDE OUTPUT
+Stage 3: Protein Parsimony    Stage 2c: Peptide ComBat Batch Correction
+    ↓                              ↓
+    ↓                         PEPTIDE OUTPUT
     ↓                         (corrected_peptides.parquet)
 Stage 4: Peptide → Protein Rollup (median polish)
     ↓
@@ -186,8 +186,15 @@ Stage 5b: QC Report Generation (HTML + plots)
 **Key implementation details:**
 
 - **Streaming processing**: Stage 1 uses DuckDB-based streaming to handle ~47GB datasets
-- **Batch correction applied twice**: Once at peptide level (Stage 2c), once at protein level (Stage 4c)
-- **Independent outputs**: Both peptide and protein files are batch-corrected independently
+- **Batch correction applied ONCE PER ARM, never twice to the same number**: the peptide output is
+  corrected at Stage 2c, the protein output at Stage 4c, and the protein arm branches from the
+  **normalized, pre-ComBat** peptide matrix so it does not inherit the peptide correction. Before
+  dotnet-v26.15.0 the protein arm consumed the ComBat-corrected peptides and was then corrected
+  again, which measurably hurt: on a 4-batch AD cohort the second correction moved held-out QC CV
+  the wrong way (12.7% -> 13.0%) and tripped the overfitting heuristic (reference improved 3x more
+  than QC). Correcting once instead gives 16.3% -> 12.4% and no warning.
+- **Independent outputs**: the two arms are genuinely independent - `corrected_peptides` is
+  bit-identical whether or not protein-level ComBat runs, and vice versa.
 - **Log files**: Automatically saved to output directory with timestamp (`prism_run_YYYYMMDD_HHMMSS.log`)
 - **Metadata columns**: Uses `sample`, `sample_type`, `batch` (with automatic normalization from Skyline formats)
 
@@ -919,7 +926,26 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 ## Design Decisions to Preserve
 
 1. **RT correction from reference only**: Never learn RT effects from experimental samples
-2. **Batch correction at reporting level**: Not before protein rollup
+2. **Batch correction at reporting level**: each arm is corrected once, at the level it reports, and
+   the protein arm branches from the normalized (pre-ComBat) peptide matrix. `peptides_log2_internal.parquet`
+   is therefore post-normalization and pre-ComBat - which is what `docs/output_files.md` always said it
+   was. What the two flags mean:
+
+   | `peptide_level` | `protein_level` | `corrected_peptides` | `corrected_proteins` |
+   |---|---|---|---|
+   | on | on (default) | corrected once | corrected once |
+   | on | **off** | corrected once | **not batch-corrected at all** |
+   | off | on | not corrected | corrected once |
+   | off | off | not corrected | not corrected |
+
+   > [!CAUTION]
+   > The `on / off` row changed meaning in dotnet-v26.15.0 and does so **silently** - there is
+   > deliberately no warning. Before, `protein_level: false` still gave batch-corrected proteins,
+   > because the protein arm inherited the peptide correction through its inputs. Now it gives
+   > proteins with no batch correction whatsoever. That is the setting someone would reach for to
+   > avoid double correction by hand, so it is the one most likely to be misread. Leaving it silent
+   > was a deliberate call (small, mostly in-lab user base); do not "fix" it by reintroducing the
+   > coupling, which is the thing being removed.
 3. **Median polish as default**: Quality-weighted is an alternative, not the primary method
 4. **All charge states as transitions**: Don't separate precursor→peptide rollup; treat all transitions equally
 5. **Cross-platform CLI, Windows-only GUI** (decided, not an interim state): the `prism` CLI ships for

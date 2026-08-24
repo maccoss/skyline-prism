@@ -213,6 +213,35 @@ internal static class NormalizeCorrectStage
         if (!ReferenceEquals(normalized, matrix))
             matrix = null!; // dead once a distinct normalized matrix exists
 
+        // The internal LOG2 file is written HERE - after normalization, BEFORE ComBat - because it
+        // is what the protein arm consumes, and the protein arm must not inherit the peptide arm's
+        // batch correction. Correcting at both levels would batch-correct the protein output twice:
+        // once through its already-corrected peptide inputs and again at Stage 4c. PRISM's design is
+        // one correction per reporting level (CLAUDE.md, "Batch correction at reporting level"), and
+        // this is the line that makes that true. It also matches what docs/output_files.md has always
+        // said this file is: "peptide quantities after normalization".
+        //
+        // Writing it here rather than holding the normalized matrix until after ComBat also keeps
+        // peak memory unchanged - `normalized` is still freed as soon as correction produces a
+        // distinct matrix.
+        // Built once here, before the first of the two writes that need it. Both the internal LOG2
+        // file (written next, pre-ComBat) and the corrected output (written after correction) take the
+        // same filtered metadata, and materializing it twice would allocate a full set of columns for
+        // nothing.
+        var metaCols = BuildMetaCols();
+
+        if (r.InternalLog2Path is not null)
+        {
+            var normCols = new double[samples.Count][];
+            for (var j = 0; j < samples.Count; j++)
+            {
+                normCols[j] = new double[n];
+                for (var row = 0; row < n; row++)
+                    normCols[j][row] = normalized[row, j];
+            }
+            ParquetWideWriter.Write(r.InternalLog2Path, metaCols, samples, normCols, n);
+        }
+
         double[,] corrected;
         if (!r.CombatEnabled)
         {
@@ -261,7 +290,11 @@ internal static class NormalizeCorrectStage
         if (r.QcIdx.Count >= 2)
             report($"  QC CV (median): {beforeQcCv:F1}% -> {CvMetrics.MedianCv(corrected, r.QcIdx):F1}% (before -> after)");
 
-        // Meta columns (filtered to kept rows).
+        // Meta columns (filtered to kept rows). A local function because the internal LOG2 file is
+        // written BEFORE correction and the corrected file after, so both need them; it is called
+        // once, above, and the result reused.
+        List<ParquetWideWriter.MetaColumn> BuildMetaCols()
+        {
         var metaCols = new List<ParquetWideWriter.MetaColumn>();
         foreach (var (name, type) in r.MetaSpec)
         {
@@ -285,6 +318,8 @@ internal static class NormalizeCorrectStage
                     break;
             }
         }
+        return metaCols;
+        }
 
         // Columns computed from another stage rather than read from this file - the peptide output's
         // protein groups, which parsimony knows and the peptide rollup does not. These go on the
@@ -299,20 +334,6 @@ internal static class NormalizeCorrectStage
             foreach (var (name, value) in r.DerivedMeta)
                 correctedMetaCols.Add(ParquetWideWriter.Strings(
                     name, keep.Select(i => value(keys[i] ?? "")).ToArray()));
-        }
-
-        // LOG2 "internal" output only when requested (peptide stage). Scoped so the transpose is
-        // freed before the linear transpose is allocated (peak = corrected + one column set).
-        if (r.InternalLog2Path is not null)
-        {
-            var log2Cols = new double[samples.Count][];
-            for (var j = 0; j < samples.Count; j++)
-            {
-                log2Cols[j] = new double[n];
-                for (var row = 0; row < n; row++)
-                    log2Cols[j][row] = corrected[row, j];
-            }
-            ParquetWideWriter.Write(r.InternalLog2Path, metaCols, samples, log2Cols, n);
         }
 
         // Corrected output is LINEAR (2^log2).

@@ -82,8 +82,8 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | `reference_anchored` | `false` | Estimate batch effects from reference samples across batches. **Measured worse than standard ComBat on a real 4-batch cohort with one reference per batch** (held-out QC CV 20.3% -> 25.7%). Prefer standard ComBat until that is understood; on C# also set `auto_revert: true`, which caught and reverted it (Python has no equivalent, so a Python run will apply the worse correction silently) | **Both** |
 | `reference_type` | `reference` | Sample type used as the inter-batch reference | **Both** |
 | `auto_revert` | `false` | Safety net: if ComBat worsens the control (QC, else reference) median CV by >10%, keep the uncorrected data | **C# only** — Python has the revert only in its legacy `normalize_pipeline`, not its production CLI |
-| `peptide_level` | `true` | Apply ComBat at the peptide level | **C# only** (Python always both levels) |
-| `protein_level` | `true` | Apply ComBat at the protein level | **C# only** |
+| `peptide_level` | `true` | Apply ComBat at the peptide level. Corrects the peptide output only - the protein arm branches before this, so it is never applied to proteins | **C# only** (Python always both levels) |
+| `protein_level` | `true` | Apply ComBat at the protein level. **This is the only batch correction the protein output receives**: since dotnet-v26.15.0 the protein arm consumes the normalized, pre-ComBat peptide matrix, so `protein_level: false` means `corrected_proteins` is **not batch-corrected at all** - previously it inherited the peptide correction through its inputs. Changed silently and by design; see CLAUDE.md "Batch correction at reporting level" | **C# only** |
 
 ---
 

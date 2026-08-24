@@ -410,7 +410,13 @@ internal static class StreamingNormalizeCorrect
 
                 for (var j = 0; j < nS; j++)
                 {
-                    log2Out[j][k] = output[j];
+                    // The internal LOG2 file takes the NORMALIZED value, not the corrected one: it
+                    // is what the protein arm consumes, and the protein arm must not inherit the
+                    // peptide arm's batch correction or the protein output would be corrected twice
+                    // (once through its inputs, again at Stage 4c). One correction per reporting
+                    // level - see the matching comment in NormalizeCorrectStage.RunInMemory.
+                    // With no batching `output` IS `normalized`, so the two agree.
+                    log2Out[j][k] = normalized[j];
                     linearOut[j][k] = Math.Pow(2.0, output[j]); // the published output is LINEAR
                 }
             }
