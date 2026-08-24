@@ -297,7 +297,11 @@ internal static class NormalizeCorrectStage
         // Corrected residuals, before `normalized` is released. Scaling is null when no correction
         // survived - disabled, or reverted by auto_revert - in which case the corrected file is a
         // faithful copy, so it is always present for a reader.
-        if (r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null)
+        // File.Exists, not just a configured path: the raw residual file is only written by a
+        // median-polish stage, so for sum/topN/maxLFQ/iBAQ there is nothing to scale and building
+        // featureKeys for every kept feature would allocate for a file that will never be read.
+        if (r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null
+            && File.Exists(r.RawResidualsPath))
         {
             var keyName = r.MetaSpec[0].Name;
             var keyAll = table.GetString(keyName);

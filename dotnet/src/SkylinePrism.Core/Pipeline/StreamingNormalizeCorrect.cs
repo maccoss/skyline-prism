@@ -337,7 +337,11 @@ internal static class StreamingNormalizeCorrect
         // Feature keys of the KEPT rows, in matrix order - the residual scaler needs them to map a
         // residual row back to the feature ComBat corrected. Collected here rather than in a separate
         // pass, and only when a corrected residual file was asked for.
-        var wantResiduals = r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null;
+        // File.Exists, not just a configured path: only a median-polish stage writes the raw residual
+        // file, and accumulating a key per kept row for a file that will never be read is pure cost
+        // on exactly the large cohorts this path exists to serve.
+        var wantResiduals = r.RawResidualsPath is not null && r.CorrectedResidualsPath is not null
+                            && File.Exists(r.RawResidualsPath);
         var featureKeys = wantResiduals ? new List<string>() : null;
         var keyColName = r.MetaSpec[0].Name;
 

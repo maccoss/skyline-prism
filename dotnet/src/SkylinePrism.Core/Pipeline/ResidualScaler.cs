@@ -73,32 +73,33 @@ internal static class ResidualScaler
                 ? scaling.BatchOfSample[src]
                 : -1;
 
-        // Feature key -> scale per present sample, precomputed once: the residual file has one row per
-        // (feature x transition) or (group x peptide), so a key recurs for every transition and
-        // recomputing per row would repeat the same lookups thousands of times.
-        var scaleByKey = new Dictionary<string, double[]>(StringComparer.Ordinal);
+        // Feature key -> ComBat's ACTIVE feature index. One int per feature, not one array per
+        // feature: the scale depends only on (batch, active), so caching it per (key, sample) would
+        // cost nFeatures x nSamples doubles - ~114 MB on a 74k-peptide, 192-sample cohort and
+        // unbounded as either grows, in a stage that is otherwise bounded.
+        var activeByKey = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var row = 0; row < featureKeys.Count; row++)
         {
             var key = featureKeys[row];
-            if (key is null || scaleByKey.ContainsKey(key))
+            if (key is null || activeByKey.ContainsKey(key))
                 continue;
-            var active = scaling is not null && row < scaling.ActiveOfRow.Length
+            activeByKey[key] = scaling is not null && row < scaling.ActiveOfRow.Length
                 ? scaling.ActiveOfRow[row]
                 : -1;
-            var scale = new double[presentSamples.Count];
-            for (var j = 0; j < presentSamples.Count; j++)
-            {
-                var batch = batchOfPresent[j];
-                if (scaling is null || active < 0 || batch < 0)
-                {
-                    scale[j] = 1.0;
-                    continue;
-                }
-                var delta = scaling.DeltaStar[batch, active];
-                scale[j] = delta > 0 && !double.IsNaN(delta) ? 1.0 / Math.Sqrt(delta) : 1.0;
-            }
-            scaleByKey[key] = scale;
         }
+
+        // 1/sqrt(delta) per (batch, active), computed once. Same size as DeltaStar itself
+        // (nBatch x nActive), so a few MB rather than a few hundred, and it takes the square root
+        // out of the per-cell loop.
+        var nBatch = scaling?.DeltaStar.GetLength(0) ?? 0;
+        var nActive = scaling?.DeltaStar.GetLength(1) ?? 0;
+        var invSqrt = new double[nBatch, nActive];
+        for (var i = 0; i < nBatch; i++)
+            for (var f = 0; f < nActive; f++)
+            {
+                var delta = scaling!.DeltaStar[i, f];
+                invSqrt[i, f] = delta > 0 && !double.IsNaN(delta) ? 1.0 / Math.Sqrt(delta) : 1.0;
+            }
 
         var metaTypes = new List<(string, Type)>();
         using (var probe = reader.OpenRowGroup(0))
@@ -108,8 +109,6 @@ internal static class ResidualScaler
         }
 
         using var writer = StreamingWideWriter.Create(outPath, metaTypes.ToArray(), presentSamples);
-        var one = new double[presentSamples.Count];
-        Array.Fill(one, 1.0);
 
         for (var g = 0; g < reader.RowGroupCount; g++)
         {
@@ -124,9 +123,15 @@ internal static class ResidualScaler
 
             for (var i = 0; i < n; i++)
             {
-                var scale = keys[i] is { } k && scaleByKey.TryGetValue(k, out var s) ? s : one;
+                var active = keys[i] is { } k && activeByKey.TryGetValue(k, out var a) ? a : -1;
+                if (active < 0)
+                    continue;   // held out, or a key the matrix never carried: scale is 1.0
                 for (var j = 0; j < presentSamples.Count; j++)
-                    cols[j][i] *= scale[j];
+                {
+                    var batch = batchOfPresent[j];
+                    if (batch >= 0)
+                        cols[j][i] *= invSqrt[batch, active];
+                }
             }
 
             writer.WriteRowGroup(meta, cols);
