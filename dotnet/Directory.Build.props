@@ -9,7 +9,7 @@
          manifest version lives separately in
          src/SkylinePrism.App/tool-inf/info.properties and must be kept in sync
          at release time; dotnet-release.yml verifies the match before publishing. -->
-    <Version>26.16.0</Version>
+    <Version>26.16.1</Version>
 
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
