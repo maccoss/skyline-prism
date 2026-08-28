@@ -7,7 +7,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using ScottPlot;
+using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Visualization;
 using SkylinePrism.Skyline;
@@ -202,6 +204,69 @@ public partial class MainWindow
 
     /// <summary>Guards the locator map and its reverse index, which the click and the poll share.</summary>
     private readonly object _rangeLocatorLock = new();
+
+    /// <summary>
+    /// The rollup that produced the matrix now plotted, read from the run's own parameters.json (null
+    /// when the directory has none, or it cannot be read - the plot still draws, it just cannot name the
+    /// method). Cached per directory: this is read on every redraw, and a redraw is a mouse move away.
+    /// </summary>
+    private PrismConfig? RangeRunConfig(string outputDir)
+    {
+        if (string.Equals(_rangeConfigDir, outputDir, StringComparison.OrdinalIgnoreCase))
+            return _rangeConfig;
+        _rangeConfigDir = outputDir;
+        _rangeConfig = null;
+        try
+        {
+            var path = Path.Combine(outputDir, "parameters.json");
+            if (File.Exists(path))
+                _rangeConfig = Provenance.LoadConfig(path);
+        }
+        catch
+        {
+            // A truncated or hand-made parameters.json must not take the plot down with it.
+        }
+        return _rangeConfig;
+    }
+
+    private string? _rangeConfigDir;
+    private PrismConfig? _rangeConfig;
+
+    /// <summary>
+    /// The rollup method behind the plotted values: the protein rollup at protein level, the transition
+    /// rollup at peptide level. Empty when the run recorded none.
+    /// </summary>
+    private string RangeRollupMethod(string outputDir)
+    {
+        var config = RangeRunConfig(outputDir);
+        if (config is null)
+            return "";
+        return (RangeLevel == AbundanceLevel.Protein
+            ? config.ProteinRollup.Method
+            : config.TransitionRollup.Method) ?? "";
+    }
+
+    /// <summary>
+    /// What that method's numbers ARE, in one clause - the thing worth knowing before comparing this
+    /// plot against Skyline's relative-abundance view, which sums peak areas.
+    /// <para>
+    /// The distinction is not cosmetic. A summing rollup scales with how many peptides a protein has;
+    /// median polish estimates the level of a typical one and does not. On a real cohort that reordered
+    /// the top of the plot - C4A (121 peptides) leads Skyline's summed view and sits below ITIH2
+    /// (44 peptides) here - and neither is wrong, they are different quantities.
+    /// </para>
+    /// </summary>
+    internal static string RollupMeaning(string method) => method.ToLowerInvariant() switch
+    {
+        "median_polish" => "a typical peptide's level, not a sum - so it does not scale with peptide count",
+        "sum" => "summed over the level below, so it scales with how many were measured",
+        "topn" => "summed over the top few only, so it is a partial total",
+        "maxlfq" => "a ratio-based level, not a sum",
+        "ibaq" => "divided by the theoretical peptide count - the one method meant for comparing proteins",
+        "consensus" => "an inverse-variance weighted level, not a sum",
+        "library_assist" => "a library-scaled level, not a sum",
+        _ => "",
+    };
 
     private AbundanceLevel RangeLevel =>
         ComboText(RangeLevelCombo, "Protein").StartsWith("Pep", StringComparison.OrdinalIgnoreCase)
@@ -412,9 +477,12 @@ public partial class MainWindow
             .Select(l => (l.Name, l.ColorHex, (IReadOnlyList<AbundanceEntry>)byList[l]))
             .ToList();
 
+        // On the y axis, not just the status line: the axis travels with the image when the plot is
+        // copied into a slide or a paper, and "log10 abundance" alone does not say abundance OF WHAT.
+        var rollup = RangeRollupMethod(OutputDirBox.Text?.Trim() ?? "");
         PlotRenderer.DrawDynamicRange(
             plt, background, highlights,
-            yLabel: "Log10 abundance",
+            yLabel: rollup.Length > 0 ? $"Log10 abundance ({rollup})" : "Log10 abundance",
             xLabel: RangeLevel == AbundanceLevel.Protein ? "Protein rank" : "Peptide rank");
 
         AddRangeLabels(plt, matcher, byList);
@@ -428,6 +496,10 @@ public partial class MainWindow
             + $"{_rangeEntries[^1].Log10Abundance:0.#}-{_rangeEntries[0].Log10Abundance:0.#} log10 "
             + $"({_rangeEntries[0].Log10Abundance - _rangeEntries[^1].Log10Abundance:0.#} orders of magnitude); "
             + $"averaged over {SelectedReplicateCount():N0} replicate(s)"
+            + (rollup.Length > 0
+                ? $"; {rollup} rollup"
+                  + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
+                : "")
             + (matched > 0 ? $"; {matched:N0} in {highlights.Count} list(s)" : "");
     }
 
