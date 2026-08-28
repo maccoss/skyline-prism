@@ -217,46 +217,41 @@ counted (never clamped into the nearest one) and the status line warns with the 
 that is when the raw data is most likely still where the document says it is. The windows are resolved once
 and written to the output directory; nothing later depends on the data files still being reachable.
 
-### Scheduled acquisitions (PRM / MTM / dynamic DIA)
+### DIA only, and why
 
-Skyline's importer looks for a *repeating* isolation cycle, so it works only for DIA; on anything else it
-fails with `No repeating isolation scheme found in <file>`. PRISM reads
+**This tab is for DIA.** Skyline's importer looks for a *repeating* isolation cycle, so it works only for
+DIA; on anything else it fails with `No repeating isolation scheme found in <file>`. PRISM reads
 `transition_full_scan/@acquisition_method` first and skips the import (and the ~10 s Skyline launch) for
-PRM/DDA/SureQuant, recording the method in `isolation_schemes.xml`.
+PRM/DDA/SureQuant, recording the method in `isolation_schemes.xml` so the tab can warn that the map's
+reading does not apply.
 
-Targeted methods are not just "DIA without a scheme" - a window fires only during its scheduled interval.
-PRISM models that the way [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza) does with its
-`Slot`: **an isolation window is an m/z range crossed with an RT range**. `IsolationWindow.RtStart/RtStop`
-are `NaN` for DIA (a cycle repeats all gradient long) and carry the firing interval for a scheduled slot.
-That distinction is load-bearing:
+PRM and MTM were briefly supported by loading the Thermo inclusion list that went to the instrument. That
+is gone. Reading what an acquisition actually did means walking the data file's scan headers - every MS2
+scan's isolation center, width and RT - and **that belongs in Skyline or ProteoWizard, not in an external
+tool**. There is no Skyline route to it either: `--exp-isolationlist-instrument` is the outbound direction
+(what to load *onto* an instrument), and nothing in the CLI or the RPC surface enumerates acquired
+isolation windows. Rather than carry a half-answer, the tool now says plainly when a document is not DIA.
 
-- A precursor is credited to a window only if the peak eluted **while that window was firing**
-  (`IndicesCovering`, not `IndicesContaining`). Two targets sharing an m/z but scheduled 20 min apart go to
-  their own slots instead of both.
-- Cells outside a slot's interval render as **not acquired** (NaN, drawn as a gap), so a `0` always means
-  *acquired and nothing detected* - the slot that fired and found nothing, which is the thing worth seeing.
-- The RT axis spans the **schedule**, not just the detections, so slots that produced nothing still appear.
-- MTM slots legitimately count several co-eluting precursors; PRM slots count one. Window width is drawn to
-  scale, so multiplexed slots are visibly wider.
+**The scheduled-window model is kept**, because *dynamic DIA is DIA*
+([Pino/Searle et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC10517878/)): 8 x 8 m/z windows whose
+positions shift along the gradient to track where peptides are eluting, ~300 m/z covered at any instant.
+An isolation window is therefore **an m/z range crossed with an RT range** - `IsolationWindow.RtStart/RtStop`
+are `NaN` for static DIA (the cycle repeats all gradient long) and carry a firing interval otherwise. What
+that buys, once something can produce such windows:
 
-**Dynamic DIA** ([Pino/Searle et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC10517878/)) is the same
-model with a whole *cycle* per segment instead of one slot: 8 x 8 m/z windows whose m/z positions shift
-along the gradient to track where peptides are eluting, covering ~300 m/z at any instant. Several windows
-therefore share each firing interval, and - the property that distinguishes it from both static DIA and
-PRM - **the same m/z is covered by different windows at different times**. Consequences that are handled:
-a precursor is credited to the cycle that was running when it eluted, a peak straddling a segment boundary
-counts in both cycles (it really was fragmented twice), and m/z the cycle has already marched past renders
-as never-acquired rather than as an empty spectrum. That last one required choosing the source window
-**per cell rather than per m/z row** when rasterizing; a per-row choice shows one segment and blanks the
-rest.
+- A precursor is credited to a window only if its peak eluted **while that window was firing**
+  (`IndicesCovering`, not `IndicesContaining`).
+- Cells outside a window's interval render as **not acquired** (NaN, drawn as a gap), so a `0` always means
+  *acquired and nothing detected* - the window that fired and found nothing, which is worth seeing.
+- The RT axis spans the **schedule**, not just the detections.
+- The distinguishing property of dynamic DIA is that **the same m/z is covered by different windows at
+  different times**, which forced choosing the source window **per cell rather than per m/z row** when
+  rasterizing; a per-row choice shows one segment and blanks the rest.
 
-**Where the schedule comes from: the Thermo inclusion list** that was loaded onto the instrument - for a
-scheduled run, that CSV *is* the isolation scheme, and the only complete record of it (Skyline's importer
-needs a repeating cycle, which a schedule by definition does not have). `ThermoInclusionList` reads the
-columns Cadenza's `ThermoCsvWriter` emits (`m/z`, `t start (min)`, `t stop (min)`,
-`Isolation Window (m/z)`; one row per slot or per dynamic-DIA window), tolerating header spelling/spacing
-variants. Load it from the Spectrum density tab's scheme drop-down (**Load inclusion list (PRM/MTM)…**);
-it is added to the run's `isolation_schemes.xml`, so it is offered again next time without re-browsing.
+Nothing currently produces a scheduled window - every real scheme PRISM can read today is always-on - so
+these paths are exercised by tests (`ScheduledWindowTests`, `DynamicDiaTests`) rather than by the app.
+That is deliberate: the primitives are subtle enough that re-deriving them later would be the expensive
+part, and the tests keep them from rotting meanwhile.
 
 The map itself is built from the merged data (`merged_data/`, or the single `merged_data.parquet` of a
 pre-dotnet-v26.12.0 run - `MergedDataset` opens either) - which the pipeline leaves in place and re-uses

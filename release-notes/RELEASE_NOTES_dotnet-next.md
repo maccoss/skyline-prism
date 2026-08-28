@@ -47,6 +47,15 @@ as the GitHub Release description and fails if it is missing.
 
 ## Breaking Changes
 
+- **The Spectrum density tab is now DIA-only; PRM/MTM support was removed.** The scheme drop-down no
+  longer offers **Load inclusion list (PRM/MTM)...**, and PRISM no longer reads Thermo inclusion lists.
+  Reading what a targeted acquisition actually did means walking the data file's scan headers, which
+  belongs in Skyline or ProteoWizard rather than in an external tool - and no Skyline command or RPC
+  exposes acquired isolation windows. Rather than carry a half-answer, the tab now warns plainly when a
+  document's acquisition method is not DIA, instead of drawing a map whose rows are windows the data was
+  not acquired with. An inclusion list previously saved into a run's `isolation_schemes.xml` is still
+  read back and offered; only loading new ones is gone.
+
 - **The Python implementation has been removed.** PRISM began as the `skyline-prism` Python package;
   the C# tools replaced it and reproduced its numbers to 1e-9 on the deterministic stages. The engine,
   its tests, its PyPI packaging and CI, the Python-era Skyline external tool and the helper scripts are
@@ -68,4 +77,3 @@ as the GitHub Release description and fails if it is missing.
   - The cross-engine golden fixtures under `dotnet/tests/fixtures/` stay and still gate every release;
     they are now a frozen independent-implementation baseline, regenerable only from the `v26.4.4` tag.
   - `dotnet/PORTING_STATUS.md` is kept as a historical record of what was and was not carried over.
-

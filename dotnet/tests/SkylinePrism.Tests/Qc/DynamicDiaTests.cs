@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Qc;
 using Xunit;
@@ -176,33 +177,37 @@ public class DynamicDiaTests
     }
 
     [Fact]
-    public void InclusionListRoundTrip_PreservesADynamicDiaCycle()
+    public void CatalogRoundTrip_PreservesADynamicDiaCycle()
     {
-        // A dynamic-DIA method is written as a scheduled window list the same way a targeted method is,
-        // so the inclusion-list reader is how these windows reach PRISM.
+        // Whatever eventually reads a dynamic-DIA method, the windows have to survive being written to
+        // the run's catalog and read back - that is what lets the tab bin on them when it is reopened on
+        // an old output directory with no Skyline running. The per-window firing interval is PRISM's own
+        // extension to Skyline's scheme XML, so it is the part that can silently go missing.
         var scheme = DynamicScheme(segments: 2, segmentMinutes: 10);
-        var lines = new List<string>
+        var dir = Path.Combine(Path.GetTempPath(), "prism_dyndia_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
         {
-            "Compound,Formula,Adduct,m/z,z,t start (min),t stop (min),Isolation Window (m/z),HCD Collision Energy",
-        };
-        foreach (var w in scheme.Windows)
-        {
-            lines.Add($"win,,,{w.Center.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},2,"
-                + $"{w.RtStart.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},"
-                + $"{w.RtStop.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},"
-                + $"{w.Width.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},27.0");
+            var catalog = new IsolationSchemeCatalog();
+            catalog.AddDocumentScheme("batch1", scheme);
+            var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
+            catalog.Save(path);
+
+            var loaded = Assert.Single(IsolationSchemeCatalog.Load(path)!.UsableSchemes);
+
+            Assert.Equal(scheme.Windows.Count, loaded.Windows.Count);
+            Assert.True(loaded.IsScheduled);
+            for (var i = 0; i < scheme.Windows.Count; i++)
+            {
+                Assert.Equal(scheme.Windows[i].Start, loaded.Windows[i].Start, 6);
+                Assert.Equal(scheme.Windows[i].End, loaded.Windows[i].End, 6);
+                Assert.Equal(scheme.Windows[i].RtStart, loaded.Windows[i].RtStart, 6);
+                Assert.Equal(scheme.Windows[i].RtStop, loaded.Windows[i].RtStop, 6);
+            }
         }
-
-        var parsed = ThermoInclusionList.Parse(lines, "Dynamic DIA");
-
-        Assert.Equal(scheme.Windows.Count, parsed.Windows.Count);
-        Assert.True(parsed.IsScheduled);
-        for (var i = 0; i < scheme.Windows.Count; i++)
+        finally
         {
-            Assert.Equal(scheme.Windows[i].Start, parsed.Windows[i].Start, 6);
-            Assert.Equal(scheme.Windows[i].End, parsed.Windows[i].End, 6);
-            Assert.Equal(scheme.Windows[i].RtStart, parsed.Windows[i].RtStart, 6);
-            Assert.Equal(scheme.Windows[i].RtStop, parsed.Windows[i].RtStop, 6);
+            Directory.Delete(dir, recursive: true);
         }
     }
 

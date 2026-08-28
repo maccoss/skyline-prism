@@ -44,14 +44,15 @@ public sealed class IsolationSchemeCatalog
         AcquisitionFor(batchLabel) is { } m && !string.Equals(m, "DIA", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Extra schemes the USER supplied - currently only a Thermo inclusion list loaded for a scheduled
-    /// acquisition, whose windows exist nowhere else.
+    /// Every scheme with real windows this run learned about, so reopening the output directory can offer
+    /// them again with no Skyline running. Populated from the input documents (see
+    /// <see cref="AddDocumentScheme"/>) and refilled from the saved file by <see cref="Load"/>.
     /// <para>
     /// Skyline's saved isolation-scheme list is deliberately NOT collected here. Those are generic
     /// templates (SWATH (25 m/z), SWATH (VW 64), ...) unrelated to how any given data was acquired, and
     /// offering them invites picking one: binning a 3.0014 Th forbidden-zone acquisition on a 25 Th
     /// SWATH grid gives a map that looks plausible and is wrong. The acquisition's own windows come
-    /// from its data file; where they cannot be read, labelled uniform bins are the honest fallback.
+    /// from its data file; where they cannot be read, labeled uniform bins are the honest fallback.
     /// </para>
     /// </summary>
     public List<IsolationScheme> Library { get; } = new();
@@ -88,8 +89,6 @@ public sealed class IsolationSchemeCatalog
             AcquisitionByBatch[batchLabel] = acquisitionMethod!;
     }
 
-    public void AddLibraryScheme(IsolationScheme scheme) => Library.Add(scheme);
-
     public bool IsEmpty => ByBatch.Count == 0 && Library.Count == 0 && AcquisitionByBatch.Count == 0;
 
     public void Save(string path)
@@ -120,8 +119,9 @@ public sealed class IsolationSchemeCatalog
                         new XAttribute("start", Inv(w.Start)),
                         new XAttribute("end", Inv(w.End)),
                         new XAttribute("margin", Inv(w.Margin)));
-                    // Scheduled (PRM/MTM) windows carry their firing interval. Skyline's own schema has no
-                    // such attributes - they are PRISM's extension and are simply absent for DIA.
+                    // A scheduled window carries the interval it fires in. Skyline's own schema has no
+                    // such attributes - they are PRISM's extension and are simply absent for plain DIA,
+                    // where every window is on for the whole gradient.
                     if (w.IsScheduled)
                     {
                         element.Add(new XAttribute("rt_start", Inv(w.RtStart)));

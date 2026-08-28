@@ -136,10 +136,12 @@ public class IsolationSchemeTests
         try
         {
             var catalog = new IsolationSchemeCatalog();
-            // Plate1's document names a window-less scheme; Plate2's declares real windows.
+            // Plate1's document names a window-less scheme; Plate2 and Plate3 declare real windows -
+            // the same scheme, in the two different XML spellings Skyline produces for it, which is what
+            // the deduplication below has to survive.
             catalog.AddDocumentScheme("Plate1", IsolationScheme.Parse("""<isolation_scheme name="Results only" />""")!);
             catalog.AddDocumentScheme("Plate2", IsolationScheme.Parse(DocumentXml)!);
-            catalog.AddLibraryScheme(IsolationScheme.Parse(SettingsListXml)!);
+            catalog.AddDocumentScheme("Plate3", IsolationScheme.Parse(SettingsListXml)!);
 
             var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
             catalog.Save(path);

@@ -114,9 +114,10 @@ later with no Skyline running.
 It runs **alongside** the pipeline, not before it, so a slow or unreachable data file delays nothing. If
 it does not finish, the map falls back to clearly-labelled uniform bins and the log says so.
 
-Scheduled acquisitions (PRM, MTM, dynamic DIA) are handled as scheduled — a window is an m/z range crossed
-with the retention-time interval it fires in — and their windows come from the **Thermo inclusion list**
-that was loaded onto the instrument, via **Load inclusion list (PRM/MTM)…**.
+**The tab is for DIA.** Skyline's importer can only read a repeating isolation cycle out of a data file,
+so targeted methods (PRM, MTM) have no route to their real windows — getting them means walking the file's
+scan headers, which belongs in Skyline or ProteoWizard rather than in an external tool. When a document's
+acquisition method is not DIA, the tab says so instead of drawing a map that cannot be read the same way.
 
 The tab reads the merged data from the output directory, so it works for a run that has just
 finished *and* for any previous run's output directory, with no Skyline connection. Either layout
