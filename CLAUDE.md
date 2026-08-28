@@ -191,8 +191,8 @@ Stage 5b: QC Report Generation (HTML + plots)
   **normalized, pre-ComBat** peptide matrix so it does not inherit the peptide correction. Before
   dotnet-v26.15.0 the protein arm consumed the ComBat-corrected peptides and was then corrected
   again, which measurably hurt: on a 4-batch AD cohort the second correction moved held-out QC CV
-  the wrong way (12.7% -> 13.0%) and tripped the overfitting heuristic (reference improved 3x more
-  than QC). Correcting once instead gives 16.3% -> 12.4% and no warning.
+  the wrong way (12.7% -> 13.0%) and tripped the control-asymmetry heuristic (reference improved
+  3x more than QC; that heuristic was called "overfitting" at the time and is a NOTE now). Correcting once instead gives 16.3% -> 12.4% and no warning.
 - **Independent outputs**: the two arms are genuinely independent - `corrected_peptides` is
   bit-identical whether or not protein-level ComBat runs, and vice versa.
 - **Log files**: Automatically saved to output directory with timestamp (`prism_run_YYYYMMDD_HHMMSS.log`)
@@ -799,8 +799,10 @@ with >= 2 references per batch), and whether `no_reference_batch` policy or the 
 behaves differently. Until then, prefer standard ComBat. On C# also set `auto_revert: true` - it is what caught both reversions above - but note it is **C# only**: a Python run has no equivalent and will apply the worse correction silently, which makes this finding more consequential there, not less.
 
 **`auto_revert` is implemented and works** (`BatchCorrectionEvaluator`, `batch_correction.auto_revert`,
-C# only, default `false`). It reverts when the control CV worsens by >10% and warns separately on
-reference/QC overfitting. It caught both reversions above. This entry previously claimed the automatic
+C# only, default `false`). It reverts when the control CV worsens by >10%, and separately
+logs a NOTE when the reference improved far more than the independent control. That asymmetry is an
+observation only - it reverts nothing and fails nothing (reference and QC are different materials at
+different injection amounts, so their CVs need not improve together). It caught both reversions above. This entry previously claimed the automatic
 fallback was not implemented; that was stale.
 
 ### [DISABLED] Implemented but Disabled by Default

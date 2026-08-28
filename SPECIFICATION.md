@@ -2043,11 +2043,20 @@ Given negative control samples (reference replicates) that should show no variat
 
 ### Validation Metric: Relative Variance Reduction
 
-$$RVR = \frac{CV_{qc}^{after} / CV_{qc}^{before}}{CV_{ref}^{after} / CV_{ref}^{before}}$$
+$$RVR = \frac{(CV_{qc}^{before} - CV_{qc}^{after}) / CV_{qc}^{before}}{(CV_{ref}^{before} - CV_{ref}^{after}) / CV_{ref}^{before}}$$
 
-- $RVR \approx 1$: Good - similar improvement in QC and reference
-- $RVR >> 1$: Warning - QC improved less than reference (possible undercorrection)
-- $RVR << 1$: Warning - QC improved more than reference (possible overcorrection/overfitting)
+i.e. the ratio of the two *fractional CV improvements* (QC over reference), which is what both
+engines compute. $RVR > 1$ therefore means the QC improved MORE than the reference.
+
+- $RVR \approx 1$: similar improvement in QC and reference
+- $RVR >> 1$ or $RVR << 1$: the two controls improved by very different amounts
+
+RVR is **reported, not enforced**: it appears as a note in the QC report and is not part of the
+pass/fail verdict. Reference and QC are different materials injected at different amounts, so
+whichever started with more excess variance has more of it to remove; an asymmetric improvement is
+ordinary and does not establish over- or under-correction. It is also undefined (NaN, not infinity)
+when the reference CV did not improve at all. The verdict fails only on evidence of damage: a QC CV
+that got worse, or QC and reference collapsing together in PCA space.
 
 ---
 

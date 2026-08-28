@@ -55,16 +55,32 @@ class ValidationMetrics:
     pca_qc_reference_distance_after: float
     pca_distance_ratio: float  # after / before (should be ~1, not << 1)
 
-    # Warnings
+    # Warnings: something the processing damaged. Every condition that fails the verdict adds
+    # one, so a FAILED report always says what failed.
     warnings: list[str] = field(default_factory=list)
+
+    # Notes: observations that are NOT defects and decide nothing (the QC-vs-reference improvement
+    # ratio). Kept out of `warnings` so they are never read as damage, logged, or counted against
+    # the verdict.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
-        """Check if validation passed basic criteria."""
+        """Whether the correction damaged the controls.
+
+        Only two things fail: the independent control (QC) got WORSE, or the QC and reference
+        samples collapsed onto each other. The relative variance reduction is deliberately NOT a
+        criterion - reference and QC are different materials injected at different amounts, so
+        whichever started with more excess variance has more of it to remove, and the two
+        improvements routinely differ by a lot with nothing wrong. Failing a run on that asymmetry
+        was excessive (and calling it "overfitting" named a cause the ratio cannot establish).
+        RVR is still computed and reported.
+        """
         return (
-            self.qc_cv_improvement > 0  # QC CV improved
-            and self.pca_distance_ratio > 0.5  # Didn't collapse QC into reference
-            and self.relative_variance_reduction < 2.0  # Didn't overfit to reference
+            # QC CV did not get worse. Unchanged (0.0) is not damage.
+            self.qc_cv_improvement >= 0
+            # Didn't collapse QC into reference; NaN (unmeasured) is not a failure
+            and not self.pca_distance_ratio < 0.5
         )
 
 
@@ -199,6 +215,7 @@ def validate_correction(
     logger.info("Validating normalization quality")
 
     warnings = []
+    notes = []
 
     # Create masks for sample types
     qc_mask_before = data_before[sample_type_col] == "qc"
@@ -227,21 +244,31 @@ def validate_correction(
     qc_cv_improvement = (qc_cv_before - qc_cv_after) / qc_cv_before if qc_cv_before > 0 else 0
 
     # Relative variance reduction
-    rvr = qc_cv_improvement / ref_cv_improvement if ref_cv_improvement > 0 else np.inf
+    # RVR only means something when the reference actually improved. If it did not, the ratio is
+    # undefined, not infinite - +inf used to read as "QC improved much more than the reference"
+    # while the reference had in fact got WORSE. NaN says "not measured" and fires nothing.
+    rvr = qc_cv_improvement / ref_cv_improvement if ref_cv_improvement > 0 else np.nan
 
-    # Check for warnings
+    # A warning means the processing damaged something. The QC-vs-reference ratio does not
+    # qualify (see ValidationMetrics.passed) and goes to `notes` instead.
     if qc_cv_improvement < 0:
         warnings.append("QC CV increased after normalization")
     if ref_cv_improvement < 0:
         warnings.append("Reference CV increased after normalization")
-    if rvr > 2.0:
-        warnings.append(
-            f"QC improved much more than reference (RVR={rvr:.2f}) - possible overfitting"
+
+    if np.isnan(rvr):
+        notes.append(
+            "The QC-vs-reference improvement ratio (RVR) is undefined here: the reference CV did "
+            "not improve, so there is nothing to take a ratio against."
         )
-    if rvr < 0.5:
-        warnings.append(
-            f"QC improved much less than reference (RVR={rvr:.2f}) - "
-            "normalization may not generalize"
+    # Only when BOTH controls improved: a negative ratio means QC got worse while the reference
+    # improved, which the QC-CV warning above already says plainly.
+    elif qc_cv_improvement > 0 and (rvr > 2.0 or rvr < 0.5):
+        more, less = ("QC", "the reference") if rvr > 2.0 else ("The reference", "QC")
+        notes.append(
+            f"{more} improved considerably more than {less} (RVR={rvr:.2f}). Reference and QC are "
+            "different materials injected at different amounts, so their CVs need not improve "
+            "together - on its own this is not a problem."
         )
 
     # Calculate PCA distances
@@ -277,6 +304,7 @@ def validate_correction(
         pca_qc_reference_distance_after=pca_dist_after,
         pca_distance_ratio=pca_ratio,
         warnings=warnings,
+        notes=notes,
     )
 
     # Log summary
@@ -293,6 +321,8 @@ def validate_correction(
     if warnings:
         for w in warnings:
             logger.warning(w)
+    for n in notes:
+        logger.info(n)
 
     if metrics.passed:
         logger.info("Validation PASSED")
@@ -534,6 +564,18 @@ def generate_qc_report(
         if metrics.warnings
         else '<p style="color: #28a745;">✓ No warnings</p>'
     )
+    # Observations, kept visually distinct from warnings: they are not defects (see
+    # ValidationMetrics.notes).
+    notes_html = "".join(
+        '<div style="background:#f2f6fc;border:1px solid #cfd8e3;border-radius:4px;'
+        f'padding:8px 12px;margin:8px 0;color:#40536e;">NOTE: {n}</div>'
+        for n in metrics.notes
+    )
+    rvr_text = (
+        "n/a"
+        if not np.isfinite(metrics.relative_variance_reduction)
+        else f"{metrics.relative_variance_reduction:.2f}"
+    )
     no_plots_html = (
         '<p style="color: #888;">No plots generated '
         "(data not provided or matplotlib unavailable)</p>"
@@ -617,9 +659,10 @@ def generate_qc_report(
 
         <div class="metric">
             <span class="metric-name">Relative Variance Reduction (RVR):</span>
-            <span class="metric-value">{metrics.relative_variance_reduction:.2f}</span>
-            <br><small style="color: #666;">Target: ~1.0 | &gt;&gt;1 suggests overfitting
-            | &lt;&lt;1 suggests poor generalization</small>
+            <span class="metric-value">{rvr_text}</span>
+            <br><small style="color: #666;">Reported for information - it does not affect the
+            verdict. Reference and QC are different materials injected at different amounts, so a
+            ratio far from 1.0 is not by itself a defect.</small>
         </div>
 
         <h2>PCA Metrics</h2>
@@ -648,6 +691,7 @@ def generate_qc_report(
 
         <h2>Warnings</h2>
         {warnings_html}
+        {notes_html}
 
         <h2>QC Plots</h2>
         {plots_html if plots_html else no_plots_html}

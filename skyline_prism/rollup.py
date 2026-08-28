@@ -2004,11 +2004,14 @@ def batch_correct_proteins(
                 passed = False
                 warnings.append(f"QC CV increased: {qc_cv_before:.3f} -> {qc_cv_after:.3f}")
 
+            # Observation only - it must NOT fail the evaluation; with fallback_on_failure that
+            # would discard the whole protein-level correction over an asymmetry that is ordinary
+            # (reference and QC are different materials at different injection amounts).
             if overfitting_ratio > 2.0:
-                passed = False
                 warnings.append(
-                    f"Possible overfitting: ref improved {ref_improvement:.1%}, "
-                    f"QC only {qc_improvement:.1%}"
+                    f"NOTE (not a failure): ref improved {ref_improvement:.1%}, "
+                    f"QC only {qc_improvement:.1%} - the controls improved by very "
+                    "different amounts"
                 )
 
             evaluation = BatchCorrectionEvaluation(

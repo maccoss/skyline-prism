@@ -42,31 +42,53 @@ public static class ConfigWriter
     /// <summary>Minimal YAML for <paramref name="config"/> (see the type remarks).</summary>
     public static string ToYaml(PrismConfig config)
     {
-        var def = new PrismConfig();
         var root = new Dictionary<string, object?>();
+        foreach (var (name, values) in Sections(config))
+            root[name] = values;
+        return Header + new SerializerBuilder().Build().Serialize(root);
+    }
 
-        AddSection(root, "data", Data(config.Data, config.Metadata));
-        root["transition_rollup"] = TransitionRollup(config.TransitionRollup);
-        root["global_normalization"] = GlobalNormalization(config.GlobalNormalization, def.GlobalNormalization);
-        root["sample_outlier_detection"] = OutlierDetection(config.SampleOutlierDetection, def.SampleOutlierDetection);
-        root["batch_correction"] = BatchCorrection(config.BatchCorrection, def.BatchCorrection);
-        root["parsimony"] = Parsimony(config.Parsimony, def.Parsimony);
-        root["protein_rollup"] = ProteinRollup(config.ProteinRollup, def.ProteinRollup);
-        root["protein_normalization"] = new Dictionary<string, object?>
+    /// <summary>
+    /// The sections <see cref="ToYaml"/> writes, in that order, as (name, values) pairs - for callers
+    /// that want to RENDER the settings rather than serialize them (the QC report's Processing
+    /// Parameters table). Going through one builder is the point: the table and the YAML beside it
+    /// cannot disagree, and a new config key reaches both by being added here once. Values are the
+    /// raw config values (string / bool / number / list / nested dictionary), not formatted text.
+    /// </summary>
+    public static IReadOnlyList<(string Name, IReadOnlyDictionary<string, object?> Values)> Sections(
+        PrismConfig config)
+    {
+        var def = new PrismConfig();
+        var sections = new List<(string, IReadOnlyDictionary<string, object?>)>();
+
+        void Add(string name, Dictionary<string, object?> values)
+        {
+            if (values.Count > 0) // never emit an empty mapping
+                sections.Add((name, values));
+        }
+
+        Add("data", Data(config.Data, config.Metadata));
+        Add("transition_rollup", TransitionRollup(config.TransitionRollup));
+        Add("global_normalization", GlobalNormalization(config.GlobalNormalization, def.GlobalNormalization));
+        Add("sample_outlier_detection", OutlierDetection(config.SampleOutlierDetection, def.SampleOutlierDetection));
+        Add("batch_correction", BatchCorrection(config.BatchCorrection, def.BatchCorrection));
+        Add("parsimony", Parsimony(config.Parsimony, def.Parsimony));
+        Add("protein_rollup", ProteinRollup(config.ProteinRollup, def.ProteinRollup));
+        Add("protein_normalization", new Dictionary<string, object?>
         {
             ["method"] = config.ProteinNormalization.Method,
-        };
-        root["qc_report"] = new Dictionary<string, object?>
+        });
+        Add("qc_report", new Dictionary<string, object?>
         {
             ["enabled"] = config.QcReport.Enabled,
             ["save_plots"] = config.QcReport.SavePlots,
-        };
-        AddSection(root, "output", Output(config.Output, def.Output));
-        AddSection(root, "processing", Processing(config.Processing, def.Processing));
-        AddSection(root, "batch_estimation", BatchEstimation(config.BatchEstimation, def.BatchEstimation));
-        AddSection(root, "sample_annotations", SampleAnnotations(config.SampleAnnotations, def.SampleAnnotations));
+        });
+        Add("output", Output(config.Output, def.Output));
+        Add("processing", Processing(config.Processing, def.Processing));
+        Add("batch_estimation", BatchEstimation(config.BatchEstimation, def.BatchEstimation));
+        Add("sample_annotations", SampleAnnotations(config.SampleAnnotations, def.SampleAnnotations));
 
-        return Header + new SerializerBuilder().Build().Serialize(root);
+        return sections;
     }
 
     private static Dictionary<string, object?> Data(

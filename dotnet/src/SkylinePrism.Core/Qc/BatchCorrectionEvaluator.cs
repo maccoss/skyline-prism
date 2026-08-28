@@ -9,7 +9,7 @@ public readonly record struct BatchRevertDecision(
     string ControlName,
     double ControlCvBefore,
     double ControlCvAfter,
-    string? OverfittingWarning)
+    string? ControlAsymmetryNote)
 {
     public bool Evaluable => ControlName.Length > 0;
 }
@@ -17,9 +17,9 @@ public readonly record struct BatchRevertDecision(
 /// <summary>
 /// Decides whether a ComBat correction should be reverted because it degraded control-sample quality.
 /// Ports the decision in Python's legacy normalize_pipeline (evaluate_batch_correction): the primary
-/// control is QC (else reference); revert if its median CV worsened by more than <c>worsenTolerance</c>,
-/// and separately flag overfitting when the reference CV improves far more than the QC CV. CVs are on
-/// the LINEAR scale (via <see cref="CvMetrics"/>).
+/// control is QC (else reference); revert if its median CV worsened by more than <c>worsenTolerance</c>.
+/// A reference CV improving far more than the QC CV is reported alongside as an observation - it never
+/// reverts anything. CVs are on the LINEAR scale (via <see cref="CvMetrics"/>).
 /// </summary>
 public static class BatchCorrectionEvaluator
 {
@@ -29,7 +29,7 @@ public static class BatchCorrectionEvaluator
         IReadOnlyList<int> qcIdx,
         IReadOnlyList<int> refIdx,
         double worsenTolerance = 1.1,
-        double maxOverfittingRatio = 2.0)
+        double maxAsymmetryRatio = 2.0)
     {
         var hasQc = qcIdx.Count >= 2;
         var hasRef = refIdx.Count >= 2;
@@ -38,7 +38,7 @@ public static class BatchCorrectionEvaluator
             qcAfter: hasQc ? CvMetrics.MedianCv(postCombat, qcIdx) : double.NaN,
             refBefore: hasRef ? CvMetrics.MedianCv(preCombat, refIdx) : double.NaN,
             refAfter: hasRef ? CvMetrics.MedianCv(postCombat, refIdx) : double.NaN,
-            hasQc, hasRef, worsenTolerance, maxOverfittingRatio);
+            hasQc, hasRef, worsenTolerance, maxAsymmetryRatio);
     }
 
     /// <summary>
@@ -51,7 +51,7 @@ public static class BatchCorrectionEvaluator
         double refBefore, double refAfter,
         bool hasQc, bool hasRef,
         double worsenTolerance = 1.1,
-        double maxOverfittingRatio = 2.0)
+        double maxAsymmetryRatio = 2.0)
     {
         // Primary control for the revert decision: QC (independent) preferred, else reference.
         double before, after;
@@ -72,17 +72,22 @@ public static class BatchCorrectionEvaluator
         var revert = !double.IsNaN(before) && !double.IsNaN(after) && before > 0
                      && after > before * worsenTolerance;
 
-        // Overfitting flag (warning only): reference CV improves much more than QC CV.
-        string? overfit = null;
+        // Observation only - it changes nothing. One direction is worth stating: the anchoring control
+        // improved far more than the INDEPENDENT one, which is the direction that would flatter a
+        // reference-anchored correction. It is still only an observation, not a diagnosis: reference
+        // and QC are different materials injected at different amounts, so whichever started with more
+        // excess variance has more of it to remove, and the ratio alone cannot establish a cause.
+        string? asymmetry = null;
         if (hasQc && hasRef)
         {
             var refImp = refBefore > 0 ? (refBefore - refAfter) / refBefore : 0;
             var qcImp = qcBefore > 0 ? (qcBefore - qcAfter) / qcBefore : 0;
-            if (qcImp > 0 && refImp / qcImp > maxOverfittingRatio)
-                overfit = $"reference CV improved {refImp:P0} but QC only {qcImp:P0} "
-                          + $"(ratio {refImp / qcImp:F1}) - possible overfitting";
+            if (qcImp > 0 && refImp / qcImp > maxAsymmetryRatio)
+                asymmetry = $"reference CV improved {refImp:P0} but QC only {qcImp:P0} "
+                            + $"(ratio {refImp / qcImp:F1}) - the reference improved far more than the "
+                            + "independent control";
         }
 
-        return new BatchRevertDecision(revert, name, before, after, overfit);
+        return new BatchRevertDecision(revert, name, before, after, asymmetry);
     }
 }

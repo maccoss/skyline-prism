@@ -7,16 +7,24 @@ namespace SkylinePrism.Core.Qc;
 
 /// <summary>
 /// Dual-control validation verdict (validation.py:validate_correction / ValidationMetrics). Uses the
-/// reference and QC samples to judge whether correction improved quality WITHOUT overfitting:
-/// QC CV should improve, QC should not overfit toward the reference (relative variance reduction),
-/// and QC/reference should not collapse together in PCA space.
+/// reference and QC samples to judge whether correction damaged the data: the QC CV must be
+/// measurable and must not get worse, and QC/reference must not collapse together in PCA space.
+/// Every failing condition also produces a <see cref="Warnings"/> entry, so a FAILED verdict always
+/// says what failed.
+///
+/// <para>The relative variance reduction (RVR = QC improvement / reference improvement) is reported as
+/// a <see cref="Notes"/> observation, NOT as a warning and NOT as part of the verdict. Reference and QC
+/// are different materials injected at different amounts, so one of them having more headroom to
+/// improve than the other is ordinary - it does not imply overfitting, and failing a run on it is
+/// excessive. A real problem shows up as a QC CV that got worse or as controls collapsing together,
+/// both of which are checked on their own terms.</para>
 /// </summary>
 public sealed record ValidationStatus(
     double ReferenceCvBefore, double ReferenceCvAfter, double ReferenceCvImprovement,
     double QcCvBefore, double QcCvAfter, double QcCvImprovement,
     double RelativeVarianceReduction,
     double PcaDistanceBefore, double PcaDistanceAfter, double PcaDistanceRatio,
-    bool Passed, IReadOnlyList<string> Warnings)
+    bool Passed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Notes)
 {
     /// <summary>
     /// Compute the verdict at one level from before/after LOG2 matrices [features, samples] and the
@@ -37,46 +45,63 @@ public sealed record ValidationStatus(
         var qcImp = qcBefore > 0 ? (qcBefore - qcAfter) / qcBefore : 0.0;
 
         // RVR only means something when the reference actually improved. If it did not - improvement zero
-        // or NEGATIVE - the ratio is undefined, not infinite. Reporting +inf here made the ">2" branch
-        // fire and announce "QC improved much more than reference - possible overfitting to the
-        // reference", which is backwards: the reference got WORSE, which is the opposite of overfitting
-        // to it. It also failed the whole verdict on a degenerate number. NaN keeps the ratio checks from
-        // firing at all, and the situation is reported on its own terms below.
+        // or NEGATIVE - the ratio is undefined, not infinite: +inf used to read as "QC improved much
+        // more than reference", when in fact the reference had got WORSE. NaN says "not measured", and
+        // the reference degradation is reported as its own warning below.
         var rvr = refImp > 0 ? qcImp / refImp : double.NaN;
 
         var distBefore = PcaCentroidDistance(before, refIdx, qcIdx);
         var distAfter = PcaCentroidDistance(after, refIdx, qcIdx);
         var pcaRatio = distBefore > 0 ? distAfter / distBefore : double.NaN;
 
+        // Every reason the verdict can fail must appear here, or a FAILED banner names nothing the
+        // reader can act on. That includes a QC CV that could not be measured at all - qcImp is
+        // forced to 0 in that case, which would otherwise fail the verdict silently.
+        var qcMeasurable = qcBefore > 0 && !double.IsNaN(qcBefore) && !double.IsNaN(qcAfter);
         var warnings = new List<string>();
-        if (qcImp < 0)
+        if (!qcMeasurable)
+            warnings.Add("QC CV could not be measured (no usable QC values), so the correction could not be validated.");
+        else if (qcImp < 0)
             warnings.Add("QC CV increased after normalization.");
         if (refImp < 0)
             warnings.Add("Reference CV increased after normalization.");
-        // The ratio comparisons are meaningless unless the reference improved; see the RVR note above.
-        if (double.IsNaN(rvr))
-        {
-            warnings.Add(
-                "Reference CV did not improve, so the QC-vs-reference ratio (RVR) could not be evaluated - "
-                + "the overfitting check was skipped, not passed.");
-        }
-        else
-        {
-            if (rvr > 2.0)
-                warnings.Add($"QC improved much more than reference (RVR={rvr:0.00}) - possible overfitting to the reference.");
-            if (rvr < 0.5)
-                warnings.Add($"QC improved much less than reference (RVR={rvr:0.00}) - normalization may not generalize.");
-        }
         if (pcaRatio < 0.5)
             warnings.Add($"QC-reference PCA distance decreased by {(1 - pcaRatio) * 100:0.0}% - control samples may be collapsing together.");
 
-        // An unevaluable RVR must not silently fail the verdict - the reference-CV warning above already
-        // reports that situation on its own terms.
-        var passed = qcImp > 0 && pcaRatio > 0.5 && (double.IsNaN(rvr) || rvr < 2.0);
+        // The QC-vs-reference ratio is an observation, not a defect. The two control groups are
+        // different materials at different injection amounts; whichever started with more excess
+        // variance has more of it to remove, so the two improvements routinely differ by a lot with
+        // nothing wrong. It is reported so the reader can see it, and it decides nothing.
+        var notes = new List<string>();
+        if (double.IsNaN(rvr))
+        {
+            notes.Add(
+                "The QC-vs-reference improvement ratio (RVR) is undefined here: the reference CV did not "
+                + "improve, so there is nothing to take a ratio against.");
+        }
+        else if (qcImp > 0 && (rvr > 2.0 || rvr < 0.5))
+        {
+            // Only when BOTH controls improved. A negative ratio means QC got worse while the
+            // reference improved - "improved considerably more than QC" would be a strange way to say
+            // that, and the QC-CV warning above already says it plainly.
+            var qcImprovedMore = rvr > 2.0;
+            var more = qcImprovedMore ? "QC" : "The reference";
+            var less = qcImprovedMore ? "the reference" : "QC";
+            notes.Add(
+                $"{more} improved considerably more than {less} (RVR={rvr:0.00}). Reference and QC are "
+                + "different materials injected at different amounts, so their CVs need not improve "
+                + "together - on its own this is not a problem.");
+        }
+
+        // Only genuine damage fails the verdict: the independent control got worse, or the two control
+        // groups collapsed onto each other. An unchanged QC CV (qcImp == 0) is not damage. A NaN PCA
+        // ratio (degenerate geometry) is unmeasured, not failed - but an unmeasurable QC CV is,
+        // because then nothing was validated; both cases are stated in the warnings above.
+        var passed = qcMeasurable && qcImp >= 0 && !(pcaRatio < 0.5);
 
         return new ValidationStatus(
             refBefore, refAfter, refImp, qcBefore, qcAfter, qcImp, rvr,
-            distBefore, distAfter, pcaRatio, passed, warnings);
+            distBefore, distAfter, pcaRatio, passed, warnings, notes);
     }
 
     // Euclidean distance between the QC and reference centroids in 2-D PCA space.
