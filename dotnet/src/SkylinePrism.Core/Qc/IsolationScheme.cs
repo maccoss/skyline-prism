@@ -12,12 +12,18 @@ namespace SkylinePrism.Core.Qc;
 /// display but NOT used for membership, because everything between <see cref="Start"/> and
 /// <see cref="End"/> is physically fragmented together whether or not Skyline quantified it there.
 ///
-/// <para><b>Scheduled windows.</b> A DIA window is on for the whole gradient - its cycle repeats from
-/// start to end - so <see cref="RtStart"/>/<see cref="RtStop"/> are NaN, meaning "always on". A targeted
-/// method (PRM, or MTM where several co-eluting precursors share one window) fires each window only
-/// during its scheduled interval, and those bounds carry it. This is Cadenza's <c>Slot</c>: an m/z range
-/// crossed with an RT range. Without it, a scheduled window would be drawn across the whole gradient and
-/// "never acquired here" would be indistinguishable from "acquired, nothing found".</para>
+/// <para><b>Scheduled windows.</b> A plain DIA window is on for the whole gradient - its cycle repeats
+/// from start to end - so <see cref="RtStart"/>/<see cref="RtStop"/> are NaN, meaning "always on".
+/// <b>Dynamic DIA</b> (PMC10517878) instead runs a different cycle of windows in each RT segment, so a
+/// window fires only during its segment and those bounds carry it. This is Cadenza's <c>Slot</c>: an m/z
+/// range crossed with an RT range. Without it, a scheduled window would be drawn across the whole
+/// gradient and "never acquired here" would be indistinguishable from "acquired, nothing found".</para>
+///
+/// <para>Nothing in PRISM produces a scheduled window today - it was originally added for PRM/MTM, whose
+/// windows came from the instrument's inclusion list, and that support was removed deliberately (see
+/// <c>dotnet/PORTING_STATUS.md</c>). The model is kept because dynamic DIA is DIA and needs exactly it;
+/// <c>ScheduledWindowTests</c> / <c>DynamicDiaTests</c> keep the primitives honest until something feeds
+/// them. Do not delete this dimension as dead PRM support.</para>
 /// </summary>
 public readonly record struct IsolationWindow(
     double Start, double End, double Margin = 0,
@@ -72,8 +78,21 @@ public sealed record IsolationScheme(string Name, IReadOnlyList<IsolationWindow>
     public double MzLow => Windows.Min(w => w.Start);
     public double MzHigh => Windows.Max(w => w.End);
 
-    /// <summary>True when any window fires only during a scheduled interval (a targeted method).</summary>
+    /// <summary>True when any window fires only during a scheduled interval (dynamic DIA).</summary>
     public bool IsScheduled => Windows.Any(w => w.IsScheduled);
+
+    /// <summary>
+    /// Identity by WINDOWS rather than by name - two schemes with the same layout have the same key.
+    /// <para>
+    /// Needed because a scheme's name does not identify it: two plates can both call theirs
+    /// "SWATH (25 m/z)" and mean different windows (a re-acquisition with a wider range, or the scheme
+    /// edited between plates). Anything that deduplicates schemes has to use this, or one plate's map
+    /// ends up binned on the other's grid.
+    /// </para>
+    /// </summary>
+    public string LayoutKey => string.Join("|", Windows.Select(w => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{w.Start:R}:{w.End:R}:{w.Margin:R}:{w.RtStart:R}:{w.RtStop:R}")));
 
     /// <summary>
     /// Indices of every window containing <paramref name="mz"/>. Normally one; a staggered/overlapping
@@ -91,9 +110,9 @@ public sealed record IsolationScheme(string Name, IReadOnlyList<IsolationWindow>
     /// <summary>
     /// Indices of every window that fragmented a precursor of <paramref name="mz"/> eluting over
     /// [<paramref name="rtStart"/>, <paramref name="rtStop"/>]. Same as
-    /// <see cref="IndicesContaining"/> for an always-on DIA scheme; for a scheduled method it also
-    /// requires the window to have been firing while the peak eluted, which is what stops a PRM target
-    /// from being credited to a same-m/z slot scheduled at a different time.
+    /// <see cref="IndicesContaining"/> for an always-on DIA scheme; for a scheduled one it also requires
+    /// the window to have been firing while the peak eluted, which is what stops a precursor from being
+    /// credited to a same-m/z window that fired in a different RT segment.
     /// </summary>
     public IEnumerable<int> IndicesCovering(double mz, double rtStart, double rtStop)
     {

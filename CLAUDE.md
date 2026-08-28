@@ -78,7 +78,7 @@ method states whether it expects LOG2 or LINEAR.
 > exception, not the norm.
 
 Do not design or justify an algorithm on the assumption that missing values are common. When
-choosing between two behaviours, **the dense case is the one that matters**; the sparse case must be
+choosing between two behaviors, **the dense case is the one that matters**; the sparse case must be
 *supported*, not optimized for. (This was got backwards once: a ComBat change was justified as
 "matches the reference implementation on data with missing values - which is all real proteomics
 data". The opposite is true.)

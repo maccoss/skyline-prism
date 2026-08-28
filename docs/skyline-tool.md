@@ -112,12 +112,14 @@ the raw data is most likely still where the document says it is, and the result 
 later with no Skyline running.
 
 It runs **alongside** the pipeline, not before it, so a slow or unreachable data file delays nothing. If
-it does not finish, the map falls back to clearly-labelled uniform bins and the log says so.
+it does not finish, the map falls back to clearly-labeled uniform bins and the log says so.
 
 **The tab is for DIA.** Skyline's importer can only read a repeating isolation cycle out of a data file,
 so targeted methods (PRM, MTM) have no route to their real windows — getting them means walking the file's
 scan headers, which belongs in Skyline or ProteoWizard rather than in an external tool. When a document's
-acquisition method is not DIA, the tab says so instead of drawing a map that cannot be read the same way.
+acquisition method is not DIA, the map is still drawn — on whatever grid is available — but the status line
+**warns** that the rows are not the windows the data was acquired with and that a cell is therefore not a
+co-fragmentation load, and it calls a cell a "row" rather than a "spectrum".
 
 The tab reads the merged data from the output directory, so it works for a run that has just
 finished *and* for any previous run's output directory, with no Skyline connection. Either layout

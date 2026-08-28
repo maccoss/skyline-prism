@@ -27,7 +27,7 @@ repository.
   `peptides_log2_internal.parquet`, which since dotnet-v26.15.0 is post-normalization and
   **pre-ComBat** (the protein arm branches from it). So every peptide CV, every peptide before/after
   plot and the whole validation verdict measured normalization alone - while the panels were
-  labelled "normalized + corrected" and the protein half of the same report showed a fully corrected
+  labeled "normalized + corrected" and the protein half of the same report showed a fully corrected
   matrix. It now reads `corrected_peptides.parquet`, the peptide arm's actual output, exactly as the
   protein side reads `corrected_proteins.parquet`. On the `mini` fixture with ComBat on, the
   reference median CV reported for the peptide "after" changes from 117.6% to 34.1%; expect
@@ -49,10 +49,11 @@ repository.
   longer offers **Load inclusion list (PRM/MTM)...**, and PRISM no longer reads Thermo inclusion lists.
   Reading what a targeted acquisition actually did means walking the data file's scan headers, which
   belongs in Skyline or ProteoWizard rather than in an external tool - and no Skyline command or RPC
-  exposes acquired isolation windows. Rather than carry a half-answer, the tab now warns plainly when a
-  document's acquisition method is not DIA, instead of drawing a map whose rows are windows the data was
-  not acquired with. An inclusion list previously saved into a run's `isolation_schemes.xml` is still
-  read back and offered; only loading new ones is gone.
+  exposes acquired isolation windows. Rather than carry a half-answer, the tab now **warns** when a
+  document's acquisition method is not DIA - the map is still drawn, but the status line says the rows are
+  not the windows the data was acquired with and that a cell is not a co-fragmentation load. An inclusion
+  list previously saved into a run's `isolation_schemes.xml` is still read back and offered; only loading
+  new ones is gone.
 
 - **The Python implementation has been removed.** PRISM began as the `skyline-prism` Python package;
   the C# tools replaced it and reproduced its numbers to 1e-9 on the deterministic stages. The engine,
@@ -64,7 +65,7 @@ repository.
 
   If you still need it, every Python release stays downloadable: `pip install skyline-prism==26.4.4`,
   or the [`v26.4.4` tag](https://github.com/maccoss/skyline-prism/releases/tag/v26.4.4) (any earlier
-  `v*` tag works too). Those versions are unmaintained and frozen at that release's behaviour.
+  `v*` tag works too). Those versions are unmaintained and frozen at that release's behavior.
 
   Consequences worth knowing:
   - Config keys that only ever existed in Python (`method: adaptive`, `library_fitting_method:

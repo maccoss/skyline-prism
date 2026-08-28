@@ -22,8 +22,14 @@ public sealed record PrecursorDensityMap(
     double RtLow, double RtBinMin,
     int[,] Counts,
     string RowSource,
-    int PrecursorsOutsideRows = 0)
+    int PrecursorsOutsideRows = 0,
+    bool RowsAreWindows = true)
 {
+    // RowsAreWindows: whether a cell IS a spectrum. True when Rows are the acquisition's real isolation
+    // windows; false on the approximate uniform-bin fallback, where a row is a bin no single spectrum
+    // covered. Carried explicitly rather than inferred from RowSource - a display string is not a
+    // contract, and what a cell counts is the one thing a reader must not be told wrongly.
+
     public int MzBins => Counts.GetLength(0);
     public int RtBins => Counts.GetLength(1);
     public double RtHigh => RtLow + RtBins * RtBinMin;
@@ -50,7 +56,7 @@ public sealed record PrecursorDensityMap(
     /// (the largest, where windows overlap), so a variable-width or staggered scheme still renders with
     /// its true m/z extents.
     /// <para>NaN means "no spectrum here", and draws as a gap rather than a zero: either no window covers
-    /// that m/z at all, or - for a scheduled PRM/MTM window - the window was not firing at that time. A
+    /// that m/z at all, or - for a scheduled (dynamic DIA) window - it was not firing at that time. A
     /// zero therefore always means "acquired, nothing detected", which is the reading the plot is for.</para>
     /// </summary>
     public double[,] ToDisplayGrid(int displayRows = 600)
@@ -319,9 +325,9 @@ public static class PrecursorDensity
             var from = Math.Max(0, (int)((p.RtStart - rtLo) / rtBin));
             var to = Math.Min(nRt, (int)((p.RtStop - rtLo) / rtBin) + 1);
             var matched = false;
-            // Covers(), not Contains(): for a scheduled (PRM/MTM) window the peak must also fall inside
-            // the interval the window was firing, or a target would be credited to a same-m/z slot
-            // scheduled at a completely different time.
+            // Covers(), not Contains(): for a scheduled (dynamic DIA) window the peak must also fall
+            // inside the interval the window was firing, or a precursor would be credited to a same-m/z
+            // window that fired in a different RT segment.
             foreach (var row in scheme.IndicesCovering(p.Mz, p.RtStart, p.RtStop))
             {
                 matched = true;
@@ -351,7 +357,8 @@ public static class PrecursorDensity
             throw new ArgumentOutOfRangeException(nameof(rtBinMin), rtBinMin, "RT bin must be greater than 0.");
         if (precursors.Count == 0)
             return new PrecursorDensityMap(
-                Array.Empty<IsolationWindow>(), 0, rtBinMin, new int[0, 0], UniformSource(mzBinTh));
+                Array.Empty<IsolationWindow>(), 0, rtBinMin, new int[0, 0], UniformSource(mzBinTh),
+                RowsAreWindows: false);
 
         double mzLo = double.PositiveInfinity, mzHi = double.NegativeInfinity;
         foreach (var p in precursors)
@@ -381,7 +388,8 @@ public static class PrecursorDensity
             for (var j = from; j < to; j++)
                 counts[row, j]++;
         }
-        return new PrecursorDensityMap(rows, rtLo, rtBin, counts, UniformSource(mzBinTh));
+        return new PrecursorDensityMap(
+            rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false);
     }
 
     /// <summary>Label that marks a map as approximate, so it can never be mistaken for real windows.</summary>

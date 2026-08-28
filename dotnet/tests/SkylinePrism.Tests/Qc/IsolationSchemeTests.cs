@@ -136,9 +136,11 @@ public class IsolationSchemeTests
         try
         {
             var catalog = new IsolationSchemeCatalog();
-            // Plate1's document names a window-less scheme; Plate2 and Plate3 declare real windows -
-            // the same scheme, in the two different XML spellings Skyline produces for it, which is what
-            // the deduplication below has to survive.
+            // Plate1's document names a window-less scheme; Plate2 and Plate3 declare real windows.
+            // Note what these two fixtures actually are: the same NAME ("SWATH (25 m/z)"), in the two
+            // XML spellings Skyline produces, but NOT the same scheme - DocumentXml has 2 windows and
+            // SettingsListXml has 3. That is the case this test exists for, and each plate has to come
+            // back with its own layout.
             catalog.AddDocumentScheme("Plate1", IsolationScheme.Parse("""<isolation_scheme name="Results only" />""")!);
             catalog.AddDocumentScheme("Plate2", IsolationScheme.Parse(DocumentXml)!);
             catalog.AddDocumentScheme("Plate3", IsolationScheme.Parse(SettingsListXml)!);
@@ -151,14 +153,62 @@ public class IsolationSchemeTests
             // Plate1 has no usable scheme - the tool must ask - but its name survives for the UI to explain.
             Assert.Null(loaded!.DocumentSchemeFor("Plate1"));
             Assert.Equal(IsolationScheme.ResultsOnlyName, loaded.DocumentSchemeNameFor("Plate1"));
-            // Plate2's document scheme is authoritative and comes back with its windows attached.
+            // Each plate's document scheme is authoritative and comes back with ITS OWN windows -
+            // the whole point, since both are named "SWATH (25 m/z)". Resolving the name against a
+            // library that keeps one entry per name gave Plate3 Plate2's 2-window grid: a map that looks
+            // plausible and is not the acquisition's.
             var plate2 = loaded.DocumentSchemeFor("Plate2");
             Assert.NotNull(plate2);
             Assert.Equal(2, plate2!.Windows.Count);
             Assert.Equal(424, plate2.Windows[0].End);
-            // Both named schemes are offered, deduplicated (Plate2's document scheme shares its name).
-            Assert.Single(loaded.UsableSchemes);
-            Assert.Equal("SWATH (25 m/z)", loaded.UsableSchemes[0].Name);
+
+            var plate3 = loaded.DocumentSchemeFor("Plate3");
+            Assert.NotNull(plate3);
+            Assert.Equal(3, plate3!.Windows.Count);
+            Assert.Equal(472, plate3.Windows[2].End);
+
+            // Both layouts are offered, and they are two entries: deduplication is by name AND windows,
+            // so the second is not dropped for sharing a name with the first.
+            Assert.Equal(2, loaded.UsableSchemes.Count);
+            Assert.All(loaded.UsableSchemes, s => Assert.Equal("SWATH (25 m/z)", s.Name));
+            Assert.Equal(new[] { 2, 3 }, loaded.UsableSchemes.Select(s => s.Windows.Count).ToArray());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A catalog written before the per-batch windows were inlined has only the name attribute and the
+    /// shared library. Those files must keep loading - the name lookup is right whenever the names do
+    /// not collide, which is the ordinary case.
+    /// </summary>
+    [Fact]
+    public void Catalog_LoadsAFileWrittenBeforeWindowsWereInlined()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_iso_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
+            File.WriteAllText(path, """
+                <prism_isolation_schemes>
+                  <document batch="Plate1" scheme="SWATH (25 m/z)" acquisition="DIA" />
+                  <IsolationScheme name="SWATH (25 m/z)">
+                    <isolation_window start="400" end="424" margin="0.5" />
+                    <isolation_window start="424" end="448" margin="0.5" />
+                  </IsolationScheme>
+                </prism_isolation_schemes>
+                """);
+
+            var loaded = IsolationSchemeCatalog.Load(path);
+
+            Assert.NotNull(loaded);
+            var plate1 = loaded!.DocumentSchemeFor("Plate1");
+            Assert.NotNull(plate1);
+            Assert.Equal(2, plate1!.Windows.Count);
+            Assert.Equal("DIA", loaded.AcquisitionFor("Plate1"));
         }
         finally
         {

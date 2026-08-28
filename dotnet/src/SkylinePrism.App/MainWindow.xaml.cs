@@ -966,11 +966,17 @@ public partial class MainWindow : Window
         {
             try
             {
-                var catalog = new IsolationSchemeCatalog();
+                // Start from whatever this directory already records and merge into it. Save() writes
+                // the whole file, so building a fresh catalog here DESTROYED what an earlier run into the
+                // same directory had learned - and since the inclusion-list loader was removed there is no
+                // way to put a lost scheme back. A batch re-collected now overwrites its own entry; every
+                // other entry survives.
+                var path = Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
+                var catalog = IsolationSchemeCatalog.Load(path) ?? new IsolationSchemeCatalog();
                 foreach (var input in inputs)
                     input.CollectIsolationSchemes(catalog, Log, SkylineCmdPathOverride, cancellationToken);
                 if (!catalog.IsEmpty)
-                    catalog.Save(Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+                    catalog.Save(path);
             }
             catch (OperationCanceledException)
             {

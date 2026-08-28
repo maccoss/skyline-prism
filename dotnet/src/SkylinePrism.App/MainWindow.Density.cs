@@ -217,9 +217,15 @@ public partial class MainWindow
     /// <summary>
     /// Fill the isolation-scheme picker for the selected run's batch. When that batch's document declares
     /// a scheme WITH windows, it is selected and the picker is locked - the document is authoritative and
-    /// there is nothing to choose. Otherwise (the usual "Results only" case) the user picks which of their
-    /// saved Skyline schemes the data was acquired with, because Skyline stores those windows only inside
-    /// the raw files.
+    /// there is nothing to choose. Otherwise (the usual "Results only" case, where Skyline keeps the
+    /// windows only inside the raw files) the user picks from what this run actually learned: another
+    /// batch's document scheme, a scheme reloaded from the run's own catalog, a built-in cycle, or
+    /// labeled uniform bins.
+    /// <para>
+    /// Skyline's saved isolation-scheme list is deliberately NOT among them - see
+    /// <see cref="IsolationSchemeCatalog.Library"/> for why offering those generic templates invites a
+    /// map that looks plausible and is wrong.
+    /// </para>
     /// </summary>
     private void PopulateSchemeCombo()
     {
@@ -239,11 +245,22 @@ public partial class MainWindow
                 DensitySchemeCombo.Items.Add($"{documentScheme.Name} (from document)");
                 _densitySchemeChoices.Add(documentScheme);
             }
-            foreach (var scheme in usable
-                         .Where(s => documentScheme is null
-                             || !string.Equals(s.Name, documentScheme.Name, StringComparison.OrdinalIgnoreCase)))
+            var offered = usable
+                .Where(s => documentScheme is null || s.LayoutKey != documentScheme.LayoutKey)
+                .ToList();
+            // Two plates can name their schemes the same thing and mean different windows, and both are
+            // offered (UsableSchemes deduplicates on the layout, not the name). Say which is which -
+            // two identical-looking entries would be a coin toss.
+            var ambiguous = offered
+                .GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var scheme in offered)
             {
-                DensitySchemeCombo.Items.Add(scheme.Name + (scheme.IsScheduled ? " (scheduled)" : ""));
+                DensitySchemeCombo.Items.Add(scheme.Name
+                    + (ambiguous.Contains(scheme.Name) ? $" ({scheme.Windows.Count} windows)" : "")
+                    + (scheme.IsScheduled ? " (scheduled)" : ""));
                 _densitySchemeChoices.Add(scheme);
             }
             // The built-in schemes: modern narrow-window cycles. Enumerated from IsolationScheme.BuiltIns
@@ -526,8 +543,13 @@ public partial class MainWindow
         var nonDia = batch is not null && _densitySchemes is not null && _densitySchemes.IsNonDia(batch)
             ? _densitySchemes.AcquisitionFor(batch)
             : null;
+        // "Spectrum" is only the right noun when a cell IS one: a real window layout, acquired by DIA.
+        // On the uniform-bin fallback a cell is a bin (the picker's tooltip says so), and for a targeted
+        // acquisition it is a row of a scheme the data was not acquired with. Calling those a spectrum
+        // is the misreading this tab's warnings exist to prevent.
+        var cellNoun = nonDia is not null ? "row" : map.RowsAreWindows ? "spectrum" : "bin";
         DensityStatusText.Text =
-            $"{total:N0} precursors; busiest spectrum {map.MaxCount:N0}; "
+            $"{total:N0} precursors; busiest {cellNoun} {map.MaxCount:N0}; "
             + $"{map.RowSource}; {map.MzBins:N0} rows x {map.RtBins:N0} RT bins of {map.RtBinMin:0.###} min"
             + (nonDia is not null
                 ? $"; WARNING: this is a {nonDia} acquisition, and this map assumes DIA - the rows are not "

@@ -466,7 +466,7 @@ injection.
 > The two files can use **different** per-batch scales, because each is corrected by the ComBat that
 > applied to the output it accompanies: `corrected_peptides_residuals` by the peptide-level delta,
 > `corrected_proteins_residuals` by the protein-level one. Since the arms are corrected independently
-> (see `peptides_log2_internal.parquet`), that is the correct behaviour rather than an inconsistency -
+> (see `peptides_log2_internal.parquet`), that is the correct behavior rather than an inconsistency -
 > but it does mean the two files are not on a common scale and should not be pooled.
 
 ---
