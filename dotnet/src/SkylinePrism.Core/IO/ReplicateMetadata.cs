@@ -33,6 +33,30 @@ public sealed class ReplicateMetadata
     public Dictionary<string, string> TypeBySampleId { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> BatchBySampleId { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Every OTHER column of the report, verbatim: replicate -> column name -> value. PRISM interprets
+    /// three things (replicate, sample type, batch) and used to discard the rest, but the rest is the
+    /// study - Subject, Timepoint, responder status, days between draws - and the run's outputs are
+    /// where an analyst goes looking for it. Carried through untouched, names and values as exported,
+    /// so a downstream join does not depend on PRISM having understood the annotation.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, string>> ValuesByReplicate { get; } =
+        new(StringComparer.Ordinal);
+
+    /// <summary>The same, keyed by document-qualified sample ID; takes precedence (see above).</summary>
+    public Dictionary<string, Dictionary<string, string>> ValuesBySampleId { get; } =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Column names in report order, unioned across metadata files, excluding the replicate-name column
+    /// (that is the sample itself). The header order of the extra columns written to sample_metadata.csv.
+    /// </summary>
+    public List<string> ColumnNames { get; } = new();
+
+    /// <summary>Annotation values for a merged sample ID: the document-qualified entry wins.</summary>
+    public IReadOnlyDictionary<string, string>? ValuesFor(string sampleId, string replicate)
+        => ValuesBySampleId.GetValueOrDefault(sampleId) ?? ValuesByReplicate.GetValueOrDefault(replicate);
+
     public bool HasTypes => TypeByReplicate.Count > 0 || TypeBySampleId.Count > 0;
     public bool HasBatches => BatchByReplicate.Count > 0 || BatchBySampleId.Count > 0;
 
@@ -95,6 +119,8 @@ public sealed class ReplicateMetadata
                     md.TypeBySampleId[QualifiedKey(kv.Key, label!)] = kv.Value;
                 foreach (var kv in md.BatchByReplicate)
                     md.BatchBySampleId[QualifiedKey(kv.Key, label!)] = kv.Value;
+                foreach (var kv in md.ValuesByReplicate)
+                    md.ValuesBySampleId[QualifiedKey(kv.Key, label!)] = kv.Value;
             }
 
             if (merged is null)
@@ -110,6 +136,15 @@ public sealed class ReplicateMetadata
                 merged.TypeBySampleId[kv.Key] = kv.Value;
             foreach (var kv in md.BatchBySampleId)
                 merged.BatchBySampleId[kv.Key] = kv.Value;
+            foreach (var kv in md.ValuesByReplicate)
+                merged.ValuesByReplicate[kv.Key] = kv.Value;
+            foreach (var kv in md.ValuesBySampleId)
+                merged.ValuesBySampleId[kv.Key] = kv.Value;
+            // Union, in first-seen order: documents in one cohort normally share their annotations, but
+            // a column present in only one of them is still that document's data and still goes out.
+            foreach (var name in md.ColumnNames)
+                if (!merged.ColumnNames.Contains(name, StringComparer.Ordinal))
+                    merged.ColumnNames.Add(name);
         }
         return merged;
     }
@@ -147,6 +182,19 @@ public sealed class ReplicateMetadata
             log?.Invoke($"Replicates metadata: requested batch column '{batchColumn}' not found in the report.");
 
         var md = new ReplicateMetadata();
+        // Every column except the replicate name, in report order - kept whether or not PRISM knows
+        // what it means.
+        var extraCols = new List<(string Name, int Index)>();
+        for (var c = 0; c < header.Length; c++)
+        {
+            var name = header[c].Trim();
+            if (c == repIdx || name.Length == 0)
+                continue;
+            extraCols.Add((name, c));
+            if (!md.ColumnNames.Contains(name, StringComparer.Ordinal))
+                md.ColumnNames.Add(name);
+        }
+
         for (var i = 1; i < lines.Length; i++)
         {
             if (string.IsNullOrWhiteSpace(lines[i]))
@@ -157,6 +205,11 @@ public sealed class ReplicateMetadata
             var rep = f[repIdx].Trim();
             if (rep.Length == 0)
                 continue;
+
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, idx) in extraCols)
+                values[name] = idx < f.Length ? f[idx].Trim() : "";
+            md.ValuesByReplicate[rep] = values;
 
             if (typeIdx >= 0 && f.Length > typeIdx)
                 md.TypeByReplicate[rep] = MapSampleType(f[typeIdx]);
@@ -172,7 +225,12 @@ public sealed class ReplicateMetadata
             $"Replicates metadata: replicate='{header[repIdx]}'"
             + (typeIdx >= 0 ? $", type='{header[typeIdx]}'" : ", type=(none)")
             + (batchIdx >= 0 ? $", batch='{header[batchIdx]}'" : ", batch=(none)")
-            + $"; {md.TypeByReplicate.Count} typed, {md.BatchByReplicate.Count} batched.");
+            + $"; {md.TypeByReplicate.Count} typed, {md.BatchByReplicate.Count} batched"
+            + (md.ColumnNames.Count > 0
+                ? $"; carrying {md.ColumnNames.Count} column(s) into sample_metadata.csv: "
+                  + string.Join(", ", md.ColumnNames)
+                : "")
+            + ".");
         return md;
     }
 
@@ -207,29 +265,5 @@ public sealed class ReplicateMetadata
         return -1;
     }
 
-    // Minimal RFC4180 splitter (handles double-quoted fields with embedded commas).
-    private static string[] SplitCsv(string line)
-    {
-        var fields = new List<string>();
-        var sb = new System.Text.StringBuilder();
-        var inQuotes = false;
-        for (var i = 0; i < line.Length; i++)
-        {
-            var c = line[i];
-            if (inQuotes)
-            {
-                if (c == '"')
-                {
-                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
-                    else inQuotes = false;
-                }
-                else sb.Append(c);
-            }
-            else if (c == '"') inQuotes = true;
-            else if (c == ',') { fields.Add(sb.ToString()); sb.Clear(); }
-            else sb.Append(c);
-        }
-        fields.Add(sb.ToString());
-        return fields.ToArray();
-    }
+    private static string[] SplitCsv(string line) => CsvLine.Split(line);
 }

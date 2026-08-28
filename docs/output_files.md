@@ -345,8 +345,35 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/parameters
 |--------|------|-------------|
 | `sample_id` | string | Unique sample identifier (column name in parquet files) |
 | `sample` | string | Sample name (without batch suffix) |
-| `sample_type` | string | Sample type: `experimental`, `reference`, or `qc` |
+| `sample_type` | string | Sample type: `experimental`, `reference`, `qc`, or `blank` |
 | `batch` | string | Batch assignment for batch correction |
+| *(every other Replicates column)* | string | Carried through verbatim — see below |
+
+**Replicate annotations**: after those four, the file carries **every other column** of the Skyline
+Replicates report (or of the metadata files given to `-m`), with its own name and value: `SampleType`,
+`AnalyteConcentration`, and one column per replicate annotation (`Subject`, `Timepoint`, `Condition`,
+whatever the document defines). This is what makes the output directory self-contained for downstream
+analysis — the study design sits beside the abundances, and a join needs no second file.
+
+Notes:
+
+- The four columns above keep their names and positions, so anything already reading this file works
+  unchanged.
+- `sample_type` and the report's own `SampleType` are **both** written, and they are not the same
+  fact. `sample_type` is PRISM's mapping — `Standard` → `reference`, `Quality Control` → `qc`,
+  `Solvent`/`Blank`/`Double Blank` → `blank`, everything else → `experimental` — and that mapping is
+  **lossy**: it cannot tell a solvent blank from a double blank, and Skyline's sample-type list is
+  editable, so a type someone adds arrives as `experimental` alongside `Unknown`. `SampleType` is what
+  the document actually calls the replicate, and it is the only one of the two that survives a custom
+  vocabulary. Use `sample_type` to understand what PRISM did; use `SampleType` to know what it was.
+  The same applies to a `Batch` annotation next to the resolved `batch`, which differ whenever PRISM
+  fell back (blank cell, `#N/A`, or no batch annotation at all).
+- The only name adjusted is one that clashes **exactly** with a reserved column: an annotation literally
+  named `batch` is written as `batch (report)`, so nothing is dropped and no duplicate header appears.
+- Multi-document cohorts: each document's Replicates grid has its own columns, so the header is their
+  **union** in first-seen order, and a replicate from a document that lacks a column gets an empty cell.
+  A replicate name reused across documents keeps its own document's values.
+- Values are CSV-quoted when they contain commas or quotes; parse it as CSV, not with `split(',')`.
 
 **Sample types**:
 

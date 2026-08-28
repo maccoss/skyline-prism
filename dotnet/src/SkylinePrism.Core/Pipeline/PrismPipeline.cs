@@ -510,7 +510,8 @@ public sealed class PrismPipeline
         cancellationToken.ThrowIfCancellationRequested();
         report("Stage 5: Output generation");
         report("============================================================");
-        WriteSampleMetadata(Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType);
+        WriteSampleMetadata(
+            Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType, metadata);
         Provenance.Write(
             Path.Combine(outputDir, "parameters.json"), config, inputs,
             new Provenance.Stats(samples.Count, nPeptides, nProteins, groups.Count),
@@ -616,18 +617,63 @@ public sealed class PrismPipeline
         return map;
     }
 
+    /// <summary>
+    /// Write sample_metadata.csv: PRISM's four resolved fields, then EVERY other column of the
+    /// Replicates report (or of the metadata files given to the CLI), verbatim.
+    /// <para>
+    /// The annotations are the study - Subject, Timepoint, responder status, days between draws - and
+    /// this file is where an analyst looks for them next to the abundances. PRISM interprets three of
+    /// the report's columns and used to write only those, so a cohort's design reached the output
+    /// directory only inside a Skyline export that most downstream code never opens. The four resolved
+    /// columns keep their names and positions, so anything already reading this file still works.
+    /// </para>
+    /// <para>
+    /// The report's own `SampleType` is carried too, even though `sample_type` is derived from it,
+    /// because the derivation is LOSSY and the raw value is its own fact. Skyline's sample types are an
+    /// editable list: `Solvent`, `Blank` and `Double Blank` are three different things that PRISM maps
+    /// onto one `blank`, and a type a user added to the dropdown maps onto `experimental` along with
+    /// `Unknown`. `sample_type` says what PRISM did with the replicate; `SampleType` says what the
+    /// document calls it, and only the second survives a custom vocabulary. The same holds for a
+    /// `Batch` column, whose raw value differs from the resolved `batch` whenever PRISM fell back
+    /// (blank cell, `#N/A`, or no batch annotation at all).
+    /// </para>
+    /// </summary>
     private static void WriteSampleMetadata(
         string path, IReadOnlyList<string> samples,
-        IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType)
+        IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType,
+        ReplicateMetadata? metadata)
     {
-        var sb = new StringBuilder("sample_id,sample,sample_type,batch\n");
+        // Every report column goes out. Only an EXACT name clash with one of the four reserved fields
+        // is adjusted, and by suffixing rather than dropping: two columns with the same header would
+        // resolve to whichever a reader indexes first, silently, while dropping one would lose data the
+        // run was asked to carry. (A replicate annotation really can be called "batch".)
+        var reserved = new[] { "sample_id", "sample", "sample_type", "batch" };
+        var extraCols = new List<(string Header, string Column)>();
+        foreach (var col in metadata?.ColumnNames ?? new List<string>())
+        {
+            var header = reserved.Contains(col, StringComparer.OrdinalIgnoreCase)
+                ? col + " (report)"
+                : col;
+            extraCols.Add((header, col));
+        }
+
+        var sb = new StringBuilder("sample_id,sample,sample_type,batch");
+        foreach (var (header, _) in extraCols)
+            sb.Append(',').Append(Csv(header));
+        sb.Append('\n');
+
         foreach (var sampleId in samples)
         {
             var replicate = SampleIdToReplicate(sampleId);
             var batch = resolvedBatch.GetValueOrDefault(sampleId, "batch1");
             var type = resolvedType.GetValueOrDefault(sampleId, "experimental");
             sb.Append(Csv(sampleId)).Append(',').Append(Csv(replicate)).Append(',')
-              .Append(type).Append(',').Append(Csv(batch)).Append('\n');
+              .Append(type).Append(',').Append(Csv(batch));
+
+            var values = metadata?.ValuesFor(sampleId, replicate);
+            foreach (var (_, col) in extraCols)
+                sb.Append(',').Append(Csv(values?.GetValueOrDefault(col) ?? ""));
+            sb.Append('\n');
         }
         File.WriteAllText(path, sb.ToString());
     }

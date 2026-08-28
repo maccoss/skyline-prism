@@ -191,6 +191,81 @@ public class MultiDocumentBatchTests
         Assert.Equal("PlateB", samples["Ref_01__@__PlateB"].Batch);
     }
 
+    /// <summary>
+    /// The Replicates report's annotations are the study, and they have to land in
+    /// sample_metadata.csv - the file an analyst reads beside the abundances. PRISM interprets three of
+    /// the report's columns; the rest used to be dropped, so the design never left Skyline.
+    /// </summary>
+    [Fact]
+    public void SampleMetadata_CarriesTheReplicateAnnotations_WithoutRestatingResolvedColumns()
+    {
+        using var ws = new Workspace();
+        var a = WriteTransitionReport(ws, "PlateA", 1.0, 1);
+        var b = WriteTransitionReport(ws, "PlateB", 1.8, 2);
+        // Each document's grid is its own: PlateA carries Subject/Timepoint, PlateB carries Condition.
+        var metaA = WriteAnnotatedMetadata(ws, "PlateA", "P1", "Subject,Timepoint", "S01,1");
+        var metaB = WriteAnnotatedMetadata(ws, "PlateB", "P2", "Condition", "treated");
+        var outDir = ws.Path("out");
+
+        PrismPipeline.Run(new[] { a, b }, outDir, Config(batchColumn: "Plate"), new[] { metaA, metaB });
+
+        var lines = File.ReadAllLines(Path.Combine(outDir, "sample_metadata.csv"));
+        var header = CsvLine.Split(lines[0]);
+
+        // The four resolved fields keep their names AND positions - existing readers are unaffected.
+        Assert.Equal(new[] { "sample_id", "sample", "sample_type", "batch" }, header.Take(4).ToArray());
+
+        // Every annotation column is present, unioned across the two documents.
+        Assert.Contains("Subject", header);
+        Assert.Contains("Timepoint", header);
+        Assert.Contains("Condition", header);
+
+        // The report's raw SampleType is carried too: PRISM's mapping is lossy (Solvent, Blank and
+        // Double Blank all become "blank", and a sample type a user added to Skyline's editable list
+        // becomes "experimental"), so the document's own word for the replicate is its own fact.
+        Assert.Contains("SampleType", header);
+        // Exactly one column each for the resolved fields - no duplicate header for a reader to guess at.
+        Assert.Single(header, h => h.Equals("sample_type", StringComparison.Ordinal));
+        Assert.Single(header, h => h.Equals("batch", StringComparison.Ordinal));
+
+        var rows = lines.Skip(1)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Select(CsvLine.Split)
+            .ToDictionary(f => f[0], f => f, StringComparer.Ordinal);
+        int Col(string name) => CsvLine.IndexOf(header, name);
+
+        // The two sample-type columns side by side: what the document calls it, and what PRISM made of it.
+        Assert.Equal("Standard", rows["Ref_01__@__PlateA"][Col("SampleType")]);
+        Assert.Equal("reference", rows["Ref_01__@__PlateA"][Col("sample_type")]);
+
+        // Each document's replicate keeps its OWN values, and a column the other document does not
+        // define comes through empty rather than borrowed.
+        var fromA = rows["Ref_01__@__PlateA"];
+        var fromB = rows["Ref_01__@__PlateB"];
+        Assert.Equal("S01", fromA[Col("Subject")]);
+        Assert.Equal("1", fromA[Col("Timepoint")]);
+        Assert.Equal("", fromA[Col("Condition")]);
+        Assert.Equal("treated", fromB[Col("Condition")]);
+        Assert.Equal("", fromB[Col("Subject")]);
+    }
+
+    /// <summary>A Replicates report with document-specific annotation columns after the standard ones.</summary>
+    private static string WriteAnnotatedMetadata(
+        Workspace ws, string label, string plate, string annotationCols, string annotationValues)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Replicate,SampleType,Plate,{annotationCols}");
+        foreach (var r in References)
+            sb.AppendLine($"{r},Standard,{plate},{annotationValues}");
+        foreach (var r in Qcs)
+            sb.AppendLine($"{r},Quality Control,{plate},{annotationValues}");
+        foreach (var r in Studies)
+            sb.AppendLine($"{r},Unknown,{plate},{annotationValues}");
+        var path = ws.Path(label + ".metadata.csv");
+        File.WriteAllText(path, sb.ToString());
+        return path;
+    }
+
     [Fact]
     public void TwoDocuments_WithPerDocumentMetadata_KeepTheirOwnBatchAndSampleType()
     {
