@@ -18,7 +18,10 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 
 ## Project Overview
 
-**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) is a Python package for normalization of LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction.
+**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) normalizes LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction. It ships as a cross-platform `prism` CLI and a Windows Skyline external tool, both built from the .NET 8 code under `dotnet/`.
+
+> [!NOTE]
+> PRISM began as a Python package (`skyline-prism` on PyPI). That engine was **retired and removed** after its last release, `v26.4.4`; the C# code reproduced its numbers to 1e-9 on the deterministic stages. Older Python releases remain available from the `v*` tags and PyPI but are unmaintained. Do not add Python engine code back, and do not describe PRISM as a Python package.
 
 ### Key Concepts
 
@@ -46,9 +49,9 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 | **Output** | LINEAR | Final peptide/protein output matrices (parquet/CSV) are always written in LINEAR scale (values are 2^x, not log2(x)) |
 
 **Implementation Location:**
-The log2→linear conversion is enforced in `skyline_prism/cli.py` at the final output stage:
-- Peptide output: Line ~1610 (`for col in pep_sample_cols: peptide_output_df[col] = np.power(2, ...)`)
-- Protein output: Line ~1835 (`for col in prot_sample_cols: protein_output_df[col] = np.power(2, ...)`)
+The log2→linear conversion happens where each arm's corrected matrix is written -
+`NormalizeCorrectStage` / `StreamingNormalizeCorrect` (`CorrectedLinearPath`), for the peptide arm at
+Stage 2b/2c and the protein arm at Stage 4b/4c.
 
 **Important:** Intermediate files (`peptides_rollup.parquet`, `proteins_raw.parquet`) remain in LOG2 scale for normalization and batch correction. Only the **final** output files (`corrected_peptides.parquet`, `corrected_proteins.parquet`) are converted to linear.
 
@@ -63,7 +66,8 @@ The pipeline automatically handles transforms:
 - Input linear values are log2-transformed for processing
 - Output values are back-transformed to linear (2^x) before writing
 
-When using functions directly via Python API, check docstrings for scale requirements.
+When calling `SkylinePrism.Core` types directly, check the XML doc comments: every matrix-taking
+method states whether it expects LOG2 or LINEAR.
 
 ### Data Density (CRITICAL - PRISM input is normally COMPLETE)
 
@@ -96,10 +100,10 @@ Missing values do still occur, and must keep working:
 
 **CVs must ALWAYS be calculated on LINEAR scale data, NEVER on log-transformed data.**
 
-Correct calculation:
-```python
-linear_data = 2 ** log2_data  # Convert from log2 to linear
-cv = (linear_data.std() / linear_data.mean()) * 100  # CV as percentage
+Correct calculation (`CvMetrics`, which every CV in the QC report goes through):
+```csharp
+var linear = Math.Pow(2, log2Value);   // back-transform first
+var cv = stdDev(linear) / mean(linear) * 100.0;   // CV as a percentage
 ```
 
 Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2 data would be meaningless - true biological CVs for proteomics control samples typically range from 10-30%.
@@ -126,31 +130,17 @@ Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2
 | Phosphorylation (Thr) | `T(unimod:21)` | `T[+79.96633]` |
 | Phosphorylation (Tyr) | `Y(unimod:21)` | `Y[+79.96633]` |
 
-**Conversion function:**
-```python
-import re
+**How PRISM matches** (`SpectralLibrary.GetSpectrum`): rather than translating one notation into
+the other - which needs a table entry per modification and silently fails on the next one - it looks up
+the **exact** `modifiedSequence_charge` key first, then falls back to a key with **all** modification
+notation stripped (`StripModifications` removes `(unimod:N)`, `[+57.02146]`, `[Carbamidomethyl]` and
+`(...)` alike). So any notation matches any other, with no per-modification table to maintain.
 
-def convert_unimod_to_blib_format(seq):
-    """Convert Unimod format C(unimod:4) to BLIB format C[+57.02146]."""
-    conversions = {
-        r'C\(unimod:4\)': 'C[+57.02146]',     # Carbamidomethyl
-        r'M\(unimod:35\)': 'M[+15.99491]',    # Oxidation
-        r'S\(unimod:21\)': 'S[+79.96633]',    # Phospho
-        r'T\(unimod:21\)': 'T[+79.96633]',    # Phospho
-        r'Y\(unimod:21\)': 'Y[+79.96633]',    # Phospho
-    }
-    result = seq
-    for pattern, replacement in conversions.items():
-        result = re.sub(pattern, replacement, result)
-    return result
-```
-
-**When matching peptides to library:**
-1. First try the original key format from the data
-2. If not found, convert to BLIB format and retry
-3. Also try I/L normalization (mass spec cannot distinguish isoleucine/leucine)
-
-**PRISM implementation:** The `SpectralLibraryLoader.normalize_sequence_for_matching()` handles I/L normalization, but modification format conversion must be done separately when working with raw Skyline exports.
+> [!CAUTION]
+> **I and L are deliberately NOT collapsed.** `NormalizeForMatching` exists but the library lookup does
+> not use it: I/L give different predicted spectra and RTs, and every detected peptide has its own exact
+> predicted spectrum in the library (it was detected against it), so collapsing them would force a match
+> to the wrong spectrum. Do not "fix" the lookup by adding I/L normalization.
 
 ### Processing Pipeline
 
@@ -202,30 +192,36 @@ Stage 5b: QC Report Generation (HTML + plots)
 
 ```
 skyline-prism/
-├── skyline_prism/           # Main Python package
-│   ├── __init__.py          # Package exports
-│   ├── cli.py               # Command-line interface (entry point: `prism`)
-│   ├── chunked_processing.py # Memory-efficient chunked/streaming processing
-│   ├── data_io.py           # Skyline report loading and merging (includes merge_and_sort_streaming)
-│   ├── normalization.py     # RT-aware correction pipeline
-│   ├── batch_correction.py  # ComBat implementation (empirical Bayes)
-│   ├── parsimony.py         # Protein grouping and shared peptide handling
-│   ├── rollup.py            # Peptide → Protein rollup (median polish, etc.)
-│   ├── spectral_library.py  # Library-assisted rollup with least squares fitting
-│   ├── transition_rollup.py # Transition → Peptide rollup (median polish, quality-weighted, variance learning)
-│   ├── validation.py        # QC metrics and reporting (generates HTML QC reports with embedded plots)
-│   └── visualization.py     # Plotting functions for QC assessment and normalization evaluation
-├── tests/                   # Unit tests (pytest)
-│   ├── test_data_io.py
-│   ├── test_parsimony.py
-│   ├── test_rollup.py
-│   ├── test_spectral_library.py  # Library-assisted rollup tests
-│   └── test_transition_rollup.py
-├── SPECIFICATION.md         # Detailed technical specification
-├── README.md                # User-facing documentation
-├── config_template.yaml     # Static reference (NOT the source - see cli.py)
-├── pyproject.toml           # Package configuration and dependencies
-└── .venv/                   # Virtual environment (not in git)
+├── dotnet/
+│   ├── src/
+│   │   ├── SkylinePrism.Core/       # Platform-neutral engine (net8.0)
+│   │   │   ├── Pipeline/            # PrismPipeline (stage orchestration), NormalizeCorrectStage,
+│   │   │   │                        #   StreamingNormalizeCorrect, Provenance (parameters.json)
+│   │   │   ├── Rollup/              # TukeyMedianPolish, TransitionRollup, ProteinRollup,
+│   │   │   │                        #   Sum/TopN/Consensus rollups
+│   │   │   ├── BatchCorrection/     # ComBat, ComBatCore, ReferenceAnchoredComBat, StreamingComBat
+│   │   │   ├── Normalization/       # Normalizer (median/rt_lowess/quantile/vsn), OutlierDetector
+│   │   │   ├── Parsimony/           # ParsimonyEngine, FastaParser, ProteinGroup
+│   │   │   ├── Library/             # SpectralLibrary (.blib), LibraryRollup
+│   │   │   ├── Qc/                  # QcReport, CvMetrics, ValidationStatus, DynamicRange,
+│   │   │   │                        #   PrecursorDensity, IsolationScheme
+│   │   │   ├── IO/                  # DuckDbMerge, parquet readers/writers, SkylineColumns
+│   │   │   ├── Numerics/            # Stats, Lowess, Pca, LinAlg, Kde
+│   │   │   ├── Config/              # PrismConfig, ConfigTemplate, ConfigWriter
+│   │   │   └── Visualization/       # PlotRenderer (ScottPlot/SkiaSharp)
+│   │   ├── SkylinePrism.Cli/        # `prism` CLI (net8.0, cross-platform)
+│   │   ├── SkylinePrism.Skyline/    # Skyline JSON-RPC + headless export (Windows)
+│   │   └── SkylinePrism.App/        # WPF Skyline external tool / standalone GUI (Windows)
+│   ├── tests/
+│   │   ├── SkylinePrism.Tests/          # Core + CLI (xUnit, cross-platform)
+│   │   ├── SkylinePrism.Tests.Windows/  # Skyline + App
+│   │   └── fixtures/                    # Committed cross-engine goldens + bit-exact digests
+│   ├── build/                       # Skyline-tool packaging (package-and-verify.ps1)
+│   └── Directory.Build.props        # <Version> - one of the two release version sources
+├── docs/                            # Parameter reference, methods, output files, parsimony
+├── release-notes/                   # One file per release + the rolling dotnet-next draft
+├── SPECIFICATION.md                 # Algorithm/format specification
+└── CLAUDE.md                        # This file
 ```
 
 ## Key Algorithms
@@ -246,19 +242,21 @@ The median operation automatically downweights outliers without explicit filteri
 
 **Important**: Following Plubell et al. 2022 (doi:10.1021/acs.jproteome.1c00894), residuals are **preserved, not discarded**. Peptides/transitions with large residuals may indicate biologically interesting proteoform variation, PTMs, or protein processing.
 
-**Implementation**: 
-- `skyline_prism/rollup.py` → `tukey_median_polish()` returns `MedianPolishResult` with residuals
-- `skyline_prism/rollup.py` → `extract_peptide_residuals()` for output to parquet
-- `skyline_prism/rollup.py` → `extract_transition_residuals()` for transition-level residuals
+**Implementation**:
+- `Core/Rollup/TukeyMedianPolish.cs` → returns `MedianPolishResult` (row/column effects + residuals)
+- `Core/Rollup/TransitionRollup.cs` → transition → peptide, writes `peptides_rollup_residuals.parquet`
+- `Core/Rollup/ProteinRollup.cs` → peptide → protein, writes `proteins_raw_residuals.parquet`
+- `Core/Pipeline/ResidualScaler.cs` → the batch-corrected copies of both residual files
 
-### RT Correction (Spline-based)
+### RT-LOWESS Normalization (the default)
 
-Learns RT-dependent technical variation from reference samples only:
-1. Calculate residuals: observed - reference mean
-2. Fit smoothing spline to residuals vs RT
-3. Apply correction to all samples
+Removes RT-dependent systematic variation (ion suppression, gradient drift) on top of the overall
+loading difference. Per sample: take the log-ratio of each peptide to the cohort reference profile, fit
+a LOWESS curve of those ratios against `mean_rt` on a grid, interpolate, and subtract.
 
-**Implementation**: `skyline_prism/normalization.py` → `rt_correction_from_reference()`
+**Implementation**: `Core/Normalization/Normalizer.cs` → `RtLowessNormalize()`, with the smoother in
+`Core/Numerics/Lowess.cs`. Tuned by `global_normalization.rt_lowess.{frac,n_grid_points}`; set
+`global_normalization.method: median` for a plain per-sample median shift.
 
 ### ComBat Batch Correction
 
@@ -267,55 +265,9 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 - Uses empirical Bayes shrinkage for robust estimation
 - Supports reference batch, parametric/non-parametric priors, mean-only correction
 
-**Implementation**: `skyline_prism/batch_correction.py` → `combat()`, `combat_from_long()`
-
-### Adaptive Rollup (Learned Transition Weighting)
-
-For transition→peptide aggregation, the adaptive method learns optimal weighting parameters to minimize CV:
-
-**Weight Formula** (`AdaptiveRollupParams`):
-```
-w_t = exp(beta_mz * normalized_mz + beta_shape_outlier * outlier_frac)
-```
-
-Where:
-- `normalized_mz`: Product m/z normalized to [0, 1] range
-- `outlier_frac`: Fraction of samples where shape correlation < threshold (indicates interference)
-
-**Key insight:** When all betas = 0, weights = 1 for all transitions (equivalent to simple sum). The optimizer only uses learned weights if they improve CV.
-
-**What gets optimized:**
-- `beta_mz`: Higher m/z fragments may have better signal (positive = favor high m/z)
-- `beta_shape_corr_outlier`: Transitions with frequent interference should be down-weighted (negative = penalize)
-
-**The peptide abundance calculation:**
-```
-Peptide_abundance = log2(Σ weight_t × intensity_t)
-```
-
-The transition intensities are the VALUES being summed. The learned weights adjust how much each transition contributes based on its quality metrics (m/z and interference level).
-
-**Learning process**:
-1. Parameters optimized on reference samples by minimizing median CV (L-BFGS-B optimizer)
-2. Validated on QC samples (held-out) to prevent overfitting
-3. Automatic fallback to simple sum if adaptive doesn't improve CV by `min_improvement_pct`
-
-**Implementation**:
-- `skyline_prism/transition_rollup.py` → `learn_adaptive_weights()` - learns parameters
-- `skyline_prism/transition_rollup.py` → `rollup_peptide_adaptive()` - applies weights
-- `skyline_prism/transition_rollup.py` → `compute_adaptive_weights()` - computes weights from params
-
-**Configuration:**
-```yaml
-transition_rollup:
-  method: "adaptive"
-  learn_adaptive_weights: true
-  adaptive_rollup:
-    beta_mz: 0.0                  # Starting value (optimized automatically)
-    beta_shape_corr_outlier: 0.0  # Starting value (optimized automatically)
-    shape_corr_low_threshold: 0.7 # Threshold for "low" shape correlation
-    min_improvement_pct: 0.1      # Required improvement over sum
-```
+**Implementation**: `Core/BatchCorrection/ComBat.cs` (+ `ComBatCore` for the estimator,
+`ReferenceAnchoredComBat` for the opt-in anchored variant, `StreamingComBat` for the bounded-memory
+path). `Core/Qc/BatchCorrectionEvaluator.cs` decides the opt-in `auto_revert`.
 
 ## Development Guidelines
 
@@ -325,87 +277,60 @@ transition_rollup:
 - **This is a strict requirement**: All status indicators, section headers, and documentation must use plain ASCII text. Use prefixes like "[WORKING]", "[ISSUE]", "[TODO]" instead of emoji symbols.
 - Unicode arrows (→) for flow diagrams are acceptable.
 
-### Virtual Environment
+### Building
 
-The project uses a Python virtual environment in `.venv/`:
+Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download).
 
 ```bash
-cd /home/maccoss/GitHub-Repo/maccoss/skyline-prism
-source .venv/bin/activate
+cd dotnet
+dotnet build                                  # whole solution (Windows: includes the WPF tool)
+dotnet build SkylinePrism.CrossPlatform.slnf  # Core + CLI only (Linux/macOS)
 ```
 
 ### Running Tests
 
-**Always run tests after making changes:**
+**Always run the tests after making changes:**
 
 ```bash
-# Run all tests with verbose output
-pytest tests/ -v
-
-# Run tests with coverage
-pytest tests/ -v --cov=skyline_prism --cov-report=term-missing
-
-# Run a specific test file
-pytest tests/test_parsimony.py -v
-
-# Run a specific test
-pytest tests/test_rollup.py::TestTukeyMedianPolish::test_simple_matrix -v
+cd dotnet
+dotnet test                                                  # everything
+dotnet test tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj   # Core + CLI only
+dotnet test --filter "FullyQualifiedName~QcReport"           # one area
+dotnet test --filter "FullyQualifiedName~QcReportTests.MedianCv_MatchesHandComputed"  # one test
 ```
 
 **Test expectations:**
 - All tests must pass before committing
-- New features should include corresponding tests
-- Tests are in `tests/` directory using pytest
-- Coverage is tracked via pytest-cov
+- New features need tests; a bug fix starts with a failing test that reproduces it
+- `dotnet/tests/fixtures/` holds committed goldens: cross-engine parity references and the
+  **bit-exact quantity digests**. A digest failure is the gate working - find out which quantity moved
+  and why before even considering regeneration (see `dotnet/tests/fixtures/README.md`)
 
 ### Code Style
 
-The project uses:
-- **black** for code formatting
-- **ruff** for linting (with auto-fix)
-- **mypy** for type checking
-
-```bash
-# Format code
-black skyline_prism/
-
-# Lint and auto-fix issues
-ruff check skyline_prism/ --fix
-
-# For more aggressive fixes (type annotation modernization, etc.)
-ruff check skyline_prism/ --fix --unsafe-fixes
-
-# Type check
-mypy skyline_prism/
-```
-
-**Always run ruff with `--fix`** to automatically correct linting issues before committing.
+- Follow the surrounding code: same naming, same comment density, same idiom
+- `dotnet build` must be **warning-free**; do not silence a warning you can fix
+- XML doc comments on public types/members, especially the scale a matrix argument expects
 
 ### Documentation Updates
 
 **Keep README.md updated:**
 - When adding new features, update the README.md to document them
 - When changing CLI commands, update the usage examples
-- When adding new configuration options, update the template functions in `cli.py` (see below)
+- When adding new configuration options, update every config surface (see below)
 
 **CRITICAL: Configuration is a contract - keep the template, schema, and docs in sync**
 
 A config-driven feature has multiple surfaces that MUST stay consistent. Whenever you **add, rename, or
 remove** a configuration key, update ALL of the relevant surfaces in the SAME change:
 
-Python engine (`skyline_prism/`):
-1. `get_full_config_template()` in `skyline_prism/cli.py` - the annotated full template
-2. `get_minimal_config_template()` in `skyline_prism/cli.py` - only if it's a common option
-3. `KNOWN_CONFIG_KEYS` in `skyline_prism/cli.py` - the key-validation schema
-
-C# port (`dotnet/`):
 1. The config class property in `dotnet/src/SkylinePrism.Core/Config/PrismConfig.cs`
 2. `ConfigTemplate.Default()` (and `.Minimal()` if common) in `ConfigTemplate.cs` - the emitted YAML
 3. The `KnownKeys` schema (`BuildSchema()`) in `PrismConfig.cs` - so `FindUnknownKeys` accepts it while
    still warning on typos/unknown keys
-
-Both engines:
-4. `docs/parameters.md` - the cross-engine parameter reference (key, default, availability).
+4. `ConfigWriter` - the minimal round-trippable YAML, which is also what the QC report's Processing
+   Parameters table renders from (`QcReport.ParameterRows`), so a key added there reaches both
+5. `docs/parameters.md` - the parameter reference (key, default, description).
 
 Confirmation is MANDATORY, not optional:
 - **Adding a feature:** run `prism config-template` and confirm the new key appears in the generated YAML
@@ -414,13 +339,10 @@ Confirmation is MANDATORY, not optional:
   template contains a key the schema does not know - fix the schema/template, do not silence it.
 - **Removing a feature:** delete the key from the template AND the schema AND `docs/parameters.md`. A
   removed key must never linger in the generated YAML.
-- **Deliberately NOT porting a feature to C# (or vice-versa):** this is a specific, recorded decision.
-  Note it in `docs/parameters.md` (availability "Python only" / "C# only", with the reason) and in
-  `dotnet/PORTING_STATUS.md` "Config surface & parity". The C# port must never silently ignore a key -
-  make it warn (`FindUnknownKeys`) or abort (`PrismConfig.Validate`).
+- **A key PRISM does not implement** (including one left over from the retired Python engine) must
+  never be silently ignored - make it warn (`FindUnknownKeys`) or abort (`PrismConfig.Validate`).
 
-These functions/files - NOT the static `config_template.yaml` in the repo root - are what the software
-emits. `config_template.yaml` is a reference copy only. Users generate their configs via:
+Users generate their configs via:
 ```bash
 prism config-template -o config.yaml           # Full template
 prism config-template --minimal -o config.yaml  # Minimal template
@@ -439,54 +361,48 @@ The authoritative technical specification. Contains:
 
 ### Configuration Templates (IMPORTANT)
 
-**The configuration templates are generated from functions in `skyline_prism/cli.py`, NOT from `config_template.yaml`.**
-
-To update configuration options (see "CRITICAL: Configuration is a contract" above for the full
-checklist across both engines + `docs/parameters.md`):
-1. Edit `get_full_config_template()` in `cli.py` for full template
-2. Edit `get_minimal_config_template()` in `cli.py` for minimal template
-3. The C# port has its own template in `dotnet/src/SkylinePrism.Core/Config/ConfigTemplate.cs`
-   (`Default()` / `Minimal()`) plus the `KnownKeys` schema in `PrismConfig.cs` - keep them in sync
-4. The static `config_template.yaml` is just a reference and is NOT read by the software
+**The templates are generated from `ConfigTemplate.Default()` / `.Minimal()` in
+`dotnet/src/SkylinePrism.Core/Config/ConfigTemplate.cs`** - there is no checked-in template file to
+edit. Keep them in step with the `KnownKeys` schema in `PrismConfig.cs`; the test
+`ConfigValidationTests.ConfigTemplate_HasNoUnknownKeysAndValidates` fails if the emitted template
+contains a key the schema does not know. See "Configuration is a contract" above for the full
+checklist.
 
 Users generate templates via:
 - `prism config-template -o config.yaml` (full template)
 - `prism config-template --minimal -o config.yaml` (common options only)
 
 Key sections:
-- `transition_rollup`: Transition→peptide rollup (method: sum, median_polish, adaptive, library_assist)
+- `transition_rollup`: Transition→peptide rollup (method: sum, median_polish, topn, consensus, library_assist)
+- `global_normalization`: Peptide normalization (method: rt_lowess (default), median, quantile, vsn, none)
 - `sample_outlier_detection`: Detect low-signal samples (method: iqr or fold_median, action: report or exclude)
-- `rt_correction`: RT-aware normalization (method: spline) - DISABLED by default
-- `batch_correction`: ComBat settings (method: combat)
-- `protein_rollup`: Peptide→protein rollup (method: sum, median_polish, topn, maxlfq, ibaq)
-- `parsimony`: Shared peptide handling (all_groups, unique_only, razor)
-- `qc_report`: QC report generation (enabled, save_plots, embed_plots, plot selection)
+- `batch_correction`: ComBat settings (enabled, peptide_level, protein_level, reference_anchored, auto_revert)
+- `protein_rollup`: Peptide→protein rollup (method: median_polish, sum, topn, maxlfq, ibaq)
+- `protein_normalization`: Protein-level normalization (method: median)
+- `parsimony`: Shared peptide handling (all_groups, unique_only, razor) + enzyme / enzyme_specificity
+- `qc_report`: QC report generation (enabled, save_plots)
 
-### batch_correction.py
-Full ComBat implementation with:
-- `combat()`: Main function for wide-format data
-- `combat_from_long()`: Wrapper for long-format data (PRISM pipeline format)
-- `combat_with_reference_samples()`: Automatic evaluation using reference/QC CVs
-- `evaluate_batch_correction()`: Compare before/after metrics
+### Core/BatchCorrection/
+- `ComBat.Run()`: the entry point for a wide LOG2 matrix + batch labels
+- `ComBatCore`: the empirical-Bayes estimator itself (shared by every path)
+- `ReferenceAnchoredComBat`: the opt-in variant anchored on reference samples across batches
+- `StreamingComBat`: the same result with bounded memory, a row group at a time
+- `Qc/BatchCorrectionEvaluator`: the `auto_revert` decision (control CV worsened by >10%)
 
-### visualization.py
-QC visualization functions for normalization assessment:
-- `plot_intensity_distribution()`: Box plots of sample intensity distributions
-- `plot_pca()`, `plot_comparative_pca()`: PCA analysis for batch effects
-- `plot_control_correlation_heatmap()`: Correlation heatmaps for control samples
-- `plot_cv_distribution()`, `plot_comparative_cv()`: CV distributions for precision assessment
-- `plot_rt_correction_comparison()`: Before/after comparison of RT correction showing reference (fitted) vs QC (held-out validation)
-- `plot_rt_correction_per_sample()`: Per-sample RT correction quality assessment
+### Core/Qc/
+- `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory
+- `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
+- `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
+- `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs
+- `Visualization/PlotRenderer`: every plot (ScottPlot/SkiaSharp), rendered headlessly
 
-### pyproject.toml
-Package metadata and dependencies. Contains:
-- Package name: `skyline-prism`
-- CLI entry point: `prism` → `skyline_prism.cli:main`
-- Dependencies (core, dev, viz)
+### dotnet/Directory.Build.props
+`<Version>` - drives every assembly version, `prism --version`, and provenance `pipeline_version`.
+It must match `SkylinePrism.App/tool-inf/info.properties` `Version =` and the release tag.
 
 ## CLI Commands
 
-The package provides a `prism` CLI. The primary command is `prism run`:
+The `prism` CLI is the cross-platform entry point. The primary command is `prism run`:
 
 ```bash
 # Run the full PRISM pipeline (recommended)
@@ -499,24 +415,28 @@ This produces:
 - `peptides_rollup.parquet` - Raw peptide abundances from transition rollup (before normalization)
 - `proteins_raw.parquet` - Raw protein abundances from peptide rollup (before normalization)
 - `protein_groups.csv` - Protein group definitions
-- `peptide_residuals.parquet` - Residuals for outlier analysis (if enabled)
-- `metadata.json` - Complete processing parameters for reproducibility
+- `peptides_rollup_residuals.parquet` / `proteins_raw_residuals.parquet` - median-polish residuals,
+  plus `corrected_*_residuals.parquet` (batch-corrected copies), if `output.include_residuals`
+- `sample_metadata.csv` - resolved sample, batch and sample type per replicate
+- `parameters.json` - complete processing parameters for reproducibility (provenance)
 - `qc_report.html` - HTML QC report with embedded diagnostic plots
 - `qc_plots/` - Directory containing PNG plot files (if `save_plots: true`)
 
 ### Reproducibility with --from-provenance
 
-The `metadata.json` output contains all processing parameters, enabling exact re-runs:
+The `parameters.json` output contains all processing parameters, enabling exact re-runs:
 
 ```bash
 # Re-run with exact same parameters on new data
-prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json
+prism run -i new_data.csv -o output2/ --from-provenance output1/parameters.json
 
 # Override specific settings while keeping others from provenance
-prism run -i new_data.csv -o output2/ --from-provenance output1/metadata.json -c overrides.yaml
+prism run -i new_data.csv -o output2/ --from-provenance output1/parameters.json -c overrides.yaml
 ```
 
-**Implementation**: `skyline_prism/cli.py` -> `load_config_from_provenance()`
+**Implementation**: `Core/Pipeline/Provenance.cs` -> `Write()` / `LoadConfig()`. The QC report reads
+the same file for its "Analysis Information" block, so a report always names the version, date, host
+and inputs of the run that produced the numbers.
 
 Additional utility commands:
 
@@ -526,6 +446,9 @@ prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 
 # Regenerate QC report from existing output (without reprocessing)
 prism qc -d output_dir/
+
+# Compare control-sample CVs between two runs
+prism compare -1 run1/ -2 run2/ -o comparison.html
 
 # Generate annotated configuration template
 prism config-template -o config.yaml
@@ -539,15 +462,16 @@ prism config-template --minimal -o config.yaml
 ### Adding a New Feature
 
 1. Read SPECIFICATION.md to understand the design
-2. Implement in the appropriate module
-3. Add tests in `tests/`
-4. Run `pytest tests/ -v` to verify
-5. Update README.md if user-facing
+2. Implement it in the appropriate `SkylinePrism.Core` area
+3. Add tests under `dotnet/tests/`
+4. Run `dotnet test` to verify
+5. Update README.md / `docs/` if user-facing, and add a release-note entry to
+   `release-notes/RELEASE_NOTES_dotnet-next.md`
 6. If configurable: update every config surface and confirm the generated YAML has the key - see
-   "CRITICAL: Configuration is a contract" above (templates + schema in `cli.py` AND, for the C# port,
-   `ConfigTemplate.cs` + `PrismConfig.cs`; plus `docs/parameters.md`). Run `prism config-template` and
-   verify the key appears; remove it everywhere when removing a feature.
-7. Commit with descriptive message
+   "CRITICAL: Configuration is a contract" above (`PrismConfig.cs` + `ConfigTemplate.cs` +
+   `ConfigWriter.cs` + `docs/parameters.md`). Run `prism config-template` and verify the key appears;
+   remove it everywhere when removing a feature.
+7. Commit with a descriptive message
 
 ### Fixing a Bug
 
@@ -557,47 +481,33 @@ prism config-template --minimal -o config.yaml
 4. Run full test suite
 5. Commit with reference to the issue if applicable
 
-### Modifying Imports
-
-The package exports are defined in `skyline_prism/__init__.py`. Key exports include:
-- Data I/O: `load_skyline_report`, `merge_skyline_reports`, `load_sample_metadata`
-- Rollup: `tukey_median_polish`, `rollup_to_proteins`, `rollup_transitions_to_peptides`
-- Normalization: `normalize_pipeline`, `rt_correction_from_reference`
-- Batch correction: `combat`, `combat_from_long`, `combat_with_reference_samples`
-- Parsimony: `compute_protein_groups`, `ProteinGroup`
-- Validation: `validate_correction`, `generate_qc_report`
-- Visualization: `plot_intensity_distribution`, `plot_pca`, `plot_cv_distribution`, `plot_rt_correction_comparison`
-
 ## Important Notes
 
 - **Skyline** is an external tool (https://skyline.ms) - we process its exports, we don't modify Skyline itself
 - **Sample types**: `experimental`, `qc`, `reference` - these have specific meanings in the normalization workflow
-- **Column naming**: Internal column names differ from Skyline export names - see `SKYLINE_COLUMN_MAP` in data_io.py
+- **Column naming**: input column names are auto-detected per document and matched ignoring case, spaces and underscores - see `Core/IO/SkylineColumns.cs` (the `data:` config section overrides it)
 - **Log scale**: Most operations work on log2-transformed abundances
 - **Median polish is default**: For both transition→peptide and peptide→protein rollups
 - **Two-arm pipeline**: Batch correction happens at the reporting level (peptide or protein), not before rollup
 
 ## FASTA-Based Protein Parsimony
 
-The `fasta.py` module provides FASTA parsing for proper protein parsimony:
+`Core/Parsimony/FastaParser.cs` provides FASTA parsing for protein parsimony:
 
-**Key functions:**
-- `parse_fasta()`: Parse UniProt/NCBI format FASTA files
-- `strip_modifications()`: Remove modifications from peptide sequences for matching
-- `normalize_for_matching()`: Handle I/L ambiguity (MS cannot distinguish)
-- `build_peptide_protein_map_from_fasta()`: Build peptide-protein mapping via **enzyme-aware** substring search
-- `cleavage_boundary_set()` / `terminus_is_enzymatic()`: enzyme terminus check helpers
+**Key members:**
+- `Parse()`: UniProt/NCBI format FASTA
+- `StripModifications()`: remove modifications from peptide sequences before matching
+- `BuildMap()`: peptide→protein mapping via **enzyme-aware** substring search
+- `CleavageBoundaries()`: the enzyme terminus check behind it
+- `Digest()`: in-silico digestion, used for the iBAQ denominator
 
-**Usage in parsimony:**
-```python
-from skyline_prism.parsimony import build_peptide_protein_map_from_fasta
-
-pep_to_prot, prot_to_pep, prot_names = build_peptide_protein_map_from_fasta(
-    df,
-    fasta_path="/path/to/search.fasta",
-    enzyme="trypsin",           # parsimony.enzyme (see docs/parameters.md)
-    enzyme_specificity="full",  # full | semi | none
-)
+**Configuration** (`parsimony:` in the YAML - see `docs/parameters.md`):
+```yaml
+parsimony:
+  fasta_path: /path/to/search.fasta
+  enzyme: trypsin             # trypsin | trypsin/p | lys-c | ...
+  enzyme_specificity: full    # full | semi | none
+  shared_peptide_handling: all_groups
 ```
 
 **Enzyme-aware membership (important):** substring containment is *necessary but not sufficient* for a
@@ -608,31 +518,18 @@ assignments to homologs that share the subsequence but not the flanking cleavage
 `AKEGVVAAAEK` is a substring of beta-synuclein (SNCB) but is preceded there by `M`, not `K/R`, so
 trypsin cannot liberate it; it is proteotypic to alpha-synuclein (SNCA). Set `enzyme_specificity: none`
 to restore the legacy pure-substring behavior. The check only applies on the FASTA path; the Skyline
-Protein Accession column is already enzyme-aware. C# mirrors this exactly in
-`FastaParser.CleavageBoundaries` / `BuildMap`, so the two engines produce identical maps.
+Protein Accession column is already enzyme-aware.
 
-**Note:** The module also contains in-silico digestion functions (`digest_protein()`, `digest_fasta()`)
-which are used for iBAQ (to count theoretical peptides per protein). iBAQ digestion and the parsimony
-terminus check share the same enzyme rules but are separate code paths.
+**Note:** iBAQ's in-silico digestion (below) and the parsimony terminus check share the same enzyme
+rules but are separate code paths.
 
 ## iBAQ Support
 
 iBAQ (Intensity-Based Absolute Quantification) is now integrated. It normalizes protein abundances
 by the number of theoretical peptides, enabling cross-protein abundance comparison.
 
-**Key function:**
-- `get_theoretical_peptide_counts()`: Count theoretical peptides per protein for iBAQ
-
-**Usage:**
-```python
-from skyline_prism.fasta import get_theoretical_peptide_counts
-
-counts = get_theoretical_peptide_counts(
-    "/path/to/database.fasta",
-    enzyme="trypsin",
-    missed_cleavages=0,  # Strict for iBAQ
-)
-```
+**Implementation:** `FastaParser.Digest()` counts the theoretical peptides per protein; the counts
+become the iBAQ denominator in `ProteinRollup`.
 
 **Configuration:**
 ```yaml
@@ -738,41 +635,6 @@ equivalent (or can't be read), the tool keeps the config default.
 
 This section tracks what's currently working, what needs attention, and what's not yet implemented.
 
-### [WORKING] Fully Implemented and Tested (December 2024)
-
-**Core Pipeline:**
-
-- Streaming CSV merge (handles ~47GB datasets)
-- Transition → Peptide rollup (Tukey median polish, adaptive weighted)
-- Adaptive rollup weight learning from reference samples
-- Peptide global normalization (median-based)
-- Peptide batch correction (ComBat, empirical Bayes)
-- Protein parsimony (FASTA-based grouping)
-- Peptide → Protein rollup (Tukey median polish)
-- Protein global normalization (median-based)
-- Protein batch correction (ComBat, empirical Bayes)
-- Log file generation (timestamped in output directory)
-- Parquet output with metadata
-- Provenance tracking (metadata.json)
-- Config key validation (warns about unknown/typo config keys)
-
-**Data Handling:**
-
-- Automatic column detection (handles different Skyline export formats)
-- Metadata normalization (`sample`/`sample_type`/`batch` from Skyline formats)
-- Sample type pattern matching (reference/QC/experimental detection)
-- Batch estimation from source files or timestamps
-- Duplicate sample validation (allows same sample across batches)
-- Scale handling: All parquet files output in LINEAR scale
-
-**Testing:**
-
-- 196 tests passing
-- Core algorithms well-tested (median polish, ComBat, parsimony)
-- Scale handling tests (log2/linear conversions, CV calculation)
-- Config validation tests
-- Real-world validation on 238 samples, 3 batches, ~47GB data
-
 ### [ISSUE] Known Issues / Needs Attention
 
 **Reference-anchored ComBat degrades held-out QC on a real cohort - unexplained, do not
@@ -792,122 +654,25 @@ batch is too thin an anchor**: with n=1 the scale term is not estimable at all (
 `UnestimableScales`), and the location term is pinned to a single injection's idiosyncrasies rather
 than to the batch. That is a hypothesis, not a diagnosis - it has not been confirmed, and the
 alternative (a defect in the anchored estimator) has not been ruled out. `RefAnchoredCrossEngineTests`
-pins C# to Python across five scenarios, so if it is a defect it is one both engines share.
+pins the current implementation against the goldens the Python engine produced across five
+scenarios, so if it is a defect it predates the port.
 
 To investigate: whether the degradation tracks the reference count per batch (compare against a cohort
 with >= 2 references per batch), and whether `no_reference_batch` policy or the location-only path
-behaves differently. Until then, prefer standard ComBat. On C# also set `auto_revert: true` - it is what caught both reversions above - but note it is **C# only**: a Python run has no equivalent and will apply the worse correction silently, which makes this finding more consequential there, not less.
+behaves differently. Until then, prefer standard ComBat, and set `auto_revert: true` - it is what
+caught both reversions above.
 
 **`auto_revert` is implemented and works** (`BatchCorrectionEvaluator`, `batch_correction.auto_revert`,
-C# only, default `false`). It reverts when the control CV worsens by >10%, and separately
-logs a NOTE when the reference improved far more than the independent control. That asymmetry is an
-observation only - it reverts nothing and fails nothing (reference and QC are different materials at
-different injection amounts, so their CVs need not improve together). It caught both reversions above. This entry previously claimed the automatic
-fallback was not implemented; that was stale.
-
-### [DISABLED] Implemented but Disabled by Default
-
-**RT Correction:**
-
-- Fully implemented but **disabled by default**
-- Reason: Search engine RT calibration (DIA-NN) may not generalize between samples
-- Can enable via `rt_correction.enabled: true` in config
-- Uses spline-based correction fitted to reference samples
+default `false`). It reverts when the control CV worsens by >10%, and separately logs a NOTE when
+the reference improved far more than the independent control. That asymmetry is an observation only -
+it reverts nothing and fails nothing (reference and QC are different materials at different injection
+amounts, so their CVs need not improve together). It caught both reversions above.
 
 ### [TODO] Not Yet Implemented
 
-**Advanced Features:**
-
-- VSN normalization (placeholder in config)
 - Per-batch RT models with cross-validation
 - Quality-weighted protein rollup
-- iBAQ support (code exists but not integrated into pipeline)
-
-### [PRIORITY] Development Priorities
-
-Based on current usage and known issues:
-
-1. **Fix CV calculation bug** - Critical for QC validation
-2. **Investigate protein NaN values** - May indicate data quality issues
-3. **Implement ComBat quality checks** - Enable automatic fallback
-4. **Improve QC report robustness** - Fix edge cases causing warnings
-
-### [COVERAGE] Test Coverage Details
-
-**High coverage (>85%):**
-
-- `fasta.py`: 95% - Protein parsimony and FASTA parsing
-- `transition_rollup.py`: 93% - Transition → Peptide aggregation
-- `batch_correction.py`: 89% - ComBat implementation
-- `parsimony.py`: 78% - Protein grouping
-
-**Low coverage (<30%):**
-
-- `cli.py`: 13% - Command-line interface (mainly integration code)
-- `normalization.py`: 12% - RT correction (disabled by default)
-- `data_io.py`: 28% - File I/O (tested via integration)
-- `validation.py`: 10% - QC reporting (needs more unit tests)
-
-**Overall**: 60% coverage, 291 tests passing
-
-### [CHANGELOG] Recent Changes Log
-
-**December 2024:**
-
-- Implemented log file generation with timestamps
-- Fixed metadata column handling (`sample` vs `replicate_name`)
-- Added support for duplicate samples across batches (Reference/QC in multiple plates)
-- Improved protein sample column detection using dtype checks
-- Updated stage naming (1, 2, 2b, 2c, 3, 4, 4b, 4c, 5, 5b)
-- Validated on 238 samples across 3 batches (~47GB total data)
-- Added input data summary logging (transitions, peptides, samples)
-
-**December 30, 2024:**
-
-- Fixed log2/linear scale handling throughout pipeline (overflow prevention)
-- Added config key validation (detects typos like `learn_weights` vs `learn_adaptive_weights`)
-- Fixed `learn_adaptive_weights` default to be True when `method: adaptive`
-- Fixed `shape_corr_low_threshold` not being passed from config to learning function
-- Renamed output files: `peptides_rollup.2.parquet` -> `peptides_rollup.parquet`
-- Removed redundant `peptides_normalized.3.parquet` (same as `corrected_peptides.parquet`)
-- Added comprehensive scale handling tests (`tests/test_scale_handling.py`)
-- Test count increased from 182 to 196
-
-**December 31, 2024:**
-
-- **Released v0.1.2**
-- Added automatic batch estimation from acquisition times (`batch_estimation` config)
-- Added support for multiple metadata files (`-m file1.csv file2.csv`)
-- Added `Replicate` as accepted column name in metadata
-- Fixed Sample ID vs Replicate Name mismatch throughout pipeline (helper functions)
-- Fixed QC report sample type detection (Reference/QC now appear correctly in plots)
-- Fixed duplicate progress logging in streaming peptide rollup
-
-**January 2025:**
-
-- **Library-assisted rollup (v10)**: Spectral library-based interference detection
-  - Uses library as PRIOR for row effects (transition ionization efficiency)
-  - Two fitting methods available via `fitting_method` config:
-    - `median_polish` (DEFAULT, RECOMMENDED): Estimates sample scale via MEDIAN
-      - Robust to 1-2 outliers automatically (median ignores up to 50% outliers)
-      - Model: `log(obs) = log(lib) + beta_s + epsilon`
-      - Final abundance = `exp(beta_s) * sum(ALL library intensities)`
-    - `least_squares`: Classic OLS: `scale = (lib . obs) / (lib . lib)`
-      - More sensitive to outliers
-      - May be better for very clean data
-  - Both methods: only HIGH positive residuals indicate interference (obs > 2x predicted)
-  - Supports BLIB (Skyline) and Carafe TSV (DIA-NN) library formats
-  - Dramatically improves CV for peptides with real interference
-- **Vectorized implementation**: All samples processed in parallel using numpy
-  - ~10x speedup for library-assisted rollup on large datasets
-  - Implementation: `spectral_library.py` -> `library_median_polish_rollup_vectorized()`
-  - Legacy: `spectral_library.py` -> `least_squares_rollup_vectorized()`
-- **Merge-and-sort streaming**: CSV merge and sort in single DuckDB operation
-  - Eliminates redundant sorting pass, faster for large multi-file datasets
-  - Implementation: `data_io.py` -> `merge_and_sort_streaming()`
-- **Pre-sorted optimization**: Rollup skips sorting when data is already sorted
-  - Implementation: `chunked_processing.py` -> `rollup_transitions_sorted(pre_sorted=True)`
-- Test count increased from 196 to 291 (comprehensive spectral library tests)
+- directLFQ (see below)
 
 ## Not Yet Implemented
 
@@ -964,9 +729,9 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    - The one thing still worth extracting from `MainWindow` is a view-model for **testability**
      (it is ~1000 lines of code-behind at 0% coverage), not for portability.
 6. **C# Stage 1 partitions, and does NOT sort** (measured, not stylistic). `merged_data/` is a
-   hive-partitioned parquet directory (`_pep_bucket=N/`), hashed on the peptide column and unsorted;
-   Python still writes one sorted file because its rollup consumes the file positionally. Every row of
-   a peptide is in exactly one partition, which is what lets the rollup sort and stream one partition
+   hive-partitioned parquet directory (`_pep_bucket=N/`), hashed on the peptide column and unsorted
+   (the retired Python engine wrote one sorted file instead, because its rollup consumed the file
+   positionally). Every row of a peptide is in exactly one partition, which is what lets the rollup sort and stream one partition
    at a time instead of ordering the whole cohort - the only operator whose cost grew with the number
    of documents merged. See `MergedDataset` for the sizing trade (it was measured in both directions,
    and the intuitive answer was wrong) and `docs/output_files.md` for the layout. Row CONTENT remains
@@ -1026,55 +791,44 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 
 ## Release Process
 
-Skyline-PRISM currently ships **two implementations side by side**, released on **independent tracks**:
-
-- **Python** package (`skyline-prism` on PyPI) - the original reference implementation.
-- **C# (.NET 8)** tools - the `prism` CLI + the Windows Skyline external tool, published to GitHub Releases.
+PRISM ships as the **C# (.NET 8)** tools - the `prism` CLI and the Windows Skyline external tool -
+published to GitHub Releases. There is one release track.
 
 > [!NOTE]
-> The side-by-side period is **temporary**. The Python package is planned for retirement once the C#
-> port is the sole supported implementation; at that point only the C# (`dotnet-v*`) track remains.
-> Until then keep both releasable, but treat Python as legacy - new development targets the C# port.
+> There used to be a second, Python (`skyline-prism` on PyPI) track, tagged `v{version}`. It ended at
+> `v26.4.4` and the engine has been removed; those tags and PyPI versions stay downloadable but are
+> unmaintained. The `dotnet-v*` namespace is kept as-is rather than renamed, so existing tags, release
+> URLs and the workflow's tag→notes-file mapping keep working.
 
-### Versioning scheme (both tracks)
+### Versioning scheme
 
-Both tracks use CalVer **`YY.feature.patch`** (e.g. `26.5.0` = year 2026, feature release 5, patch 0):
-**YY** = two-digit year, **feature** bumps for new features, **patch** for bug-fix-only releases. The
-version is bumped **only at release time**, not during development. The two tracks share the *scheme*
-but keep **distinct tag namespaces and independent counters**, so their numbers need not match and
-never collide:
+CalVer **`YY.feature.patch`** (e.g. `26.15.0` = year 2026, feature release 15, patch 0): **YY** =
+two-digit year, **feature** bumps for new features, **patch** for bug-fix-only releases. The version is
+bumped **only at release time**, not during development. Tags are `dotnet-v{version}`
+(e.g. `dotnet-v26.15.0`).
 
-- Python: tag `v{version}` (e.g. `v26.4.2`)
-- C#: tag `dotnet-v{version}` (e.g. `dotnet-v26.5.0`)
-
-### Release notes (both tracks)
+### Release notes
 
 All release notes live in `release-notes/`; **`release-notes/README.md` is the canonical convention**.
-One file per release, with a rolling draft renamed at release time:
-
-- Python: draft `RELEASE_NOTES_next.md` -> released `RELEASE_NOTES_v{version}.md`
-- C#: draft `RELEASE_NOTES_dotnet-next.md` -> released `RELEASE_NOTES_dotnet-v{version}.md`
-
-The `dotnet-` prefix is what keeps the C# notes from colliding with the Python `RELEASE_NOTES_v*.md`
-when both tracks reach the same CalVer number. Content structure:
+One file per release, with a rolling draft renamed at release time: `RELEASE_NOTES_dotnet-next.md` ->
+`RELEASE_NOTES_dotnet-v{version}.md`. Content structure:
 `## New Features / ## Bug Fixes / ## Performance / ## Breaking Changes` (omit empty sections); past
 tense, lead with user impact, include concrete numbers, reference config keys by name.
 
 > [!IMPORTANT]
-> **The notes file IS the GitHub Release description - write it for that audience.** On the C# track
-> `dotnet-release.yml` publishes `release-notes/RELEASE_NOTES_${tag}.md` verbatim as the Release body, so
-> whatever lands in that file is what users read on the Releases page. Two consequences:
+> **The notes file IS the GitHub Release description - write it for that audience.**
+> `dotnet-release.yml` publishes `release-notes/RELEASE_NOTES_${tag}.md` verbatim as the Release body,
+> so whatever lands in that file is what users read on the Releases page. Two consequences:
 >
-> - **Rename the draft before tagging.** The workflow resolves the path from the tag and **fails** if the
->   file is missing - after the artifacts have already built.
+> - **Rename the draft before tagging.** The workflow resolves the path from the tag and **fails** if
+>   the file is missing - after the artifacts have already built.
 > - It renders as GitHub-flavoured Markdown, so keep headings/links/code fences valid; the leading `#`
 >   title is redundant with the release's own heading but harmless.
 >
-> On the Python track you create the Release by hand (that is what triggers the PyPI upload), so paste
-> the notes in yourself. Backfill an old Release with
+> Backfill an old Release with
 > `gh release edit <tag> --notes-file release-notes/RELEASE_NOTES_<tag>.md`.
 
-### C# (.NET) release - the primary track
+### Making a release
 
 Two version sources MUST stay in lockstep; `dotnet-release.yml` fails the release if either differs
 from the tag:
@@ -1095,7 +849,7 @@ Steps:
    `pwsh -File dotnet/build/package-and-verify.ps1 -Configuration Release` (tests -> packages
    `SkylinePrism.zip` -> extracts and launch-verifies the exe). Confirm `prism --version` prints
    `{version}.0`.
-4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml` + Python `ci.yml`), run
+4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml`), run
    `/pw-self-review`, then **squash-merge** it (`gh pr merge --squash --delete-branch`). Always squash,
    for every PR, not just releases - `main` keeps one commit per change. Write the squash commit
    message deliberately; it is the permanent record, and the default (a concatenation of the branch's
@@ -1106,8 +860,7 @@ Steps:
    git push origin dotnet-v{version}
    ```
    **Pushing the tag both builds the artifacts AND creates the GitHub Release**
-   (`.github/workflows/dotnet-release.yml`). Do NOT hand-create the Release; there is no PyPI upload
-   for the C# track.
+   (`.github/workflows/dotnet-release.yml`). Do NOT hand-create the Release.
 
    The Release **body is the notes file**: the workflow reads
    `release-notes/RELEASE_NOTES_${tag}.md` (so tag `dotnet-v26.7.2` -> `RELEASE_NOTES_dotnet-v26.7.2.md`)
@@ -1127,35 +880,8 @@ Framework-dependent is deliberate (small downloads, one shared runtime). Archive
 because they bundle the app's native deps (DuckDB, SkiaSharp), not the runtime. To publish a bare
 `prism` CLI for a new OS/arch, add a row to the `cli` matrix in `dotnet-release.yml`.
 
-### Python release - legacy track
-
-Two version sources, **both bumped together** (they have drifted before):
-
-- `pyproject.toml` `version` - the PyPI package version (source of truth for `importlib.metadata`).
-- `skyline_prism/__init__.py` `__version__` - what Python `prism --version` prints and what provenance
-  records.
-
-Steps:
-
-1. Finalize `RELEASE_NOTES_next.md`; `git mv` to `RELEASE_NOTES_v{version}.md`, update heading,
-   **delete every section heading with no entries under it** (the draft is seeded with all four),
-   create a fresh `RELEASE_NOTES_next.md`.
-2. Bump `pyproject.toml` `version` AND `skyline_prism/__init__.py` `__version__` to `{version}`.
-3. Run `pytest tests/ -v` (all pass).
-4. Merge to `main`, then `git tag v{version}` and `git push origin main --tags`.
-5. **Publish a GitHub Release** for the `v{version}` tag - that is what triggers the PyPI upload via
-   `.github/workflows/release.yml` (trusted publishing / OIDC). Note the asymmetry with the C# track:
-   here you create the Release to trigger publish; there the workflow creates the Release for you.
-
-### Which track(s) to release
-
-The tracks are independent - release whichever the change affects. A Python-only fix -> Python release
-only; a C#-only change -> C# release only; a cross-cutting algorithm change -> release both, each with
-its own notes and version bump.
-
 Canonical references: `release-notes/README.md` (notes + step-by-step), `dotnet/README.md` (C#
-build/package/CI), and the workflows under `.github/workflows/` (`dotnet-release.yml`, `release.yml`,
-`dotnet-ci.yml`, `ci.yml`).
+build/package/CI), and the workflows under `.github/workflows/` (`dotnet-release.yml`, `dotnet-ci.yml`).
 
 ## Repository Information
 

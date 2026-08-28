@@ -6,8 +6,8 @@ single-threaded, and how it was made **near-linear** and **multi-threaded** with
 grouping result.
 
 Implementation: `dotnet/src/SkylinePrism.Core/Parsimony/FastaParser.cs` (the bipartite graph) and
-`ParsimonyEngine.cs` (`ComputeProteinGroups`). The Python side (`skyline_prism/parsimony.py`) and the Rust
-reference (maccoss/osprey) implement the same grouping; determinism is asserted in both languages.
+`ParsimonyEngine.cs` (`ComputeProteinGroups`). The Rust reference (maccoss/osprey) implements the same
+grouping, and the same cases are asserted against it.
 
 ---
 
@@ -222,8 +222,7 @@ subsumable scan was.
 ## 9. Determinism & parity guarantees
 
 - The grouping depends only on the peptide/protein **sets**, never on input row order or thread scheduling.
-- Proven by `ParsimonyOspreyTests.Grouping_IsOrderIndependent` (C#) and `tests/test_parsimony_osprey.py`
-  (Python), which run the same identical-set / subset / all-mode / razor / determinism cases and keep
-  Python ↔ C# ↔ osprey in lockstep.
+- Proven by `ParsimonyOspreyTests.Grouping_IsOrderIndependent`, which runs the identical-set /
+  subset / all-mode / razor / determinism cases and keeps PRISM ↔ osprey in lockstep.
 - The 23 parsimony + pipeline-parity tests all pass with the near-linear + parallel implementation, confirming
   the grouping is **identical** to the original all-pairs version.

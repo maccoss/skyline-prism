@@ -7,7 +7,7 @@ namespace SkylinePrism.Core.Config;
 public static class ConfigTemplate
 {
     public static string Default() => """
-# PRISM Configuration Template (C# port)
+# PRISM Configuration Template
 # =====================================
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
 

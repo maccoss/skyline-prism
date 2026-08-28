@@ -1,5 +1,5 @@
 # C# (.NET 8) CI - cross-platform CLI matrix + Windows tool packaging.
-# Scoped to dotnet/** so it does not run on Python-only changes.
+# Scoped to dotnet/**: a docs-only change does not need the full matrix.
 name: dotnet-ci
 
 on:

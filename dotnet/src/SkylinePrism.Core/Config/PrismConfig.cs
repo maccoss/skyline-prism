@@ -53,21 +53,26 @@ public sealed class PrismConfig
         var config = Parse(yaml);
         if (warn is not null)
             foreach (var key in FindUnknownKeys(yaml))
-                warn($"config key '{key}' is not recognized by the C# PRISM port and will be ignored "
-                    + "(a typo, or a Python-only setting not ported - see PORTING_STATUS.md).");
+                warn($"config key '{key}' is not recognized by PRISM and will be ignored "
+                    + "(a typo, or a key from the retired Python engine - see docs/parameters.md).");
         config.Validate();
         return config;
     }
 
-    /// <summary>Throw on config choices whose Python behavior is not implemented in the C# port.</summary>
+    /// <summary>
+    /// Throw on method choices PRISM does not implement, naming each one. Several existed only in the
+    /// retired Python engine, so a config carried over from it fails loudly here rather than silently
+    /// running something else.
+    /// </summary>
     public void Validate()
     {
         var trm = TransitionRollup.Method?.ToLowerInvariant();
         if (trm == "adaptive")
             throw new NotSupportedException(
-                "transition_rollup.method 'adaptive' is not implemented in the C# port. "
+                "transition_rollup.method 'adaptive' is not implemented. "
                 + "Use median_polish, sum, topn, consensus, or library_assist. "
-                + "(Adaptive/QuantUMS rollup is a documented non-port - see PORTING_STATUS.md.)");
+                + "(Adaptive/QuantUMS rollup existed only in the retired Python engine - see "
+                + "dotnet/PORTING_STATUS.md for why it was not carried over.)");
         var validTr = new[] { "sum", "median_polish", "topn", "consensus", "library_assist" };
         if (trm is not null && Array.IndexOf(validTr, trm) < 0)
             throw new NotSupportedException(
@@ -76,16 +81,17 @@ public sealed class PrismConfig
 
         if (TransitionRollup.LibraryFittingMethod?.ToLowerInvariant() == "least_squares")
             throw new NotSupportedException(
-                "library_assist.fitting_method 'least_squares' is not implemented in the C# port "
-                + "(only median_polish). See PORTING_STATUS.md.");
+                "library_assist.fitting_method 'least_squares' is not implemented "
+                + "(only median_polish). It existed only in the retired Python engine - see "
+                + "dotnet/PORTING_STATUS.md.");
 
         var bcm = BatchCorrection.Method?.ToLowerInvariant();
         if (bcm is not null && bcm != "combat")
             throw new NotSupportedException(
-                $"batch_correction.method '{BatchCorrection.Method}' is not implemented in the C# port (only combat).");
+                $"batch_correction.method '{BatchCorrection.Method}' is not implemented (only combat).");
     }
 
-    // Nested schema of every config key the C# pipeline actually reads. Keys absent here are
+    // Nested schema of every config key the pipeline actually reads. Keys absent here are
     // reported by FindUnknownKeys. (null leaf = scalar key; nested dict = a subsection.)
     private static readonly IReadOnlyDictionary<string, object?> KnownKeys = BuildSchema();
 

@@ -1,8 +1,8 @@
 # Skyline-PRISM (C# / .NET 8)
 
-A C# port of the Python `skyline_prism` package, living side by side with it. Provides a
-cross-platform `prism` CLI (Windows / Linux / macOS) and a Windows Skyline external tool
-(WPF + JSON-RPC), reproducing the Python pipeline's numeric results.
+The PRISM engine: a cross-platform `prism` CLI (Windows / Linux / macOS) and a Windows Skyline
+external tool (WPF + JSON-RPC). Originally a port of the `skyline_prism` Python package, which it
+reproduced numerically and has since replaced — that engine was retired after `v26.4.4`.
 
 ## Projects
 
@@ -35,8 +35,8 @@ dotnet test dotnet/SkylinePrism.CrossPlatform.slnf
 dotnet test dotnet/SkylinePrism.sln
 ```
 
-The parity tests read committed golden fixtures under `tests/fixtures/` produced by the
-Python pipeline (see `tests/fixtures/README.md`). Linux hosts need `libfontconfig1` and
+The parity tests read committed golden fixtures under `tests/fixtures/`, produced by the original
+Python pipeline and now frozen (see `tests/fixtures/README.md`). Linux hosts need `libfontconfig1` and
 `libfreetype6` for the ScottPlot/SkiaSharp QC plots; DuckDB.NET ships its own native engine.
 
 ## CLI
@@ -268,7 +268,7 @@ at a previous run's directory. Computation lives in `PrecursorDensity` / `Isolat
 obliged to be uniform, gapless or non-overlapping, so the map keeps explicit `[Low, High)` rows and
 rasterizes onto a uniform grid at draw time (heatmap cells must be equal-height). This is a port of the
 m/z x RT heatmap in [Skyline-Cadenza](https://github.com/maccoss/skyline-cadenza), fed by the PRISM
-report instead of a DIA-NN report, and has no Python-engine equivalent.
+report instead of a DIA-NN report.
 
 ## Performance and memory
 
@@ -350,4 +350,3 @@ which then fails to load; reinstalling with the tool closed fixes it.
   `prism-linux-arm64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`). Both artifacts are
   framework-dependent — users install the .NET 8 runtime (Desktop Runtime for the Skyline tool).
 
-The Python CI (`ci.yml`, `release.yml`) is unchanged and runs independently.

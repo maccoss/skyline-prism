@@ -23,9 +23,20 @@ PRISM ships two ways to run the same pipeline:
   **standalone** (no Skyline needed) on reports you already exported, and it can combine **several
   Skyline documents** — open or closed — into one multi-batch run.
 
-> This repository also contains the original **Python** implementation, which remains the reference.
-> See **[README-python.md](README-python.md)** for the `skyline-prism` PyPI package. The C# tools
-> reproduce the Python pipeline's numeric results (exact parity on the deterministic stages).
+> [!IMPORTANT]
+> **The Python implementation has been retired.** PRISM began as a Python package (`skyline-prism` on
+> PyPI); the C# tools above replaced it and reproduced its numbers to 1e-9 on the deterministic
+> stages. The Python engine was removed from this repository after **`v26.4.4`**, its last release,
+> and is **no longer maintained** — no fixes, no releases, and it will not track changes made here.
+>
+> If you still need it, every Python release remains downloadable:
+>
+> - **Source:** the [`v26.4.4` tag](https://github.com/maccoss/skyline-prism/releases/tag/v26.4.4)
+>   (or any earlier `v*` tag) — `git checkout v26.4.4`, or the source archive on that release page.
+> - **PyPI:** `pip install skyline-prism==26.4.4`.
+>
+> Those versions are unsupported and frozen at the behaviour of that release. Anything newer —
+> bug fixes, new methods, performance work — happens only in the C# tools.
 
 ## What it does
 
@@ -187,8 +198,8 @@ protein_rollup:       # median_polish (default) | sum | topn | maxlfq | ibaq
 qc_report:            # HTML report + plots
 ```
 
-See **[docs/parameters.md](docs/parameters.md)** for the full parameter reference — every key, its
-default, and whether it is available in the Python package, the C# port, or both.
+See **[docs/parameters.md](docs/parameters.md)** for the full parameter reference — every key, what
+it does, and its default.
 
 A run records its full configuration to `parameters.json`; `prism run --from-provenance
 out/parameters.json` reproduces an earlier run's settings.
@@ -218,7 +229,6 @@ dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
 - **[dotnet/README.md](dotnet/README.md)** — building, testing, project layout, and CI for the C# code.
 - **[SPECIFICATION.md](SPECIFICATION.md)** — the authoritative algorithm/format specification.
 - **[docs/](docs/)** — [the Skyline tool](docs/skyline-tool.md), [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
-- **[README-python.md](README-python.md)** — the original Python `skyline-prism` package.
 
 ## License
 
