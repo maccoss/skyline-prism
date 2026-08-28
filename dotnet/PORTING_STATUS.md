@@ -54,7 +54,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       when a batch has no references / none present.
 - [x] ComBat auto-evaluate + revert-on-QC-failure (`batch_correction.auto_revert`, opt-in) —
       `BatchCorrectionEvaluator` compares the control CV (QC preferred, else reference) pre/post ComBat
-      and reverts to the uncorrected data if it worsened by >10%; also warns on reference/QC overfitting.
+      and reverts to the uncorrected data if it worsened by >10%; a lopsided reference/QC improvement
+      is logged as a NOTE and reverts nothing.
       Off by default to match Python's production path (Python has the revert only in legacy
       `normalize_pipeline`). `BatchCorrectionEvaluatorTests`.
 
@@ -150,8 +151,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       display rasterizer picks its source window per CELL, not per m/z row — a per-row choice renders one
       segment and blanks the others
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
-- [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, RVR overfitting,
-      PCA QC-reference distance collapse) — `ValidationStatus`
+- [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, PCA
+      QC-reference distance collapse; RVR is reported as a note and decides nothing) — `ValidationStatus`
 - [x] RT-bin abundance boxplot (before/after)
 - [-] 3-stage plot variants — N/A: our pipeline is 2-stage (raw -> corrected); the Python 3-stage
       needs a persisted post-normalization/pre-ComBat intermediate we don't keep
@@ -227,8 +228,14 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (
       any annotation), applied to PCA, CV, and intensity plots with a standardized per-group palette
 
 ## Validation status & warnings (Python validation.py)
-- [x] Pass/fail verdict + warnings banner (QC-CV-increased, RVR overfitting >2, PCA QC-reference distance
-      collapse) — `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`)
+- [x] Pass/fail verdict + warnings banner (QC-CV-increased, PCA QC-reference distance collapse) —
+      `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`). The
+      QC-vs-reference improvement ratio (RVR) is reported as a NOTE, not a warning, and is not part of
+      the verdict in either engine: the two control groups are different materials at different
+      injection amounts, so an asymmetric improvement is ordinary rather than evidence of overfitting.
+- [x] "Analysis Information" header - PRISM version, processing date, computer, and source files
+      (read from the run's `parameters.json`), plus a Processing Parameters table for every stage and
+      the exact re-runnable config as YAML — `QcReport.AppendRunInfo`
 - [x] "Batch source" line — the "Batches: N from <source>" log names where labels came from (metadata
       Batch column > per-file Source Document > acquisition-time estimation > single default label)
 - [x] Pattern-based sample-type fallback — Replicates "Sample Type" column first (Standard/Quality

@@ -152,6 +152,10 @@ public static class Program
             Console.Error.WriteLine("Usage: prism qc -d <output-dir> [-c config]");
             return 2;
         }
+        // -c carries report options only. The processing settings the report PRINTS come from the
+        // directory's own parameters.json (QcReport.ReadRunConfig), never from this config - filling
+        // the sections a QC-only config omits with defaults would attribute the numbers to settings
+        // that never ran.
         var config = configPath is not null
             ? PrismConfig.LoadValidated(configPath, w => Console.Error.WriteLine($"WARNING: {w}"))
             : new PrismConfig();
@@ -304,13 +308,15 @@ public static class Program
         prism qc - (Re)generate the QC report
 
         Rebuilds qc_report.html (and the plot PNGs) from the parquet outputs already in
-        an output directory, without re-running the pipeline.
+        an output directory, without re-running the pipeline. The processing settings it
+        reports are read from that directory's parameters.json.
 
         Usage: prism qc -d <output-dir> [options]
 
         Options:
             -d, --dir <DIR>       Output directory from a prior 'prism run'
-            -c, --config <FILE>   YAML configuration (optional; QC settings only)
+            -c, --config <FILE>   YAML configuration (optional; QC report settings only)
+                --no-save-plots   Embed the plots only; do not write qc_plots/*.png
             -h, --help            Show this help
         """;
 

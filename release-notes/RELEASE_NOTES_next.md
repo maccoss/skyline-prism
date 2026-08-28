@@ -28,6 +28,15 @@ Working draft. Rename to `RELEASE_NOTES_v{version}.md` at release time.
   This method now has cross-engine fixtures (`dotnet/tests/fixtures/refanchored/`) holding the C# port
   to the Python engine's output, which it reproduces to 1e-10. It previously had none.
 
+- **Validation no longer fails because the QC and reference samples improved by different amounts.**
+  The relative variance reduction (RVR) was a criterion in `ValidationMetrics.passed`, so an
+  `RVR > 2` failed the run and the QC report called it "possible overfitting". The two control groups
+  are different materials injected at different amounts, so an asymmetric improvement is ordinary and
+  the ratio cannot establish a cause; it is now reported as an observation and decides nothing. RVR is
+  also NaN rather than `+inf` when the reference CV did not improve - the old `+inf` tripped the
+  "QC improved much more than reference" branch while the reference had in fact got worse. Matches the
+  C# port.
+
 ## Performance
 
 <!-- none yet -->

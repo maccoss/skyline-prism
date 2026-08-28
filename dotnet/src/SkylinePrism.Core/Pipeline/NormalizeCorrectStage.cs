@@ -272,12 +272,12 @@ internal static class NormalizeCorrectStage
             ReportComBatDiagnostics(report, diagnostics.HeldOutFeatures, diagnostics.UnestimableScales);
 
             // Safety net (opt-in): if ComBat worsened the control CV by >10%, revert to the uncorrected
-            // (post-normalization) data; separately warn on reference/QC overfitting.
+            // (post-normalization) data; separately note a lopsided reference/QC improvement.
             if (r.AutoRevert)
             {
                 var eval = BatchCorrectionEvaluator.Evaluate(normalized, combatOut, r.QcIdx, r.RefIdx);
-                if (eval.OverfittingWarning is not null)
-                    report($"  WARNING: ComBat {eval.OverfittingWarning}");
+                if (eval.ControlAsymmetryNote is not null)
+                    report($"  NOTE: ComBat {eval.ControlAsymmetryNote}");
                 if (eval.Revert)
                 {
                     report($"  ComBat REVERTED: {eval.ControlName} CV worsened "

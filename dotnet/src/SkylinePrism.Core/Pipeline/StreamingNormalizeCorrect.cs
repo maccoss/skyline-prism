@@ -151,8 +151,8 @@ internal static class StreamingNormalizeCorrect
                 decision = Evaluate(
                     reader, samples, factors, rtColumn, batching, activeOfKept, grandMeanArray,
                     stdPooled, gammaStar, deltaStar, r.QcIdx, r.RefIdx, r.CancellationToken);
-                if (decision.OverfittingWarning is not null)
-                    r.Report($"  WARNING: ComBat {decision.OverfittingWarning}");
+                if (decision.ControlAsymmetryNote is not null)
+                    r.Report($"  NOTE: ComBat {decision.ControlAsymmetryNote}");
                 if (decision.Revert)
                 {
                     r.Report($"  ComBat REVERTED: {decision.ControlName} CV worsened "

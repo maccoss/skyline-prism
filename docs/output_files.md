@@ -240,7 +240,7 @@ The "before batch correction" is the point of the file, not an accident of order
 branches here so that the protein output is ComBat-corrected exactly once, at its own reporting level
 (Stage 4c), rather than inheriting the peptide correction and then being corrected again. Measured on a
 4-batch AD cohort, correcting twice moved held-out QC CV the wrong way (12.7% -> 13.0%) and tripped the
-overfitting heuristic; correcting once gives 16.3% -> 12.4%.
+control-asymmetry heuristic; correcting once gives 16.3% -> 12.4%.
 
 > [!NOTE]
 > Through dotnet-v26.14.1 this file held post-ComBat values, despite this page always describing it as
@@ -491,6 +491,14 @@ injection.
 
 **Contains**:
 
+- Peptide and protein CV tables and before/after plots, each comparing the raw rollup against that
+  arm's own corrected output (`corrected_peptides` / `corrected_proteins`)
+- Analysis Information: PRISM version, processing date, computer, and source files (read back from
+  `parameters.json`), a Processing Parameters table for each stage, and the full re-runnable config
+  as YAML in a collapsible block
+- Validation verdict: PASSED/FAILED plus control-CV before/after. It fails only if the QC CV got
+  worse or the QC and reference samples collapsed together in PCA space - the two control groups
+  improving by different amounts is reported as a note, not a failure
 - Intensity distributions (box plots)
 - PCA plots (before/after normalization)
 - CV distributions for control samples

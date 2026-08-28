@@ -64,6 +64,22 @@ internal sealed class ParquetColumnReader : IDisposable
 
     public bool HasColumn(string name) => _fields.ContainsKey(name);
 
+    /// <summary>
+    /// Whether a column holds numbers. Lets a caller separate metadata from sample columns by TYPE
+    /// rather than by name, which is the only way for matrices whose metadata columns are derived
+    /// per run (corrected_peptides carries protein_group / leading_*). Mirrors
+    /// <see cref="ParquetTable.IsNumericColumn"/>.
+    /// </summary>
+    public bool IsNumericColumn(string name)
+    {
+        if (!_fields.TryGetValue(name, out var field))
+            return false;
+        var underlying = Nullable.GetUnderlyingType(field.ClrType) ?? field.ClrType;
+        return underlying == typeof(double) || underlying == typeof(float)
+            || underlying == typeof(long) || underlying == typeof(int)
+            || underlying == typeof(short) || underlying == typeof(decimal);
+    }
+
     /// <summary>One whole column as doubles (null -&gt; NaN), concatenated across row groups.</summary>
     public double[] ReadDoubles(string name)
     {

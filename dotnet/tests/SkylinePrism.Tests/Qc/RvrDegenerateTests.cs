@@ -6,15 +6,18 @@ using Xunit;
 namespace SkylinePrism.Tests.Qc;
 
 /// <summary>
-/// The relative variance reduction (RVR = QC improvement / reference improvement) is only meaningful
-/// when the reference actually improved.
+/// The relative variance reduction (RVR = QC improvement / reference improvement) is an OBSERVATION -
+/// a <see cref="ValidationStatus.Notes"/> entry - never a warning and never part of the verdict.
 ///
-/// <para>When it did not - improvement zero or NEGATIVE - the ratio used to be forced to +infinity, which
-/// tripped the "&gt; 2" branch and announced <i>"QC improved much more than reference - possible
-/// overfitting to the reference"</i>. That is backwards: a reference that got WORSE is the opposite of
-/// overfitting to it. It also failed the whole verdict on a degenerate number. RVR is now NaN
-/// (undefined) in that case, the ratio warnings are skipped, and the situation is reported on its own
-/// terms.</para>
+/// <para>Reference and QC are different materials injected at different amounts, so whichever started
+/// with more excess variance has more of it to remove; the two improvements routinely differ by a lot
+/// with nothing wrong. Failing a run on that asymmetry (the old <c>rvr &lt; 2.0</c> pass condition) was
+/// excessive, and calling it "possible overfitting" named a cause the number cannot establish.</para>
+///
+/// <para>It is also only defined when the reference improved at all. When it did not - improvement zero
+/// or NEGATIVE - the ratio used to be forced to +infinity, which tripped the "&gt; 2" branch and
+/// announced <i>"QC improved much more than reference"</i> while the reference had in fact got WORSE.
+/// RVR is NaN (undefined) there, and the reference degradation is reported on its own terms.</para>
 /// </summary>
 public class RvrDegenerateTests
 {
@@ -62,13 +65,12 @@ public class RvrDegenerateTests
     {
         var status = Evaluate(0.30, 0.34, 0.50, 0.48);
 
-        // The old behavior CLAIMED overfitting to the reference while the reference had degraded. The
-        // new message mentions the overfitting check by name, so match the claim, not the word.
-        Assert.DoesNotContain(status.Warnings,
-            w => w.Contains("possible overfitting", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR=", StringComparison.Ordinal));
-        Assert.Contains(status.Warnings, w => w.Contains("could not be evaluated", StringComparison.OrdinalIgnoreCase));
-        // The genuine problem is still reported.
+        // The old behavior CLAIMED overfitting to the reference while the reference had degraded.
+        Assert.DoesNotContain(status.Warnings.Concat(status.Notes),
+            m => m.Contains("overfitting", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.Ordinal));
+        Assert.Contains(status.Notes, n => n.Contains("undefined", StringComparison.OrdinalIgnoreCase));
+        // The genuine problem is still reported, as a warning.
         Assert.Contains(status.Warnings, w => w.Contains("Reference CV increased", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -80,39 +82,45 @@ public class RvrDegenerateTests
         var status = Evaluate(0.30, 0.34, 0.50, 0.48);
 
         Assert.True(status.QcCvImprovement > 0);
-        Assert.True(status.Passed || status.PcaDistanceRatio <= 0.5,
+        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5,
             "an undefined RVR must not be the thing that fails the verdict");
     }
 
     [Fact]
-    public void GenuineOverfittingIsStillFlagged()
+    public void ALargeRvrIsANoteAndDoesNotFailTheVerdict()
     {
-        // Reference barely improves, QC improves a lot -> a real, finite, large RVR.
+        // Reference barely improves, QC improves a lot. The controls are different materials at
+        // different injection amounts, so this asymmetry is ordinary - it is reported, not penalized.
         var status = Evaluate(refBefore: 0.40, refAfter: 0.399, qcBefore: 0.60, qcAfter: 0.30);
 
-        Assert.False(double.IsNaN(status.RelativeVarianceReduction));
         Assert.True(status.RelativeVarianceReduction > 2.0);
-        Assert.Contains(status.Warnings, w => w.Contains("possible overfitting", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(status.Notes, n => n.Contains("RVR=", StringComparison.Ordinal));
+        Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.Ordinal));
+        Assert.DoesNotContain(status.Warnings.Concat(status.Notes),
+            m => m.Contains("overfitting", StringComparison.OrdinalIgnoreCase));
+        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5,
+            "an asymmetric improvement must not be the thing that fails the verdict");
     }
 
     [Fact]
-    public void PoorGeneralizationIsStillFlagged()
+    public void ASmallRvrIsANoteAndDoesNotFailTheVerdict()
     {
-        // Reference improves a lot, QC barely -> small finite RVR.
+        // Reference improves a lot, QC barely - the mirror image, and equally not a defect.
         var status = Evaluate(refBefore: 0.60, refAfter: 0.30, qcBefore: 0.40, qcAfter: 0.399);
 
-        Assert.False(double.IsNaN(status.RelativeVarianceReduction));
         Assert.True(status.RelativeVarianceReduction < 0.5);
-        Assert.Contains(status.Warnings, w => w.Contains("may not generalize", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(status.Notes, n => n.Contains("RVR=", StringComparison.Ordinal));
+        Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.Ordinal));
+        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5);
     }
 
     [Fact]
-    public void ABalancedImprovementPassesWithNoRatioWarnings()
+    public void ABalancedImprovementReportsNoRatioMessageAtAll()
     {
         var status = Evaluate(refBefore: 0.50, refAfter: 0.30, qcBefore: 0.50, qcAfter: 0.30);
 
         Assert.False(double.IsNaN(status.RelativeVarianceReduction));
-        Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(status.Warnings, w => w.Contains("could not be evaluated", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(status.Warnings.Concat(status.Notes),
+            m => m.Contains("RVR", StringComparison.OrdinalIgnoreCase));
     }
 }

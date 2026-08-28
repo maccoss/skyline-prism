@@ -7,6 +7,7 @@ using System.Text;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Numerics;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Visualization;
 using SkylinePrism.Core.Rollup;
 
@@ -37,11 +38,23 @@ public static class QcReport
     {
         var sampleTypes = ReadSampleTypes(Path.Combine(outputDir, "sample_metadata.csv"));
 
+        // What the report SAYS about the run has to come from the run, not from whatever config this
+        // invocation was handed: `prism qc -c qc_only.yaml` supplies report options, and every section
+        // it omits would otherwise be filled with defaults and printed as though it had been used.
+        var runConfig = ReadRunConfig(outputDir) ?? config;
+
         var peptideCol = DetectPeptideColumn(Path.Combine(outputDir, "peptides_rollup.parquet"));
         var pepMeta = new[] { peptideCol, PepMetaN, PepMetaRt };
 
+        // "After" is each arm's ACTUAL output - corrected_peptides / corrected_proteins (LINEAR, so
+        // log2 here) - not the internal file. peptides_log2_internal is post-normalization and
+        // PRE-ComBat: since dotnet-v26.15.0 the protein arm branches from it, so reading it as the
+        // peptide "after" left every peptide CV, every peptide plot and the validation verdict
+        // measuring normalization alone, while the panels were labelled "normalized + corrected" and
+        // the protein half of the same report showed a fully corrected matrix. On the mini fixture
+        // with ComBat on, the two files differ in every cell (up to 4.7 log2).
         var pepRaw = LoadMatrix(Path.Combine(outputDir, "peptides_rollup.parquet"), pepMeta);
-        var pepCorrected = LoadMatrix(Path.Combine(outputDir, "peptides_log2_internal.parquet"), pepMeta);
+        var pepCorrected = Log2(LoadMatrix(Path.Combine(outputDir, "corrected_peptides.parquet"), pepMeta));
         var protRaw = LoadMatrix(Path.Combine(outputDir, "proteins_raw.parquet"), ProtMeta);
         var protCorrectedLinear = LoadMatrix(Path.Combine(outputDir, "corrected_proteins.parquet"), ProtMeta);
         var protCorrected = Log2(protCorrectedLinear);
@@ -63,16 +76,17 @@ public static class QcReport
 
         // RT diagnostic plots are only meaningful when RT-lowess normalization actually ran (matches
         // Python, which gates them on rt_lowess_result being present).
-        var rtLowessRan = string.Equals(config.GlobalNormalization.Method, "rt_lowess", StringComparison.OrdinalIgnoreCase);
+        var rtLowessRan = string.Equals(runConfig.GlobalNormalization.Method, "rt_lowess", StringComparison.OrdinalIgnoreCase);
         var peptidePlots = RenderLevelSections("peptide", pepRaw, pepCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
         var proteinPlots = RenderLevelSections("protein", protRaw, protCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
 
         var validation = ValidationStatus.Compute(pepRaw.Values, pepCorrected.Values, refIdx, qcIdx);
+        var runInfo = Provenance.ReadRunInfo(Path.Combine(outputDir, "parameters.json"));
 
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
             pepRaw.RowCount, protRaw.RowCount,
-            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, validation);
+            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, validation, runConfig, runInfo);
 
         var htmlPath = Path.Combine(outputDir, "qc_report.html");
         File.WriteAllText(htmlPath, html);
@@ -212,8 +226,11 @@ public static class QcReport
         CvMetrics.BeforeAfter? pepRef, CvMetrics.BeforeAfter? pepQc,
         CvMetrics.BeforeAfter? protRef, CvMetrics.BeforeAfter? protQc,
         List<PlotSection> peptidePlots, List<PlotSection> proteinPlots,
-        ValidationStatus? validation)
+        ValidationStatus? validation, PrismConfig config, Provenance.RunInfo? runInfo)
     {
+        // One reading for the whole page: rendering a large cohort's plots takes seconds, and a header
+        // and footer that disagree about when the report was made read as two different reports.
+        var generatedAt = DateTimeStamp();
         var nRef = sampleTypes.Values.Count(v => v == "reference");
         var nQc = sampleTypes.Values.Count(v => v == "qc");
         var nExp = sampleTypes.Values.Count(v => v == "experimental");
@@ -249,9 +266,18 @@ td:first-child, th:first-child { text-align: left; }
 .status-fail { background: #fdeceb; color: #b42318; border: 1px solid #f0b3ad; }
 .warnings { background: #fff8e6; border: 1px solid #f2d98a; border-radius: 6px; padding: 8px 14px; margin: 8px 0; }
 .warnings li { color: #8a6d00; }
+.notes { background: #f2f6fc; border: 1px solid #cfd8e3; border-radius: 6px; padding: 8px 14px; margin: 8px 0; }
+.notes li { color: #40536e; }
+table.kv td:nth-child(2) { text-align: left; }
+details { margin: 10px 0; }
+summary { cursor: pointer; color: #1a3c6e; font-weight: 600; }
+pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; padding: 10px 14px;
+      overflow-x: auto; font-size: 12.5px; line-height: 1.4; }
 </style></head><body><div class="container">
 """);
         sb.Append("<h1>PRISM QC Report</h1>");
+
+        AppendRunInfo(sb, runInfo, config, generatedAt);
 
         sb.Append("<div class=\"box\"><h2>Dataset Summary</h2>");
         sb.Append($"<p>Samples: <strong>{nSamples}</strong> (experimental {nExp}, reference {nRef}, qc {nQc})<br>");
@@ -279,9 +305,145 @@ td:first-child, th:first-child { text-align: left; }
         sb.Append("<div class=\"section-header\">Protein-Level QC</div>");
         AppendSections(sb, proteinPlots);
 
-        sb.Append($"<p class=\"footer\">Generated by Skyline-PRISM (C#) at {DateTimeStamp()}</p>");
+        sb.Append($"<p class=\"footer\">Generated by Skyline-PRISM (C#) at {generatedAt}</p>");
         sb.Append("</div></body></html>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// "Analysis Information": which PRISM produced these numbers, when, on what machine, from what
+    /// inputs, and with which settings. The provenance facts come from the run's parameters.json - not
+    /// from the binary rendering the page, which may be a later `prism qc` - while the settings come
+    /// from the config handed to the report.
+    /// </summary>
+    private static void AppendRunInfo(
+        StringBuilder sb, Provenance.RunInfo? info, PrismConfig config, string generatedAt)
+    {
+        sb.Append("<div class=\"box\"><h2>Analysis Information</h2>");
+        sb.Append("<table class=\"kv\">");
+        void Row(string label, string valueHtml) =>
+            sb.Append($"<tr><td><strong>{HtmlEncode(label)}</strong></td><td>{valueHtml}</td></tr>");
+
+        // Without a parameters.json - a hand-assembled directory, or a run from before provenance was
+        // written - the run facts are unknown. Say so rather than passing the rendering process off as
+        // the one that produced the outputs.
+        Row("Pipeline", info is not null
+            ? $"PRISM v{HtmlEncode(info.PipelineVersion)} (C#)"
+            : $"PRISM v{HtmlEncode(Provenance.AssemblyVersion)} (C#) <span style=\"color:#888\">- report "
+              + "generator only; no parameters.json here, so the version that produced these outputs is "
+              + "unrecorded</span>");
+        if (info is not null)
+        {
+            Row("Processing date", HtmlEncode(info.ProcessingDate));
+            Row("Computer", HtmlEncode(info.Host));
+            Row("Source files", info.SourceFiles.Count == 0
+                ? "<em>not recorded</em>"
+                : "<ul style=\"margin:0;padding-left:18px\">"
+                  + string.Concat(info.SourceFiles.Select(f => $"<li><code>{HtmlEncode(f)}</code></li>"))
+                  + "</ul>");
+        }
+        Row("Report generated", HtmlEncode(generatedAt));
+        sb.Append("</table>");
+
+        sb.Append("<h3>Processing Parameters</h3><table class=\"kv\">");
+        foreach (var (stage, setting) in ParameterRows(config))
+            sb.Append($"<tr><td>{HtmlEncode(stage)}</td><td>{HtmlEncode(setting)}</td></tr>");
+        sb.Append("</table>");
+
+        // The table above is the readable summary; this is the exact, re-runnable config behind it
+        // (ConfigWriter emits only what applies to the selected methods, so it stays short).
+        sb.Append("<details><summary>Full configuration (YAML)</summary><pre>")
+          .Append(HtmlEncode(ConfigWriter.ToYaml(config)))
+          .Append("</pre></details>");
+        sb.Append("</div>");
+    }
+
+    /// Display names for the config sections, in the order <see cref="ConfigWriter.Sections"/> emits
+    /// them. A section without an entry here is shown under its own key rather than dropped - a new
+    /// config section must not be able to vanish from the report by being forgotten in this table.
+    private static readonly Dictionary<string, string> StageLabels = new(StringComparer.Ordinal)
+    {
+        ["data"] = "Input columns",
+        ["transition_rollup"] = "Transition -> peptide rollup",
+        ["global_normalization"] = "Peptide normalization",
+        ["sample_outlier_detection"] = "Sample outlier detection",
+        ["batch_correction"] = "Batch correction",
+        ["parsimony"] = "Protein parsimony",
+        ["protein_rollup"] = "Peptide -> protein rollup",
+        ["protein_normalization"] = "Protein normalization",
+        ["qc_report"] = "QC report",
+        ["output"] = "Output",
+        ["processing"] = "Processing",
+        ["batch_estimation"] = "Batch estimation",
+        ["sample_annotations"] = "Sample-type patterns",
+    };
+
+    /// <summary>
+    /// One row per config section: the method that ran and the operands that shaped it, rendered from
+    /// <see cref="ConfigWriter.Sections"/> - the same builder that produces the YAML below the table,
+    /// so the two cannot disagree and a new config key needs no second edit here. Keys that the
+    /// selected method does not read are already absent from that builder's output.
+    /// </summary>
+    private static List<(string Stage, string Setting)> ParameterRows(PrismConfig c)
+    {
+        var rows = new List<(string, string)>();
+        foreach (var (name, values) in ConfigWriter.Sections(c))
+        {
+            var parts = new List<string>();
+            Flatten(values, prefix: "", parts);
+            if (parts.Count > 0)
+                rows.Add((StageLabels.GetValueOrDefault(name, name), string.Join(", ", parts)));
+        }
+        return rows;
+    }
+
+    /// <summary>Render one config section as `key=value` parts, `sub.key=value` for nested blocks.</summary>
+    private static void Flatten(IReadOnlyDictionary<string, object?> values, string prefix, List<string> parts)
+    {
+        foreach (var (key, value) in values)
+        {
+            if (value is IReadOnlyDictionary<string, object?> nested)
+                Flatten(nested, prefix + key + ".", parts);
+            else if (value is IDictionary<string, object?> nestedRw)
+                Flatten(new Dictionary<string, object?>(nestedRw), prefix + key + ".", parts);
+            else
+                parts.Add($"{prefix}{key}={FormatValue(value)}");
+        }
+    }
+
+    /// <summary>
+    /// Config values as they read in a config file, except booleans, which keep the Python report's
+    /// True/False. Numbers round-trip ("R"): a rounded operand in the table that disagrees with the
+    /// YAML below it would defeat the point of printing the settings at all.
+    /// </summary>
+    private static string FormatValue(object? value) => value switch
+    {
+        null => "(none)",
+        bool b => b ? "True" : "False",
+        double d => d.ToString("R", CultureInfo.InvariantCulture),
+        float f => f.ToString("R", CultureInfo.InvariantCulture),
+        IFormattable n and (int or long or decimal) => n.ToString(null, CultureInfo.InvariantCulture),
+        System.Collections.IEnumerable list and not string =>
+            "[" + string.Join(" | ", list.Cast<object?>().Select(FormatValue)) + "]",
+        _ => value.ToString() ?? "",
+    };
+
+    /// <summary>
+    /// The config a run was made with, from its parameters.json. Null when there is none or it cannot
+    /// be read - a QC report must still render beside a hand-assembled directory or a truncated
+    /// provenance file, so this never throws.
+    /// </summary>
+    private static PrismConfig? ReadRunConfig(string outputDir)
+    {
+        try
+        {
+            var path = Path.Combine(outputDir, "parameters.json");
+            return File.Exists(path) ? Provenance.LoadConfig(path) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void AppendValidation(StringBuilder sb, ValidationStatus? v)
@@ -295,6 +457,13 @@ td:first-child, th:first-child { text-align: left; }
 
         sb.Append($"<div class=\"status {(v.Passed ? "status-pass" : "status-fail")}\">"
             + $"Validation: {(v.Passed ? "PASSED" : "FAILED")}</div>");
+        // Say what the verdict is answering, so a FAILED banner points at something actionable and a
+        // PASSED one is not read as a blanket endorsement.
+        sb.Append("<p class=\"note\">The verdict asks one question: did the processing damage the "
+            + "controls? It fails only if the QC CV got <em>worse</em>, or if the QC and reference "
+            + "samples collapsed onto each other in PCA space. The reference and QC groups improving by "
+            + "different amounts is not a failure - they are different materials injected at different "
+            + "amounts, so one can have more excess variance to remove than the other.</p>");
 
         sb.Append("<table><tr><th>Control CV</th><th>Before</th><th>After</th><th>Improvement</th></tr>");
         void Row(string label, double before, double after, double impFrac)
@@ -307,10 +476,13 @@ td:first-child, th:first-child { text-align: left; }
         Row("QC", v.QcCvBefore, v.QcCvAfter, v.QcCvImprovement);
         sb.Append("</table>");
 
-        var rvr = double.IsInfinity(v.RelativeVarianceReduction) ? "inf" : v.RelativeVarianceReduction.ToString("0.00");
+        var rvr = double.IsNaN(v.RelativeVarianceReduction) || double.IsInfinity(v.RelativeVarianceReduction)
+            ? "n/a"
+            : v.RelativeVarianceReduction.ToString("0.00");
         var pca = double.IsNaN(v.PcaDistanceRatio) ? "n/a" : v.PcaDistanceRatio.ToString("0.00");
         sb.Append($"<p style=\"color:#555\">Relative variance reduction (QC/reference improvement): "
-            + $"<strong>{rvr}</strong> (overfitting if &gt; 2.0) &nbsp;&middot;&nbsp; "
+            + $"<strong>{rvr}</strong> (reported for information - it does not affect the verdict) "
+            + "&nbsp;&middot;&nbsp; "
             + $"PCA QC-reference distance ratio (after/before): <strong>{pca}</strong> (collapse if &lt; 0.5)</p>");
 
         if (v.Warnings.Count > 0)
@@ -318,6 +490,14 @@ td:first-child, th:first-child { text-align: left; }
             sb.Append("<div class=\"warnings\"><strong>WARNINGS</strong><ul>");
             foreach (var w in v.Warnings)
                 sb.Append($"<li>{HtmlEncode(w)}</li>");
+            sb.Append("</ul></div>");
+        }
+
+        if (v.Notes.Count > 0)
+        {
+            sb.Append("<div class=\"notes\"><strong>NOTES</strong><ul>");
+            foreach (var n in v.Notes)
+                sb.Append($"<li>{HtmlEncode(n)}</li>");
             sb.Append("</ul></div>");
         }
     }
@@ -376,7 +556,13 @@ td:first-child, th:first-child { text-align: left; }
     {
         using var reader = ParquetColumnReader.Open(path);
         var meta = new HashSet<string>(metaCols, StringComparer.Ordinal);
-        var sampleCols = reader.ColumnNames.Where(c => !meta.Contains(c)).ToList();
+        // A non-numeric column is metadata whatever it is called: corrected_peptides carries the
+        // derived protein_group / leading_* strings that peptides_rollup does not, and reading one as
+        // a replicate would throw. (Same rule as DynamicRange.PeptideMetadataColumns, which lists only
+        // the NUMERIC metadata for exactly this reason.)
+        var sampleCols = reader.ColumnNames
+            .Where(c => !meta.Contains(c) && reader.IsNumericColumn(c))
+            .ToList();
         var n = reader.RowCount;
         var m = new double[n, sampleCols.Count];
         for (var j = 0; j < sampleCols.Count; j++)

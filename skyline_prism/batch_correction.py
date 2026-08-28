@@ -1430,11 +1430,16 @@ def evaluate_batch_correction(
             f"QC CV did not improve ({qc_improvement:.1%} vs required {min_qc_improvement:.1%})"
         )
 
+    # Observation only - it must NOT fail the evaluation, because failing it makes
+    # combat_with_reference_samples(fallback_on_failure=True) throw the whole correction away.
+    # Reference and QC are different materials injected at different amounts, so whichever started
+    # with more excess variance has more of it to remove; the ratio cannot establish overfitting,
+    # and discarding a correction over it silently changes every abundance.
     if np.isfinite(overfitting_ratio) and overfitting_ratio > max_overfitting_ratio:
-        passed = False
         warnings.append(
-            f"Possible overfitting: reference improved {ref_improvement:.1%} "
-            f"but QC only {qc_improvement:.1%} (ratio {overfitting_ratio:.1f})"
+            f"NOTE (not a failure): reference improved {ref_improvement:.1%} but QC only "
+            f"{qc_improvement:.1%} (ratio {overfitting_ratio:.1f}) - the controls improved by "
+            "very different amounts"
         )
 
     if qc_cv_after > qc_cv_before * 1.1:  # QC got worse by >10%
