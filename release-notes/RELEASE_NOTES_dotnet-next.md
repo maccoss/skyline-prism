@@ -46,3 +46,26 @@ as the GitHub Release description and fails if it is missing.
 ## Performance
 
 ## Breaking Changes
+
+- **The Python implementation has been removed.** PRISM began as the `skyline-prism` Python package;
+  the C# tools replaced it and reproduced its numbers to 1e-9 on the deterministic stages. The engine,
+  its tests, its PyPI packaging and CI, the Python-era Skyline external tool and the helper scripts are
+  all gone from this repository, and `README-python.md` with them.
+
+  **Nothing about the `prism` CLI or the Skyline tool changes** - this removes a second implementation
+  nearly everyone had already stopped using, not any feature of the one that ships.
+
+  If you still need it, every Python release stays downloadable: `pip install skyline-prism==26.4.4`,
+  or the [`v26.4.4` tag](https://github.com/maccoss/skyline-prism/releases/tag/v26.4.4) (any earlier
+  `v*` tag works too). Those versions are unmaintained and frozen at that release's behaviour.
+
+  Consequences worth knowing:
+  - Config keys that only ever existed in Python (`method: adaptive`, `library_fitting_method:
+    least_squares`, the per-plot `qc_report.plots.*` toggles, ...) are unchanged in their handling:
+    PRISM still warns on the key or aborts on the method choice by name, so an old config tells you
+    what it hit rather than silently doing something else. They are no longer listed in
+    `docs/parameters.md`.
+  - The cross-engine golden fixtures under `dotnet/tests/fixtures/` stay and still gate every release;
+    they are now a frozen independent-implementation baseline, regenerable only from the `v26.4.4` tag.
+  - `dotnet/PORTING_STATUS.md` is kept as a historical record of what was and was not carried over.
+

@@ -7,10 +7,17 @@ so standard ComBat is what normally runs.
 
 **Status: FIXED in both engines** (divergence 1 below), together with the prior contamination in
 rows 3-4. Verified: one missing cell in a 20x8 matrix now yields exactly one missing cell out,
-where it previously yielded 160 of 160. Outstanding: the Python goldens under
-`dotnet/tests/fixtures/mini/` still encode the old behaviour and must be regenerated (see
-"Regenerating" in `dotnet/tests/fixtures/README.md`), and the sva goldens
-(`dotnet/tests/fixtures/sva/generate.R`) have not been generated yet.
+where it previously yielded 160 of 160.
+
+> [!NOTE]
+> **The "regenerate the mini goldens" item is moot** (checked when the Python engine was removed).
+> Every *quantity* golden under `dotnet/tests/fixtures/mini/` holds **0 nulls** — the nulls in those
+> directories are all in `merged_data.parquet`, on the input side, and never reach ComBat. On dense
+> input the old and fixed code are bit-identical, which is what the section below says, so those
+> goldens do not encode the old behaviour and nothing needs regenerating. Just as well: the Python
+> engine has since been removed, so regenerating them would mean checking out `v26.4.4`.
+>
+> The sva goldens (`dotnet/tests/fixtures/sva/generate.R`) are R, not Python, and are unaffected.
 
 **What changed, precisely.** Every reduction now ignores NaN by compacting a feature's observed
 values and running the ORDINARY pairwise reductions on them - so a dense cohort is bit-identical to

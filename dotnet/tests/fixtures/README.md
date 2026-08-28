@@ -1,10 +1,19 @@
 # Cross-language golden fixtures
 
-These are committed reference outputs produced by the **Python** PRISM pipeline. The C#
-port's parity tests read them and assert the C# pipeline reproduces the same values
-(exact tolerance for the deterministic core; functional tolerance for optimizer-driven
-methods). They are copied next to the test assembly (see `SkylinePrism.Tests.csproj`)
-and resolved via `AppContext.BaseDirectory/fixtures`.
+These are committed reference outputs produced by the original **Python** PRISM pipeline. The parity
+tests read them and assert PRISM still reproduces the same values (exact tolerance for the
+deterministic core; functional tolerance for optimizer-driven methods). They are copied next to the
+test assembly (see `SkylinePrism.Tests.csproj`) and resolved via `AppContext.BaseDirectory/fixtures`.
+
+> [!IMPORTANT]
+> **These goldens are frozen.** The Python engine was retired and removed after `v26.4.4`, so they can
+> no longer be regenerated from this repository (the recipe at the bottom needs a Python environment
+> with that package). That costs nothing they were doing: they are a fixed independent-implementation
+> baseline, and the `quantities.sha256` digests — which compare PRISM against **its own** committed
+> reference — are what catches a change in today's numbers. A parity failure still means what it always
+> meant: a reported quantity moved away from the reference implementation. Investigate it; do not
+> delete the fixture. To regenerate them anyway, check out the `v26.4.4` tag, which still has the
+> Python package.
 
 ## `mini/merge/`
 Tiny byte-faithful slices of two real plate exports (`mini_plate1.csv`, `mini_plate2.csv`

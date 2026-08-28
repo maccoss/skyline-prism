@@ -1,7 +1,19 @@
-# C# port status — Python feature coverage
+# Port status — a historical record
 
-Tracks which Python `skyline_prism` features are implemented in the C# port (`dotnet/`).
-Legend: **[x]** done · **[~]** partial · **[ ]** not yet · **[-]** deferred (not planned for now).
+> [!IMPORTANT]
+> **This is a historical document, not a live tracker.** It recorded which features of the original
+> Python `skyline_prism` package the C# code had taken on, while the two shipped side by side. The
+> Python engine was retired and removed after `v26.4.4`, so there is no longer anything to port *from*
+> and no "not yet" left to close.
+>
+> It is kept for two things it is still the best record of: **why** a Python feature was deliberately
+> not carried over (`method: adaptive`, `least_squares` library fitting, per-plot QC toggles — all of
+> which PRISM still rejects or warns about by name, so a user arriving with an old config gets told),
+> and the measured parity evidence behind the numbers PRISM produces today. For what PRISM supports
+> now, read [`../docs/parameters.md`](../docs/parameters.md); for how a stage works, read
+> [`../docs/methods.md`](../docs/methods.md).
+
+Legend: **[x]** done · **[~]** partial · **[ ]** not done · **[-]** deferred (never planned).
 
 ## Data I/O & merge
 - [x] Streaming CSV/parquet merge (DuckDB), UNION ALL of N reports with `memory_limit` + disk-spill

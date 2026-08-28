@@ -536,10 +536,12 @@ Enabled with `batch_correction.reference_anchored: true`, or in the Skyline tool
 
 A feature that a batch's *references* never observed is held out and returned unchanged, for the same reason as in standard ComBat: the offset is unknown, not zero.
 
-**Implementation:** both engines share one estimator with standard ComBat.
-Python `skyline_prism/batch_correction.py` -> `combat_reference_anchored()`;
-C# `ComBatCore` + `ComBatPlan.ReferenceAnchored` (`dotnet/src/SkylinePrism.Core/BatchCorrection/`).
-Because there is no third-party implementation of this method to check against, cross-engine fixtures (`dotnet/tests/fixtures/refanchored/`) pin Python's output and hold C# to it — the two agree to $10^{-10}$, including on sparse input and both no-reference policies.
+**Implementation:** shares one estimator with standard ComBat — `ComBatCore` +
+`ComBatPlan.ReferenceAnchored` (`dotnet/src/SkylinePrism.Core/BatchCorrection/`).
+Because there is no third-party implementation of this method to check against, the fixtures in
+`dotnet/tests/fixtures/refanchored/` hold it to the output the original Python engine produced — they
+agreed to $10^{-10}$, including on sparse input and both no-reference policies, and the goldens remain
+the regression baseline.
 
 ---
 
@@ -598,7 +600,7 @@ graph.
    of the loop; canonical proteins are iterated in sorted order; claimed
    peptides per round are sorted alphabetically before being added to the
    razor set. Repeated runs on the same input produce identical razor
-   assignments regardless of Python `dict`/`set` iteration order.
+   assignments regardless of hash-table iteration order.
 
 ### Protein Groups
 

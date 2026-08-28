@@ -1,5 +1,6 @@
-# C# (.NET 8) release - triggered by a dotnet-v* tag (distinct from the Python v* tags,
-# so the two release cadences do not collide). Publishes, as GitHub Release assets:
+# Release - triggered by a dotnet-v* tag. (The prefix is historical: the retired Python package
+# used the bare v* namespace. It is kept so existing tags, release URLs and the tag -> notes-file
+# mapping below keep working.) Publishes, as GitHub Release assets:
 #   - SkylinePrism.zip           the Windows Skyline external tool (needs the .NET 8 Desktop Runtime)
 #   - prism-<rid>.{zip,tar.gz}   framework-dependent `prism` CLI, one per platform (needs the .NET 8 Runtime)
 name: dotnet-release
