@@ -6,6 +6,32 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **A re-run now only redoes the stages that actually changed.** Changing one setting used to recompute
+  everything: on a real cohort, changing `protein_rollup.method` re-exported ~15 GB from Skyline and
+  redid the transition rollup and the peptide normalization, none of which that setting can affect.
+  Only the Stage 1 merge was cached.
+
+  Each stage now records a fingerprint of its inputs and of the config keys it actually reads, and a
+  re-run into the same output directory reuses any stage whose fingerprint is unchanged. Change
+  `protein_rollup.method` and only the protein arm re-runs - `corrected_peptides.parquet` comes out
+  byte-identical. Change `transition_rollup.method` and everything downstream of it rebuilds, because
+  invalidation chains through the fingerprints.
+
+  Guardrails, because the failure mode here is silently stale numbers rather than an error:
+  - The fingerprint includes the **PRISM version**, so any release re-runs everything rather than
+    trusting that a code change did not move a result.
+  - Reuse requires every file the cache claims to still exist and be non-empty - deleting an output by
+    hand rebuilds it.
+  - Which config keys belong to which stage is a declared table (`StageDependencies`), and a test fails
+    the build if a key is added without being classified, or if mutating a key does not change exactly
+    the stages that declare it.
+  - `--force-reprocess` reuses nothing (and still records, so the next run benefits).
+
+  A **closed** `.sky` also gets its export reused when the document and the report definition are
+  unchanged. A **running** Skyline does not: a live document can hold unsaved edits that the file on
+  disk knows nothing about, and the RPC surface exposes no document revision to key on, so re-exporting
+  it every run is the only safe answer.
+
 - **The Dynamic Range plot now says which rollup produced its values.** The y axis reads
   `Log10 abundance (median_polish)` - on the axis, so it travels with the image when the plot is copied
   into a slide - and the status line adds what that method's numbers *are*: for median polish, "a

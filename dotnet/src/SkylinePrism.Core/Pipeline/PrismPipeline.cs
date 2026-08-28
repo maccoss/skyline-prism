@@ -77,6 +77,11 @@ public sealed class PrismPipeline
             reportRaw(line);
         }
 
+        // Per-stage reuse for a re-run into this directory. A stage whose inputs and settings are
+        // unchanged keeps its output; --force-reprocess reuses nothing but still records, so the next
+        // run benefits. See StageDependencies for what "unchanged" means, key by key.
+        var stageCache = StageCache.Load(outputDir, forceReprocess);
+
         report("============================================================");
         report("Stage 1: Merge / prepare input");
         report("============================================================");
@@ -238,16 +243,38 @@ public sealed class PrismPipeline
         };
         if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
             report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
-        var dop = config.Processing.NWorkers <= 0
-            ? Environment.ProcessorCount
-            : Math.Min(config.Processing.NWorkers, Environment.ProcessorCount);
-        report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
-            + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
-        var t2 = TransitionRollup.Run(
-            dataset, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
-        report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
-        if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
-            report("  Wrote peptides_rollup_residuals.parquet (per-transition median-polish residuals).");
+        // The merge's own fingerprint anchors the chain: everything downstream is invalid when the
+        // inputs change, without each stage having to re-examine them.
+        var mergeFp = StageCache.Fingerprint(
+            StageDependencies.Merge, config, extraInputs: new[] { fingerprint });
+        var rollupFp = StageCache.Fingerprint(
+            StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
+
+        int nRolledUp;
+        if (stageCache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
+        {
+            nRolledUp = ParquetColumnReader.RowCountOf(peptidesRollupPath);
+            report($"  Reusing peptides_rollup.parquet ({nRolledUp:N0} peptides; inputs and "
+                + "transition_rollup settings unchanged).");
+        }
+        else
+        {
+            var dop = config.Processing.NWorkers <= 0
+                ? Environment.ProcessorCount
+                : Math.Min(config.Processing.NWorkers, Environment.ProcessorCount);
+            report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
+                + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
+            stageCache.Invalidate(StageDependencies.TransitionRollup);
+            var t2 = TransitionRollup.Run(
+                dataset, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
+            nRolledUp = t2.NPeptides;
+            report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
+            if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
+                report("  Wrote peptides_rollup_residuals.parquet (per-transition median-polish residuals).");
+            stageCache.Record(
+                StageDependencies.TransitionRollup, rollupFp,
+                peptidesRollupPath, transitionCfg.ResidualsPath);
+        }
 
         // Stage 2a: peptide-matrix density diagnostic + optional sample outlier detection.
         {
@@ -345,10 +372,26 @@ public sealed class PrismPipeline
         // the protein groups each peptide belongs to (so the peptide and protein tables can be joined,
         // and a peptide can be navigated to in Skyline). Its banner and CSV stay at Stage 3 below, where
         // the grouping is reported; only the computation moved.
-        var groups = ParsimonyEngine.Run(
-            dataset, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
-            config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity,
-            config.Processing.MergeMemoryMb);
+        var groupsPath = Path.Combine(outputDir, "protein_groups.csv");
+        var parsimonyFp = StageCache.Fingerprint(
+            StageDependencies.Parsimony, config, upstream: new[] { mergeFp });
+        List<ProteinGroup> groups;
+        if (stageCache.CanReuse(StageDependencies.Parsimony, parsimonyFp))
+        {
+            // Read back rather than recomputed: the grouping is a pure function of the merged data and
+            // the parsimony settings, both of which the fingerprint covers.
+            groups = ProteinGroupsCsv.Read(groupsPath);
+            report($"  Reusing protein_groups.csv ({groups.Count:N0} groups; merged data and parsimony "
+                + "settings unchanged).");
+        }
+        else
+        {
+            stageCache.Invalidate(StageDependencies.Parsimony);
+            groups = ParsimonyEngine.Run(
+                dataset, cols, config.Parsimony.Enabled, config.Parsimony.FastaPath,
+                config.Parsimony.Enzyme, config.Parsimony.EnzymeSpecificity,
+                config.Processing.MergeMemoryMb);
+        }
         var peptideGroups = PeptideGroupIndex(groups);
         // Counted now so the index itself can be dropped as soon as the peptide output is written,
         // rather than staying alive through the protein rollup for the sake of one number.
@@ -359,7 +402,32 @@ public sealed class PrismPipeline
             + (peptideCombat ? " + 2c: ComBat batch correction" : "") + "...");
         var internalPath = Path.Combine(outputDir, "peptides_log2_internal.parquet");
         var correctedPepPath = Path.Combine(outputDir, "corrected_peptides." + config.Output.Format);
-        var nPeptides = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
+        var pepNormFp = StageCache.Fingerprint(
+            StageDependencies.PeptideNormalize, config,
+            upstream: new[] { rollupFp, parsimonyFp },
+            // The resolved sample types and batches are an INPUT to this stage and are not config: they
+            // come from the metadata files and the estimator. Fold them in directly, so re-running with
+            // a corrected Sample Type in Skyline invalidates the correction that used the old one.
+            extraInputs: new[] { SampleContextKey(samples, batchLabels, resolvedType) });
+
+        int nPeptides;
+        var pepResidualPaths = config.Output.IncludeResiduals
+            ? new[]
+            {
+                Path.Combine(outputDir, "peptides_rollup_residuals.parquet"),
+                Path.Combine(outputDir, "corrected_peptides_residuals.parquet"),
+            }
+            : Array.Empty<string>();
+        if (stageCache.CanReuse(StageDependencies.PeptideNormalize, pepNormFp))
+        {
+            nPeptides = ParquetColumnReader.RowCountOf(internalPath);
+            report($"  Reusing peptides_log2_internal / corrected_peptides ({nPeptides:N0} peptides; "
+                + "rollup, normalization and batch-correction settings unchanged).");
+        }
+        else
+        {
+        stageCache.Invalidate(StageDependencies.PeptideNormalize);
+        nPeptides = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
         {
             WideParquet = peptidesRollupPath,
             MetaSpec = new[]
@@ -397,6 +465,10 @@ public sealed class PrismPipeline
             CancellationToken = cancellationToken,
         });
         report($"  Wrote {nPeptides:N0} corrected peptides.");
+        stageCache.Record(
+            StageDependencies.PeptideNormalize, pepNormFp,
+            new[] { internalPath, correctedPepPath }.Concat(pepResidualPaths).ToArray());
+        }
         // Done with the index; the protein rollup that follows is the other memory-heavy stage, so let
         // this go rather than holding it alongside another full matrix.
         peptideGroups = null!;
@@ -408,7 +480,10 @@ public sealed class PrismPipeline
         if (!string.IsNullOrWhiteSpace(config.Parsimony.FastaPath))
             report($"  FASTA-based parsimony map: {config.Parsimony.FastaPath} "
                 + $"(enzyme={config.Parsimony.Enzyme}, specificity={config.Parsimony.EnzymeSpecificity})");
-        ProteinGroupsCsv.Write(groups, Path.Combine(outputDir, "protein_groups.csv"));
+        // Written on both paths (it is a small CSV), so the file the cache vouches for is always
+        // present - including the first run after an older release, whose sidecar this one ignores.
+        ProteinGroupsCsv.Write(groups, groupsPath);
+        stageCache.Record(StageDependencies.Parsimony, parsimonyFp, groupsPath);
         report($"  {(config.Parsimony.Enabled ? "Computed" : "Built")} {groups.Count:N0} protein groups.");
         if (sharedPeptides > 0)
             report($"  {sharedPeptides:N0} peptide(s) map to more than one group; corrected_peptides lists "
@@ -463,10 +538,28 @@ public sealed class PrismPipeline
                     + $"length {config.ProteinRollup.Ibaq.MinPeptideLength}-{config.ProteinRollup.Ibaq.MaxPeptideLength}).");
             }
         }
-        var protResult = ProteinRollup.Run(
-            internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples, theoreticalCounts,
-            maxDegreeOfParallelism: config.Processing.NWorkers);
-        report($"  Rolled up to {protResult.NProteins:N0} proteins.");
+        var protRollupFp = StageCache.Fingerprint(
+            StageDependencies.ProteinRollup, config,
+            upstream: new[] { pepNormFp, parsimonyFp },
+            extraInputs: new[] { SampleContextKey(samples, batchLabels, resolvedType) });
+        int nRolledUpProteins;
+        if (stageCache.CanReuse(StageDependencies.ProteinRollup, protRollupFp))
+        {
+            nRolledUpProteins = ParquetColumnReader.RowCountOf(proteinsRawPath);
+            report($"  Reusing proteins_raw.parquet ({nRolledUpProteins:N0} proteins; peptide matrix, "
+                + "grouping and protein_rollup settings unchanged).");
+        }
+        else
+        {
+            stageCache.Invalidate(StageDependencies.ProteinRollup);
+            var protResult = ProteinRollup.Run(
+                internalPath, groups, proteinCfg, cols.Peptide, proteinsRawPath, samples, theoreticalCounts,
+                maxDegreeOfParallelism: config.Processing.NWorkers);
+            nRolledUpProteins = protResult.NProteins;
+            report($"  Rolled up to {protResult.NProteins:N0} proteins.");
+            stageCache.Record(
+                StageDependencies.ProteinRollup, protRollupFp, proteinsRawPath, proteinCfg.ResidualsPath);
+        }
         report($"Stage 4b: Protein normalization ({config.ProteinNormalization.Method})"
             + (proteinCombat ? " + 4c: ComBat" : "") + "...");
 
@@ -479,7 +572,28 @@ public sealed class PrismPipeline
             ("leading_description", MetaType.Str), ("n_peptides", MetaType.Long),
             ("n_unique_peptides", MetaType.Long), ("low_confidence", MetaType.Bool),
         };
-        var nProteins = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
+        var protNormFp = StageCache.Fingerprint(
+            StageDependencies.ProteinNormalize, config,
+            upstream: new[] { protRollupFp },
+            extraInputs: new[] { SampleContextKey(samples, batchLabels, resolvedType) });
+        var protResidualPaths = config.Output.IncludeResiduals
+            ? new[]
+            {
+                Path.Combine(outputDir, "proteins_raw_residuals.parquet"),
+                Path.Combine(outputDir, "corrected_proteins_residuals.parquet"),
+            }
+            : Array.Empty<string>();
+        int nProteins;
+        if (stageCache.CanReuse(StageDependencies.ProteinNormalize, protNormFp))
+        {
+            nProteins = ParquetColumnReader.RowCountOf(correctedProtPath);
+            report($"  Reusing corrected_proteins ({nProteins:N0} proteins; protein matrix, "
+                + "normalization and batch-correction settings unchanged).");
+        }
+        else
+        {
+        stageCache.Invalidate(StageDependencies.ProteinNormalize);
+        nProteins = NormalizeCorrectStage.Run(new NormalizeCorrectRequest
         {
             WideParquet = proteinsRawPath,
             MetaSpec = proteinMeta,
@@ -505,6 +619,10 @@ public sealed class PrismPipeline
             PathReport = path => report($"  Path: {path}."),
             CancellationToken = cancellationToken,
         });
+        stageCache.Record(
+            StageDependencies.ProteinNormalize, protNormFp,
+            new[] { correctedProtPath }.Concat(protResidualPaths).ToArray());
+        }
 
         report("============================================================");
         cancellationToken.ThrowIfCancellationRequested();
@@ -638,6 +756,26 @@ public sealed class PrismPipeline
     /// (blank cell, `#N/A`, or no batch annotation at all).
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The resolved per-sample context that the normalize/correct stages consume but the config does
+    /// not describe: which samples there are, each one's batch, and each one's sample type. These come
+    /// from the metadata files and the batch estimator, so a corrected Sample Type in Skyline - or a
+    /// sample dropped as an outlier - has to invalidate a cached correction even though no config key
+    /// moved.
+    /// </summary>
+    private static string SampleContextKey(
+        IReadOnlyList<string> samples, IReadOnlyList<string> batchLabels,
+        IReadOnlyDictionary<string, string> resolvedType)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < samples.Count; i++)
+            sb.Append(samples[i]).Append('\t')
+              .Append(i < batchLabels.Count ? batchLabels[i] : "").Append('\t')
+              .Append(resolvedType.GetValueOrDefault(samples[i], "experimental")).Append('\n');
+        return Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
+    }
+
     private static void WriteSampleMetadata(
         string path, IReadOnlyList<string> samples,
         IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType,

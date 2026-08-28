@@ -90,6 +90,87 @@ public class HeadlessExporterWithFakeRunnerTests
         return path;
     }
 
+    /// <summary>
+    /// Re-exporting a closed document that has not changed is the most expensive wasted work in a
+    /// re-run - a large cohort's transition report is tens of GB - so an unchanged document skips it.
+    /// Safe for a CLOSED document specifically: the file cannot change without its size or
+    /// last-write-time changing.
+    /// </summary>
+    [Fact]
+    public void Export_ReusesThePreviousExport_WhenTheDocumentIsUnchanged()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        var first = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        var callsAfterFirst = runner.Invocations.Count;
+        Assert.True(callsAfterFirst > 0);
+
+        var second = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.Equal(callsAfterFirst, runner.Invocations.Count); // Skyline was not run again
+        Assert.Equal(first.InputPath, second.InputPath);
+        Assert.Equal(first.ReplicatesCsv, second.ReplicatesCsv);
+    }
+
+    [Fact]
+    public void Export_DoesNotReuse_WhenTheDocumentChanged()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        var callsAfterFirst = runner.Invocations.Count;
+
+        // Re-integrated, re-saved: same path, different content and timestamp.
+        File.AppendAllText(sky, "\n<!-- edited -->\n");
+        File.SetLastWriteTimeUtc(sky, DateTime.UtcNow.AddMinutes(1));
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(runner.Invocations.Count > callsAfterFirst, "a changed document must be re-exported");
+    }
+
+    [Fact]
+    public void Export_DoesNotReuse_WhenTheBatchAnnotationChanged()
+    {
+        // The annotation decides a column of the metadata report, so the previous export is the wrong
+        // shape even though the document is untouched.
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA", "Plate");
+        var callsAfterFirst = runner.Invocations.Count;
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA", "Condition");
+
+        Assert.True(runner.Invocations.Count > callsAfterFirst);
+    }
+
+    [Fact]
+    public void Export_DoesNotReuse_WhenTheExportedFileIsGone()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        var first = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        var callsAfterFirst = runner.Invocations.Count;
+        File.Delete(first.InputPath);
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(runner.Invocations.Count > callsAfterFirst);
+        Assert.True(File.Exists(first.InputPath));
+    }
+
     [Fact]
     public void Export_UsesParquet_WhenTheRunnerSupportsItAndItIsValid()
     {

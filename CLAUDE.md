@@ -330,7 +330,14 @@ remove** a configuration key, update ALL of the relevant surfaces in the SAME ch
    still warning on typos/unknown keys
 4. `ConfigWriter` - the minimal round-trippable YAML, which is also what the QC report's Processing
    Parameters table renders from (`QcReport.ParameterRows`), so a key added there reaches both
-5. `docs/parameters.md` - the parameter reference (key, default, description).
+5. `StageDependencies.ByStage` - which pipeline stage(s) the key can change the OUTPUT of, or
+   `OutputIrrelevant` with the reason. **This one is a correctness surface, not a documentation one:**
+   the stage cache reuses a stage whose declared keys are unchanged, so a key missing from this table
+   means a re-run silently keeps output computed with the OLD value.
+   `StageDependencyCoverageTests` fails the build on an unclassified key, and separately asserts that
+   mutating a key changes exactly the fingerprints of the stages that declare it - so this cannot be
+   satisfied by listing the key in the wrong place.
+6. `docs/parameters.md` - the parameter reference (key, default, description).
 
 Confirmation is MANDATORY, not optional:
 - **Adding a feature:** run `prism config-template` and confirm the new key appears in the generated YAML
