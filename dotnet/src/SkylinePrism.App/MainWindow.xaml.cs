@@ -1872,14 +1872,18 @@ public partial class MainWindow : Window
         var lines = File.ReadAllLines(metadataCsv);
         if (lines.Length < 2)
             return map;
-        var header = lines[0].Split(',');
-        var idIdx = Array.IndexOf(header, "sample_id");
-        var typeIdx = Array.IndexOf(header, "sample_type");
+        // Quote-aware - sample_metadata.csv carries the replicate annotations now, and their values
+        // (like batch labels and sample names before them) can contain commas.
+        var header = CsvLine.Split(lines[0]);
+        var idIdx = CsvLine.IndexOf(header, "sample_id");
+        var typeIdx = CsvLine.IndexOf(header, "sample_type");
         if (idIdx < 0 || typeIdx < 0)
             return map;
         for (var i = 1; i < lines.Length; i++)
         {
-            var f = lines[i].Split(',');
+            if (string.IsNullOrWhiteSpace(lines[i]))
+                continue;
+            var f = CsvLine.Split(lines[i]);
             if (f.Length > Math.Max(idIdx, typeIdx))
                 map[f[idIdx]] = f[typeIdx];
         }

@@ -118,14 +118,20 @@ public static class RollupComparison
         var lines = File.ReadAllLines(metadataCsv);
         if (lines.Length < 2)
             return map;
-        var header = lines[0].Split(',');
-        var idIdx = Array.IndexOf(header, "sample_id");
-        var typeIdx = Array.IndexOf(header, "sample_type");
+        // Quote-aware: this file carries the replicate annotations, whose values can contain commas
+        // (so can a batch label or a sample name, which the writer has always quoted). Splitting on
+        // every comma shifts the fields and keys a sample by the wrong string - it does not throw, it
+        // just drops that sample out of the control groups.
+        var header = CsvLine.Split(lines[0]);
+        var idIdx = CsvLine.IndexOf(header, "sample_id");
+        var typeIdx = CsvLine.IndexOf(header, "sample_type");
         if (idIdx < 0 || typeIdx < 0)
             return map;
         for (var i = 1; i < lines.Length; i++)
         {
-            var f = lines[i].Split(',');
+            if (string.IsNullOrWhiteSpace(lines[i]))
+                continue;
+            var f = CsvLine.Split(lines[i]);
             if (f.Length > Math.Max(idIdx, typeIdx))
                 map[f[idIdx]] = f[typeIdx];
         }
