@@ -296,7 +296,8 @@ public static class PlotRenderer
     /// The band between min and max is the point of the plot as much as the mean is - a wide band says
     /// the load is piled into a few isolation windows, a narrow one says it is spread evenly, and the
     /// mean alone cannot tell those apart.
-    /// <para>A time when nothing was acquired (a gap in a scheduled PRM/MTM method) comes back as NaN,
+    /// <para>A time when nothing was acquired (a gap between the segments of a scheduled acquisition)
+    /// comes back as NaN,
     /// and every series is BROKEN there rather than drawn through zero: a scheduled gap is not an idle
     /// instrument, and a line dropping to the axis would say it was.</para>
     /// </remarks>

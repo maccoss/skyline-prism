@@ -35,7 +35,7 @@ PRISM ships two ways to run the same pipeline:
 >   (or any earlier `v*` tag) — `git checkout v26.4.4`, or the source archive on that release page.
 > - **PyPI:** `pip install skyline-prism==26.4.4`.
 >
-> Those versions are unsupported and frozen at the behaviour of that release. Anything newer —
+> Those versions are unsupported and frozen at the behavior of that release. Anything newer —
 > bug fixes, new methods, performance work — happens only in the C# tools.
 
 ## What it does
