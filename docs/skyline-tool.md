@@ -132,18 +132,48 @@ Named sets of proteins — plasma contaminants, EV markers, endothelial markers 
 and an on/off tick. Define them in **Protein lists…**, or import from a text/CSV file. They are saved per
 user, so the same lists are available in every project and output directory.
 
-**PRISM ships three panels**, listed alongside your own and editable into cohort-specific variants. They
-arrive **unticked**, so nothing is colored until you ask for it, and a list of yours with the same name
-replaces the shipped one rather than doubling it. The same lists name a marker normalization
-(`marker_normalization.protein_list` — see [parameters.md](parameters.md) for the keys and
-[methods.md](methods.md#marker-protein-normalization) for what the normalization does), so a panel
-curated for the plot can normalize as well.
+The **Protein lists…** button is on the Settings tab as well, beside the marker-normalization picker,
+because a panel usually has to be curated before it can be selected there. It is the same editor and the
+same one set of lists; a list created from either place is immediately selectable in the picker.
 
-| Panel | What it is |
-|---|---|
-| **EV markers** | 18 canonical extracellular-vesicle proteins — tetraspanins, ESCRT/biogenesis, flotillins, annexins, RAB GTPases |
-| **Glomerulus** | Structural markers of glomerular tissue — GBM collagen IV (alpha-3/4/5) and laminin, basement-membrane proteoglycans, glomerular endothelium, mesangium, podocytes — for normalizing single-glomerulus work by how much glomerulus a dissection captured |
-| **Tubular contamination** | Proximal-tubule, thick-ascending-limb and distal/collecting markers — a **readout**, for seeing carry-over on the plot, never a normalizer |
+### Predefined and your own
+
+The editor has two tabs. **Predefined** holds the 28 panels PRISM ships; **My lists** holds yours. The
+split is not cosmetic: a predefined panel is **read-only**, so it means the same thing on every machine,
+which is what makes one citable in a methods section. **Duplicate to my lists** makes an editable copy.
+Ticking a predefined panel stores only whether it is shown and labeled — not a copy of its members — so a
+panel you have turned on still picks up any later correction to it.
+
+A list of yours with the same name as a shipped one **wins that name**; the shipped panel stays reachable
+as `<name> (PRISM)`. Worth knowing, because a saved list curated for *highlighting* will otherwise stand
+in for a shipped panel built for *normalizing* — same name, different purpose, different answer.
+
+Shipped panels arrive **unticked**, so nothing is colored until you ask for it. All of them can also name
+a marker normalization (`marker_normalization.protein_list` — see [parameters.md](parameters.md) for the
+keys and [methods.md](methods.md#marker-protein-normalization) for what the normalization does).
+
+Three kinds are mixed in the predefined set, and the difference matters more than the membership:
+
+| Kind | Panels | What it is for |
+|---|---|---|
+| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial mass` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion |
+| **Identity** | Endothelial (arterial, venous, capillary, pan, brain/BBB, liver sinusoidal, kidney glomerular), epithelial (pan, kidney tubule, intestine, lung), plasma, immunoglobulin/complement, lipoproteins, platelet microparticles, `EV markers (extended)` | What a cell or tissue type *is*. Good for highlighting; usable as a normalizer only if the biology under study does not change that cell type's abundance |
+| **Readouts** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for. Tick them on a plot; never name them in `marker_normalization`, which would remove the evidence |
+
+Two details worth knowing:
+
+- **`Histones (proteomic ruler)`** follows Wisniewski et al., *Mol Cell Proteomics* 2014
+  ([doi:10.1074/mcp.M113.037309](https://doi.org/10.1074/mcp.M113.037309)): summed histone signal tracks
+  DNA, and therefore cell number. It is deliberately comprehensive and carries both the current HGNC and
+  the legacy `HIST1H*` nomenclatures. PRISM gives a *relative* per-cell adjustment, not the paper's
+  absolute copy-number scaling.
+- **`Common contaminants (cRAP)` is listed by accession, not gene symbol** — deliberately. These are
+  non-human proteins: `ALB` for bovine serum albumin would match *human* albumin, and `ENO1` would match a
+  yeast enolase spike-in rather than the housekeeper. It is a starting set; import your search's cRAP
+  FASTA to extend it.
+
+Panels carry mouse symbols wherever the ortholog is named differently (`Hbb-bs`, `Ighg2a`, `Lyz1`).
+Matching is case-insensitive, so a conserved symbol needs no help.
 
 Two things about the kidney panels are deliberate and worth knowing before trusting them on a new cohort:
 

@@ -210,7 +210,10 @@
                                       Content="Normalize to a protein list"
                                       ToolTip="Estimate one per-sample score from how a set of marker proteins move together (PC1 of the z-scored markers, at the protein level), then remove from every peptide and protein the part that tracks it. Answers 'what changed per unit of the marked material' rather than 'what changed in whatever was captured'. Runs after the normalization above, never instead of it." />
                             <ComboBox x:Name="MarkerNormListCombo" Width="200" IsEnabled="False"
-                                      ToolTip="Which protein list defines the markers. These are the same lists the Dynamic Range tab highlights - edit them with 'Protein lists...' on that tab." />
+                                      ToolTip="Which protein list defines the markers. These are the same lists the Dynamic Range tab highlights." />
+                            <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
+                                    Click="OnManageProteinLists"
+                                    ToolTip="Create or edit the named protein lists. Always available - a panel usually has to be curated before it can be selected here. The same editor opens from the Dynamic Range tab; there is one set of lists." />
                         </StackPanel>
 
                         <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"

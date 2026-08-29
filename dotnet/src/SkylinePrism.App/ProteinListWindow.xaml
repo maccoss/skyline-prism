@@ -15,15 +15,18 @@
         </Grid.ColumnDefinitions>
 
         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="#555"
-                   Text="Named sets of proteins to highlight on the Dynamic Range plot - plasma contaminants, EV markers, endothelial markers. Members may be UniProt accessions, gene names or full protein names; all three are matched. Lists are saved per user, so they are available in every project." />
+                   Text="Named sets of proteins that highlight on the Dynamic Range plot and can define a marker normalization. Members may be UniProt accessions, gene names or full protein names; all three are matched. Predefined panels ship with PRISM and are read-only - duplicate one to change it. Your own lists are saved per user, so they are available in every project." />
 
-        <DockPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,0">
-            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
-                <Button Content="Add" Padding="12,3" Click="OnAddList" />
-                <Button Content="Remove" Padding="12,3" Margin="6,0,0,0" Click="OnRemoveList" />
-            </StackPanel>
-            <ListBox x:Name="ListsBox" SelectionChanged="OnSelectedListChanged">
-                <ListBox.ItemTemplate>
+        <TabControl Grid.Row="1" Grid.Column="0" Margin="0,0,10,0" x:Name="ListTabs"
+                    SelectionChanged="OnListTabChanged">
+            <TabItem Header="My lists">
+                <DockPanel Margin="6">
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                        <Button Content="Add" Padding="12,3" Click="OnAddList" />
+                        <Button Content="Remove" Padding="12,3" Margin="6,0,0,0" Click="OnRemoveList" />
+                    </StackPanel>
+                    <ListBox x:Name="ListsBox" SelectionChanged="OnSelectedListChanged">
+                        <ListBox.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal">
                             <CheckBox IsChecked="{Binding Visible, Mode=TwoWay}" VerticalAlignment="Center"
@@ -35,9 +38,34 @@
                                        Margin="6,0,0,0" Foreground="#888" />
                         </StackPanel>
                     </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
-        </DockPanel>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="Predefined">
+                <DockPanel Margin="6">
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                        <Button Content="Duplicate to my lists" Padding="12,3" Click="OnDuplicateShipped"
+                                ToolTip="Make an editable copy under My lists. The predefined panel is left alone, so it keeps meaning the same thing on every machine." />
+                    </StackPanel>
+                    <ListBox x:Name="ShippedBox" SelectionChanged="OnSelectedListChanged">
+                        <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox IsChecked="{Binding Visible, Mode=TwoWay}" VerticalAlignment="Center"
+                                      ToolTip="Show this list on the plot" />
+                            <Border Width="14" Height="14" Margin="6,0" CornerRadius="2"
+                                    Background="{Binding Brush}" BorderBrush="#555" BorderThickness="1" />
+                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding CountLabel}" VerticalAlignment="Center"
+                                       Margin="6,0,0,0" Foreground="#888" />
+                        </StackPanel>
+                    </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
 
         <DockPanel Grid.Row="1" Grid.Column="1" x:Name="DetailPanel" IsEnabled="False">
             <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
@@ -67,10 +95,14 @@
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
                 <CheckBox x:Name="ShowLabelsCheck" Content="Label this list's members on the plot"
                           VerticalAlignment="Center" Click="OnShowLabelsChanged" />
-                <Button Content="Import from file..." Padding="10,2" Margin="16,0,0,0" Click="OnImportMembers" />
+                <Button x:Name="ImportButton" Content="Import from file..." Padding="10,2" Margin="16,0,0,0"
+                        Click="OnImportMembers" />
             </StackPanel>
             <TextBlock DockPanel.Dock="Top" Foreground="#888" Margin="0,0,0,4"
                        Text="One identifier per line (accession, gene name or protein name):" />
+            <TextBlock x:Name="ReadOnlyNote" DockPanel.Dock="Top" Margin="0,0,0,6" TextWrapping="Wrap"
+                       Foreground="#8a6d1f" Visibility="Collapsed"
+                       Text="This panel ships with PRISM and cannot be edited. Tick it to show it on the plot, or use 'Duplicate to my lists' to make a version you can change." />
             <TextBox x:Name="MembersBox" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                      TextChanged="OnMembersChanged" />

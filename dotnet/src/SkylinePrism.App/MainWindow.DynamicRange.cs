@@ -1080,6 +1080,8 @@ public partial class MainWindow
         if (dialog.ShowDialog() != true)
             return;
         _proteinLists = dialog.Result;
+        // A list created or renamed here is immediately selectable as a marker set on the Settings tab.
+        RefreshMarkerListCombo();
         try
         {
             _proteinLists.Save();
