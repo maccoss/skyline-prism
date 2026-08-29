@@ -26,7 +26,8 @@ public partial class ProteinListWindow : Window
         ("Teal", "#17becf"), ("Grey", "#7f7f7f"),
     };
 
-    private readonly ObservableCollection<ListRow> _rows = new();
+    private readonly ObservableCollection<ListRow> _rows = new();     // the user's own
+    private readonly ObservableCollection<ListRow> _shipped = new();  // the panels PRISM ships
     private ListRow? _current;
     private bool _suppress;
 
@@ -34,27 +35,40 @@ public partial class ProteinListWindow : Window
     {
         InitializeComponent();
 
-        // Seeded from WithBuiltIns, not from Lists: the panels PRISM ships (EV markers, Glomerulus,
-        // Tubular contamination) show up here alongside the user's own, so they can be ticked on for the
-        // plot or edited into a cohort-specific variant. They arrive unticked, and a name the user has
-        // already defined wins - so an override replaces the shipped one rather than doubling it.
-        foreach (var list in source.WithBuiltIns())
+        // Two collections, not one, because the two are governed differently: a shipped panel is
+        // read-only so that it means the same thing on every machine - which is what makes it citable -
+        // while the user's own are freely editable. Mixing them in one box was how a saved list came to
+        // silently stand in for a shipped panel of the same name.
+        foreach (var list in source.Lists)
             _rows.Add(new ListRow(list.Clone()));
+
+        var mine = source.Lists.Select(l => l.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var list in source.WithBuiltIns())
+            if (!mine.Contains(list.Name))
+                _shipped.Add(new ListRow(list.Clone()));
+
         ListsBox.ItemsSource = _rows;
+        ShippedBox.ItemsSource = _shipped;
         ColorCombo.ItemsSource = Palette.Select(p => new ColorChoice(p.Name, p.Hex)).ToList();
         if (_rows.Count > 0)
             ListsBox.SelectedIndex = 0;
+        else if (_shipped.Count > 0)
+            ListTabs.SelectedIndex = 1;
     }
 
     /// <summary>The edited set; only meaningful when ShowDialog returned true.</summary>
     public ProteinListSet Result { get; private set; } = new();
 
+    /// <summary>Whether the selected row is a shipped panel, which is read-only.</summary>
+    private bool CurrentIsShipped => _current is not null && _shipped.Contains(_current);
+
     private void OnAddList(object sender, RoutedEventArgs e)
     {
         var used = _rows.Select(r => r.Model.ColorHex).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var color = Palette.FirstOrDefault(p => !used.Contains(p.Hex)).Hex ?? Palette[0].Hex;
-        var row = new ListRow(new ProteinList { Name = $"List {_rows.Count + 1}", ColorHex = color });
+        var row = new ListRow(new ProteinList { Name = UniqueName($"List {_rows.Count + 1}"), ColorHex = color });
         _rows.Add(row);
+        ListTabs.SelectedIndex = 0;
         ListsBox.SelectedItem = row;
         NameBox.Focus();
         NameBox.SelectAll();
@@ -73,7 +87,62 @@ public partial class ProteinListWindow : Window
     }
 
     private void OnSelectedListChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-        => BindDetail(ListsBox.SelectedItem as ListRow);
+    {
+        // Whichever box raised it owns the selection; clear the other so one row is current at a time.
+        if (ReferenceEquals(sender, ListsBox) && ListsBox.SelectedItem is not null)
+            ShippedBox.SelectedItem = null;
+        else if (ReferenceEquals(sender, ShippedBox) && ShippedBox.SelectedItem is not null)
+            ListsBox.SelectedItem = null;
+
+        BindDetail((ListsBox.SelectedItem ?? ShippedBox.SelectedItem) as ListRow);
+    }
+
+    private void OnListTabChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, ListTabs) || !IsInitialized)
+            return;
+        // Bind whatever the newly shown tab has selected, so the detail pane never describes a row the
+        // user can no longer see.
+        var box = ListTabs.SelectedIndex == 0 ? ListsBox : ShippedBox;
+        if (box.SelectedItem is null && box.Items.Count > 0)
+            box.SelectedIndex = 0;
+        BindDetail(box.SelectedItem as ListRow);
+    }
+
+    /// <summary>
+    /// Copy the selected shipped panel into My lists, where it can be edited. The shipped one is left
+    /// exactly as it was - that is the whole point of the split.
+    /// </summary>
+    private void OnDuplicateShipped(object sender, RoutedEventArgs e)
+    {
+        if (ShippedBox.SelectedItem is not ListRow row)
+            return;
+
+        var copy = row.Model.Clone();
+        copy.Name = UniqueName(copy.Name);
+        copy.Visible = false; // a new list starts hidden, like every other list PRISM adds
+        var added = new ListRow(copy);
+        _rows.Add(added);
+        ListTabs.SelectedIndex = 0;
+        ListsBox.SelectedItem = added;
+        NameBox.Focus();
+        NameBox.SelectAll();
+    }
+
+    /// <summary>A name not already taken by one of the user's lists.</summary>
+    private string UniqueName(string wanted)
+    {
+        bool Taken(string n) =>
+            _rows.Any(r => string.Equals(r.Model.Name, n, StringComparison.OrdinalIgnoreCase));
+        if (!Taken(wanted))
+            return wanted;
+        for (var i = 2; ; i++)
+        {
+            var candidate = $"{wanted} ({i})";
+            if (!Taken(candidate))
+                return candidate;
+        }
+    }
 
     private void BindDetail(ListRow? row)
     {
@@ -82,6 +151,16 @@ public partial class ProteinListWindow : Window
         {
             _current = row;
             DetailPanel.IsEnabled = row is not null;
+
+            // A shipped panel is shown in full but cannot be altered. Its Visible/ShowLabels ticks stay
+            // live: those are the user's view of it, not part of its definition.
+            var shipped = row is not null && _shipped.Contains(row);
+            ReadOnlyNote.Visibility = shipped ? Visibility.Visible : Visibility.Collapsed;
+            NameBox.IsReadOnly = shipped;
+            MembersBox.IsReadOnly = shipped;
+            ColorCombo.IsEnabled = !shipped;
+            ImportButton.IsEnabled = !shipped;
+
             NameBox.Text = row?.Model.Name ?? "";
             MembersBox.Text = row is null ? "" : string.Join(Environment.NewLine, row.Model.Members);
             ShowLabelsCheck.IsChecked = row?.Model.ShowLabels ?? false;
@@ -165,7 +244,12 @@ public partial class ProteinListWindow : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        Result = new ProteinListSet { Lists = _rows.Select(r => r.Model).ToList() };
+        // Only the user's lists are saved as lists. A shipped panel contributes just its two view flags,
+        // so ticking one never forks its membership and it still picks up a later correction.
+        var result = new ProteinListSet { Lists = _rows.Select(r => r.Model).ToList() };
+        foreach (var row in _shipped)
+            result.SetShippedState(row.Model.Name, row.Model.Visible, row.Model.ShowLabels);
+        Result = result;
         DialogResult = true;
     }
 
