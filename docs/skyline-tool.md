@@ -106,6 +106,26 @@ rather than implying a single assignment.
 > Following Skyline's selection polls the document (Skyline cannot notify us), so it runs only while this
 > tab is on screen. It stops when you switch tabs or close the window.
 
+### Checking a marker normalization
+
+When a run used `marker_normalization`, two extra entries appear in the **Plot** picker on the QC Plots
+tab. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
+run actually subtracted, not a recomputation — so **Level** and **View** are greyed out for them: there
+is one score per replicate for the whole run, with no before/after and no peptide/protein version.
+
+- **Marker score** — the per-sample score, one column per **Group-by** value. Set Group-by to the
+  study's condition. The score is supposed to measure how much of the captured material a sample
+  contributed, so it should track section size or input amount. **If it separates the study groups, the
+  panel is tracking the phenotype**, and normalizing on it removes the finding along with the capture.
+  That judgement cannot be automated — the same separation is what you would see if the biology really
+  does change the marked material — which is why it is a plot and not a warning.
+- **Marker loadings** — each marker's PC1 contribution, largest first, with opposing markers in red.
+  Opposing signs are normal and are why the score is PC1 rather than a mean. The title gives the largest
+  marker's share of the axis and says so when it is over half: a panel carried by one protein is a
+  single-protein normalization wearing a panel's clothes.
+
+The replicate picker applies to **Marker score**, so a suspicious group can be isolated.
+
 ### Protein lists
 
 Named sets of proteins — plasma contaminants, EV markers, endothelial markers — each with its own color

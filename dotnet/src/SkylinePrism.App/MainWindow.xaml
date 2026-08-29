@@ -243,6 +243,8 @@
                         <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
                         <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
                             <ComboBoxItem>PCA</ComboBoxItem>
+                            <ComboBoxItem>Marker score</ComboBoxItem>
+                            <ComboBoxItem>Marker loadings</ComboBoxItem>
                             <ComboBoxItem>CV distribution</ComboBoxItem>
                             <ComboBoxItem>Intensity distribution</ComboBoxItem>
                             <ComboBoxItem>Control correlation</ComboBoxItem>
