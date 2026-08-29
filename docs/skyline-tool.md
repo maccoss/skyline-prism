@@ -62,6 +62,35 @@ Abundances are averaged on the **linear** scale and only then log-transformed, a
 in the selection is dropped rather than plotted at zero. Changing the replicate selection re-ranks
 everything, because the ordering depends on what is being averaged.
 
+### Viewing another rollup
+
+The **Rollup** drop-down re-rolls the proteins under any method — **sum**, **median polish**, **top N**,
+**MaxLFQ**, **iBAQ** — whatever the run itself used. This is not cosmetic: the method decides what the y
+axis *is*. A summing method carries the peptide count into the answer, so a protein with 121 peptides
+outranks one with 44 partly for having more of them; median polish estimates the level of a typical
+peptide and does not; **iBAQ divides by the theoretical peptide count and is the only one of them meant
+for comparing one protein against another**. Sum is what Skyline's Relative Abundance plot shows.
+
+- **As run** (the default) reads `corrected_proteins.parquet` — the run's own numbers.
+- Any other choice re-rolls `corrected_peptides.parquet` with that method, using the run's own
+  `min_peptides` / `topn` settings so the method is the only thing that changes. It does **not** re-run
+  parsimony or the protein-level normalization and batch correction, so it shows the shape and ordering
+  that method gives rather than the numbers a re-run would produce. The status line says
+  `[recomputed from corrected_peptides]` whenever that is what you are looking at.
+- Shared peptides count toward every group they map to (the pipeline's default `all_groups`). A run
+  configured for `unique_only` or `razor` is not reproduced here — which group parsimony gave a shared
+  peptide to is not recorded per peptide in the peptide matrix.
+- **iBAQ** needs a FASTA, taken from the run's `protein_rollup.ibaq.fasta_path` or `parsimony.fasta_path`.
+  Without one it divides by the *observed* peptide count instead, and the status line says so — that is a
+  materially different quantity, closer to a per-peptide mean than to an absolute-abundance estimate.
+
+The digest and the rollup run off the UI thread with a progress bar, so a large cohort does not look like
+a hang; the theoretical counts are cached, so flipping back to iBAQ is instant. The drop-down is greyed
+out at peptide level — there is no protein rollup below a peptide.
+
+The rollup needs `corrected_peptides.parquet`, so an output directory without one — an older run, or
+one whose peptide arm never finished — can only show **As run**.
+
 ### Selection works in both directions
 
 - **Click a point** → that protein or peptide is selected in Skyline's document tree. At peptide level it
@@ -82,6 +111,30 @@ rather than implying a single assignment.
 Named sets of proteins — plasma contaminants, EV markers, endothelial markers — each with its own color
 and an on/off tick. Define them in **Protein lists…**, or import from a text/CSV file. They are saved per
 user, so the same lists are available in every project and output directory.
+
+**PRISM ships three panels**, listed alongside your own and editable into cohort-specific variants. They
+arrive **unticked**, so nothing is colored until you ask for it, and a list of yours with the same name
+replaces the shipped one rather than doubling it. The same lists name a marker normalization
+(`marker_normalization.protein_list` — see [parameters.md](parameters.md) for the keys and
+[methods.md](methods.md#marker-protein-normalization) for what the normalization does), so a panel
+curated for the plot can normalize as well.
+
+| Panel | What it is |
+|---|---|
+| **EV markers** | 18 canonical extracellular-vesicle proteins — tetraspanins, ESCRT/biogenesis, flotillins, annexins, RAB GTPases |
+| **Glomerulus** | Structural markers of glomerular tissue — GBM collagen IV (alpha-3/4/5) and laminin, basement-membrane proteoglycans, glomerular endothelium, mesangium, podocytes — for normalizing single-glomerulus work by how much glomerulus a dissection captured |
+| **Tubular contamination** | Proximal-tubule, thick-ascending-limb and distal/collecting markers — a **readout**, for seeing carry-over on the plot, never a normalizer |
+
+Two things about the kidney panels are deliberate and worth knowing before trusting them on a new cohort:
+
+- The glomerular panel is weighted toward **structure**. `NPHS1`/`NPHS2` are left out because podocyte
+  loss *is* the phenotype in most glomerular disease, and a score dominated by them would regress out the
+  finding along with the capture; `COL4A1`/`COL4A2` are left out because they are ubiquitous basement
+  membrane and would make the score track any basement membrane rather than the GBM. Check how many of
+  the panel are quantified, and whether PC1 separates large sections from small ones (capture — what you
+  want) rather than diseased from control (pathology — what you do not).
+- **Tubular contamination is not a normalizer.** Its abundance *is* the contamination; normalizing to it
+  would remove the thing being measured. Tick it on the plot, do not name it in `marker_normalization`.
 
 Members may be written as UniProt accessions, gene names, or full protein names, with or without `sp|`
 prefixes, species suffixes or isoform numbers — all forms are matched.

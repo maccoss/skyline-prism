@@ -78,6 +78,7 @@ public static class ConfigWriter
         {
             ["method"] = config.ProteinNormalization.Method,
         });
+        Add("marker_normalization", MarkerNormalization(config.MarkerNormalization));
         Add("qc_report", new Dictionary<string, object?>
         {
             ["enabled"] = config.QcReport.Enabled,
@@ -242,6 +243,23 @@ public static class ConfigWriter
                 s["ibaq"] = ibaq;
                 break;
         }
+        return s;
+    }
+
+    /// <summary>
+    /// Only when it ran: an entire block of keys describing a normalization that was switched off
+    /// would read as though it had been applied.
+    /// </summary>
+    private static Dictionary<string, object?> MarkerNormalization(
+        PrismConfig.MarkerNormalizationSection m)
+    {
+        var s = new Dictionary<string, object?>();
+        if (!m.Enabled)
+            return s;
+        s["enabled"] = true;
+        AddIfSet(s, "protein_list", m.ProteinList);
+        AddIfSet(s, "protein_list_file", m.ProteinListFile);
+        s["method"] = m.Method;
         return s;
     }
 

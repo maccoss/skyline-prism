@@ -30,6 +30,114 @@ public sealed class ProteinList
     /// </summary>
     public List<string> Members { get; set; } = new();
 
+    /// <summary>
+    /// The lists PRISM ships. Available without the user having curated anything, in the plot picker
+    /// and as <c>marker_normalization.protein_list</c>, and usable from the CLI on a machine that has
+    /// no saved lists at all - which a per-user JSON alone could not be.
+    /// <para>
+    /// A user list of the same name wins, so shipping one never overrides a curated version of it.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<ProteinList> BuiltIns { get; } = new[]
+    {
+        new ProteinList
+        {
+            Name = EvMarkersName,
+            ColorHex = "#2ca02c",
+            Visible = false,
+            // Eighteen canonical EV proteins, by gene symbol, grouped by what they are:
+            //   tetraspanins            CD9, CD63, CD81
+            //   ESCRT / biogenesis      TSG101, PDCD6IP (ALIX), SDCBP (syntenin), VPS4B
+            //   membrane microdomain    FLOT1, FLOT2
+            //   annexins                ANXA2, ANXA5, ANXA6
+            //   RAB GTPases             RAB7A, RAB5C, RAB14
+            //   other EV-associated     HSPA8, ITGB1, EHD1
+            // They do NOT all move together - on the cohort this came from, CD81, SDCBP, ANXA2 and
+            // ANXA6 load opposite to the other fourteen, which is why the score is PC1 and not a mean.
+            Members =
+            {
+                "CD9", "CD63", "CD81",
+                "TSG101", "PDCD6IP", "SDCBP", "VPS4B",
+                "FLOT1", "FLOT2",
+                "ANXA2", "ANXA5", "ANXA6",
+                "RAB7A", "RAB5C", "RAB14",
+                "HSPA8", "ITGB1", "EHD1",
+            },
+        },
+        new ProteinList
+        {
+            Name = GlomerulusName,
+            ColorHex = "#1f77b4",
+            Visible = false,
+            // Structural markers of glomerular tissue, for normalizing single-glomerulus work by how
+            // much glomerulus a dissection actually captured:
+            //   GBM collagen IV      COL4A3/4/5 - the alpha3-4-5 network, GBM-specific. COL4A1/COL4A2
+            //                        are deliberately absent: they are ubiquitous basement membrane and
+            //                        would make the score track any BM, not this one.
+            //   GBM laminin          LAMA5, LAMB2, LAMC1 (laminin-521)
+            //   BM proteoglycan      AGRN, HSPG2, NID1
+            //   glomerular endothel. EHD3 (glomerular-endothelium enriched), EMCN, PECAM1
+            //   mesangium            ITGA8, PDGFRB
+            //   podocyte             PODXL, SYNPO, CD2AP, PTPRO
+            //
+            // Weighted toward structure ON PURPOSE. The obvious podocyte markers - NPHS1, NPHS2 - are
+            // left out because podocyte loss IS the phenotype in most glomerular disease, and a score
+            // dominated by them would regress out the finding rather than the capture. The four
+            // podocyte proteins here are a minority of the panel so it still tracks podocyte-bearing
+            // tissue without PC1 becoming a podocyte-injury axis.
+            //
+            // Check before trusting it on a new cohort: how many are quantified, and whether PC1
+            // separates large sections from small ones (capture, what you want) or diseased from
+            // control (pathology, which you do not want to remove).
+            Members =
+            {
+                "COL4A3", "COL4A4", "COL4A5",
+                "LAMA5", "LAMB2", "LAMC1",
+                "AGRN", "HSPG2", "NID1",
+                "EHD3", "EMCN", "PECAM1",
+                "ITGA8", "PDGFRB",
+                "PODXL", "SYNPO", "CD2AP", "PTPRO",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = TubularContaminationName,
+            ColorHex = "#d62728",
+            Visible = false,
+            ShowLabels = true,
+            // NOT a normalizer - a readout. Hand-dissected or microdissected glomeruli carry tubular
+            // fragments, and these proteins are abundant enough that a little carry-over is obvious on
+            // the dynamic-range plot. Spread across nephron segments so the plot says WHICH segment
+            // came along:
+            //   proximal tubule    LRP2 (megalin), CUBN (cubilin), SLC34A1, SLC5A2, MIOX, ACSM2A,
+            //                      ACSM2B, ANPEP, GGT1, PDZK1
+            //   thick ascending    UMOD (uromodulin), SLC12A1
+            //   distal / collecting SLC12A3, AQP2
+            //   proximal + thin    AQP1
+            //
+            // Normalizing to these would be backwards: their abundance is the contamination, not the
+            // thing being measured.
+            Members =
+            {
+                "LRP2", "CUBN", "SLC34A1", "SLC5A2", "MIOX", "ACSM2A", "ACSM2B", "ANPEP", "GGT1",
+                "PDZK1",
+                "UMOD", "SLC12A1",
+                "SLC12A3", "AQP2",
+                "AQP1",
+            },
+        },
+    };
+
+    /// <summary>Name of the shipped EV panel, so callers do not spell it out.</summary>
+    public const string EvMarkersName = "EV markers";
+
+    /// <summary>Structural glomerular markers - see the list's own comment on what is left out and why.</summary>
+    public const string GlomerulusName = "Glomerulus";
+
+    /// <summary>Tubular markers, for spotting carry-over on the plot. Never a normalizer.</summary>
+    public const string TubularContaminationName = "Tubular contamination";
+
     public ProteinList Clone() => new()
     {
         Name = Name,
@@ -117,11 +225,77 @@ public sealed class ProteinListSet
         or "uniprot id" or "protein name" or "entry" or "id";
 
     /// <summary>
-    /// Index the visible lists for fast lookup. Returns a matcher from an <see cref="AbundanceEntry"/> to
-    /// the first visible list that claims it (list order = priority, so an earlier list wins a protein
-    /// that appears in two).
+    /// Index the visible lists for fast lookup - the user's and the shipped ones alike, so a panel PRISM
+    /// ships can highlight proteins on the plot without being copied into the user's file first (shipped
+    /// lists start invisible, so nothing is colored until it is asked for). Returns a matcher from an
+    /// <see cref="AbundanceEntry"/> to the first visible list that claims it (list order = priority, so
+    /// an earlier list wins a protein that appears in two, and the user's lists come first).
     /// </summary>
-    public ProteinListMatcher BuildMatcher() => new(Lists.Where(l => l.Visible).ToList());
+    public ProteinListMatcher BuildMatcher() => new(WithBuiltIns().Where(l => l.Visible).ToList());
+
+    /// <summary>
+    /// A matcher over ONE named list, whatever its <see cref="ProteinList.Visible"/> state.
+    /// <para>
+    /// Visibility means "highlight this on the Dynamic Range plot" and has nothing to do with
+    /// normalization. Going through <see cref="BuildMatcher"/> for a marker set made every shipped
+    /// panel unusable as a normalizer the moment they were changed to ship unticked: the list resolved
+    /// by name, then the visibility filter dropped it and the stage reported zero markers found.
+    /// </para>
+    /// </summary>
+    public static ProteinListMatcher MatcherFor(ProteinList list) => new(new[] { list });
+
+    /// <summary>
+    /// The user's lists followed by any shipped list they have not overridden, which is what a picker
+    /// should offer and what a config name resolves against.
+    /// </summary>
+    public IReadOnlyList<ProteinList> WithBuiltIns()
+    {
+        var all = new List<ProteinList>(Lists);
+        foreach (var builtIn in ProteinList.BuiltIns)
+            if (!all.Any(l => string.Equals(l.Name, builtIn.Name, StringComparison.OrdinalIgnoreCase)))
+                all.Add(builtIn);
+        return all;
+    }
+
+    /// <summary>
+    /// Find a list by name among the user's and the shipped ones, or null. Case-insensitive, because
+    /// the name is typed into a config file by hand.
+    /// </summary>
+    public ProteinList? Find(string? name) => string.IsNullOrWhiteSpace(name)
+        ? null
+        : WithBuiltIns().FirstOrDefault(
+            l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The list a run should normalize against: an explicit members FILE wins over a name, because a
+    /// path is reproducible on another machine and a name depends on that machine's saved lists.
+    /// Returns null when neither is given; throws when what was asked for does not exist, rather than
+    /// carrying on without the normalization the config asked for.
+    /// </summary>
+    public static ProteinList? Resolve(string? name, string? membersFile, string? setPath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(membersFile))
+        {
+            if (!File.Exists(membersFile))
+                throw new FileNotFoundException(
+                    $"marker_normalization.protein_list_file not found: {membersFile}", membersFile);
+            return new ProteinList
+            {
+                Name = Path.GetFileNameWithoutExtension(membersFile),
+                Members = ReadMembersFile(membersFile!),
+            };
+        }
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var found = Load(setPath).Find(name);
+        if (found is null)
+            throw new InvalidOperationException(
+                $"marker_normalization.protein_list '{name}' was not found. Available: "
+                + string.Join(", ", Load(setPath).WithBuiltIns().Select(l => $"'{l.Name}'"))
+                + ". Use marker_normalization.protein_list_file to point at a file of members instead.");
+        return found;
+    }
 }
 
 /// <summary>Resolves which protein list (if any) an entry belongs to.</summary>
@@ -139,6 +313,17 @@ public sealed class ProteinListMatcher
     }
 
     public IReadOnlyList<ProteinList> Lists => _lists.Select(l => l.List).ToList();
+
+    /// <summary>
+    /// Whether any list claims a protein described by its raw identifier columns - what the pipeline
+    /// has in hand (leading_protein / leading_gene_name / leading_name), as opposed to the plot's
+    /// <see cref="AbundanceEntry"/>. Same matching rules either way, deliberately: a list that
+    /// highlights a protein on the plot has to select the same protein when it normalizes.
+    /// </summary>
+    public ProteinList? Match(string? accession, string? gene, string? proteinName)
+        => Match(new AbundanceEntry(
+            Key: accession ?? gene ?? proteinName ?? "", Label: "", Accession: accession, Gene: gene,
+            ProteinName: proteinName, MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0));
 
     /// <summary>The first visible list claiming this entry, or null.</summary>
     public ProteinList? Match(AbundanceEntry entry)

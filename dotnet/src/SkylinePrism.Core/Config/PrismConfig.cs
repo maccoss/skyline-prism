@@ -20,6 +20,7 @@ public sealed class PrismConfig
     public BatchCorrectionSection BatchCorrection { get; set; } = new();
     public ProteinRollupSection ProteinRollup { get; set; } = new();
     public ProteinNormalizationSection ProteinNormalization { get; set; } = new();
+    public MarkerNormalizationSection MarkerNormalization { get; set; } = new();
     public SampleAnnotationsSection SampleAnnotations { get; set; } = new();
     public ParsimonySection Parsimony { get; set; } = new();
     public OutputSection Output { get; set; } = new();
@@ -84,6 +85,19 @@ public sealed class PrismConfig
                 "library_assist.fitting_method 'least_squares' is not implemented "
                 + "(only median_polish). It existed only in the retired Python engine - see "
                 + "dotnet/PORTING_STATUS.md.");
+
+        var mnm = MarkerNormalization.Method?.ToLowerInvariant();
+        if (MarkerNormalization.Enabled && mnm is not null && mnm is not ("pc1" or "mean"))
+            throw new NotSupportedException(
+                $"marker_normalization.method '{MarkerNormalization.Method}' is not recognized. "
+                + "Valid: pc1, mean.");
+        if (MarkerNormalization.Enabled
+            && string.IsNullOrWhiteSpace(MarkerNormalization.ProteinList)
+            && string.IsNullOrWhiteSpace(MarkerNormalization.ProteinListFile))
+            throw new NotSupportedException(
+                "marker_normalization.enabled is true but no markers were given. Set "
+                + "marker_normalization.protein_list (a saved or shipped list name) or "
+                + "protein_list_file (a file of members).");
 
         var bcm = BatchCorrection.Method?.ToLowerInvariant();
         if (bcm is not null && bcm != "combat")
@@ -167,6 +181,8 @@ public sealed class PrismConfig
                 "reference_anchored", "reference_type", "auto_revert"),
             ["protein_rollup"] = pr,
             ["protein_normalization"] = Leaves("method"),
+            ["marker_normalization"] = Leaves(
+                "enabled", "protein_list", "protein_list_file", "method"),
             ["sample_annotations"] = Leaves("reference_pattern", "qc_pattern"),
             ["parsimony"] = Leaves(
                 "enabled", "fasta_path", "shared_peptide_handling", "enzyme", "enzyme_specificity"),
@@ -344,6 +360,47 @@ public sealed class PrismConfig
     public sealed class ProteinNormalizationSection
     {
         public string Method { get; set; } = "median";
+    }
+
+    /// <summary>
+    /// Normalization against a defined set of marker proteins, applied AFTER the ordinary
+    /// normalization and to both the peptide and the protein output.
+    /// <para>
+    /// One per-sample score is estimated from how the markers move together (PC1 of the z-scored
+    /// marker block), and the part of every feature that tracks it is removed. It answers "what
+    /// changed per unit of the marked material" rather than "what changed in whatever was captured" -
+    /// the question a capture-based experiment (EV enrichment, say) otherwise cannot separate, because
+    /// loading normalization makes total signal equal by construction.
+    /// </para>
+    /// <para>
+    /// The score is computed at the PROTEIN level and applied to both matrices: how much marked
+    /// material a sample contributed is a property of the sample, not of the table being analyzed, and
+    /// re-estimating it from peptides would mostly re-measure the same quantity with more noise.
+    /// </para>
+    /// </summary>
+    public sealed class MarkerNormalizationSection
+    {
+        /// <summary>Off unless asked for: it changes every reported abundance.</summary>
+        public bool Enabled { get; set; }
+
+        /// <summary>
+        /// Name of the protein list defining the markers - one of the user's saved lists or a shipped
+        /// one ("EV markers"). Ignored when <see cref="ProteinListFile"/> is set.
+        /// </summary>
+        public string? ProteinList { get; set; }
+
+        /// <summary>
+        /// A file of members instead, one identifier per line (or the first column of a CSV). Wins over
+        /// <see cref="ProteinList"/>, and is the reproducible form: a name depends on what is saved on
+        /// the machine running it, a path does not.
+        /// </summary>
+        public string? ProteinListFile { get; set; }
+
+        /// <summary>
+        /// How the per-sample score is summarized: <c>pc1</c> (default) or <c>mean</c> of the z-scored
+        /// markers. PC1 handles markers that do not share a sign, where a mean partially cancels.
+        /// </summary>
+        public string Method { get; set; } = "pc1";
     }
 
     public sealed class SampleAnnotationsSection

@@ -102,6 +102,20 @@ protein_rollup:
   #   max_peptide_length: 30
 
 # Protein normalization: "median" or "none".
+# Normalization against a set of marker proteins, applied AFTER the normalization above and to
+# BOTH the peptide and protein outputs. One per-sample score is estimated from how the markers move
+# together (PC1 of the z-scored marker block, computed at the protein level) and the part of every
+# feature that tracks it is removed - "what changed per unit of the marked material" rather than
+# "what changed in whatever was captured".
+#
+# Off by default: it changes every reported abundance. The markers themselves stay in the output,
+# flagged, with near-flat values by construction - exclude them from any result you read.
+# marker_normalization:
+#   enabled: true
+#   protein_list: "EV markers"     # a saved list, or the shipped EV panel (18 canonical EV proteins)
+#   protein_list_file: null        # or a file of members, one per line - reproducible across machines
+#   method: pc1                    # pc1 (default) | mean
+
 protein_normalization:
   method: "median"
 

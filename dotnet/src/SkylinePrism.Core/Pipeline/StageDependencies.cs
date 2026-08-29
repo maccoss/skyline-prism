@@ -33,6 +33,7 @@ public static class StageDependencies
     public const string PeptideNormalize = "normalize.peptide";
     public const string ProteinRollup = "rollup.protein";
     public const string ProteinNormalize = "normalize.protein";
+    public const string MarkerNormalize = "normalize.marker";
 
     // Deliberately NOT cached:
     //
@@ -85,6 +86,14 @@ public static class StageDependencies
                 "sample_outlier_detection",
                 "parsimony",
                 "output.format", "output.include_residuals",
+            // marker_normalization is here because Stage 5a REWRITES corrected_peptides.parquet in
+            // place - this stage's own claimed output file. The cache reuses a stage whose declared
+            // keys are unchanged, so without this a re-run with a different marker list (or with
+            // marker normalization switched off) reused the file as it was left by the PREVIOUS run:
+            // still carrying that run's marker adjustment, and then residualized a second time on top.
+            // Declaring it means the peptide arm is regenerated whenever the adjustment applied to it
+            // could differ - which is the only way this stage's file is what it claims to be.
+                "marker_normalization",
             },
 
             // Peptide -> protein. shared_peptide_handling is read here as well as by parsimony, and
@@ -100,6 +109,14 @@ public static class StageDependencies
             },
 
             // Protein normalization + protein ComBat.
+            // Marker residualization, applied to both corrected outputs. Its own list file counts as
+            // an input, and so does every key of the two stages it rewrites - it reads what they wrote.
+            [MarkerNormalize] = new[]
+            {
+                "marker_normalization",
+                "output.format",
+            },
+
             [ProteinNormalize] = new[]
             {
                 "protein_normalization",
@@ -107,6 +124,10 @@ public static class StageDependencies
                 "sample_annotations", "metadata", "batch_estimation",
                 "sample_outlier_detection",
                 "output.format", "output.include_residuals",
+                // Same reason as PeptideNormalize above: Stage 5a rewrites corrected_proteins.parquet
+                // in place, so what this stage's cached file CONTAINS depends on the marker settings
+                // even though what this stage COMPUTES does not.
+                "marker_normalization",
             },
         };
 
@@ -140,6 +161,7 @@ public static class StageDependencies
     public static IReadOnlyList<string> ExternalFiles(string stageId, PrismConfig config) => stageId switch
     {
         TransitionRollup => Paths(config.TransitionRollup.LibraryPath),
+        MarkerNormalize => Paths(config.MarkerNormalization.ProteinListFile),
         ProteinRollup => Paths(config.ProteinRollup.Ibaq.FastaPath, config.Parsimony.FastaPath),
         _ => Array.Empty<string>(),
     };

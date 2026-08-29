@@ -10,7 +10,8 @@ This document provides detailed descriptions of all computational methods implem
 4. [Batch Correction](#batch-correction)
 5. [Protein Parsimony](#protein-parsimony)
 6. [Peptide → Protein Rollup](#peptide--protein-rollup)
-7. [Quality Control and Outlier Detection](#quality-control-and-outlier-detection)
+7. [Marker-Protein Normalization](#marker-protein-normalization)
+8. [Quality Control and Outlier Detection](#quality-control-and-outlier-detection)
 
 ---
 
@@ -693,6 +694,183 @@ Where $N_{\text{theoretical}}$ is computed by *in silico* trypsin digestion of t
 
 ---
 
+## Marker-Protein Normalization
+
+Enabled with `marker_normalization.enabled: true`, or in the Skyline tool by ticking **"Normalize to a
+protein list"** on the Settings tab. Off by default: it changes every reported abundance.
+
+### The question it answers
+
+A capture-based experiment measures whatever the capture caught. If the amount of the thing you care
+about varies between samples — extracellular vesicles pulled from plasma, a hand-dissected glomerulus,
+a punch of tissue — then every protein's share of the signal moves with it. A loading normalization
+cannot separate that from biology, because it makes total signal equal *by construction*: after median
+or RT-LOWESS normalization, a sample with half the EVs and a sample with twice the EVs look the same
+size, and the difference has been pushed into the composition of every protein.
+
+Residualizing on a marker score turns **"what changed in what was captured"** into **"what changed per
+unit of the marked material"**. Those are different questions, and only the second one is usually the
+one being asked.
+
+This is not a replacement for the ordinary normalization; it runs after it (see *Where it runs*).
+
+### Algorithm
+
+Given a marker set $M$ (rows of the protein matrix matched to a protein list) on the LOG2 scale, with
+$m = |M|$ markers and $n$ samples:
+
+**1. z-score each marker across samples**, using the sample standard deviation ($\text{ddof}=1$):
+
+$$z_{ij} = \frac{y_{ij} - \bar{y}_i}{s_i}, \qquad s_i = \sqrt{\frac{1}{n-1}\sum_j (y_{ij} - \bar{y}_i)^2}$$
+
+Without this a high-abundance marker would dominate the axis purely by scale. A marker with $s_i = 0$
+is left at zero rather than dividing by zero: it carries no information about the axis, but stays in
+the block.
+
+**2. Take PC1 by SVD** of the $m \times n$ z-scored block $Z = U S V^{\mathsf{T}}$:
+
+$$\text{score}_j = V^{\mathsf{T}}_{0j} \cdot S_0, \qquad \text{loading}_i = U_{i0},
+\qquad \text{variance explained} = \frac{S_0^2}{\sum_k S_k^2}$$
+
+This is the decomposition `numpy.linalg.svd(Z, full_matrices=False)` gives. A dense SVD is appropriate
+here and nowhere else in PRISM: the marker block is a couple of dozen rows, not the tens of thousands
+of features `Pca` must avoid materializing.
+
+**3. Orient the sign.** The sign of a principal component is arbitrary. The score and loadings are
+flipped, if needed, so the score correlates **positively** with the mean z-scored marker profile.
+Without this, "higher score" would mean more marked material or less, at random, from run to run.
+
+**4. Residualize every feature** on the score. Per feature, an ordinary least-squares fit of its LOG2
+profile on $[1, \text{score}]$, keeping the residual **with the intercept added back**:
+
+$$y'_{gj} = y_{gj} - \hat{\beta}_g \cdot \text{score}_j, \qquad
+\hat{\beta}_g = \frac{n\sum x y - \sum x \sum y}{n \sum x^2 - (\sum x)^2}$$
+
+Only $\hat{\beta}_g \cdot \text{score}_j$ is removed. The plain residual $y - \hat{\alpha} - \hat{\beta}x$
+would put every feature at zero in log space — an abundance of 1 — which is not a quantity anything
+downstream can use. Keeping the intercept means protein X stays 100× more abundant than protein Y
+while acquiring the same fold change between conditions that the residuals have.
+
+Sums run over the samples a feature was actually observed in. Fewer than 3 observations leaves the
+feature untouched: a two-point fit through a two-parameter model has no residual to speak of, and
+zeroing it would fabricate a result. A score that is constant across a feature's samples is likewise
+skipped.
+
+**Alternative score.** `method: mean` replaces step 2 with the plain mean of the z-scored markers.
+Offered for comparison; see *Why PC1* below.
+
+### Where it runs, and why there
+
+Stage **5a** — after both arms are finished, after normalization *and* batch correction, and the score
+is computed at the **protein** level then applied to **both** the peptide and the protein output.
+
+- **After the loading normalization, never instead of it.** The score has to come from data whose
+  per-sample loading is already removed. Computed on raw abundances, PC1 loads on injection volume,
+  and residualizing then quietly re-does the loading step using a couple of dozen proteins' worth of
+  noise instead of the whole matrix.
+- **One score, from the protein level.** How much marked material a sample contributed is a property
+  of *the sample*, not of the table being analyzed. Re-estimating it from the peptide matrix would
+  mostly re-measure the same quantity with more noise, and would let the two outputs disagree about a
+  fact that has one answer.
+- `peptides_log2_internal.parquet` is deliberately **not** adjusted. It is what the protein rollup
+  consumed, produced before the score existed; adjusting it would describe a rollup that never happened.
+
+### Why PC1 rather than the mean of the markers
+
+Markers do not have to move as one block. On the cohort the shipped `EV markers` panel comes from, PC1
+explains **70.4%** of marker variance and **4 of the 18** markers (`SDCBP`, `ANXA2`, `ANXA6`, `CD81`)
+load with the *opposite* sign to the other 14. A mean therefore partially cancels and blunts the
+estimate. PC1 weights each marker by its contribution and handles the sign structure, and it transfers
+to a panel whose dominant axis is driven by different members.
+
+On that cohort the two scores correlate at $r = +0.951$, with PC1 giving the more conservative answer.
+
+### Diagnostics and failure modes
+
+`marker_normalization.csv` records the per-sample score and the per-marker loadings, so a run can be
+judged rather than trusted. What to look at:
+
+| Signal | Meaning |
+|---|---|
+| **Fewer than 3 quantified markers** | Hard error, not a silent fallback. A score cannot be defined. |
+| **PC1 variance explained < 40%** | Warning. The markers are not moving together, so the score is a weak summary of them. |
+| **Score correlates with total ion current / loaded material** | Expected to a degree, and ambiguous: compatible with a residual technical effect *or* with the capture biology. Worth reporting, not worth panicking about. |
+| **Score separates cases from controls** | The danger sign. That is pathology, not capture, and residualizing on it removes the finding. See below. |
+
+**The markers themselves stay in the outputs**, flagged `normalization_marker`. Their residual is near
+zero by construction, so **exclude them from any result read off these files** — a test among them is
+circular.
+
+**Choosing a panel is the whole game.** The markers must be proportional to the amount of material
+captured and *not* to the phenotype. This is why the shipped `Glomerulus` panel is weighted toward
+structural proteins and deliberately excludes `NPHS1`/`NPHS2` (podocyte loss *is* the phenotype in most
+glomerular disease) and `COL4A1`/`COL4A2` (ubiquitous basement membrane, so the score would track any
+BM rather than the GBM). It is also why `Tubular contamination` ships as a **readout** for the Dynamic
+Range plot and never as a normalizer: its abundance *is* the contamination, so normalizing to it would
+remove the thing being measured.
+
+### Relationship to published methods
+
+The mechanism — factor-analyze a *designated* subset of features, then regress the leading factor out
+of everything — is well precedented. The **intent** is where PRISM's use differs from the closest
+published family, and that difference is the thing to keep in mind when reading those papers.
+
+**Closest formal precedent: RUV (Remove Unwanted Variation).** RUV-2 restricts a factor analysis to
+negative control genes and removes the resulting factors from the whole matrix (Gagnon-Bartsch & Speed,
+2012); RUVSeq/RUVg is the widely used implementation (Risso et al., 2014), with an unsupervised variant
+for when the factor of interest is unobserved (Jacob et al., 2016) and RUV-III adding technical
+replicates to the control set (Molania et al., 2019). RUV has been benchmarked favorably on large
+clinical MS proteomics cohorts (Dubois et al., 2022).
+
+> **The key difference.** RUV's control genes are chosen because they are *unaffected by the biology* —
+> spike-ins, negative controls, housekeepers — so the factor they estimate is meant to be purely
+> technical. PRISM's markers are the opposite: chosen **because** they are biological, and specifically
+> because their abundance is proportional to how much of the material of interest was captured. The
+> axis removed here is therefore a biological-but-nuisance quantity (input amount), which puts the
+> intent closer to tumor-purity or cell-composition adjustment than to RUV proper.
+>
+> RUV's own safeguard states PRISM's main risk exactly: control features must be *a priori* not
+> differentially expressed with respect to the factor of interest. Any marker that also tracks the
+> phenotype gets the finding regressed out along with the capture.
+
+**PC1 of a feature set as a summary quantity.** "Eigengenes" — SVD components of an expression matrix,
+with the ones judged to be artifact filtered out — go back to Alter, Brown & Botstein (2000). WGCNA's
+*module eigengene* is literally PC1 of a gene set (Langfelder & Horvath, 2007, 2008), though it is used
+as a summary and a covariate rather than to residualize the matrix.
+
+**Unsupervised cousins** estimate the factor from *all* features rather than a chosen set: SVA (Leek &
+Storey, 2007; Leek et al., 2012) and, in our own field, **EigenMS** (Karpievitch et al., 2009), which
+adapts SVA to LC-MS proteomics with SVD on the residuals. scLVM (Buettner et al., 2015) infers a latent
+factor from a known cell-cycle gene set and regresses it out — a latent-variable model rather than PCA,
+but the same shape of idea, and the closest published match to "known marker set → one factor → remove".
+
+**Two things PRISM does differently from RUV**, worth knowing if the single-factor version turns out
+to be too blunt:
+
+- RUV treats the number of removed factors $k$ as a tuning parameter with its own diagnostics. PRISM
+  removes exactly one.
+- RUV-III uses technical replicates as part of the control set. PRISM already tracks reference and QC
+  injections and could do the same, but does not today.
+
+**What was not found.** A literature search on **2026-08-29** (PubMed, via the `search_articles` /
+`get_article_metadata` tools) did not turn up a paper doing precisely this: PC1 of a *curated EV or
+glomerular marker panel*, OLS-residualized out of an LC-MS proteomics matrix. Searches covering EV
+marker normalization, glomerular/LCM proteomics normalization, and podocyte-marker normalization
+returned nothing of that shape. So the machinery is well precedented and this particular application of
+it may not be — which is either a gap in the search or a small novelty. Treat it as "not found", not as
+"does not exist", and re-check before claiming novelty in print.
+
+### Implementation
+
+| Piece | Location |
+|---|---|
+| Score and residualization | `dotnet/src/SkylinePrism.Core/Normalization/MarkerNormalization.cs` |
+| Stage 5a driver (matching, flagging, CSV) | `dotnet/src/SkylinePrism.Core/Pipeline/MarkerNormalizeStage.cs` |
+| Marker panels and matching | `dotnet/src/SkylinePrism.Core/Qc/ProteinListSet.cs` |
+| Config keys | [`parameters.md`](parameters.md#marker_normalization--normalize-to-a-set-of-proteins-stage-5a) |
+
+---
+
 ## Quality Control and Outlier Detection
 
 ### Sample Outlier Detection
@@ -732,3 +910,32 @@ Methods for identifying problematic samples:
 3. Tukey JW (1977). Exploratory Data Analysis. Addison-Wesley.
 
 4. Schwämmle V, León IR, Jensen ON (2013). Assessment and improvement of statistical tools for comparative proteomics analysis of sparse data sets with few experimental replicates. *Journal of Proteome Research* 12(9):4215-4224.
+
+### Marker-protein normalization: prior art
+
+Retrieved from PubMed on 2026-08-29. See
+[Relationship to published methods](#relationship-to-published-methods) for what each one contributes.
+
+5. Gagnon-Bartsch JA, Speed TP (2012). Using control genes to correct for unwanted variation in microarray data. *Biostatistics* 13(3):539-552. [doi:10.1093/biostatistics/kxr034](https://doi.org/10.1093/biostatistics/kxr034)
+
+6. Risso D, Ngai J, Speed TP, Dudoit S (2014). Normalization of RNA-seq data using factor analysis of control genes or samples. *Nature Biotechnology* 32(9):896-902. [doi:10.1038/nbt.2931](https://doi.org/10.1038/nbt.2931)
+
+7. Jacob L, Gagnon-Bartsch JA, Speed TP (2016). Correcting gene expression data when neither the unwanted variation nor the factor of interest are observed. *Biostatistics* 17(1):16-28. [doi:10.1093/biostatistics/kxv026](https://doi.org/10.1093/biostatistics/kxv026)
+
+8. Molania R, Gagnon-Bartsch JA, Dobrovic A, Speed TP (2019). A new normalization for Nanostring nCounter gene expression data. *Nucleic Acids Research* 47(12):6073-6083. [doi:10.1093/nar/gkz433](https://doi.org/10.1093/nar/gkz433)
+
+9. Alter O, Brown PO, Botstein D (2000). Singular value decomposition for genome-wide expression data processing and modeling. *PNAS* 97(18):10101-10106. [doi:10.1073/pnas.97.18.10101](https://doi.org/10.1073/pnas.97.18.10101)
+
+10. Langfelder P, Horvath S (2007). Eigengene networks for studying the relationships between co-expression modules. *BMC Systems Biology* 1:54. [doi:10.1186/1752-0509-1-54](https://doi.org/10.1186/1752-0509-1-54)
+
+11. Langfelder P, Horvath S (2008). WGCNA: an R package for weighted correlation network analysis. *BMC Bioinformatics* 9:559. [doi:10.1186/1471-2105-9-559](https://doi.org/10.1186/1471-2105-9-559)
+
+12. Leek JT, Storey JD (2007). Capturing heterogeneity in gene expression studies by surrogate variable analysis. *PLoS Genetics* 3(9):1724-1735. [doi:10.1371/journal.pgen.0030161](https://doi.org/10.1371/journal.pgen.0030161)
+
+13. Leek JT, Johnson WE, Parker HS, Jaffe AE, Storey JD (2012). The sva package for removing batch effects and other unwanted variation in high-throughput experiments. *Bioinformatics* 28(6):882-883. [doi:10.1093/bioinformatics/bts034](https://doi.org/10.1093/bioinformatics/bts034)
+
+14. Karpievitch YV, Taverner T, Adkins JN, Callister SJ, Anderson GA, Smith RD, Dabney AR (2009). Normalization of peak intensities in bottom-up MS-based proteomics using singular value decomposition. *Bioinformatics* 25(19):2573-2580. [doi:10.1093/bioinformatics/btp426](https://doi.org/10.1093/bioinformatics/btp426)
+
+15. Buettner F, Natarajan KN, Casale FP, Proserpio V, Scialdone A, Theis FJ, Teichmann SA, Marioni JC, Stegle O (2015). Computational analysis of cell-to-cell heterogeneity in single-cell RNA-sequencing data reveals hidden subpopulations of cells. *Nature Biotechnology* 33(2):155-160. [doi:10.1038/nbt.3102](https://doi.org/10.1038/nbt.3102)
+
+16. Dubois E, Núñez Galindo A, Dayon L, Cominetti O (2022). Assessing normalization methods in mass spectrometry-based proteome profiling of clinical samples. *Biosystems* 215-216:104661. [doi:10.1016/j.biosystems.2022.104661](https://doi.org/10.1016/j.biosystems.2022.104661)

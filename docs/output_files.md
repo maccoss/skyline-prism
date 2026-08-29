@@ -33,6 +33,7 @@ output_dir/
 ├── corrected_proteins_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
+├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
 ├── parameters.json                 # Complete provenance and processing parameters
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)

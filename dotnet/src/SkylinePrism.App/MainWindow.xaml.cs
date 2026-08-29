@@ -358,6 +358,16 @@ public partial class MainWindow : Window
     private void OnParsimonyChanged(object sender, RoutedEventArgs e) => UpdateSharedPeptideRow();
 
     /// <summary>
+    /// The list picker means nothing with marker normalization off, and a stale selection sitting
+    /// enabled beside an unchecked box reads as though it were in effect.
+    /// </summary>
+    private void OnMarkerNormChanged(object sender, RoutedEventArgs e)
+    {
+        if (MarkerNormListCombo is not null)
+            MarkerNormListCombo.IsEnabled = MarkerNormCheck?.IsChecked == true;
+    }
+
+    /// <summary>
     /// Shared-peptide handling only means something once proteins are grouped: with parsimony off every
     /// accession is its own group, so there is nothing for a peptide to be shared between.
     /// </summary>
@@ -461,6 +471,24 @@ public partial class MainWindow : Window
         SelectCombo(TransitionRollupCombo, c.TransitionRollup.Method);
         MinTransitionsBox.Text = c.TransitionRollup.MinTransitions.ToString();
         UseMs1Check.IsChecked = c.TransitionRollup.UseMs1;
+        // The protein lists the Dynamic Range tab highlights are the same ones that can normalize, so
+        // the picker is filled from one place - a list curated for one purpose is available to the other.
+        MarkerNormListCombo.Items.Clear();
+        foreach (var list in ProteinListSet.Load().WithBuiltIns())
+            MarkerNormListCombo.Items.Add(list.Name);
+        MarkerNormCheck.IsChecked = c.MarkerNormalization.Enabled;
+        MarkerNormListCombo.IsEnabled = c.MarkerNormalization.Enabled;
+        if (!string.IsNullOrWhiteSpace(c.MarkerNormalization.ProteinList))
+        {
+            if (!MarkerNormListCombo.Items.Contains(c.MarkerNormalization.ProteinList))
+                MarkerNormListCombo.Items.Add(c.MarkerNormalization.ProteinList);
+            MarkerNormListCombo.SelectedItem = c.MarkerNormalization.ProteinList;
+        }
+        else if (MarkerNormListCombo.Items.Count > 0)
+        {
+            MarkerNormListCombo.SelectedIndex = 0;
+        }
+
         if (!string.IsNullOrWhiteSpace(c.TransitionRollup.LibraryPath))
         {
             if (!LibraryCombo.Items.Contains(c.TransitionRollup.LibraryPath))
@@ -509,6 +537,14 @@ public partial class MainWindow : Window
             var lib = LibraryCombo.Text?.Trim();
             c.TransitionRollup.LibraryPath = string.IsNullOrWhiteSpace(lib) ? null : lib;
         }
+
+        // Read unconditionally. This lived inside the library_assist branch above, which meant the
+        // checkbox did nothing at all for every other transition rollup - i.e. for the default. The
+        // control is independent of the library row, so its read has to be too.
+        c.MarkerNormalization.Enabled = MarkerNormCheck.IsChecked == true;
+        c.MarkerNormalization.ProteinList = c.MarkerNormalization.Enabled
+            ? MarkerNormListCombo.SelectedItem as string
+            : null;
 
         c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "rt_lowess");
 

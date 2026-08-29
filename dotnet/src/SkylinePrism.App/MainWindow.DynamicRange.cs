@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,7 +11,9 @@ using ScottPlot;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
+using SkylinePrism.Core.Parsimony;
 using SkylinePrism.Core.Qc;
+using SkylinePrism.Core.Rollup;
 using SkylinePrism.Core.Visualization;
 using SkylinePrism.Skyline;
 
@@ -25,6 +28,12 @@ public partial class MainWindow
 {
     private bool _rangeLoaded;
     private bool _suppressRangeRender;
+
+    /// <summary>
+    /// A load or a re-rollup is running. Re-entry is not merely wasteful here: a second recompute would
+    /// race the first to assign <see cref="_rangeEntries"/>, and the loser's plot could land last.
+    /// </summary>
+    private bool _rangeBusy;
 
     /// <summary>
     /// Whether the tab has ever been shown, i.e. whether a level change is a real user action rather
@@ -235,13 +244,17 @@ public partial class MainWindow
     /// <summary>
     /// The rollup method behind the plotted values: the protein rollup at protein level, the transition
     /// rollup at peptide level. Empty when the run recorded none.
+    /// <para>
+    /// The level is a parameter rather than a read of <see cref="RangeLevel"/> because this runs on the
+    /// worker thread that computes the entries, where touching a WPF control throws.
+    /// </para>
     /// </summary>
-    private string RangeRollupMethod(string outputDir)
+    private string RangeRollupMethod(string outputDir, AbundanceLevel level)
     {
         var config = RangeRunConfig(outputDir);
         if (config is null)
             return "";
-        return (RangeLevel == AbundanceLevel.Protein
+        return (level == AbundanceLevel.Protein
             ? config.ProteinRollup.Method
             : config.TransitionRollup.Method) ?? "";
     }
@@ -272,6 +285,108 @@ public partial class MainWindow
         ComboText(RangeLevelCombo, "Protein").StartsWith("Pep", StringComparison.OrdinalIgnoreCase)
             ? AbundanceLevel.Peptide
             : AbundanceLevel.Protein;
+
+    /// <summary>
+    /// The rollup picker's entries, in the combo's own order. The first is null - "As run", which reads
+    /// corrected_proteins.parquet rather than recomputing anything.
+    /// </summary>
+    private static readonly ProteinRollupMethod?[] RangeRollupChoices =
+    {
+        null,
+        ProteinRollupMethod.Sum,
+        ProteinRollupMethod.MedianPolish,
+        ProteinRollupMethod.TopN,
+        ProteinRollupMethod.MaxLfq,
+        ProteinRollupMethod.Ibaq,
+    };
+
+    /// <summary>
+    /// Which rollup to recompute, or null to plot the run's own protein matrix. Always null at peptide
+    /// level: there is no protein rollup below a peptide, and re-rolling transitions would need the
+    /// merged report rather than an output file.
+    /// </summary>
+    private ProteinRollupMethod? RangeRollupOverride
+    {
+        get
+        {
+            if (RangeLevel != AbundanceLevel.Protein || RangeRollupCombo is null)
+                return null;
+            var i = RangeRollupCombo.SelectedIndex;
+            return i > 0 && i < RangeRollupChoices.Length ? RangeRollupChoices[i] : null;
+        }
+    }
+
+    /// <summary>The method name as the config spells it, for the axis label and the status line.</summary>
+    private static string RollupConfigName(ProteinRollupMethod method) => method switch
+    {
+        ProteinRollupMethod.MedianPolish => "median_polish",
+        ProteinRollupMethod.Sum => "sum",
+        ProteinRollupMethod.TopN => "topn",
+        ProteinRollupMethod.MaxLfq => "maxlfq",
+        ProteinRollupMethod.Ibaq => "ibaq",
+        _ => method.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>
+    /// Grey the rollup picker out at peptide level rather than hiding it, so it does not appear and
+    /// disappear as the level changes - and say why in the tooltip, which is the only place there is
+    /// room. Every control that would start a competing computation is disabled while one is running:
+    /// a change made mid-flight would otherwise be dropped on the floor by the re-entry guard, leaving
+    /// a combo showing a method the plot is not.
+    /// </summary>
+    private void UpdateRangeRollupEnabled()
+    {
+        if (RangeRollupCombo is null || RangeRollupLabel is null)
+            return;
+        var protein = RangeLevel == AbundanceLevel.Protein;
+        RangeRollupCombo.IsEnabled = protein && !_rangeBusy;
+        RangeRollupLabel.Opacity = protein ? 1.0 : 0.5;
+        if (RangeLevelCombo is not null)
+            RangeLevelCombo.IsEnabled = !_rangeBusy;
+        if (RangeSampleCombo is not null)
+            RangeSampleCombo.IsEnabled = !_rangeBusy;
+        if (RangeReloadButton is not null)
+            RangeReloadButton.IsEnabled = !_rangeBusy;
+    }
+
+    /// <summary>
+    /// The theoretical peptide counts iBAQ divides by, cached against the FASTA they came from. Digesting
+    /// a whole proteome takes seconds, and the picker invites flipping back and forth.
+    /// </summary>
+    private string? _rangeIbaqKey;
+    private IReadOnlyDictionary<string, int>? _rangeIbaqCounts;
+
+    /// <summary>
+    /// Theoretical counts for an iBAQ view, or null when the run recorded no FASTA. Null is not a
+    /// failure: the rollup falls back to observed peptide counts, which the status line then says,
+    /// because that is a materially different quantity from a real iBAQ.
+    /// </summary>
+    private IReadOnlyDictionary<string, int>? IbaqCounts(
+        string outputDir, ParquetTable peptides, CancellationToken cancellationToken)
+    {
+        var config = RangeRunConfig(outputDir);
+        var fasta = config?.ProteinRollup.Ibaq.FastaPath ?? config?.Parsimony.FastaPath;
+        if (string.IsNullOrWhiteSpace(fasta) || !File.Exists(fasta))
+            return null;
+
+        var ibaq = config!.ProteinRollup.Ibaq;
+        var key = string.Join("|", fasta, ibaq.Enzyme, ibaq.MissedCleavages, ibaq.MinPeptideLength,
+            ibaq.MaxPeptideLength);
+        if (_rangeIbaqKey == key && _rangeIbaqCounts is not null)
+            return _rangeIbaqCounts;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var counts = FastaParser.GetTheoreticalPeptideCounts(
+            fasta!, DynamicRangeRollup.LeadingProteins(peptides), ibaq.Enzyme, ibaq.MissedCleavages,
+            ibaq.MinPeptideLength, ibaq.MaxPeptideLength);
+        _rangeIbaqKey = key;
+        _rangeIbaqCounts = counts;
+        return counts;
+    }
+
+    /// <summary>What the last computed view actually was, for the axis label and the status line.</summary>
+    private string _rangeRollupShown = "";
+    private string _rangeRollupNote = "";
 
     private void InvalidateDynamicRange()
     {
@@ -307,6 +422,7 @@ public partial class MainWindow
             // InitializeComponent, when controls declared later do not exist yet.
             if (!IsInitialized || _suppressRangeRender || !_rangeTabShown)
                 return;
+            UpdateRangeRollupEnabled();
             await LoadDynamicRangeAsync(force: true);
         }
         catch (Exception ex)
@@ -315,9 +431,30 @@ public partial class MainWindow
         }
     }
 
+    private async void OnRangeRollupChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _suppressRangeRender || !_rangeTabShown)
+                return;
+            // Recomputing changes every abundance, so the ranking moves and the plot must be rebuilt
+            // from the file - a re-render of the existing entries would show the old method's numbers
+            // under the new method's label.
+            await LoadDynamicRangeAsync(force: true);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnRangeRollupChanged), ex);
+        }
+    }
+
     /// <summary>
     /// Read the corrected matrix for the current level and rank it. Parquet I/O runs off the UI thread;
     /// these files are small compared with the merged report but can still sit on a slow share.
+    /// <para>
+    /// Under a rollup override the file read is the PEPTIDE matrix, whatever the level combo says, and
+    /// the protein rows are recomputed from it - see <see cref="ComputeRangeEntries"/>.
+    /// </para>
     /// </summary>
     private async Task LoadDynamicRangeAsync(bool force = false)
     {
@@ -329,7 +466,12 @@ public partial class MainWindow
         }
 
         var level = RangeLevel;
-        var fileName = level == AbundanceLevel.Protein ? "corrected_proteins" : "corrected_peptides";
+        var rollup = RangeRollupOverride;
+        // A recomputed protein view is built from the peptide matrix, so that is the file that has to
+        // exist - and the message when it does not has to name it, or it points at the wrong problem.
+        var fileName = level == AbundanceLevel.Peptide || rollup is not null
+            ? "corrected_peptides"
+            : "corrected_proteins";
         var path = CorrectedMatrixPath(outputDir, fileName);
         if (path is null)
         {
@@ -342,29 +484,58 @@ public partial class MainWindow
             ShowRangeMessage(textForm is not null
                 ? $"{Path.GetFileName(textForm)} is not parquet. This plot reads the parquet matrices - "
                   + "re-run with output.format: parquet."
-                : $"No {fileName}.parquet in the output directory. Run PRISM, or point the output "
-                  + "directory at a previous run.");
+                : rollup is not null
+                    ? $"No {fileName}.parquet in the output directory. A recomputed rollup is built from "
+                      + "the peptide matrix, so that file has to be there - re-run PRISM, or switch the "
+                      + "rollup back to 'As run' to read the protein matrix instead."
+                    : $"No {fileName}.parquet in the output directory. Run PRISM, or point the output "
+                      + "directory at a previous run.");
             return;
         }
         if (_rangeLoaded && !force && string.Equals(_rangeOutputDir, outputDir, StringComparison.OrdinalIgnoreCase))
             return;
 
-        RangeStatusText.Text = "Reading " + Path.GetFileName(path) + "...";
+        await RunRangeComputation(
+            outputDir, level, rollup, path, chosen: null,
+            starting: "Reading " + Path.GetFileName(path) + "...",
+            apply: result =>
+            {
+                _rangeOutputDir = outputDir;
+                _rangeSampleColumns = result.Samples;
+                PopulateRangeSamples(result.Samples);
+            });
+    }
+
+    /// <summary>
+    /// Run one computation off the UI thread, with the progress bar up and the pickers disabled, and
+    /// apply the result. The two callers differ only in whether the replicate picker is rebuilt.
+    /// </summary>
+    private async Task RunRangeComputation(
+        string outputDir, AbundanceLevel level, ProteinRollupMethod? rollup, string path,
+        IReadOnlyList<string>? chosen, string starting, Action<RangeResult> apply)
+    {
+        if (_rangeBusy)
+            return;
+        _rangeBusy = true;
+        UpdateRangeRollupEnabled();
+        RangeStatusText.Text = starting;
+        // Determinate only where there is something to count. Reading and ranking a matrix reports
+        // nothing, and a bar frozen at 0% reads as a hang - the very thing it is here to prevent.
+        RangeProgress.IsIndeterminate = rollup is null;
+        RangeProgress.Value = 0;
+        RangeProgress.Visibility = Visibility.Visible;
         try
         {
-            var (entries, samples) = await Task.Run(() =>
-            {
-                var table = ParquetTable.Load(path);
-                var sampleCols = DynamicRange.SampleColumns(table, level);
-                return (DynamicRange.Compute(table, level, sampleCols), sampleCols);
-            });
+            var progress = new Progress<double>(v => RangeProgress.Value = v);
+            var result = await Task.Run(
+                () => ComputeRangeEntries(outputDir, level, rollup, path, chosen, progress));
 
-            _rangeOutputDir = outputDir;
-            _rangeSampleColumns = samples;
-            _rangeEntries = entries;
-            _rangeEntryByLocator = null; // rebuilt against the entries just loaded
+            _rangeEntries = result.Entries;
+            _rangeEntryByLocator = null; // new entry objects, so the locator index is stale
+            _rangeRollupShown = result.RollupShown;
+            _rangeRollupNote = result.Note;
             _rangeLoaded = true;
-            PopulateRangeSamples(samples);
+            apply(result);
             RenderDynamicRange();
         }
         catch (Exception ex)
@@ -373,6 +544,67 @@ public partial class MainWindow
             App.WriteLog("Dynamic range load failed: " + ex);
             ShowRangeMessage("Could not read the corrected matrix: " + ex.Message);
         }
+        finally
+        {
+            _rangeBusy = false;
+            RangeProgress.Visibility = Visibility.Collapsed;
+            RangeProgress.IsIndeterminate = false;
+            UpdateRangeRollupEnabled();
+        }
+    }
+
+    private sealed record RangeResult(
+        List<AbundanceEntry> Entries, List<string> Samples, string RollupShown, string Note);
+
+    /// <summary>
+    /// The worker-thread half: read the parquet and produce ranked entries, either straight from the
+    /// run's own matrix or re-rolled from the peptide matrix under <paramref name="rollup"/>.
+    /// </summary>
+    private RangeResult ComputeRangeEntries(
+        string outputDir, AbundanceLevel level, ProteinRollupMethod? rollup, string path,
+        IReadOnlyList<string>? chosen, IProgress<double> progress)
+    {
+        var table = ParquetTable.Load(path);
+
+        if (rollup is null)
+        {
+            var cols = DynamicRange.SampleColumns(table, level);
+            var use = chosen is { Count: > 0 } ? chosen : cols;
+            return new RangeResult(
+                DynamicRange.Compute(table, level, use), cols, RangeRollupMethod(outputDir, level), "");
+        }
+
+        if (!DynamicRangeRollup.CanRecompute(table))
+        {
+            throw new InvalidOperationException(
+                "corrected_peptides.parquet has no protein_group column, so it cannot be rolled up to "
+                + "proteins. Re-run PRISM, or switch the rollup back to 'As run'.");
+        }
+
+        var sampleCols = DynamicRange.SampleColumns(table, AbundanceLevel.Peptide);
+        var config = RangeRunConfig(outputDir);
+        IReadOnlyDictionary<string, int>? counts = null;
+        var note = "recomputed from corrected_peptides";
+        if (rollup == ProteinRollupMethod.Ibaq)
+        {
+            counts = IbaqCounts(outputDir, table, CancellationToken.None);
+            note += counts is null
+                ? "; NO FASTA, so iBAQ divides by the OBSERVED peptide count - not a real iBAQ"
+                : $"; {counts.Count:N0} theoretical peptide counts";
+        }
+
+        var options = new DynamicRangeRollupOptions
+        {
+            Method = rollup.Value,
+            // The run's own thresholds, so the only thing that changes between choices is the method.
+            MinPeptides = config?.ProteinRollup.MinPeptides ?? 3,
+            TopN = config?.ProteinRollup.Topn.N ?? 3,
+            TopNSelection = config?.ProteinRollup.Topn.Selection ?? "median_abundance",
+            TheoreticalCounts = counts,
+        };
+        var entries = DynamicRangeRollup.Recompute(
+            table, options, chosen is { Count: > 0 } ? chosen : sampleCols, progress);
+        return new RangeResult(entries, sampleCols, RollupConfigName(rollup.Value), note);
     }
 
     // Replicate picker: same checkbox-combo pattern as the QC tab's group filter; none ticked = All.
@@ -383,9 +615,19 @@ public partial class MainWindow
         _suppressRangeRender = true;
         try
         {
+            // Carry the ticks across the rebuild. Switching rollup or level reloads the picker, and
+            // silently reverting to "All replicates" would change the plot for a reason the user did
+            // not ask for and cannot see.
+            var ticked = _rangeSampleValues.Where(v => v.IsSelected).Select(v => v.Name)
+                .ToHashSet(StringComparer.Ordinal);
             var display = StripSharedBatchSuffix(samples.ToList(), samples.ToList());
             _rangeSampleValues = samples
-                .Select((s, i) => new QcGroupValue { Name = display[i], Changed = OnRangeSampleToggled })
+                .Select((s, i) => new QcGroupValue
+                {
+                    Name = display[i],
+                    IsSelected = ticked.Contains(display[i]),
+                    Changed = OnRangeSampleToggled,
+                })
                 .ToList();
             RangeSampleCombo.ItemsSource = _rangeSampleValues;
             UpdateRangeSampleSummary();
@@ -418,29 +660,32 @@ public partial class MainWindow
 
     private async void RecomputeForSelectedSamples()
     {
-        if (!_rangeLoaded || _rangeOutputDir is null)
-            return;
-        var level = RangeLevel;
-        var chosen = Enumerable.Range(0, _rangeSampleValues.Count)
-            .Where(i => _rangeSampleValues[i].IsSelected)
-            .Select(i => _rangeSampleColumns[i])
-            .ToList();
-        var fileName = level == AbundanceLevel.Protein ? "corrected_proteins" : "corrected_peptides";
-        var path = CorrectedMatrixPath(_rangeOutputDir, fileName);
-        if (path is null)
-            return;
-
+        // async void: nothing can catch what escapes this, so it catches its own.
         try
         {
-            _rangeEntries = await Task.Run(() =>
-                DynamicRange.Compute(ParquetTable.Load(path), level, chosen));
-            _rangeEntryByLocator = null; // new entry objects, so the locator index is stale
-            RenderDynamicRange();
+            if (!_rangeLoaded || _rangeOutputDir is null)
+                return;
+            var level = RangeLevel;
+            var rollup = RangeRollupOverride;
+            var chosen = Enumerable.Range(0, _rangeSampleValues.Count)
+                .Where(i => _rangeSampleValues[i].IsSelected)
+                .Select(i => _rangeSampleColumns[i])
+                .ToList();
+            var fileName = level == AbundanceLevel.Peptide || rollup is not null
+                ? "corrected_peptides"
+                : "corrected_proteins";
+            var path = CorrectedMatrixPath(_rangeOutputDir, fileName);
+            if (path is null)
+                return;
+
+            // The replicate picker is NOT rebuilt here - it is what the user just changed.
+            await RunRangeComputation(
+                _rangeOutputDir, level, rollup, path, chosen,
+                starting: "Recomputing...", apply: _ => { });
         }
         catch (Exception ex)
         {
-            App.WriteLog("Dynamic range recompute failed: " + ex);
-            ShowRangeMessage("Could not recompute: " + ex.Message);
+            ReportHandlerFailure(nameof(RecomputeForSelectedSamples), ex);
         }
     }
 
@@ -479,7 +724,7 @@ public partial class MainWindow
 
         // On the y axis, not just the status line: the axis travels with the image when the plot is
         // copied into a slide or a paper, and "log10 abundance" alone does not say abundance OF WHAT.
-        var rollup = RangeRollupMethod(OutputDirBox.Text?.Trim() ?? "");
+        var rollup = _rangeRollupShown;
         PlotRenderer.DrawDynamicRange(
             plt, background, highlights,
             yLabel: rollup.Length > 0 ? $"Log10 abundance ({rollup})" : "Log10 abundance",
@@ -500,6 +745,7 @@ public partial class MainWindow
                 ? $"; {rollup} rollup"
                   + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
                 : "")
+            + (_rangeRollupNote.Length > 0 ? $" [{_rangeRollupNote}]" : "")
             + (matched > 0 ? $"; {matched:N0} in {highlights.Count} list(s)" : "");
     }
 
