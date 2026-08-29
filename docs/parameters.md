@@ -111,10 +111,14 @@ is computed at the **protein** level and applied to **both** outputs:
   analysed, so re-estimating it from peptides would mostly re-measure the same quantity with more noise.
 
 **Why PC1 rather than the mean.** Markers need not move as one block. On the cohort the shipped EV
-panel comes from, PC1 explains ~65% of marker variance and four of the eighteen (`CD81`, `SDCBP`,
-`ANXA2`, `ANXA6`) load with the *opposite* sign — a mean partially cancels and blunts the estimate.
-PC1 weights each marker by its contribution and keeps the sign structure. The score's sign is oriented
-so higher always means more marked material.
+panel comes from, PC1 explains 70.4% of marker variance and four of the eighteen (`CD81`, `SDCBP`,
+`ANXA2`, `ANXA6`) load with the *opposite* sign — a mean partially cancels and blunts the estimate
+(the two scores correlate at r = +0.95, with PC1 the more conservative). PC1 weights each marker by
+its contribution and keeps the sign structure. The score's sign is oriented so higher always means
+more marked material.
+
+See [`methods.md`](methods.md#marker-protein-normalization) for the algorithm, the diagnostics, and
+how this relates to published methods (RUV, eigengenes, SVA/EigenMS).
 
 **What you get.** Both corrected outputs are rewritten with the score axis removed, each feature
 keeping its own abundance level (only the score-dependent part is taken out, so the values stay on the

@@ -115,8 +115,9 @@ user, so the same lists are available in every project and output directory.
 **PRISM ships three panels**, listed alongside your own and editable into cohort-specific variants. They
 arrive **unticked**, so nothing is colored until you ask for it, and a list of yours with the same name
 replaces the shipped one rather than doubling it. The same lists name a marker normalization
-(`marker_normalization.protein_list` — see [parameters.md](parameters.md)), so a panel curated for the
-plot can normalize as well.
+(`marker_normalization.protein_list` — see [parameters.md](parameters.md) for the keys and
+[methods.md](methods.md#marker-protein-normalization) for what the normalization does), so a panel
+curated for the plot can normalize as well.
 
 | Panel | What it is |
 |---|---|
