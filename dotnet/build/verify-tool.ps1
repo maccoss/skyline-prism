@@ -19,7 +19,13 @@ param(
     # Upper bound, not a dwell time: the run below polls the log and stops as soon as the tool has
     # either loaded its window or crashed, so the normal case takes about a second. The bound only has
     # to cover a cold start on the slowest machine that runs this - a CI runner, not this laptop.
-    [int]$WaitSeconds = 40
+    #
+    # Raised from 40 after a false failure on a GitHub Windows runner (run 33277696324): the tool
+    # started, logged no exception, and simply had not reached 'MainWindow loaded' when the deadline
+    # expired at 41s; an immediate re-run of the same commit passed. Because this polls and breaks
+    # early, a larger bound costs nothing when the tool is healthy - it only lengthens how long a
+    # genuine hang takes to report, which is the right way round for a gate that blocks every release.
+    [int]$WaitSeconds = 150
 )
 $ErrorActionPreference = 'Stop'
 
