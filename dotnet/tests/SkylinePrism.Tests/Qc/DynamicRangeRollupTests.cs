@@ -324,6 +324,42 @@ public class DynamicRangeRollupTests
     }
 
     /// <summary>
+    /// A group with no gene mapping contributes an EMPTY element to the ';'-joined identity columns.
+    /// Dropping blanks while splitting shifts every later index, so PG1 (no gene) would be labeled with
+    /// PG2's gene and PG2 would be left with none - the plot then colors and labels the wrong protein.
+    /// </summary>
+    [Fact]
+    public void AGroupWithNoGeneNameDoesNotShiftTheOtherGroupsIdentities()
+    {
+        var dir = TempDir();
+        try
+        {
+            // leading_gene_name is ";BBB": PG1 has no gene, PG2 has "BBB".
+            var path = WritePeptides(
+                dir,
+                peptides: new[] { "SHAREDK" },
+                groups: new[] { "PG1;PG2" },
+                accessions: new[] { "P1;P2" },
+                genes: new[] { ";BBB" },
+                new[] { 100.0 });
+
+            var entries = DynamicRangeRollup.Recompute(
+                ParquetTable.Load(path),
+                new DynamicRangeRollupOptions { Method = ProteinRollupMethod.Sum });
+
+            Assert.Equal(2, entries.Count);
+            var pg1 = entries.Single(e => e.Accession == "P1");
+            var pg2 = entries.Single(e => e.Accession == "P2");
+            Assert.Null(pg1.Gene);
+            Assert.Equal("BBB", pg2.Gene);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// The accessions iBAQ needs counts for - so the digest reads only the proteins on the plot rather
     /// than the whole FASTA's worth.
     /// </summary>

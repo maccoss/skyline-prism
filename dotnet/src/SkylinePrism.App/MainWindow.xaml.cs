@@ -535,13 +535,16 @@ public partial class MainWindow : Window
         if (c.TransitionRollup.Method == "library_assist")
         {
             var lib = LibraryCombo.Text?.Trim();
-            c.MarkerNormalization.Enabled = MarkerNormCheck.IsChecked == true;
-            c.MarkerNormalization.ProteinList = c.MarkerNormalization.Enabled
-                ? MarkerNormListCombo.SelectedItem as string
-                : null;
-
             c.TransitionRollup.LibraryPath = string.IsNullOrWhiteSpace(lib) ? null : lib;
         }
+
+        // Read unconditionally. This lived inside the library_assist branch above, which meant the
+        // checkbox did nothing at all for every other transition rollup - i.e. for the default. The
+        // control is independent of the library row, so its read has to be too.
+        c.MarkerNormalization.Enabled = MarkerNormCheck.IsChecked == true;
+        c.MarkerNormalization.ProteinList = c.MarkerNormalization.Enabled
+            ? MarkerNormListCombo.SelectedItem as string
+            : null;
 
         c.GlobalNormalization.Method = ComboText(PeptideNormCombo, "rt_lowess");
 

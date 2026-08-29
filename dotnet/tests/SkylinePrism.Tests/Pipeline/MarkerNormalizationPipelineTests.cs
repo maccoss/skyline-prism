@@ -111,7 +111,7 @@ public class MarkerNormalizationPipelineTests : IDisposable
     [Fact]
     public void TheMarkerAxisIsRemoved_SoEachMarkerVariesLessThanBefore()
     {
-        // The by-construction property: after residualising on a score built from these features,
+        // The by-construction property: after residualizing on a score built from these features,
         // what remains of each of them no longer carries the axis they shared.
         var plain = RunOnce();
         File.WriteAllLines(_listFile, AllProteins(Path.Combine(plain, "corrected_proteins.parquet")));
@@ -130,7 +130,7 @@ public class MarkerNormalizationPipelineTests : IDisposable
             Assert.True(after[i] <= before[i] + 1e-9,
                 $"protein {i}: variance rose from {before[i]:0.####} to {after[i]:0.####}");
         Assert.True(after.Sum() < before.Sum(),
-            "residualising on the markers' own axis should reduce their spread");
+            "residualizing on the markers' own axis should reduce their spread");
     }
 
     private static string[] AllProteins(string path)
@@ -188,6 +188,55 @@ public class MarkerNormalizationPipelineTests : IDisposable
         var ex = Assert.Throws<InvalidOperationException>(() =>
             ProteinListSet.Resolve("no such list", null, Path.Combine(_dir, "none.json")));
         Assert.Contains(ProteinList.EvMarkersName, ex.Message);
+    }
+
+    /// <summary>
+    /// A list's Visible flag must not decide whether it can normalize. Visible means "highlight this on
+    /// the Dynamic Range plot"; every shipped panel ships unticked, and routing the marker lookup through
+    /// the plot's visibility-filtered matcher made all three of them unusable as normalizers - the list
+    /// resolved by name and then vanished, and the stage reported zero markers found.
+    /// </summary>
+    [Fact]
+    public void AnInvisibleListStillNormalizes()
+    {
+        var plain = RunOnce();
+        var members = AllProteins(Path.Combine(plain, "corrected_proteins.parquet"));
+
+        var hidden = new ProteinList { Name = "hidden panel", Visible = false };
+        foreach (var m in members)
+            hidden.Members.Add(m);
+
+        var matcher = ProteinListSet.MatcherFor(hidden);
+        Assert.NotNull(matcher.Match(members[0], null, null));
+    }
+
+    /// <summary>
+    /// Stage 5a rewrites corrected_peptides/corrected_proteins IN PLACE - files the normalize stages
+    /// claim as their own cached output. So those stages have to be regenerated when the marker settings
+    /// change, or a re-run into the same directory keeps the previous run's adjustment and residualizes a
+    /// second time on top of it. Asserted on the fingerprints, which is what the cache actually compares.
+    /// </summary>
+    [Fact]
+    public void ChangingTheMarkerSettingsRebuildsTheFilesStage5aRewrites()
+    {
+        PrismConfig WithList(string? name)
+        {
+            var c = Config();
+            c.MarkerNormalization.Enabled = name is not null;
+            c.MarkerNormalization.ProteinList = name;
+            return c;
+        }
+
+        foreach (var stage in new[]
+                 { StageDependencies.PeptideNormalize, StageDependencies.ProteinNormalize })
+        {
+            var off = StageCache.Fingerprint(stage, WithList(null), upstream: new[] { "u" });
+            var ev = StageCache.Fingerprint(stage, WithList(ProteinList.EvMarkersName), upstream: new[] { "u" });
+            var glom = StageCache.Fingerprint(stage, WithList(ProteinList.GlomerulusName), upstream: new[] { "u" });
+
+            Assert.NotEqual(off, ev);
+            Assert.NotEqual(ev, glom);
+        }
     }
 
     private static byte[] Hash(string path) =>

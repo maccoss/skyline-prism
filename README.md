@@ -185,6 +185,13 @@ Merge reports  →  Transition→Peptide rollup  →  Peptide normalization  →
 Batch correction is applied at the reporting level (peptide and protein), not before rollup. RT-LOWESS
 normalization and reference sample handling are learned from control samples only.
 
+Optionally, a final **marker normalization** (Stage 5a, off by default) estimates one per-sample score
+from a set of marker proteins — PC1 of the z-scored markers, at the protein level — and removes from
+both corrected outputs the part that tracks it. It answers "what changed per unit of the marked
+material" rather than "what changed in whatever was captured", which is the question a capture-based
+experiment cannot otherwise separate. See
+**[docs/methods.md](docs/methods.md#marker-protein-normalization)**.
+
 ## Configuration
 
 `prism config-template` emits a commented YAML file with every option and its default. Key sections:
@@ -195,6 +202,8 @@ global_normalization: # rt_lowess (default) | median | quantile | vsn | none
 batch_correction:     # ComBat; peptide/protein levels; reference_anchored: true|false
 parsimony:            # fasta_path; shared_peptide_handling; enzyme (default trypsin) + enzyme_specificity
 protein_rollup:       # median_polish (default) | sum | topn | maxlfq | ibaq
+protein_normalization:# median
+marker_normalization: # off by default; PC1 of a named protein list, applied to both outputs
 qc_report:            # HTML report + plots
 ```
 
@@ -214,6 +223,7 @@ out/parameters.json` reproduces an earlier run's settings.
 | `proteins_raw.parquet` | log2 | Raw protein abundances from the peptide rollup |
 | `protein_groups.csv` | — | Protein group / parsimony assignments |
 | `sample_metadata.csv` | — | Resolved sample types and batches |
+| `marker_normalization.csv` | — | Per-sample marker score and loadings (only with `marker_normalization`) |
 | `parameters.json` | — | Full run configuration (provenance) |
 | `qc_report.html` + `qc_plots/` | — | QC report and diagnostic plots |
 

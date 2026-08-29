@@ -15,10 +15,10 @@ namespace SkylinePrism.Core.Pipeline;
 ///
 /// <para>Runs LAST, after both arms have been normalized and batch-corrected, for two reasons. The
 /// score has to be estimated from data whose per-sample loading is already removed - on raw
-/// abundances PC1 loads on injection volume, and residualising then re-does the loading step with
+/// abundances PC1 loads on injection volume, and residualizing then re-does the loading step with
 /// eighteen proteins' worth of noise. And it is estimated at the PROTEIN level and applied to both
 /// matrices, because how much marked material a sample contributed is a property of the sample, not
-/// of the table being analysed; re-estimating it from peptides would mostly re-measure the same
+/// of the table being analyzed; re-estimating it from peptides would mostly re-measure the same
 /// quantity with more noise.</para>
 ///
 /// <para>The two matrices are read, adjusted and rewritten in place. That is a deliberate extra pass
@@ -37,7 +37,7 @@ internal static class MarkerNormalizeStage
         int PeptidesAdjusted);
 
     /// <summary>
-    /// Residualise <paramref name="correctedProteins"/> and <paramref name="correctedPeptides"/> on a
+    /// Residualize <paramref name="correctedProteins"/> and <paramref name="correctedPeptides"/> on a
     /// score built from the markers in <paramref name="list"/>. Both files are LINEAR on disk; the fit
     /// is done in log2 and the values written back linear, the scale the rest of PRISM contracts for.
     /// </summary>
@@ -45,7 +45,9 @@ internal static class MarkerNormalizeStage
         string correctedProteins, string? correctedPeptides, ProteinList list,
         MarkerScoreMethod method, IReadOnlyList<string> samples, Action<string> report)
     {
-        var matcher = new ProteinListSet { Lists = { list } }.BuildMatcher();
+        // MatcherFor, not BuildMatcher: the latter keeps only VISIBLE lists, which is a plot setting.
+        // Every shipped panel ships unticked, so routing normalization through it found zero markers.
+        var matcher = ProteinListSet.MatcherFor(list);
 
         // ---- the marker block, from the protein matrix -------------------------------------------
         var protein = WideMatrix.Read(correctedProteins, ProteinMetaNames);
@@ -115,7 +117,7 @@ internal static class MarkerNormalizeStage
     }
 
     /// <summary>
-    /// Residualise, flag the markers, and rewrite the file. Returns the number of features adjusted.
+    /// Residualize, flag the markers, and rewrite the file. Returns the number of features adjusted.
     /// </summary>
     private static int Adjust(
         WideMatrix matrix, double[] score, IReadOnlyList<int> markerRows, string path,
@@ -126,7 +128,7 @@ internal static class MarkerNormalizeStage
             for (var j = 0; j < matrix.SampleCount; j++)
                 log2[i, j] = Log2(matrix.Values[i, j]);
 
-        MarkerNormalization.Residualise(log2, score);
+        MarkerNormalization.Residualize(log2, score);
 
         for (var i = 0; i < matrix.RowCount; i++)
             for (var j = 0; j < matrix.SampleCount; j++)
@@ -140,7 +142,7 @@ internal static class MarkerNormalizeStage
         matrix.SetFlag(MarkerColumn, isMarker);
 
         matrix.Write(path);
-        report($"  Rewrote {Path.GetFileName(path)}: {matrix.RowCount:N0} features residualised, "
+        report($"  Rewrote {Path.GetFileName(path)}: {matrix.RowCount:N0} features residualized, "
             + $"{markerRows.Count:N0} flagged as markers.");
         return matrix.RowCount;
     }

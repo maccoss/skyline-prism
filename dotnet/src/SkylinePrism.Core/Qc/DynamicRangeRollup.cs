@@ -213,9 +213,13 @@ public static class DynamicRangeRollup
             var ids = DynamicRange.SplitGroups(At(groupIds, row));
             if (ids.Count == 0)
                 continue;
-            var rowNames = DynamicRange.SplitGroups(At(names, row));
-            var rowAccessions = DynamicRange.SplitGroups(At(accessions, row));
-            var rowGenes = DynamicRange.SplitGroups(At(genes, row));
+            // Aligned, NOT SplitGroups: a group with no gene mapping contributes an EMPTY element, and
+            // dropping it shifts every later index. A peptide in PG1 (no gene) and PG2 (gene ALB) has
+            // leading_gene_name ";ALB" - discard the blank and position 0 becomes "ALB", labelling PG1
+            // with PG2's gene and leaving PG2 with none.
+            var rowNames = SplitAligned(At(names, row));
+            var rowAccessions = SplitAligned(At(accessions, row));
+            var rowGenes = SplitAligned(At(genes, row));
 
             for (var k = 0; k < ids.Count; k++)
             {
@@ -248,4 +252,19 @@ public static class DynamicRangeRollup
 
     private static string? At(string?[]? column, int row) =>
         column is null || row >= column.Length ? null : column[row];
+
+    /// <summary>
+    /// Split a ';'-separated identity column KEEPING empty entries, so position k still corresponds to
+    /// position k of protein_group. Returns an empty list for a null or empty value, which is the
+    /// "this column is absent" case rather than "one blank entry".
+    /// </summary>
+    private static IReadOnlyList<string?> SplitAligned(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return Array.Empty<string?>();
+        return value!.Split(DynamicRange.GroupSeparator)
+            .Select(v => v.Trim())
+            .Select(v => v.Length == 0 ? null : v)
+            .ToArray();
+    }
 }

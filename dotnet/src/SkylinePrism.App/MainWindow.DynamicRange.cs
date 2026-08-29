@@ -486,7 +486,8 @@ public partial class MainWindow
                   + "re-run with output.format: parquet."
                 : rollup is not null
                     ? $"No {fileName}.parquet in the output directory. A recomputed rollup is built from "
-                      + "the peptide matrix - re-run with output.peptides: true, or switch back to 'As run'."
+                      + "the peptide matrix, so that file has to be there - re-run PRISM, or switch the "
+                      + "rollup back to 'As run' to read the protein matrix instead."
                     : $"No {fileName}.parquet in the output directory. Run PRISM, or point the output "
                       + "directory at a previous run.");
             return;

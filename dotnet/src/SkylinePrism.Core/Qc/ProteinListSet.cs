@@ -234,6 +234,17 @@ public sealed class ProteinListSet
     public ProteinListMatcher BuildMatcher() => new(WithBuiltIns().Where(l => l.Visible).ToList());
 
     /// <summary>
+    /// A matcher over ONE named list, whatever its <see cref="ProteinList.Visible"/> state.
+    /// <para>
+    /// Visibility means "highlight this on the Dynamic Range plot" and has nothing to do with
+    /// normalization. Going through <see cref="BuildMatcher"/> for a marker set made every shipped
+    /// panel unusable as a normalizer the moment they were changed to ship unticked: the list resolved
+    /// by name, then the visibility filter dropped it and the stage reported zero markers found.
+    /// </para>
+    /// </summary>
+    public static ProteinListMatcher MatcherFor(ProteinList list) => new(new[] { list });
+
+    /// <summary>
     /// The user's lists followed by any shipped list they have not overridden, which is what a picker
     /// should offer and what a config name resolves against.
     /// </summary>

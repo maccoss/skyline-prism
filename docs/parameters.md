@@ -105,10 +105,10 @@ makes total signal equal by construction.
 is computed at the **protein** level and applied to **both** outputs:
 
 - The score must come from data whose per-sample loading is already removed. On raw abundances PC1
-  loads on injection volume, and residualising then re-does the loading step using a handful of
+  loads on injection volume, and residualizing then re-does the loading step using a handful of
   proteins' worth of noise.
 - How much marked material a sample contributed is a property of *the sample*, not of the table being
-  analysed, so re-estimating it from peptides would mostly re-measure the same quantity with more noise.
+  analyzed, so re-estimating it from peptides would mostly re-measure the same quantity with more noise.
 
 **Why PC1 rather than the mean.** Markers need not move as one block. On the cohort the shipped EV
 panel comes from, PC1 explains 70.4% of marker variance and four of the eighteen (`CD81`, `SDCBP`,

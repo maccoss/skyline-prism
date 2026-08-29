@@ -7,10 +7,17 @@ namespace SkylinePrism.Tests.Normalization;
 
 /// <summary>
 /// Marker-based normalization: PC1 of a marker block as a per-sample score, then every feature
-/// residualised on it. Ported from the EV-content analysis it was built for, and checked against that
-/// notebook's numpy on the real cohort: same variance explained (0.645136), same correlation with the
-/// mean marker profile (0.927921), the same four opposing loadings (ANXA2, ANXA6, CD81, SDCBP), and
-/// per-sample scores agreeing to 5e-07.
+/// residualized on it. Ported from the EV-content analysis it was built for, and checked against that
+/// notebook's numpy on the real cohort: same variance explained, same correlation with the mean marker
+/// profile, the same four opposing loadings (ANXA2, ANXA6, CD81, SDCBP), and per-sample scores agreeing
+/// to 5e-07.
+/// <para>
+/// The parity run was against the notebook AS IT STOOD AT PORT TIME (variance explained 0.645136,
+/// correlation with the mean profile 0.927921). The notebook has since been re-run on newer PRISM
+/// output and now reports 0.704 and 0.951 - which is what the docs quote. Both are that cohort at that
+/// moment; neither is a property of this code, so nothing here asserts either number. What IS pinned
+/// is the behavior, on synthetic blocks, below.
+/// </para>
 /// </summary>
 public class MarkerNormalizationTests
 {
@@ -80,7 +87,7 @@ public class MarkerNormalizationTests
     }
 
     [Fact]
-    public void ResidualisingRemovesTheScoreAxis_AndKeepsEachFeaturesOwnLevel()
+    public void ResidualizingRemovesTheScoreAxis_AndKeepsEachFeaturesOwnLevel()
     {
         var factor = Factor(18);
         var score = MarkerNormalization.ComputeScore(
@@ -95,7 +102,7 @@ public class MarkerNormalizationTests
         }
         var meanBefore = Enumerable.Range(0, 18).Select(j => m[0, j]).Average();
 
-        MarkerNormalization.Residualise(m, score.Score);
+        MarkerNormalization.Residualize(m, score.Score);
 
         // The tracking feature is flattened...
         var after = Enumerable.Range(0, 18).Select(j => m[0, j]).ToArray();
@@ -118,7 +125,7 @@ public class MarkerNormalizationTests
         m[0, 1] = 10.0;
         m[0, 3] = 14.0;
 
-        MarkerNormalization.Residualise(m, score);
+        MarkerNormalization.Residualize(m, score);
 
         Assert.Equal(10.0, m[0, 1], 9);
         Assert.Equal(14.0, m[0, 3], 9);

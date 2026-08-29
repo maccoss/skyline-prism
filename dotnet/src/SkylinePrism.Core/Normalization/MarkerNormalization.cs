@@ -12,7 +12,7 @@ namespace SkylinePrism.Core.Normalization;
 /// <para><b>What it answers.</b> A capture-based experiment measures whatever the beads caught. If the
 /// captured amount of the thing you care about varies between samples - extracellular vesicles, say -
 /// then every protein's share moves with it, and a plain loading normalization cannot tell that apart
-/// from biology, because it makes total signal equal by construction. Residualising on a marker score
+/// from biology, because it makes total signal equal by construction. Residualizing on a marker score
 /// turns "what changed in what was captured" into "what changed per unit of the marked material".</para>
 ///
 /// <para><b>Why PC1 and not the mean of the markers.</b> Markers do not have to move as one block. In
@@ -25,7 +25,7 @@ namespace SkylinePrism.Core.Normalization;
 ///
 /// <para><b>Where it belongs.</b> AFTER the ordinary normalization, never instead of it. The score has
 /// to be estimated from data whose per-sample loading is already removed; computed on raw abundances,
-/// PC1 loads on injection volume, and residualising then quietly re-does the loading step using
+/// PC1 loads on injection volume, and residualizing then quietly re-does the loading step using
 /// eighteen proteins' worth of noise instead of everything.</para>
 /// </summary>
 public static class MarkerNormalization
@@ -155,7 +155,7 @@ public static class MarkerNormalization
     /// residual to speak of, and zeroing it would fabricate a result.
     /// </para>
     /// </summary>
-    public static void Residualise(double[,] log2Matrix, IReadOnlyList<double> score)
+    public static void Residualize(double[,] log2Matrix, IReadOnlyList<double> score)
     {
         var nFeatures = log2Matrix.GetLength(0);
         var nSamples = log2Matrix.GetLength(1);
@@ -213,7 +213,7 @@ public static class MarkerNormalization
     }
 }
 
-/// <summary>How the per-sample marker score is summarised from the marker block.</summary>
+/// <summary>How the per-sample marker score is summarized from the marker block.</summary>
 public enum MarkerScoreMethod
 {
     /// <summary>First principal component of the z-scored markers (default).</summary>

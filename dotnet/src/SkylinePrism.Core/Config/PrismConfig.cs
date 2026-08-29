@@ -374,7 +374,7 @@ public sealed class PrismConfig
     /// </para>
     /// <para>
     /// The score is computed at the PROTEIN level and applied to both matrices: how much marked
-    /// material a sample contributed is a property of the sample, not of the table being analysed, and
+    /// material a sample contributed is a property of the sample, not of the table being analyzed, and
     /// re-estimating it from peptides would mostly re-measure the same quantity with more noise.
     /// </para>
     /// </summary>
@@ -397,7 +397,7 @@ public sealed class PrismConfig
         public string? ProteinListFile { get; set; }
 
         /// <summary>
-        /// How the per-sample score is summarised: <c>pc1</c> (default) or <c>mean</c> of the z-scored
+        /// How the per-sample score is summarized: <c>pc1</c> (default) or <c>mean</c> of the z-scored
         /// markers. PC1 handles markers that do not share a sign, where a mean partially cancels.
         /// </summary>
         public string Method { get; set; } = "pc1";

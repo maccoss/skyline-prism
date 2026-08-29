@@ -708,7 +708,7 @@ cannot separate that from biology, because it makes total signal equal *by const
 or RT-LOWESS normalization, a sample with half the EVs and a sample with twice the EVs look the same
 size, and the difference has been pushed into the composition of every protein.
 
-Residualising on a marker score turns **"what changed in what was captured"** into **"what changed per
+Residualizing on a marker score turns **"what changed in what was captured"** into **"what changed per
 unit of the marked material"**. Those are different questions, and only the second one is usually the
 one being asked.
 
@@ -740,7 +740,7 @@ of features `Pca` must avoid materializing.
 flipped, if needed, so the score correlates **positively** with the mean z-scored marker profile.
 Without this, "higher score" would mean more marked material or less, at random, from run to run.
 
-**4. Residualise every feature** on the score. Per feature, an ordinary least-squares fit of its LOG2
+**4. Residualize every feature** on the score. Per feature, an ordinary least-squares fit of its LOG2
 profile on $[1, \text{score}]$, keeping the residual **with the intercept added back**:
 
 $$y'_{gj} = y_{gj} - \hat{\beta}_g \cdot \text{score}_j, \qquad
@@ -766,10 +766,10 @@ is computed at the **protein** level then applied to **both** the peptide and th
 
 - **After the loading normalization, never instead of it.** The score has to come from data whose
   per-sample loading is already removed. Computed on raw abundances, PC1 loads on injection volume,
-  and residualising then quietly re-does the loading step using a couple of dozen proteins' worth of
+  and residualizing then quietly re-does the loading step using a couple of dozen proteins' worth of
   noise instead of the whole matrix.
 - **One score, from the protein level.** How much marked material a sample contributed is a property
-  of *the sample*, not of the table being analysed. Re-estimating it from the peptide matrix would
+  of *the sample*, not of the table being analyzed. Re-estimating it from the peptide matrix would
   mostly re-measure the same quantity with more noise, and would let the two outputs disagree about a
   fact that has one answer.
 - `peptides_log2_internal.parquet` is deliberately **not** adjusted. It is what the protein rollup
@@ -795,7 +795,7 @@ judged rather than trusted. What to look at:
 | **Fewer than 3 quantified markers** | Hard error, not a silent fallback. A score cannot be defined. |
 | **PC1 variance explained < 40%** | Warning. The markers are not moving together, so the score is a weak summary of them. |
 | **Score correlates with total ion current / loaded material** | Expected to a degree, and ambiguous: compatible with a residual technical effect *or* with the capture biology. Worth reporting, not worth panicking about. |
-| **Score separates cases from controls** | The danger sign. That is pathology, not capture, and residualising on it removes the finding. See below. |
+| **Score separates cases from controls** | The danger sign. That is pathology, not capture, and residualizing on it removes the finding. See below. |
 
 **The markers themselves stay in the outputs**, flagged `normalization_marker`. Their residual is near
 zero by construction, so **exclude them from any result read off these files** — a test among them is
@@ -811,7 +811,7 @@ remove the thing being measured.
 
 ### Relationship to published methods
 
-The mechanism — factor-analyse a *designated* subset of features, then regress the leading factor out
+The mechanism — factor-analyze a *designated* subset of features, then regress the leading factor out
 of everything — is well precedented. The **intent** is where PRISM's use differs from the closest
 published family, and that difference is the thing to keep in mind when reading those papers.
 
@@ -836,7 +836,7 @@ clinical MS proteomics cohorts (Dubois et al., 2022).
 **PC1 of a feature set as a summary quantity.** "Eigengenes" — SVD components of an expression matrix,
 with the ones judged to be artifact filtered out — go back to Alter, Brown & Botstein (2000). WGCNA's
 *module eigengene* is literally PC1 of a gene set (Langfelder & Horvath, 2007, 2008), though it is used
-as a summary and a covariate rather than to residualise the matrix.
+as a summary and a covariate rather than to residualize the matrix.
 
 **Unsupervised cousins** estimate the factor from *all* features rather than a chosen set: SVA (Leek &
 Storey, 2007; Leek et al., 2012) and, in our own field, **EigenMS** (Karpievitch et al., 2009), which
@@ -854,7 +854,7 @@ to be too blunt:
 
 **What was not found.** A literature search on **2026-08-29** (PubMed, via the `search_articles` /
 `get_article_metadata` tools) did not turn up a paper doing precisely this: PC1 of a *curated EV or
-glomerular marker panel*, OLS-residualised out of an LC-MS proteomics matrix. Searches covering EV
+glomerular marker panel*, OLS-residualized out of an LC-MS proteomics matrix. Searches covering EV
 marker normalization, glomerular/LCM proteomics normalization, and podocyte-marker normalization
 returned nothing of that shape. So the machinery is well precedented and this particular application of
 it may not be — which is either a gap in the search or a small novelty. Treat it as "not found", not as
@@ -864,7 +864,7 @@ it may not be — which is either a gap in the search or a small novelty. Treat 
 
 | Piece | Location |
 |---|---|
-| Score and residualisation | `dotnet/src/SkylinePrism.Core/Normalization/MarkerNormalization.cs` |
+| Score and residualization | `dotnet/src/SkylinePrism.Core/Normalization/MarkerNormalization.cs` |
 | Stage 5a driver (matching, flagging, CSV) | `dotnet/src/SkylinePrism.Core/Pipeline/MarkerNormalizeStage.cs` |
 | Marker panels and matching | `dotnet/src/SkylinePrism.Core/Qc/ProteinListSet.cs` |
 | Config keys | [`parameters.md`](parameters.md#marker_normalization--normalize-to-a-set-of-proteins-stage-5a) |

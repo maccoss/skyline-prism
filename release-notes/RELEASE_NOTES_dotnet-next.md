@@ -15,7 +15,7 @@ as the GitHub Release description and fails if it is missing.
 
   It runs **after** the ordinary normalization, never instead of it, and one protein-level score is
   applied to **both** outputs: how much marked material a sample contributed is a property of the
-  sample, not of the table being analysed.
+  sample, not of the table being analyzed.
 
   The markers are defined by a **protein list** - the same lists the Dynamic Range tab highlights,
   selectable in the GUI or named in the config (`protein_list`), or given as a file
