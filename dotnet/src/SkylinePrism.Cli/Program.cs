@@ -63,7 +63,11 @@ public static class Program
         var provenanceLoaded = false;
         if (provenancePath is not null)
         {
-            config = Provenance.LoadConfig(provenancePath);
+            config = Provenance.LoadConfig(provenancePath, out var redirectedFasta);
+            // A substituted database must never be silent: it changes protein grouping and iBAQ counts.
+            foreach (var key in redirectedFasta)
+                Console.Error.WriteLine(
+                    $"NOTE: {key} no longer exists; using the copy this run archived beside its outputs.");
             if (inputs.Count == 0)
                 foreach (var s in Provenance.SourceFiles(provenancePath))
                     inputs.Add(s);

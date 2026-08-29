@@ -39,7 +39,8 @@ public static class Provenance
     };
 
     public static void Write(
-        string path, PrismConfig config, IReadOnlyList<string> sourceFiles, Stats stats, string processingDateUtc)
+        string path, PrismConfig config, IReadOnlyList<string> sourceFiles, Stats stats,
+        string processingDateUtc, IReadOnlyList<FastaArchive.Entry>? archivedFasta = null)
     {
         var doc = new Dictionary<string, object?>
         {
@@ -49,6 +50,11 @@ public static class Provenance
             // host when the QC report renders, because `prism qc` can regenerate a report anywhere.
             ["host"] = Environment.MachineName,
             ["source_files"] = sourceFiles,
+            // Where each FASTA came from and where the run kept a copy. Recorded beside the config
+            // rather than inside it so the config still names the ORIGINAL path: the stage cache stamps
+            // that path, and rewriting it to the copy would invalidate every downstream stage on a
+            // re-run that changed nothing.
+            ["fasta_files"] = archivedFasta is { Count: > 0 } ? archivedFasta : null,
             ["processing_parameters"] = config,
             ["statistics"] = new Dictionary<string, int>
             {
@@ -65,13 +71,34 @@ public static class Provenance
     /// Reconstruct the PrismConfig from a run's parameters.json. Reads the embedded full config; if
     /// the file only carries the Python-subset sections, those still deserialize onto defaults.
     /// </summary>
-    public static PrismConfig LoadConfig(string metadataJsonPath)
+    public static PrismConfig LoadConfig(string metadataJsonPath) =>
+        LoadConfig(metadataJsonPath, out _);
+
+    /// <summary>
+    /// As <see cref="LoadConfig(string)"/>, also reporting any FASTA that was resolved to the copy the
+    /// run archived because the original path no longer exists. The caller should say so: substituting
+    /// a database silently is exactly the failure this archive exists to prevent.
+    /// </summary>
+    public static PrismConfig LoadConfig(string metadataJsonPath, out IReadOnlyList<string> redirectedFasta)
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(metadataJsonPath));
         if (!doc.RootElement.TryGetProperty("processing_parameters", out var pp))
             throw new InvalidOperationException(
                 $"'{metadataJsonPath}' has no 'processing_parameters' (not a PRISM provenance file).");
-        return JsonSerializer.Deserialize<PrismConfig>(pp.GetRawText(), Options()) ?? new PrismConfig();
+        var config = JsonSerializer.Deserialize<PrismConfig>(pp.GetRawText(), Options()) ?? new PrismConfig();
+
+        redirectedFasta = Array.Empty<string>();
+        if (doc.RootElement.TryGetProperty("fasta_files", out var fasta)
+            && fasta.ValueKind == JsonValueKind.Array)
+        {
+            var entries = JsonSerializer.Deserialize<List<FastaArchive.Entry>>(fasta.GetRawText(), Options());
+            if (entries is { Count: > 0 })
+            {
+                var dir = Path.GetDirectoryName(Path.GetFullPath(metadataJsonPath)) ?? ".";
+                redirectedFasta = FastaArchive.Restore(config, dir, entries);
+            }
+        }
+        return config;
     }
 
     /// <summary>

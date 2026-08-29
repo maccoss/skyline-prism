@@ -34,6 +34,7 @@ output_dir/
 ├── protein_groups.csv              # Protein group definitions and peptide assignments
 ├── sample_metadata.csv             # Sample metadata (auto-generated or merged from input)
 ├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
+├── fasta/                          # Copy of the search database(s) this run used (if any)
 ├── parameters.json                 # Complete provenance and processing parameters
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)

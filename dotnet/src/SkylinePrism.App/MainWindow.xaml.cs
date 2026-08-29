@@ -51,6 +51,9 @@ public partial class MainWindow : Window
         // saved document, SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the
         // box stays empty so the user must choose (no defaulting into OneDrive-synced Documents).
         RunButton.IsEnabled = false;
+        // Here, not only in ApplyConfigToUi: that runs when a provenance file is opened, so on a
+        // fresh start the hint would be blank and the box would read as decoration.
+        UpdateFastaHint();
 
         try
         {
@@ -386,6 +389,84 @@ public partial class MainWindow : Window
             LibraryRow.IsEnabled = ComboText(TransitionRollupCombo, "sum") == "library_assist";
     }
 
+    /// <summary>
+    /// <c>protein_rollup.ibaq.fasta_path</c> as a loaded config set it, or null. The GUI has no control
+    /// for it - it exists so iBAQ can digest a different database from the one parsimony groups against -
+    /// so it is round-tripped rather than edited.
+    /// </summary>
+    private string? _ibaqFastaOverride;
+
+    private void OnBrowseFasta(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select the search FASTA",
+            Filter = "FASTA (*.fasta;*.fa;*.faa)|*.fasta;*.fa;*.faa|All files (*.*)|*.*",
+        };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
+        if (dlg.ShowDialog() == true)
+            FastaBox.Text = dlg.FileName;
+    }
+
+    private void OnFastaChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        => UpdateFastaHint();
+
+    private void OnProteinRollupChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (IsInitialized)
+            UpdateFastaHint();
+    }
+
+    /// <summary>
+    /// Say what the current FASTA setting means, rather than leaving the box to be read as decoration.
+    /// The case that matters is iBAQ without a database: the run still succeeds, dividing by the
+    /// OBSERVED peptide count instead of the theoretical one, which is close to a per-peptide mean and
+    /// not the absolute-abundance estimate iBAQ is chosen for. That fallback is only mentioned in the
+    /// log today, which is not where someone picking a method is looking.
+    /// </summary>
+    private void UpdateFastaHint()
+    {
+        if (FastaHint is null || FastaBox is null || ProteinRollupCombo is null)
+            return;
+
+        var path = FastaBox.Text?.Trim();
+        var have = !string.IsNullOrWhiteSpace(path);
+        var isIbaq = string.Equals(
+            ComboText(ProteinRollupCombo, "median_polish"), "ibaq", StringComparison.OrdinalIgnoreCase);
+
+        if (have && !File.Exists(path))
+        {
+            FastaHint.Text = "File not found - the run will fall back to the Skyline accession column.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+        }
+        else if (isIbaq && !have)
+        {
+            FastaHint.Text = "iBAQ needs a FASTA. Without one it divides by the OBSERVED peptide count, "
+                + "which is not an iBAQ.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+        }
+        else if (isIbaq && !string.IsNullOrWhiteSpace(_ibaqFastaOverride))
+        {
+            // The loaded config points iBAQ at its own database. Say so, because the box does not show it
+            // and the run will not use what is on screen for the iBAQ counts.
+            FastaHint.Text = "iBAQ uses its own database from the loaded config: "
+                + Path.GetFileName(_ibaqFastaOverride);
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+        }
+        else if (have)
+        {
+            FastaHint.Text = "Enzyme-aware parsimony" + (isIbaq ? " and iBAQ counts." : ".");
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+        }
+        else
+        {
+            FastaHint.Text = "Optional - without it, protein groups come from the Skyline accession column.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+        }
+    }
+
     private void OnBrowseLibrary(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
@@ -538,6 +619,13 @@ public partial class MainWindow : Window
         UpdateSharedPeptideRow();
         SelectCombo(ProteinRollupCombo, c.ProteinRollup.Method);
         MinPeptidesBox.Text = c.ProteinRollup.MinPeptides.ToString();
+        // The box shows the path it OWNS - parsimony.fasta_path. protein_rollup.ibaq.fasta_path is a
+        // separate key the GUI does not edit (a smaller curated digest database is a legitimate reason to
+        // set it), so it is remembered and written back untouched. Showing it here instead would mean
+        // pressing Run silently re-pointed protein grouping at the iBAQ database.
+        FastaBox.Text = c.Parsimony.FastaPath ?? "";
+        _ibaqFastaOverride = c.ProteinRollup.Ibaq.FastaPath;
+        UpdateFastaHint();
         SelectCombo(ProteinNormCombo, c.ProteinNormalization.Method);
     }
 
@@ -596,6 +684,12 @@ public partial class MainWindow : Window
 
         c.ProteinRollup.Method = ComboText(ProteinRollupCombo, "median_polish");
         c.ProteinRollup.MinPeptides = ParseInt(MinPeptidesBox.Text, 3);
+        var fasta = FastaBox.Text?.Trim();
+        c.Parsimony.FastaPath = string.IsNullOrWhiteSpace(fasta) ? null : fasta;
+        // Carried through from a loaded config, never invented here. Dropping it would silently move the
+        // iBAQ digest onto the parsimony database; overwriting it with the box would silently move
+        // protein grouping onto the iBAQ one. The GUI edits one key and leaves the other alone.
+        c.ProteinRollup.Ibaq.FastaPath = _ibaqFastaOverride;
         c.ProteinNormalization.Method = ComboText(ProteinNormCombo, "median");
 
         c.QcReport.Enabled = true;
