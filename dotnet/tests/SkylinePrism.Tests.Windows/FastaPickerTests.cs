@@ -54,6 +54,30 @@ public class FastaPickerTests
     }
 
     /// <summary>
+    /// The box owns ONE key. protein_rollup.ibaq.fasta_path is separate by design - a smaller curated
+    /// digest database is a legitimate reason to set it - so the GUI round-trips it instead of editing it.
+    ///
+    /// <para>Showing it in the box and writing the box back to parsimony.fasta_path silently re-pointed
+    /// protein GROUPING at the iBAQ database: open a provenance with two different FASTAs, press Run
+    /// without touching anything, and Stage 3 built its groups against the wrong one, with no warning and
+    /// no way to recover the original pair from the GUI.</para>
+    /// </summary>
+    [Fact]
+    public void TheIbaqFastaIsRoundTrippedNotOverwritten()
+    {
+        var apply = Between(CodeBehind, "private void ApplyConfigToUi(PrismConfig c)", "\n    private ");
+        var build = Between(CodeBehind, "private PrismConfig BuildConfigFromUi()", "\n    private ");
+
+        // The box shows the key it owns, not the one it does not.
+        Assert.Contains("FastaBox.Text = c.Parsimony.FastaPath", apply);
+        Assert.DoesNotContain("FastaBox.Text = c.ProteinRollup.Ibaq.FastaPath", apply);
+
+        // The other key is remembered on load and written back unchanged.
+        Assert.Contains("_ibaqFastaOverride = c.ProteinRollup.Ibaq.FastaPath", apply);
+        Assert.Contains("c.ProteinRollup.Ibaq.FastaPath = _ibaqFastaOverride", build);
+    }
+
+    /// <summary>
     /// iBAQ is offered now that a FASTA can be supplied. It was withheld for exactly that reason, so if
     /// the picker is ever removed this should go with it.
     /// </summary>
@@ -67,8 +91,10 @@ public class FastaPickerTests
     }
 
     /// <summary>
-    /// The hint is set when the window opens, not only when a provenance file is opened - the mistake
-    /// the marker-normalization picker shipped with. See <see cref="MarkerListPickerTests"/>.
+    /// The hint is set when the window opens, not only when a provenance file is opened. A control
+    /// populated solely from ApplyConfigToUi looks broken on a fresh install, because that method runs
+    /// only on "Open provenance..." - which is easy to miss, since whoever is testing usually has a
+    /// previous run to load.
     /// </summary>
     [Fact]
     public void TheHintIsSetAtStartup()

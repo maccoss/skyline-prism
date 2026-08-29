@@ -220,6 +220,13 @@ dotnet-v26.12.0.
 The same setting feeds the Dynamic Range tab's **iBAQ** rollup view, which reads it back from the run's
 `parameters.json`.
 
+**The run keeps a copy.** Whatever FASTA a run used is copied into `fasta/` in the output directory, and
+`parameters.json` records where it came from and where the copy sits. An absolute path describes a run;
+it does not let anyone repeat it once the database has been reorganized, renamed, or the output directory
+handed to a collaborator. `--from-provenance` prefers the original whenever it is still there — so a
+re-run is not invalidated by the copy existing — and falls back to the copy only when the original has
+gone, saying so rather than substituting a database silently.
+
 The rollup picker offers `topn`, `maxlfq` and `ibaq` alongside `median_polish` and `sum`; iBAQ was
 previously absent because nothing in the tool could give it a database.
 

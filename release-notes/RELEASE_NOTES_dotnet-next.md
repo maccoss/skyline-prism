@@ -20,6 +20,17 @@ as the GitHub Release description and fails if it is missing.
   with no database - rather than leaving it to a line in the log, which is not where someone picking a
   method is looking.
 
+- **A run now keeps a copy of the FASTA it used**, in `fasta/` beside its outputs, with the original path
+  and the copy both recorded in `parameters.json`. An absolute path describes a run; it does not let
+  anyone repeat it once the database has been reorganized or the output directory handed to someone
+  else - `--from-provenance` would quietly fall back to the Skyline accession column for parsimony, or
+  to observed counts for iBAQ, and the same numbers would never come back.
+
+  `--from-provenance` prefers the ORIGINAL whenever it still exists, so a re-run is not invalidated by
+  the copy: the stage cache stamps the path, size and write time, and preferring the copy would rebuild
+  every downstream stage for nothing. It falls back to the copy only when the original has gone, and
+  says which key it redirected rather than substituting a database in silence.
+
 ## Bug Fixes
 
 ## Performance

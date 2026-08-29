@@ -676,10 +676,14 @@ public sealed class PrismPipeline
         report("============================================================");
         WriteSampleMetadata(
             Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType, metadata);
+        // Keep a copy of the search database beside the results. An absolute path describes the run;
+        // it does not let anyone repeat it once the database has been reorganized or the output
+        // directory handed to someone else.
+        var archivedFasta = FastaArchive.Archive(config, outputDir, report);
         Provenance.Write(
             Path.Combine(outputDir, "parameters.json"), config, inputs,
             new Provenance.Stats(samples.Count, nPeptides, nProteins, groups.Count),
-            DateTime.UtcNow.ToString("o"));
+            DateTime.UtcNow.ToString("o"), archivedFasta);
         var nRef = resolvedType.Values.Count(t => t == "reference");
         var nQc = resolvedType.Values.Count(t => t == "qc");
         var nExp = resolvedType.Values.Count(t => t == "experimental");

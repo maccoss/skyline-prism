@@ -386,6 +386,13 @@ public partial class MainWindow : Window
             LibraryRow.IsEnabled = ComboText(TransitionRollupCombo, "sum") == "library_assist";
     }
 
+    /// <summary>
+    /// <c>protein_rollup.ibaq.fasta_path</c> as a loaded config set it, or null. The GUI has no control
+    /// for it - it exists so iBAQ can digest a different database from the one parsimony groups against -
+    /// so it is round-tripped rather than edited.
+    /// </summary>
+    private string? _ibaqFastaOverride;
+
     private void OnBrowseFasta(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
@@ -436,6 +443,14 @@ public partial class MainWindow : Window
             FastaHint.Text = "iBAQ needs a FASTA. Without one it divides by the OBSERVED peptide count, "
                 + "which is not an iBAQ.";
             FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+        }
+        else if (isIbaq && !string.IsNullOrWhiteSpace(_ibaqFastaOverride))
+        {
+            // The loaded config points iBAQ at its own database. Say so, because the box does not show it
+            // and the run will not use what is on screen for the iBAQ counts.
+            FastaHint.Text = "iBAQ uses its own database from the loaded config: "
+                + Path.GetFileName(_ibaqFastaOverride);
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
         }
         else if (have)
         {
@@ -573,9 +588,12 @@ public partial class MainWindow : Window
         UpdateSharedPeptideRow();
         SelectCombo(ProteinRollupCombo, c.ProteinRollup.Method);
         MinPeptidesBox.Text = c.ProteinRollup.MinPeptides.ToString();
-        // ibaq.fasta_path wins if the config set one; parsimony.fasta_path is the shared default and is
-        // what the box writes back, because one database serves both.
-        FastaBox.Text = c.ProteinRollup.Ibaq.FastaPath ?? c.Parsimony.FastaPath ?? "";
+        // The box shows the path it OWNS - parsimony.fasta_path. protein_rollup.ibaq.fasta_path is a
+        // separate key the GUI does not edit (a smaller curated digest database is a legitimate reason to
+        // set it), so it is remembered and written back untouched. Showing it here instead would mean
+        // pressing Run silently re-pointed protein grouping at the iBAQ database.
+        FastaBox.Text = c.Parsimony.FastaPath ?? "";
+        _ibaqFastaOverride = c.ProteinRollup.Ibaq.FastaPath;
         UpdateFastaHint();
         SelectCombo(ProteinNormCombo, c.ProteinNormalization.Method);
     }
@@ -635,10 +653,12 @@ public partial class MainWindow : Window
 
         c.ProteinRollup.Method = ComboText(ProteinRollupCombo, "median_polish");
         c.ProteinRollup.MinPeptides = ParseInt(MinPeptidesBox.Text, 3);
-        // Written to parsimony.fasta_path only: iBAQ falls back to it, so setting both would be two
-        // places to keep in step for no gain, and the provenance would suggest they could differ.
         var fasta = FastaBox.Text?.Trim();
         c.Parsimony.FastaPath = string.IsNullOrWhiteSpace(fasta) ? null : fasta;
+        // Carried through from a loaded config, never invented here. Dropping it would silently move the
+        // iBAQ digest onto the parsimony database; overwriting it with the box would silently move
+        // protein grouping onto the iBAQ one. The GUI edits one key and leaves the other alone.
+        c.ProteinRollup.Ibaq.FastaPath = _ibaqFastaOverride;
         c.ProteinNormalization.Method = ComboText(ProteinNormCombo, "median");
 
         c.QcReport.Enabled = true;
