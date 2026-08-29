@@ -88,8 +88,8 @@ The digest and the rollup run off the UI thread with a progress bar, so a large 
 a hang; the theoretical counts are cached, so flipping back to iBAQ is instant. The drop-down is greyed
 out at peptide level — there is no protein rollup below a peptide.
 
-The rollup needs `corrected_peptides.parquet`, so a run with `output.peptides: false` can only show
-**As run**.
+The rollup needs `corrected_peptides.parquet`, so an output directory without one — an older run, or
+one whose peptide arm never finished — can only show **As run**.
 
 ### Selection works in both directions
 
