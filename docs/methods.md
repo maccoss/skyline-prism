@@ -788,14 +788,17 @@ On that cohort the two scores correlate at $r = +0.951$, with PC1 giving the mor
 ### Diagnostics and failure modes
 
 `marker_normalization.csv` records the per-sample score and the per-marker loadings, so a run can be
-judged rather than trusted. What to look at:
+judged rather than trusted. The Skyline tool plots both on the **QC Plots** tab — **Marker score**
+(per-sample, grouped by the Group-by column) and **Marker loadings** (per-marker PC1 contribution) —
+which is the fastest way to see the two failure modes below. What to look at:
 
 | Signal | Meaning |
 |---|---|
 | **Fewer than 3 quantified markers** | Hard error, not a silent fallback. A score cannot be defined. |
 | **PC1 variance explained < 40%** | Warning. The markers are not moving together, so the score is a weak summary of them. |
 | **Score correlates with total ion current / loaded material** | Expected to a degree, and ambiguous: compatible with a residual technical effect *or* with the capture biology. Worth reporting, not worth panicking about. |
-| **Score separates cases from controls** | The danger sign. That is pathology, not capture, and residualizing on it removes the finding. See below. |
+| **Score separates cases from controls** | The danger sign. That is pathology, not capture, and residualizing on it removes the finding. Set **Group-by** to the study condition and look at **Marker score**. See below. |
+| **One marker carries most of the loading** | A panel in name only — the axis is really that one protein. Visible on **Marker loadings**, which titles with the largest marker's share and flags it above 50%. |
 
 **The markers themselves stay in the outputs**, flagged `normalization_marker`. Their residual is near
 zero by construction, so **exclude them from any result read off these files** — a test among them is

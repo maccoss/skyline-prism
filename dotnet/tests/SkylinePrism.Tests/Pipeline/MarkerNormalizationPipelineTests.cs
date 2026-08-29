@@ -5,6 +5,7 @@ using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
+using SkylinePrism.Core.Rollup;
 using SkylinePrism.Tests.TestSupport;
 using Xunit;
 
@@ -237,6 +238,39 @@ public class MarkerNormalizationPipelineTests : IDisposable
             Assert.NotEqual(off, ev);
             Assert.NotEqual(ev, glom);
         }
+    }
+
+    /// <summary>
+    /// The score CSV's sample ids must be the replicate column names of the corrected matrix. The QC
+    /// tab's Marker score plot joins on exactly this, so a mismatch would render an empty plot for a run
+    /// that worked perfectly - and nothing else in the pipeline would notice.
+    /// </summary>
+    [Fact]
+    public void TheScoreCsvIsKeyedByTheMatrixReplicateNames()
+    {
+        var plain = RunOnce();
+        File.WriteAllLines(_listFile, AllProteins(Path.Combine(plain, "corrected_proteins.parquet")));
+
+        var adjusted = RunOnce(c =>
+        {
+            c.MarkerNormalization.Enabled = true;
+            c.MarkerNormalization.ProteinListFile = _listFile;
+        });
+
+        var report = MarkerNormalizationReport.Read(adjusted);
+        Assert.NotNull(report);
+
+        using var prot = ParquetColumnReader.Open(Path.Combine(adjusted, "corrected_proteins.parquet"));
+        var replicates = prot.ColumnNames
+            .Where(c => !ProteinRollup.MetadataColumns.Contains(c)
+                        && c != MarkerNormalizationReport.MarkerColumn)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.NotEmpty(report!.Samples);
+        Assert.All(report.Samples, sample => Assert.Contains(sample, replicates));
+        Assert.Equal(report.Samples.Count, report.Scores.Count);
+        Assert.NotEmpty(report.MarkerNames);
+        Assert.Equal(report.MarkerNames.Count, report.Loadings.Count);
     }
 
     private static byte[] Hash(string path) =>

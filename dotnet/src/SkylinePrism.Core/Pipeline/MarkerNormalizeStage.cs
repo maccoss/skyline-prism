@@ -27,8 +27,12 @@ namespace SkylinePrism.Core.Pipeline;
 /// </summary>
 internal static class MarkerNormalizeStage
 {
-    /// <summary>The flag column added to both outputs, marking the features that defined the score.</summary>
-    public const string MarkerColumn = "normalization_marker";
+    /// <summary>
+    /// The flag column added to both outputs, marking the features that defined the score. Defined on
+    /// the public <see cref="MarkerNormalizationReport"/> because the GUI selects these rows to plot the
+    /// panel, and a second copy of the name here would be a second thing to keep in step.
+    /// </summary>
+    public const string MarkerColumn = MarkerNormalizationReport.MarkerColumn;
 
     public sealed record Result(
         MarkerNormalization.MarkerScore Score,

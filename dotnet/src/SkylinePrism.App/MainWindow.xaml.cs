@@ -1102,6 +1102,12 @@ public partial class MainWindow : Window
 
     // Cached QC matrices ([features, samples], LOG2) keyed by "view|level" (view in raw/corrected).
     private readonly Dictionary<string, (double[,] FeaturesBySamples, List<string> Samples, double[]? MeanRt)> _qcData = new();
+
+    /// <summary>
+    /// The per-sample score and per-marker loadings the run recorded, or null when it did not use
+    /// marker normalization. Read once, beside the matrices.
+    /// </summary>
+    private MarkerNormalizationReport? _markerReport;
     private Dictionary<string, string> _qcTypes = new();
 
     // PCA hover: the current PCA points (data coordinate + replicate name) and the highlight overlay
@@ -1129,6 +1135,7 @@ public partial class MainWindow : Window
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
+            _markerReport = MarkerNormalizationReport.Read(outputDir);
             LoadReplicatesReports(Path.Combine(outputDir, "skyline-reports"));
         }
         catch (Exception ex)
@@ -1448,7 +1455,16 @@ public partial class MainWindow : Window
 
     // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
     // static images by the same PlotRenderer.
-    private static readonly HashSet<string> InteractivePlots = new() { "PCA", "CV distribution", "Intensity distribution" };
+    private static readonly HashSet<string> InteractivePlots = new()
+    {
+        "PCA", "Marker score", "Marker loadings", "CV distribution", "Intensity distribution",
+    };
+
+    /// <summary>
+    /// The plots that describe the marker normalization rather than the matrix. They read
+    /// marker_normalization.csv, so View and Level do not apply to them.
+    /// </summary>
+    private static bool IsMarkerPlot(string kind) => kind is "Marker score" or "Marker loadings";
 
     private void RenderQc()
     {
@@ -1476,8 +1492,12 @@ public partial class MainWindow : Window
             QcLevelCombo.SelectedIndex = 0; // Peptide
             _suppressQcRender = false;
         }
-        QcLevelCombo.IsEnabled = !isRt;       // RT plots: peptide only
-        QcViewCombo.IsEnabled = !beforeAfter; // RT-binned CV shows before AND after
+        // The marker plots read marker_normalization.csv, which is one score per replicate for the whole
+        // run - there is no before/after and no peptide/protein version of it, so grey both out rather
+        // than letting a setting be changed that cannot change the plot.
+        var isMarker = IsMarkerPlot(kind);
+        QcLevelCombo.IsEnabled = !isRt && !isMarker;       // RT plots: peptide only
+        QcViewCombo.IsEnabled = !beforeAfter && !isMarker; // RT-binned CV shows before AND after
 
         // "Control correlation" is about the CONTROLS: the useful reading is that QC samples correlate
         // with each other and standards with each other, but the two do not cross. Showing every sample
@@ -1544,6 +1564,10 @@ public partial class MainWindow : Window
         {
             switch (kind)
             {
+                case "Marker score":
+                    DrawMarkerScore(plt, cols.Select(i => d.Samples[i]).ToList(), column);
+                    break;
+                case "Marker loadings": DrawMarkerLoadings(plt); break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
                 default: _pcaHoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
@@ -1772,6 +1796,117 @@ public partial class MainWindow : Window
         plt.XLabel("PC1");
         plt.YLabel("PC2");
         return points;
+    }
+
+    /// <summary>
+    /// The per-sample marker score, one column per Group-by value. This is the half of the panel's PC1
+    /// that lives on the samples, taken from marker_normalization.csv - the numbers the run actually
+    /// subtracted, not a recomputation that could drift from them.
+    ///
+    /// <para><b>What to look for.</b> A marker panel is supposed to measure how much of the captured
+    /// material a sample contributed, so the score should track capture - section size, EV yield, input
+    /// amount. Set Group-by to the study's condition: if the score separates the groups, the panel is
+    /// tracking the phenotype, and residualizing on it removes the finding along with the capture. That
+    /// judgement cannot be automated - the same separation is what you would expect if the biology
+    /// really does change the marked material - which is why this is a plot rather than a warning.</para>
+    /// </summary>
+    private void DrawMarkerScore(Plot plt, IReadOnlyList<string> samples, string? column)
+    {
+        if (_markerReport is null || _markerReport.Samples.Count == 0)
+        {
+            plt.Title("This run did not use marker normalization.\n"
+                + "Tick \"Normalize to a protein list\" on the Settings tab to get this plot.");
+            return;
+        }
+
+        var byName = new Dictionary<string, double>(StringComparer.Ordinal);
+        for (var i = 0; i < _markerReport.Samples.Count && i < _markerReport.Scores.Count; i++)
+            byName[_markerReport.Samples[i]] = _markerReport.Scores[i];
+
+        // Group by the same column every other QC plot colors by, so switching Group-by re-asks the
+        // question of a different annotation without leaving the plot.
+        var groups = new Dictionary<string, List<(double Score, string Name)>>(StringComparer.Ordinal);
+        foreach (var sample in samples)
+        {
+            if (!byName.TryGetValue(sample, out var score))
+                continue;
+            var label = string.IsNullOrEmpty(column) ? "all samples" : SampleAnnotation(sample, column);
+            if (string.IsNullOrEmpty(label))
+                label = "(none)";
+            if (!groups.TryGetValue(label, out var list))
+                groups[label] = list = new List<(double, string)>();
+            list.Add((score, sample));
+        }
+        if (groups.Count == 0)
+        {
+            plt.Title("None of the scored replicates are in this selection.");
+            return;
+        }
+
+        var ordered = groups.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
+        var rng = new Random(11); // fixed seed: the jitter must not move when the plot is redrawn
+        var colorIndex = 0;
+        for (var g = 0; g < ordered.Count; g++)
+        {
+            var (label, points) = (ordered[g].Key, ordered[g].Value);
+            // Jittered strip rather than a box: with a handful of replicates per group the individual
+            // points are the information, and a box would hide an outlier driving the whole score.
+            var xs = points.Select(_ => g + (rng.NextDouble() - 0.5) * 0.35).ToArray();
+            var markers = plt.Add.Markers(xs, points.Select(p => p.Score).ToArray());
+            markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
+            markers.MarkerSize = 12;
+            markers.LegendText = $"{label} (n={points.Count})";
+        }
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
+            ordered.Select((kv, i) => new ScottPlot.Tick(i, kv.Key)).ToArray());
+        plt.Axes.SetLimitsX(-0.6, ordered.Count - 0.4);
+        plt.YLabel("Marker score (PC1)");
+        plt.ShowLegend();
+        plt.Title(ordered.Count > 1
+            ? "Separation between these groups means the panel tracks the phenotype, not the capture"
+            : "Set Group-by to the study condition to check the panel against it");
+    }
+
+    /// <summary>
+    /// The PC1 loading of each marker, largest contribution first - the half of the panel's PC1 that
+    /// lives on the features. Answers the second way a panel fails: an axis carried by one protein is a
+    /// single-protein normalization wearing a panel's clothes. Opposing signs are normal, and are the
+    /// reason the score is PC1 rather than a mean of the markers.
+    /// </summary>
+    private void DrawMarkerLoadings(Plot plt)
+    {
+        if (_markerReport is null || _markerReport.MarkerNames.Count == 0)
+        {
+            plt.Title("This run did not record marker loadings.\n"
+                + "They are written to marker_normalization.csv when marker normalization runs.");
+            return;
+        }
+
+        var ordered = _markerReport.LoadingsByMagnitude();
+        var bars = new List<ScottPlot.Bar>(ordered.Count);
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            // Horizontal and top-down in contribution order: marker names do not fit under an x axis.
+            bars.Add(new ScottPlot.Bar
+            {
+                Position = ordered.Count - 1 - i,
+                Value = ordered[i].Loading,
+                Orientation = ScottPlot.Orientation.Horizontal,
+                FillColor = ordered[i].Loading >= 0
+                    ? ScottPlot.Color.FromHex("#1f77b4")
+                    : ScottPlot.Color.FromHex("#d62728"),
+            });
+        }
+        plt.Add.Bars(bars);
+        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
+            ordered.Select((t, i) => new ScottPlot.Tick(ordered.Count - 1 - i, t.Marker)).ToArray());
+        plt.XLabel("PC1 loading");
+
+        var share = _markerReport.LargestLoadingShare();
+        var opposing = ordered.Count(t => t.Loading < 0);
+        plt.Title($"{ordered.Count} markers, {opposing} opposing"
+            + (double.IsNaN(share) ? "" : $"; largest carries {share:P0} of the axis")
+            + (share > 0.5 ? " - one marker is dominating this panel" : ""));
     }
 
     private static void DrawCv(Plot plt, double[,] featuresBySamples, List<string> labels, string level, string view, string group)
