@@ -86,6 +86,48 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 
 ---
 
+## `marker_normalization` — normalize to a set of proteins (Stage 5a)
+
+Estimates one per-sample score from how a set of marker proteins move together, then removes from
+every peptide and protein the part that tracks it. It answers **"what changed per unit of the marked
+material"** rather than "what changed in whatever was captured" — the question a capture-based
+experiment (EV enrichment, for instance) otherwise cannot separate, because loading normalization
+makes total signal equal by construction.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `false` | Off unless asked for — it changes every reported abundance |
+| `protein_list` | — | Name of the marker list: one of your saved lists, or the shipped `EV markers` panel |
+| `protein_list_file` | — | A file of members instead (one identifier per line, or a CSV's first column). Wins over `protein_list`, and is the reproducible form — a name depends on the machine's saved lists, a path does not |
+| `method` | `pc1` | `pc1` (first principal component of the z-scored markers) or `mean` |
+
+**Where it runs, and why there.** After the ordinary normalization, never instead of it, and the score
+is computed at the **protein** level and applied to **both** outputs:
+
+- The score must come from data whose per-sample loading is already removed. On raw abundances PC1
+  loads on injection volume, and residualising then re-does the loading step using a handful of
+  proteins' worth of noise.
+- How much marked material a sample contributed is a property of *the sample*, not of the table being
+  analysed, so re-estimating it from peptides would mostly re-measure the same quantity with more noise.
+
+**Why PC1 rather than the mean.** Markers need not move as one block. On the cohort the shipped EV
+panel comes from, PC1 explains ~65% of marker variance and four of the eighteen (`CD81`, `SDCBP`,
+`ANXA2`, `ANXA6`) load with the *opposite* sign — a mean partially cancels and blunts the estimate.
+PC1 weights each marker by its contribution and keeps the sign structure. The score's sign is oriented
+so higher always means more marked material.
+
+**What you get.** Both corrected outputs are rewritten with the score axis removed, each feature
+keeping its own abundance level (only the score-dependent part is taken out, so the values stay on the
+scale everything else expects). `marker_normalization.csv` records the per-sample score and the marker
+loadings. The markers themselves stay in the outputs, flagged `normalization_marker` — their residual
+is near zero by construction, so **exclude them from any result you read off these files**; a test
+among them is circular.
+
+Fewer than 3 quantified markers is an error, not a silent fallback. A PC1 explaining under 40% of
+marker variance is a warning: the markers are not moving together and the score is a weak summary.
+
+---
+
 ## `protein_normalization` — Stage 4b
 
 | Key | Default | Description |

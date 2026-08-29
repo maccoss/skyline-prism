@@ -189,6 +189,19 @@
                                       ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels." />
                         </StackPanel>
 
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <TextBlock Text="8. Marker normalization:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="MarkerNormCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                      Checked="OnMarkerNormChanged" Unchecked="OnMarkerNormChanged"
+                                      Content="Normalize to a protein list"
+                                      ToolTip="Estimate one per-sample score from how a set of marker proteins move together (PC1 of the z-scored markers, at the protein level), then remove from every peptide and protein the part that tracks it. Answers 'what changed per unit of the marked material' rather than 'what changed in whatever was captured'. Runs after the normalization above, never instead of it." />
+                            <ComboBox x:Name="MarkerNormListCombo" Width="200" IsEnabled="False"
+                                      ToolTip="Which protein list defines the markers. These are the same lists the Dynamic Range tab highlights - edit them with 'Protein lists...' on that tab." />
+                        </StackPanel>
+
+                        <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                   Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
+
                         <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
                                    Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
                         <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"

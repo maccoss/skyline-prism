@@ -30,6 +30,44 @@ public sealed class ProteinList
     /// </summary>
     public List<string> Members { get; set; } = new();
 
+    /// <summary>
+    /// The lists PRISM ships. Available without the user having curated anything, in the plot picker
+    /// and as <c>marker_normalization.protein_list</c>, and usable from the CLI on a machine that has
+    /// no saved lists at all - which a per-user JSON alone could not be.
+    /// <para>
+    /// A user list of the same name wins, so shipping one never overrides a curated version of it.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<ProteinList> BuiltIns { get; } = new[]
+    {
+        new ProteinList
+        {
+            Name = EvMarkersName,
+            ColorHex = "#2ca02c",
+            // Eighteen canonical EV proteins, by gene symbol, grouped by what they are:
+            //   tetraspanins            CD9, CD63, CD81
+            //   ESCRT / biogenesis      TSG101, PDCD6IP (ALIX), SDCBP (syntenin), VPS4B
+            //   membrane microdomain    FLOT1, FLOT2
+            //   annexins                ANXA2, ANXA5, ANXA6
+            //   RAB GTPases             RAB7A, RAB5C, RAB14
+            //   other EV-associated     HSPA8, ITGB1, EHD1
+            // They do NOT all move together - on the cohort this came from, CD81, SDCBP, ANXA2 and
+            // ANXA6 load opposite to the other fourteen, which is why the score is PC1 and not a mean.
+            Members =
+            {
+                "CD9", "CD63", "CD81",
+                "TSG101", "PDCD6IP", "SDCBP", "VPS4B",
+                "FLOT1", "FLOT2",
+                "ANXA2", "ANXA5", "ANXA6",
+                "RAB7A", "RAB5C", "RAB14",
+                "HSPA8", "ITGB1", "EHD1",
+            },
+        },
+    };
+
+    /// <summary>Name of the shipped EV panel, so callers do not spell it out.</summary>
+    public const string EvMarkersName = "EV markers";
+
     public ProteinList Clone() => new()
     {
         Name = Name,
@@ -122,6 +160,59 @@ public sealed class ProteinListSet
     /// that appears in two).
     /// </summary>
     public ProteinListMatcher BuildMatcher() => new(Lists.Where(l => l.Visible).ToList());
+
+    /// <summary>
+    /// The user's lists followed by any shipped list they have not overridden, which is what a picker
+    /// should offer and what a config name resolves against.
+    /// </summary>
+    public IReadOnlyList<ProteinList> WithBuiltIns()
+    {
+        var all = new List<ProteinList>(Lists);
+        foreach (var builtIn in ProteinList.BuiltIns)
+            if (!all.Any(l => string.Equals(l.Name, builtIn.Name, StringComparison.OrdinalIgnoreCase)))
+                all.Add(builtIn);
+        return all;
+    }
+
+    /// <summary>
+    /// Find a list by name among the user's and the shipped ones, or null. Case-insensitive, because
+    /// the name is typed into a config file by hand.
+    /// </summary>
+    public ProteinList? Find(string? name) => string.IsNullOrWhiteSpace(name)
+        ? null
+        : WithBuiltIns().FirstOrDefault(
+            l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The list a run should normalize against: an explicit members FILE wins over a name, because a
+    /// path is reproducible on another machine and a name depends on that machine's saved lists.
+    /// Returns null when neither is given; throws when what was asked for does not exist, rather than
+    /// carrying on without the normalization the config asked for.
+    /// </summary>
+    public static ProteinList? Resolve(string? name, string? membersFile, string? setPath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(membersFile))
+        {
+            if (!File.Exists(membersFile))
+                throw new FileNotFoundException(
+                    $"marker_normalization.protein_list_file not found: {membersFile}", membersFile);
+            return new ProteinList
+            {
+                Name = Path.GetFileNameWithoutExtension(membersFile),
+                Members = ReadMembersFile(membersFile!),
+            };
+        }
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var found = Load(setPath).Find(name);
+        if (found is null)
+            throw new InvalidOperationException(
+                $"marker_normalization.protein_list '{name}' was not found. Available: "
+                + string.Join(", ", Load(setPath).WithBuiltIns().Select(l => $"'{l.Name}'"))
+                + ". Use marker_normalization.protein_list_file to point at a file of members instead.");
+        return found;
+    }
 }
 
 /// <summary>Resolves which protein list (if any) an entry belongs to.</summary>
@@ -139,6 +230,17 @@ public sealed class ProteinListMatcher
     }
 
     public IReadOnlyList<ProteinList> Lists => _lists.Select(l => l.List).ToList();
+
+    /// <summary>
+    /// Whether any list claims a protein described by its raw identifier columns - what the pipeline
+    /// has in hand (leading_protein / leading_gene_name / leading_name), as opposed to the plot's
+    /// <see cref="AbundanceEntry"/>. Same matching rules either way, deliberately: a list that
+    /// highlights a protein on the plot has to select the same protein when it normalizes.
+    /// </summary>
+    public ProteinList? Match(string? accession, string? gene, string? proteinName)
+        => Match(new AbundanceEntry(
+            Key: accession ?? gene ?? proteinName ?? "", Label: "", Accession: accession, Gene: gene,
+            ProteinName: proteinName, MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0));
 
     /// <summary>The first visible list claiming this entry, or null.</summary>
     public ProteinList? Match(AbundanceEntry entry)

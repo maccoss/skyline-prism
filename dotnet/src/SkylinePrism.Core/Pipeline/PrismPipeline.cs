@@ -621,6 +621,55 @@ public sealed class PrismPipeline
             new[] { correctedProtPath }.Concat(protResidualPaths).ToArray());
         }
 
+        // Stage 5a: marker normalization, on both corrected outputs. Last, because the score has to
+        // come from data whose loading is already normalized, and from the PROTEIN level - how much
+        // marked material a sample contributed is a property of the sample, not of the table.
+        if (config.MarkerNormalization.Enabled)
+        {
+            report("============================================================");
+            cancellationToken.ThrowIfCancellationRequested();
+            report("Stage 5a: Marker normalization");
+            report("============================================================");
+
+            var markerFp = StageCache.Fingerprint(
+                StageDependencies.MarkerNormalize, config,
+                upstream: new[] { protNormFp, pepNormFp });
+            var scorePath = Path.Combine(outputDir, "marker_normalization.csv");
+
+            if (stageCache.CanReuse(StageDependencies.MarkerNormalize, markerFp))
+            {
+                report("  Reusing the marker-normalized outputs (matrices and marker list unchanged).");
+            }
+            else
+            {
+                // Both corrected files are rewritten in place, so a partial previous attempt must not
+                // be adjusted a second time: invalidate first, and let a failure leave no entry.
+                stageCache.Invalidate(StageDependencies.MarkerNormalize);
+
+                var list = ProteinListSet.Resolve(
+                    config.MarkerNormalization.ProteinList,
+                    config.MarkerNormalization.ProteinListFile)
+                    ?? throw new InvalidOperationException(
+                        "marker_normalization.enabled is true but no protein list was resolved.");
+                var scoreMethod =
+                    string.Equals(config.MarkerNormalization.Method, "mean", StringComparison.OrdinalIgnoreCase)
+                        ? MarkerScoreMethod.Mean
+                        : MarkerScoreMethod.Pc1;
+
+                var marker = MarkerNormalizeStage.Run(
+                    correctedProtPath, correctedPepPath, list, scoreMethod, samples, report);
+                MarkerNormalizeStage.WriteScoreCsv(scorePath, samples, marker.Score);
+                report($"  Wrote marker_normalization.csv (per-sample score and marker loadings).");
+                report("  NOTE: the marker features are kept in both outputs and flagged "
+                    + $"'{MarkerNormalizeStage.MarkerColumn}'. Their values are near-flat by "
+                    + "construction - exclude them from any result read off these files.");
+
+                stageCache.Record(
+                    StageDependencies.MarkerNormalize, markerFp,
+                    correctedProtPath, correctedPepPath, scorePath);
+            }
+        }
+
         report("============================================================");
         cancellationToken.ThrowIfCancellationRequested();
         report("Stage 5: Output generation");

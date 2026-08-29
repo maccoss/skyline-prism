@@ -33,6 +33,7 @@ public static class StageDependencies
     public const string PeptideNormalize = "normalize.peptide";
     public const string ProteinRollup = "rollup.protein";
     public const string ProteinNormalize = "normalize.protein";
+    public const string MarkerNormalize = "normalize.marker";
 
     // Deliberately NOT cached:
     //
@@ -100,6 +101,14 @@ public static class StageDependencies
             },
 
             // Protein normalization + protein ComBat.
+            // Marker residualisation, applied to both corrected outputs. Its own list file counts as
+            // an input, and so does every key of the two stages it rewrites - it reads what they wrote.
+            [MarkerNormalize] = new[]
+            {
+                "marker_normalization",
+                "output.format",
+            },
+
             [ProteinNormalize] = new[]
             {
                 "protein_normalization",
@@ -140,6 +149,7 @@ public static class StageDependencies
     public static IReadOnlyList<string> ExternalFiles(string stageId, PrismConfig config) => stageId switch
     {
         TransitionRollup => Paths(config.TransitionRollup.LibraryPath),
+        MarkerNormalize => Paths(config.MarkerNormalization.ProteinListFile),
         ProteinRollup => Paths(config.ProteinRollup.Ibaq.FastaPath, config.Parsimony.FastaPath),
         _ => Array.Empty<string>(),
     };
