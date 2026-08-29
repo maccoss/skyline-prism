@@ -38,99 +38,22 @@ public sealed class ProteinList
     /// A user list of the same name wins, so shipping one never overrides a curated version of it.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<ProteinList> BuiltIns { get; } = new[]
-    {
-        new ProteinList
-        {
-            Name = EvMarkersName,
-            ColorHex = "#2ca02c",
-            Visible = false,
-            // Eighteen canonical EV proteins, by gene symbol, grouped by what they are:
-            //   tetraspanins            CD9, CD63, CD81
-            //   ESCRT / biogenesis      TSG101, PDCD6IP (ALIX), SDCBP (syntenin), VPS4B
-            //   membrane microdomain    FLOT1, FLOT2
-            //   annexins                ANXA2, ANXA5, ANXA6
-            //   RAB GTPases             RAB7A, RAB5C, RAB14
-            //   other EV-associated     HSPA8, ITGB1, EHD1
-            // They do NOT all move together - on the cohort this came from, CD81, SDCBP, ANXA2 and
-            // ANXA6 load opposite to the other fourteen, which is why the score is PC1 and not a mean.
-            Members =
-            {
-                "CD9", "CD63", "CD81",
-                "TSG101", "PDCD6IP", "SDCBP", "VPS4B",
-                "FLOT1", "FLOT2",
-                "ANXA2", "ANXA5", "ANXA6",
-                "RAB7A", "RAB5C", "RAB14",
-                "HSPA8", "ITGB1", "EHD1",
-            },
-        },
-        new ProteinList
-        {
-            Name = GlomerulusName,
-            ColorHex = "#1f77b4",
-            Visible = false,
-            // Structural markers of glomerular tissue, for normalizing single-glomerulus work by how
-            // much glomerulus a dissection actually captured:
-            //   GBM collagen IV      COL4A3/4/5 - the alpha3-4-5 network, GBM-specific. COL4A1/COL4A2
-            //                        are deliberately absent: they are ubiquitous basement membrane and
-            //                        would make the score track any BM, not this one.
-            //   GBM laminin          LAMA5, LAMB2, LAMC1 (laminin-521)
-            //   BM proteoglycan      AGRN, HSPG2, NID1
-            //   glomerular endothel. EHD3 (glomerular-endothelium enriched), EMCN, PECAM1
-            //   mesangium            ITGA8, PDGFRB
-            //   podocyte             PODXL, SYNPO, CD2AP, PTPRO
-            //
-            // Weighted toward structure ON PURPOSE. The obvious podocyte markers - NPHS1, NPHS2 - are
-            // left out because podocyte loss IS the phenotype in most glomerular disease, and a score
-            // dominated by them would regress out the finding rather than the capture. The four
-            // podocyte proteins here are a minority of the panel so it still tracks podocyte-bearing
-            // tissue without PC1 becoming a podocyte-injury axis.
-            //
-            // Check before trusting it on a new cohort: how many are quantified, and whether PC1
-            // separates large sections from small ones (capture, what you want) or diseased from
-            // control (pathology, which you do not want to remove).
-            Members =
-            {
-                "COL4A3", "COL4A4", "COL4A5",
-                "LAMA5", "LAMB2", "LAMC1",
-                "AGRN", "HSPG2", "NID1",
-                "EHD3", "EMCN", "PECAM1",
-                "ITGA8", "PDGFRB",
-                "PODXL", "SYNPO", "CD2AP", "PTPRO",
-            },
-        },
+    /// <summary>
+    /// The lists PRISM ships - see <see cref="BuiltInProteinPanels"/> for the panels themselves and for
+    /// what separates a normalizer from a readout. Available with no curation, in the plot picker and as
+    /// <c>marker_normalization.protein_list</c>, and on a machine with no saved lists at all.
+    /// <para>
+    /// A user list of the same name wins that name; the shipped one remains selectable under its
+    /// <see cref="ProteinListSet.ShippedSuffix"/> form.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<ProteinList> BuiltIns => BuiltInProteinPanels.All;
 
-        new ProteinList
-        {
-            Name = TubularContaminationName,
-            ColorHex = "#d62728",
-            Visible = false,
-            ShowLabels = true,
-            // NOT a normalizer - a readout. Hand-dissected or microdissected glomeruli carry tubular
-            // fragments, and these proteins are abundant enough that a little carry-over is obvious on
-            // the dynamic-range plot. Spread across nephron segments so the plot says WHICH segment
-            // came along:
-            //   proximal tubule    LRP2 (megalin), CUBN (cubilin), SLC34A1, SLC5A2, MIOX, ACSM2A,
-            //                      ACSM2B, ANPEP, GGT1, PDZK1
-            //   thick ascending    UMOD (uromodulin), SLC12A1
-            //   distal / collecting SLC12A3, AQP2
-            //   proximal + thin    AQP1
-            //
-            // Normalizing to these would be backwards: their abundance is the contamination, not the
-            // thing being measured.
-            Members =
-            {
-                "LRP2", "CUBN", "SLC34A1", "SLC5A2", "MIOX", "ACSM2A", "ACSM2B", "ANPEP", "GGT1",
-                "PDZK1",
-                "UMOD", "SLC12A1",
-                "SLC12A3", "AQP2",
-                "AQP1",
-            },
-        },
-    };
+    /// <summary>The shipped EV panel built for NORMALIZING - the 18 the method was validated on.</summary>
+    public const string EvMarkersName = "EV markers (core)";
 
-    /// <summary>Name of the shipped EV panel, so callers do not spell it out.</summary>
-    public const string EvMarkersName = "EV markers";
+    /// <summary>The broad EV-association panel, for highlighting rather than normalizing.</summary>
+    public const string EvExtendedName = "EV markers (extended)";
 
     /// <summary>Structural glomerular markers - see the list's own comment on what is left out and why.</summary>
     public const string GlomerulusName = "Glomerulus";
@@ -165,6 +88,19 @@ public sealed class ProteinListSet
     };
 
     public List<ProteinList> Lists { get; set; } = new();
+
+    /// <summary>
+    /// Per-user state for the SHIPPED panels, keyed by panel name: whether each is shown on the plot and
+    /// whether its members are labeled.
+    /// <para>
+    /// An overlay rather than a copy, deliberately. Ticking a shipped panel must not fork its membership
+    /// - the whole value of a shipped panel is that it means the same thing on every machine, which is
+    /// what makes it citable. Storing only the two view flags means a panel the user has turned on still
+    /// picks up any correction to its member list in a later release.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, ShippedListState> Shipped { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Default location: per-user, so lists follow the user across projects and output folders.</summary>
     public static string DefaultPath => Path.Combine(
@@ -244,27 +180,94 @@ public sealed class ProteinListSet
     /// </summary>
     public static ProteinListMatcher MatcherFor(ProteinList list) => new(new[] { list });
 
+    /// <summary>Suffix a shipped list takes when the user has one of the same name.</summary>
+    public const string ShippedSuffix = " (PRISM)";
+
     /// <summary>
-    /// The user's lists followed by any shipped list they have not overridden, which is what a picker
-    /// should offer and what a config name resolves against.
+    /// The user's lists followed by every shipped list, which is what a picker should offer and what a
+    /// config name resolves against.
+    ///
+    /// <para>A user list of the same name still WINS that name - curating over a shipped default is the
+    /// point, and a config saying <c>EV markers</c> must keep meaning what it meant. But the shipped one
+    /// is no longer dropped: it comes back as <c>"EV markers (PRISM)"</c>, so it stays selectable.</para>
+    ///
+    /// <para>Dropping it was a real trap. A user whose saved <c>EV Markers</c> is a 34-protein set
+    /// curated for HIGHLIGHTING on the dynamic-range plot would silently normalize against that instead
+    /// of the 18-protein panel the method was validated on - same name, different purpose, different
+    /// answer, and no way to reach the shipped one or any sign it existed.</para>
     /// </summary>
     public IReadOnlyList<ProteinList> WithBuiltIns()
     {
         var all = new List<ProteinList>(Lists);
         foreach (var builtIn in ProteinList.BuiltIns)
+        {
             if (!all.Any(l => string.Equals(l.Name, builtIn.Name, StringComparison.OrdinalIgnoreCase)))
-                all.Add(builtIn);
+            {
+                all.Add(WithUserState(builtIn, builtIn.Name));
+                continue;
+            }
+            // Shadowed: offer it under a distinct name, unless the user has taken that one too.
+            var name = builtIn.Name + ShippedSuffix;
+            if (!all.Any(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)))
+                all.Add(WithUserState(builtIn, name));
+        }
         return all;
+    }
+
+    /// <summary>
+    /// A shipped panel under the name it is being offered as, carrying the user's view flags for it.
+    /// Always a clone: the static definition must never be mutated by anything a user does.
+    /// </summary>
+    private ProteinList WithUserState(ProteinList builtIn, string name)
+    {
+        var copy = builtIn.Clone();
+        copy.Name = name;
+        if (Shipped.TryGetValue(name, out var state))
+        {
+            copy.Visible = state.Visible;
+            copy.ShowLabels = state.ShowLabels;
+        }
+        return copy;
+    }
+
+    /// <summary>
+    /// Record the view flags for a shipped panel, or drop the record when it is back at the default of
+    /// hidden and unlabeled - so the saved file stays a list of deliberate choices.
+    /// </summary>
+    public void SetShippedState(string name, bool visible, bool showLabels)
+    {
+        if (!visible && !showLabels)
+            Shipped.Remove(name);
+        else
+            Shipped[name] = new ShippedListState { Visible = visible, ShowLabels = showLabels };
     }
 
     /// <summary>
     /// Find a list by name among the user's and the shipped ones, or null. Case-insensitive, because
     /// the name is typed into a config file by hand.
     /// </summary>
-    public ProteinList? Find(string? name) => string.IsNullOrWhiteSpace(name)
-        ? null
-        : WithBuiltIns().FirstOrDefault(
-            l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
+    public ProteinList? Find(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        var all = WithBuiltIns();
+        return all.FirstOrDefault(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase))
+            ?? (Aliases.TryGetValue(name!.Trim(), out var actual)
+                ? all.FirstOrDefault(l => string.Equals(l.Name, actual, StringComparison.OrdinalIgnoreCase))
+                : null);
+    }
+
+    /// <summary>
+    /// Names that used to identify a shipped panel and still have to resolve. A config naming a panel
+    /// must not stop working because the panel was renamed - it would abort the run with "not found"
+    /// rather than doing anything the user could act on. Only consulted after an exact match fails, so a
+    /// user list may take one of these names back.
+    /// </summary>
+    private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Shipped as plain "EV markers" in dotnet-v26.19.0 and v26.20.0, before the core/extended split.
+        ["EV markers"] = ProteinList.EvMarkersName,
+    };
 
     /// <summary>
     /// The list a run should normalize against: an explicit members FILE wins over a name, because a
@@ -296,6 +299,14 @@ public sealed class ProteinListSet
                 + ". Use marker_normalization.protein_list_file to point at a file of members instead.");
         return found;
     }
+}
+
+/// <summary>The user's view flags for one shipped panel. See <see cref="ProteinListSet.Shipped"/>.</summary>
+public sealed class ShippedListState
+{
+    public bool Visible { get; set; }
+
+    public bool ShowLabels { get; set; }
 }
 
 /// <summary>Resolves which protein list (if any) an entry belongs to.</summary>
@@ -344,7 +355,8 @@ public sealed class ProteinListMatcher
             yield return StripIsoform(entry.Accession!);
         }
         if (!string.IsNullOrWhiteSpace(entry.Gene))
-            yield return entry.Gene!;
+            foreach (var token in Tokenize(entry.Gene!))
+                yield return token;
         if (!string.IsNullOrWhiteSpace(entry.ProteinName))
             foreach (var token in Tokenize(entry.ProteinName!))
                 yield return token;
@@ -362,6 +374,23 @@ public sealed class ProteinListMatcher
         if (trimmed.Length == 0)
             yield break;
         yield return trimmed;
+
+        // An indistinguishable protein group names all its members, slash-joined:
+        // "H2AC11 / H2AC18 / H2AJ / H2AC14". Splitting only on '|' left those matchable by the whole
+        // string alone, so a panel naming any one member missed the group entirely - which is how a
+        // 158-member histone panel found four proteins in a cohort that plainly had more.
+        foreach (var member in trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var m = member.Trim();
+            if (m.Length > 0 && m != trimmed)
+            {
+                yield return m;
+                yield return StripIsoform(m);
+                var us = m.IndexOf('_');
+                if (us > 0)
+                    yield return m[..us];
+            }
+        }
 
         var parts = trimmed.Split('|', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length > 1)
@@ -381,6 +410,9 @@ public sealed class ProteinListMatcher
         else
         {
             yield return StripIsoform(trimmed);
+            var underscore = trimmed.IndexOf('_');
+            if (underscore > 0)
+                yield return trimmed[..underscore]; // H4_HUMAN / H4_MOUSE -> H4
         }
     }
 

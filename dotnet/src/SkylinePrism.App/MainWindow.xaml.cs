@@ -41,6 +41,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
+        // Here, not only in ApplyConfigToUi: that runs when a provenance file is opened, so on a fresh
+        // start the picker sat empty and the shipped panels looked as though they had not been installed.
+        RefreshMarkerListCombo();
         InputsGrid.ItemsSource = _inputs;
         _inputs.CollectionChanged += (_, _) => UpdateRunEnabled();
 
@@ -465,29 +468,57 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Fill the marker-normalization picker from the protein lists - the user's own and the ones PRISM
+    /// ships, which is the same set the Dynamic Range tab highlights, so a list curated for one purpose
+    /// is available to the other.
+    /// <para>
+    /// Called at startup, whenever a config is applied, and after the lists are edited. It used to be
+    /// filled ONLY from <see cref="ApplyConfigToUi"/>, which runs only when a provenance file is opened -
+    /// so on a machine with no saved lists the picker was empty and the shipped panels looked as though
+    /// they had not been installed at all.
+    /// </para>
+    /// <para>
+    /// Reads <c>_proteinLists</c> rather than <see cref="ProteinListSet.Load"/> so a list created in the
+    /// Protein lists editor is selectable without restarting the tool.
+    /// </para>
+    /// </summary>
+    /// <param name="select">
+    /// Name to select, or null to keep whatever is selected. A name this machine has no list for is
+    /// added anyway: it came from a config written elsewhere, and silently dropping it would change the
+    /// run without saying so.
+    /// </param>
+    private void RefreshMarkerListCombo(string? select = null)
+    {
+        if (MarkerNormListCombo is null)
+            return;
+        var keep = select ?? MarkerNormListCombo.SelectedItem as string;
+
+        MarkerNormListCombo.Items.Clear();
+        foreach (var list in _proteinLists.WithBuiltIns())
+            MarkerNormListCombo.Items.Add(list.Name);
+
+        if (!string.IsNullOrWhiteSpace(keep))
+        {
+            if (!MarkerNormListCombo.Items.Contains(keep))
+                MarkerNormListCombo.Items.Add(keep);
+            MarkerNormListCombo.SelectedItem = keep;
+        }
+        else if (MarkerNormListCombo.Items.Count > 0)
+        {
+            MarkerNormListCombo.SelectedIndex = 0;
+        }
+    }
+
     /// <summary>Populate the Settings controls from a loaded config (provenance reproduction).</summary>
     private void ApplyConfigToUi(PrismConfig c)
     {
         SelectCombo(TransitionRollupCombo, c.TransitionRollup.Method);
         MinTransitionsBox.Text = c.TransitionRollup.MinTransitions.ToString();
         UseMs1Check.IsChecked = c.TransitionRollup.UseMs1;
-        // The protein lists the Dynamic Range tab highlights are the same ones that can normalize, so
-        // the picker is filled from one place - a list curated for one purpose is available to the other.
-        MarkerNormListCombo.Items.Clear();
-        foreach (var list in ProteinListSet.Load().WithBuiltIns())
-            MarkerNormListCombo.Items.Add(list.Name);
         MarkerNormCheck.IsChecked = c.MarkerNormalization.Enabled;
+        RefreshMarkerListCombo(c.MarkerNormalization.ProteinList);
         MarkerNormListCombo.IsEnabled = c.MarkerNormalization.Enabled;
-        if (!string.IsNullOrWhiteSpace(c.MarkerNormalization.ProteinList))
-        {
-            if (!MarkerNormListCombo.Items.Contains(c.MarkerNormalization.ProteinList))
-                MarkerNormListCombo.Items.Add(c.MarkerNormalization.ProteinList);
-            MarkerNormListCombo.SelectedItem = c.MarkerNormalization.ProteinList;
-        }
-        else if (MarkerNormListCombo.Items.Count > 0)
-        {
-            MarkerNormListCombo.SelectedIndex = 0;
-        }
 
         if (!string.IsNullOrWhiteSpace(c.TransitionRollup.LibraryPath))
         {
