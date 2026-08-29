@@ -53,7 +53,6 @@ public class StageCacheReuseTests
             // Every expensive stage announced reuse rather than recomputing.
             var second = string.Join("\n", log2);
             Assert.Contains("Reusing peptides_rollup.parquet", second);
-            Assert.Contains("Reusing protein_groups.csv", second);
             Assert.Contains("Reusing peptides_log2_internal", second);
             Assert.Contains("Reusing proteins_raw.parquet", second);
             Assert.Contains("Reusing corrected_proteins", second);
@@ -89,7 +88,6 @@ public class StageCacheReuseTests
             // The peptide arm is untouched by a protein-rollup change: reused, and byte-identical.
             Assert.Contains("Reusing peptides_rollup.parquet", second);
             Assert.Contains("Reusing peptides_log2_internal", second);
-            Assert.Contains("Reusing protein_groups.csv", second);
             Assert.Equal(peptidesBefore, Hash(Path.Combine(dir, "corrected_peptides.parquet")));
 
             // The protein arm re-ran, and the numbers moved because the method did.
@@ -125,9 +123,64 @@ public class StageCacheReuseTests
             Assert.DoesNotContain("Reusing peptides_log2_internal", second);
             Assert.DoesNotContain("Reusing proteins_raw.parquet", second);
             Assert.NotEqual(proteinsBefore, Hash(Path.Combine(dir, "corrected_proteins.parquet")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
 
-            // Parsimony reads the merged data, not the peptide matrix, so it correctly survives.
-            Assert.Contains("Reusing protein_groups.csv", second);
+    /// <summary>
+    /// Parsimony must NOT be cached, and this is why: protein_groups.csv stores only the COUNT of each
+    /// group's all-mapped peptides, so a group read back from it has AllMappedPeptides = the
+    /// parsimony-ASSIGNED set. That is the list the default shared_peptide_handling ("all_groups")
+    /// quantifies from, so a reused group would silently drop every shared peptide from every protein.
+    /// If someone makes the CSV lossless, this test is the thing that should change first.
+    /// </summary>
+    [Fact]
+    public void ProteinGroupsCsv_CannotRoundTripTheAllMappedSet_WhichIsWhyParsimonyIsNotCached()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_pars_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var group = new SkylinePrism.Core.Parsimony.ProteinGroup
+            {
+                GroupId = "PG0001",
+                LeadingProtein = "P1",
+                Peptides = { "ASSIGNED1", "ASSIGNED2" },
+                UniquePeptides = { "ASSIGNED1" },
+                // The shared peptide: mapped to this group, but assigned elsewhere by parsimony.
+                AllMappedPeptides = { "ASSIGNED1", "ASSIGNED2", "SHARED_WITH_ANOTHER_GROUP" },
+            };
+            var path = Path.Combine(dir, "protein_groups.csv");
+            SkylinePrism.Core.Parsimony.ProteinGroupsCsv.Write(new[] { group }, path);
+
+            var read = SkylinePrism.Core.Parsimony.ProteinGroupsCsv.Read(path);
+
+            Assert.Single(read);
+            Assert.Equal(3, group.AllMappedPeptides.Count);
+            Assert.DoesNotContain("SHARED_WITH_ANOTHER_GROUP", read[0].AllMappedPeptides);
+            Assert.Equal(2, read[0].AllMappedPeptides.Count);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ParsimonyIsRecomputedEveryRun_NeverReused()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            PrismPipeline.Run(Inputs(), dir, Config(), null, _ => { });
+            var log = new System.Collections.Generic.List<string>();
+            PrismPipeline.Run(Inputs(), dir, Config(), null, log.Add);
+
+            Assert.DoesNotContain("Reusing protein_groups.csv", string.Join("\n", log));
         }
         finally
         {

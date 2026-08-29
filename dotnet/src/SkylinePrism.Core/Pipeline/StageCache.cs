@@ -128,11 +128,19 @@ public sealed class StageCache
             return false;
         if (!_entries.TryGetValue(stageId, out var entry) || entry.Fingerprint != fingerprint)
             return false;
+        // An entry claiming nothing verifies nothing. Recompute rather than trust a fingerprint alone.
+        if (entry.Outputs.Count == 0)
+            return false;
         foreach (var output in entry.Outputs)
         {
             var full = Path.IsPathRooted(output) ? output : Path.Combine(_outputDir, output);
             if (Directory.Exists(full))
+            {
+                // A partitioned output (merged_data-style): present but empty is not present.
+                if (!Directory.EnumerateFileSystemEntries(full).Any())
+                    return false;
                 continue;
+            }
             var info = new FileInfo(full);
             if (!info.Exists || info.Length == 0)
                 return false;
@@ -141,13 +149,21 @@ public sealed class StageCache
     }
 
     /// <summary>
-    /// Record a completed stage. Call AFTER its outputs are written and closed - an entry written
-    /// first would survive a crash mid-write and vouch for a truncated file.
+    /// Record a completed stage, claiming only the outputs that EXIST now. Call AFTER they are written
+    /// and closed - an entry written first would survive a crash mid-write and vouch for a truncated
+    /// file.
+    /// <para>
+    /// A stage does not always write everything it could: residual files come only from median polish,
+    /// so claiming them under <c>method: sum</c> recorded a file that was never written, and every
+    /// later run failed the existence check and recomputed - the feature silently doing nothing.
+    /// Claiming what is actually on disk keeps the existence check meaningful in both directions.
+    /// </para>
     /// </summary>
     public void Record(string stageId, string fingerprint, params string?[] outputs)
     {
         var relative = outputs
             .Where(o => !string.IsNullOrWhiteSpace(o))
+            .Where(o => File.Exists(o!) || Directory.Exists(o!))
             .Select(o => Relative(o!))
             .ToList();
         _entries[stageId] = new Entry(fingerprint, relative);

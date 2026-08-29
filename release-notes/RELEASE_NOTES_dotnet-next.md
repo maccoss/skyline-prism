@@ -27,10 +27,16 @@ as the GitHub Release description and fails if it is missing.
     the stages that declare it.
   - `--force-reprocess` reuses nothing (and still records, so the next run benefits).
 
-  A **closed** `.sky` also gets its export reused when the document and the report definition are
-  unchanged. A **running** Skyline does not: a live document can hold unsaved edits that the file on
-  disk knows nothing about, and the RPC surface exposes no document revision to key on, so re-exporting
-  it every run is the only safe answer.
+  **This applies to closed `.sky` documents and pre-exported reports.** A closed document also gets
+  its export reused when the document and the report definition are unchanged. A **running** Skyline
+  gets neither: a live document can hold unsaved edits the file on disk knows nothing about and the RPC
+  surface exposes no document revision to key on, so PRISM re-exports it every run - and because the
+  fresh export carries a new timestamp, the merge and therefore every stage below it are invalidated
+  too. Attached-mode runs are no slower than before; they are simply not yet faster.
+
+  Parsimony is recomputed every run by design: `protein_groups.csv` records only the COUNT of each
+  group's all-mapped peptides, so a group read back from it would quantify from the parsimony-assigned
+  set instead - silently dropping every shared peptide. It is the cheapest of the heavy stages.
 
 - **The Dynamic Range plot now says which rollup produced its values.** The y axis reads
   `Log10 abundance (median_polish)` - on the axis, so it travels with the image when the plot is copied

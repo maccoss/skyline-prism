@@ -518,11 +518,17 @@ are all reused, and `corrected_peptides.parquet` is byte-identical to the previo
 `prism run --force-reprocess` reuses nothing (but still records, so the next run benefits). Deleting
 this file has the same effect for one run.
 
-> [!NOTE]
-> A **closed** `.sky` also gets its export reused, recorded in `skyline-reports/<label>.export.json`
-> and keyed on the document's size and last-write-time. A **running** Skyline never does: a live
-> document can hold unsaved edits that the `.sky` on disk knows nothing about, and the RPC surface
-> exposes no document revision to key on, so its export is repeated every run.
+> [!IMPORTANT]
+> **Stage reuse applies to closed `.sky` documents and pre-exported reports.** A closed document also
+> gets its export reused, recorded in `skyline-reports/<label>.export.json` and keyed on the document's
+> size, last-write-time and the PRISM version. A **running** Skyline gets neither: a live document can
+> hold unsaved edits the `.sky` on disk knows nothing about, and the RPC surface exposes no document
+> revision to key on, so PRISM re-exports every run — and the fresh export's timestamp then invalidates
+> the merge and every stage below it. Attached-mode runs are no slower than before, just not faster.
+>
+> **Parsimony is always recomputed.** `protein_groups.csv` stores only the count of each group's
+> all-mapped peptides, so a group read back from it would quantify from the parsimony-assigned set —
+> silently dropping every shared peptide. Making it cacheable means persisting that set losslessly.
 
 ---
 

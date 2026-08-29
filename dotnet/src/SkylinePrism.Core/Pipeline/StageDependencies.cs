@@ -30,11 +30,22 @@ public static class StageDependencies
     // every existing output directory, which is a safe (if wasteful) thing to do.
     public const string Merge = "merge";
     public const string TransitionRollup = "rollup.transition";
-    public const string OutlierDetection = "outliers";
     public const string PeptideNormalize = "normalize.peptide";
-    public const string Parsimony = "parsimony";
     public const string ProteinRollup = "rollup.protein";
     public const string ProteinNormalize = "normalize.protein";
+
+    // Deliberately NOT cached:
+    //
+    // Parsimony. protein_groups.csv stores only the COUNT of each group's all-mapped peptides, not the
+    // list (see ProteinGroupsCsv), so reading it back gives a group whose AllMappedPeptides is the
+    // parsimony-ASSIGNED set. That is the very list the default shared_peptide_handling ("all_groups")
+    // quantifies from, so reusing a group read from the CSV would silently drop every shared peptide
+    // from every protein - a different answer, with nothing to see. Recomputing it is cheap next to the
+    // rollups. Making it cacheable means persisting the all-mapped set losslessly first.
+    //
+    // Outlier detection. It has no output file of its own; what it produces is a smaller sample list,
+    // and that reaches the stages below through SampleContextKey. Its keys are therefore declared on
+    // the stages whose matrices those samples are columns of.
 
     /// <summary>
     /// Stage -> the config keys whose values change that stage's OUTPUT. Upstream stages are chained
@@ -62,9 +73,6 @@ public static class StageDependencies
                 "data",
             },
 
-            // Which samples survive into everything downstream.
-            [OutlierDetection] = new[] { "sample_outlier_detection" },
-
             // Peptide normalization + peptide ComBat, written in one pass (peptides_log2_internal and
             // corrected_peptides). Sample types and batches decide what ComBat corrects and what the
             // control CVs are computed over, so every source of them counts. parsimony is here too:
@@ -74,12 +82,10 @@ public static class StageDependencies
                 "global_normalization",
                 "batch_correction",
                 "sample_annotations", "metadata", "batch_estimation",
+                "sample_outlier_detection",
                 "parsimony",
                 "output.format", "output.include_residuals",
             },
-
-            // Protein grouping. Reads the merged data, not the peptide matrix.
-            [Parsimony] = new[] { "parsimony", "data" },
 
             // Peptide -> protein. shared_peptide_handling is read here as well as by parsimony, and
             // parsimony.fasta_path is iBAQ's fallback when ibaq.fasta_path is unset - a dependency the
@@ -89,6 +95,7 @@ public static class StageDependencies
                 "protein_rollup",
                 "parsimony.shared_peptide_handling",
                 "parsimony.fasta_path",
+                "sample_outlier_detection",
                 "output.include_residuals",
             },
 
@@ -98,6 +105,7 @@ public static class StageDependencies
                 "protein_normalization",
                 "batch_correction",
                 "sample_annotations", "metadata", "batch_estimation",
+                "sample_outlier_detection",
                 "output.format", "output.include_residuals",
             },
         };
@@ -132,7 +140,6 @@ public static class StageDependencies
     public static IReadOnlyList<string> ExternalFiles(string stageId, PrismConfig config) => stageId switch
     {
         TransitionRollup => Paths(config.TransitionRollup.LibraryPath),
-        Parsimony => Paths(config.Parsimony.FastaPath),
         ProteinRollup => Paths(config.ProteinRollup.Ibaq.FastaPath, config.Parsimony.FastaPath),
         _ => Array.Empty<string>(),
     };
