@@ -113,6 +113,39 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.DoesNotContain(runner.Invocations[0], a => a.StartsWith("--report-format", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A CSV left by a previous run that fell back is superseded once a parquet export succeeds. They
+    /// are alternatives for the same input and only one is ever read, so keeping the loser wastes real
+    /// space - on a real cohort, 14.8 GB of CSV beside the 695 MB parquet that replaced it - and leaves
+    /// two files a user can pick between by hand, one of them stale.
+    /// </summary>
+    [Fact]
+    public void Export_RemovesACsvSupersededByASuccessfulParquet()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        Directory.CreateDirectory(work);
+
+        // Left behind by an earlier run whose parquet attempt failed.
+        var stale = Path.Combine(work, "PlateA.csv");
+        File.WriteAllText(stale, "Replicate,SampleType" + Environment.NewLine + "R1,Standard");
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".parquet", StringComparison.Ordinal)) WriteParquet(file);
+                else WriteCsv(file);
+            },
+        };
+
+        var result = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(result.InputIsParquet);
+        Assert.False(File.Exists(stale), "the superseded CSV should have been removed");
+    }
+
     [Fact]
     public void Export_FallsBackToCsv_WhenTheParquetAttemptProducesGarbage()
     {

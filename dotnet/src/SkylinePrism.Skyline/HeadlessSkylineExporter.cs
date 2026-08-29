@@ -236,6 +236,16 @@ public sealed class HeadlessSkylineExporter
             if (ParquetMagic.IsValid(parquet))
             {
                 _log($"Exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
+                // A CSV from a previous run that fell back is superseded by this parquet; the two are
+                // alternatives for the same input, and a large cohort's CSV is ~20x the parquet.
+                var superseded = Path.Combine(workDir, label + ".csv");
+                if (File.Exists(superseded))
+                {
+                    var bytes = new FileInfo(superseded).Length;
+                    TryDelete(superseded);
+                    if (!File.Exists(superseded))
+                        _log($"Removed the superseded CSV export {superseded} ({bytes:N0} bytes).");
+                }
                 return (parquet, true);
             }
             TryDelete(parquet); // a failed run can leave a stub behind

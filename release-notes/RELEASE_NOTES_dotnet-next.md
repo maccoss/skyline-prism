@@ -21,6 +21,15 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **A CSV export superseded by a parquet one is now deleted.** PRISM exports the PRISM report as
+  parquet and falls back to invariant CSV only when the parquet comes back invalid - it never writes
+  both in one run, and the fallback already deleted the failed parquet. What it did not do was the
+  reverse: a CSV left by an earlier run that fell back stayed in `skyline-reports/` forever, even once
+  a later run replaced it with a parquet. On a real cohort that is **14.8 GB of dead CSV beside the
+  695 MB parquet** that superseded it, and two files a user can pick between by hand, one of them
+  stale. A successful parquet export now removes the `<label>.csv` beside it, saying so in the log.
+  Only that file is touched, never anything else in the directory.
+
 ## Performance
 
 ## Breaking Changes
