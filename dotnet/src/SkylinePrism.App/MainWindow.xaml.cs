@@ -48,6 +48,9 @@ public partial class MainWindow : Window
         // saved document, SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the
         // box stays empty so the user must choose (no defaulting into OneDrive-synced Documents).
         RunButton.IsEnabled = false;
+        // Here, not only in ApplyConfigToUi: that runs when a provenance file is opened, so on a
+        // fresh start the hint would be blank and the box would read as decoration.
+        UpdateFastaHint();
 
         try
         {
@@ -383,6 +386,69 @@ public partial class MainWindow : Window
             LibraryRow.IsEnabled = ComboText(TransitionRollupCombo, "sum") == "library_assist";
     }
 
+    private void OnBrowseFasta(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select the search FASTA",
+            Filter = "FASTA (*.fasta;*.fa;*.faa)|*.fasta;*.fa;*.faa|All files (*.*)|*.*",
+        };
+        var start = DialogStartDir();
+        if (start is not null)
+            dlg.InitialDirectory = start;
+        if (dlg.ShowDialog() == true)
+            FastaBox.Text = dlg.FileName;
+    }
+
+    private void OnFastaChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        => UpdateFastaHint();
+
+    private void OnProteinRollupChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (IsInitialized)
+            UpdateFastaHint();
+    }
+
+    /// <summary>
+    /// Say what the current FASTA setting means, rather than leaving the box to be read as decoration.
+    /// The case that matters is iBAQ without a database: the run still succeeds, dividing by the
+    /// OBSERVED peptide count instead of the theoretical one, which is close to a per-peptide mean and
+    /// not the absolute-abundance estimate iBAQ is chosen for. That fallback is only mentioned in the
+    /// log today, which is not where someone picking a method is looking.
+    /// </summary>
+    private void UpdateFastaHint()
+    {
+        if (FastaHint is null || FastaBox is null || ProteinRollupCombo is null)
+            return;
+
+        var path = FastaBox.Text?.Trim();
+        var have = !string.IsNullOrWhiteSpace(path);
+        var isIbaq = string.Equals(
+            ComboText(ProteinRollupCombo, "median_polish"), "ibaq", StringComparison.OrdinalIgnoreCase);
+
+        if (have && !File.Exists(path))
+        {
+            FastaHint.Text = "File not found - the run will fall back to the Skyline accession column.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+        }
+        else if (isIbaq && !have)
+        {
+            FastaHint.Text = "iBAQ needs a FASTA. Without one it divides by the OBSERVED peptide count, "
+                + "which is not an iBAQ.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+        }
+        else if (have)
+        {
+            FastaHint.Text = "Enzyme-aware parsimony" + (isIbaq ? " and iBAQ counts." : ".");
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+        }
+        else
+        {
+            FastaHint.Text = "Optional - without it, protein groups come from the Skyline accession column.";
+            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+        }
+    }
+
     private void OnBrowseLibrary(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
@@ -507,6 +573,10 @@ public partial class MainWindow : Window
         UpdateSharedPeptideRow();
         SelectCombo(ProteinRollupCombo, c.ProteinRollup.Method);
         MinPeptidesBox.Text = c.ProteinRollup.MinPeptides.ToString();
+        // ibaq.fasta_path wins if the config set one; parsimony.fasta_path is the shared default and is
+        // what the box writes back, because one database serves both.
+        FastaBox.Text = c.ProteinRollup.Ibaq.FastaPath ?? c.Parsimony.FastaPath ?? "";
+        UpdateFastaHint();
         SelectCombo(ProteinNormCombo, c.ProteinNormalization.Method);
     }
 
@@ -565,6 +635,10 @@ public partial class MainWindow : Window
 
         c.ProteinRollup.Method = ComboText(ProteinRollupCombo, "median_polish");
         c.ProteinRollup.MinPeptides = ParseInt(MinPeptidesBox.Text, 3);
+        // Written to parsimony.fasta_path only: iBAQ falls back to it, so setting both would be two
+        // places to keep in step for no gain, and the provenance would suggest they could differ.
+        var fasta = FastaBox.Text?.Trim();
+        c.Parsimony.FastaPath = string.IsNullOrWhiteSpace(fasta) ? null : fasta;
         c.ProteinNormalization.Method = ComboText(ProteinNormCombo, "median");
 
         c.QcReport.Enabled = true;

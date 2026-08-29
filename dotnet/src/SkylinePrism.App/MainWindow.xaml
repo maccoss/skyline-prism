@@ -148,11 +148,25 @@
                                        Text="How a peptide matching several groups is quantified: count it for every group, assign it to one (razor), or use only proteotypic peptides." />
                         </StackPanel>
 
+                        <StackPanel x:Name="FastaRow" Orientation="Horizontal" Margin="0,2,0,6">
+                            <TextBlock Text="    Protein FASTA:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <TextBox x:Name="FastaBox" Width="330" VerticalAlignment="Center"
+                                     TextChanged="OnFastaChanged"
+                                     ToolTip="The search database. Enables enzyme-aware parsimony - a peptide is attached to a protein only where the enzyme could actually have produced it, which removes matches to homologs that merely share the subsequence. Also supplies iBAQ's theoretical peptide counts. Optional: without it PRISM uses the Skyline Protein Accession column." />
+                            <Button Content="Browse..." Padding="10,2" Margin="6,0,0,0" Click="OnBrowseFasta" />
+                            <TextBlock x:Name="FastaHint" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Foreground="#888" TextWrapping="Wrap" />
+                        </StackPanel>
+
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <TextBlock Text="5. Peptide &#8594; protein rollup:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="ProteinRollupCombo" Width="160">
+                            <ComboBox x:Name="ProteinRollupCombo" Width="160"
+                                      SelectionChanged="OnProteinRollupChanged">
                                 <ComboBoxItem>median_polish</ComboBoxItem>
                                 <ComboBoxItem>sum</ComboBoxItem>
+                                <ComboBoxItem>topn</ComboBoxItem>
+                                <ComboBoxItem>maxlfq</ComboBoxItem>
+                                <ComboBoxItem>ibaq</ComboBoxItem>
                             </ComboBox>
                             <TextBlock Text="sum below:" VerticalAlignment="Center" Margin="20,0,6,0"
                                        ToolTip="{Binding ElementName=MinPeptidesBox, Path=ToolTip}" />

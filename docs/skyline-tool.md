@@ -201,6 +201,30 @@ dotnet-v26.12.0.
 
 ---
 
+## Choosing a FASTA
+
+**Protein FASTA** on the Settings tab is the search database, and it is optional. It writes
+`parsimony.fasta_path`, which two things read:
+
+- **Enzyme-aware parsimony.** With a FASTA, a peptide is attached to a protein only where the digestion
+  enzyme could actually have produced it — the enzyme itself is read from the Skyline document, so the
+  check matches the search that produced the data. Without one, protein groups come from the Skyline
+  **Protein Accession** column instead. The difference is not cosmetic: `AKEGVVAAAEK` is a substring of
+  beta-synuclein but is preceded there by `M`, not `K`/`R`, so trypsin cannot liberate it — it is
+  proteotypic to alpha-synuclein. See [parsimony.md](parsimony.md).
+- **iBAQ's denominator.** `protein_rollup: ibaq` divides by the theoretical peptide count from an
+  in-silico digest of this database. Without a FASTA it divides by the *observed* count instead, which
+  is closer to a per-peptide mean than to an absolute-abundance estimate — so the Settings tab says so
+  in red rather than leaving it to the log.
+
+The same setting feeds the Dynamic Range tab's **iBAQ** rollup view, which reads it back from the run's
+`parameters.json`.
+
+The rollup picker offers `topn`, `maxlfq` and `ibaq` alongside `median_polish` and `sum`; iBAQ was
+previously absent because nothing in the tool could give it a database.
+
+---
+
 ## Stopping a run
 
 **Stop** cancels the pipeline, and closing the window while a run is in progress asks first and then stops
