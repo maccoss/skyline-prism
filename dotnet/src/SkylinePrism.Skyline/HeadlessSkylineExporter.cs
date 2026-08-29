@@ -109,6 +109,100 @@ public sealed class HeadlessSkylineExporter
         return new HeadlessSkylineExporter(runner, log, reportsDir);
     }
 
+    /// <summary>Sidecar recording what a previous export of this document produced, and from what.</summary>
+    /// <param name="Tool">
+    /// The PRISM version that wrote it. Without this, a release that changes the bundled
+    /// Skyline-PRISM.skyr or the generated Replicates view would reuse an export made with the OLD
+    /// report definition - the merge would then read a report missing a column PRISM now expects, while
+    /// the log said the document and report were unchanged. StageCache folds the version in for exactly
+    /// this reason; the export sidecar has to as well.
+    /// </param>
+    private sealed record ExportStamp(
+        string Document, long Length, long LastWriteUtcTicks, string BatchAnnotation,
+        string ReportPath, string? MetadataPath, string Tool);
+
+    private static string ToolVersion =>
+        typeof(HeadlessSkylineExporter).Assembly.GetName().Version?.ToString() ?? "0";
+
+    private static string StampPath(string workDir, string label) =>
+        Path.Combine(workDir, label + ".export.json");
+
+    /// <summary>
+    /// The previous export of this document, when the document and the report definition are unchanged
+    /// and the files are still there; null otherwise. Never throws - a bad sidecar means "export again".
+    /// </summary>
+    private ExportedReports? TryReuseExport(
+        string skyPath, string workDir, string label, string? batchAnnotation)
+    {
+        try
+        {
+            var stampPath = StampPath(workDir, label);
+            if (!File.Exists(stampPath))
+                return null;
+            var stamp = System.Text.Json.JsonSerializer.Deserialize<ExportStamp>(File.ReadAllText(stampPath));
+            if (stamp is null)
+                return null;
+
+            var info = new FileInfo(skyPath);
+            if (!info.Exists
+                || !string.Equals(stamp.Document, info.FullName, StringComparison.OrdinalIgnoreCase)
+                || stamp.Length != info.Length
+                || stamp.LastWriteUtcTicks != info.LastWriteTimeUtc.Ticks
+                || !string.Equals(stamp.BatchAnnotation, batchAnnotation ?? "", StringComparison.Ordinal))
+                return null;
+
+            if (!string.Equals(stamp.Tool, ToolVersion, StringComparison.Ordinal))
+                return null;
+
+            if (!File.Exists(stamp.ReportPath) || new FileInfo(stamp.ReportPath).Length == 0)
+                return null;
+
+            // The metadata report is not optional on reuse. Silently returning null for it would drop
+            // the run back to inferring sample types from replicate names and batches from the source
+            // document - different reference/QC assignment, different ComBat, different numbers, and no
+            // message. If it is gone or empty, export again.
+            string? metadata = null;
+            if (stamp.MetadataPath is not null)
+            {
+                if (!File.Exists(stamp.MetadataPath) || new FileInfo(stamp.MetadataPath).Length == 0)
+                    return null;
+                metadata = stamp.MetadataPath;
+            }
+
+            _log($"Reusing the previous export of {Path.GetFileName(skyPath)} "
+                 + "(document and report unchanged since it was written).");
+            var isParquet = Path.GetExtension(stamp.ReportPath)
+                .Equals(".parquet", StringComparison.OrdinalIgnoreCase);
+            // info.FullName, matching what the fresh path returns: a caller that deduplicates inputs by
+            // DocumentPath must not see one document as two because one run took the cache.
+            return new ExportedReports(stamp.ReportPath, isParquet, metadata, info.FullName, label);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Record what an export produced, so an unchanged document can skip it next time.</summary>
+    private static void WriteExportStamp(
+        string skyPath, string workDir, string label, string? batchAnnotation, ExportedReports reports)
+    {
+        try
+        {
+            var info = new FileInfo(skyPath);
+            var stamp = new ExportStamp(
+                info.FullName, info.Length, info.LastWriteTimeUtc.Ticks, batchAnnotation ?? "",
+                reports.InputPath, reports.ReplicatesCsv, ToolVersion);
+            File.WriteAllText(
+                StampPath(workDir, label),
+                System.Text.Json.JsonSerializer.Serialize(stamp));
+        }
+        catch
+        {
+            // Losing the stamp costs an export next time; failing here costs the run.
+        }
+    }
+
     /// <summary>
     /// Export the PRISM transition report and the replicate metadata report for <paramref name="skyPath"/>
     /// into <paramref name="workDir"/>, named after <paramref name="documentLabel"/> so the merge derives
@@ -129,6 +223,16 @@ public sealed class HeadlessSkylineExporter
         var label = string.IsNullOrWhiteSpace(documentLabel)
             ? Path.GetFileNameWithoutExtension(skyPath)
             : documentLabel!;
+
+        // Reuse the previous export when nothing about it could differ. This is the single most
+        // expensive step of a re-run - a large cohort's transition report is tens of GB - and re-doing
+        // it to change a downstream setting is pure waste.
+        //
+        // Safe here because the document is CLOSED: a file cannot change without its size or
+        // last-write-time changing. The running-Skyline path deliberately has no equivalent, because a
+        // live document can hold unsaved edits that the .sky on disk knows nothing about.
+        if (TryReuseExport(skyPath, workDir, label, batchAnnotation) is { } reused)
+            return reused;
 
         // Read the header for the replicate annotation names, so the generated metadata report carries the
         // same columns the Replicates grid would show for an open document.
@@ -191,7 +295,12 @@ public sealed class HeadlessSkylineExporter
                  + "sample types will be inferred from replicate names.");
         }
 
-        return new ExportedReports(prismPath, isParquet, metadataResult, Path.GetFullPath(skyPath), label);
+        var exported = new ExportedReports(
+            prismPath, isParquet, metadataResult, Path.GetFullPath(skyPath), label);
+        // Stamped only now, with the files written: a stamp recorded earlier would vouch for an export
+        // that a cancellation or a SkylineCmd failure left half-written.
+        WriteExportStamp(skyPath, workDir, label, batchAnnotation, exported);
+        return exported;
     }
 
     /// <summary>

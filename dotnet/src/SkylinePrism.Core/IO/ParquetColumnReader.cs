@@ -65,6 +65,16 @@ internal sealed class ParquetColumnReader : IDisposable
     public bool HasColumn(string name) => _fields.ContainsKey(name);
 
     /// <summary>
+    /// Rows in a parquet file, from its footer - no column data read. Used to report the size of a
+    /// stage's output when the stage itself was reused rather than recomputed.
+    /// </summary>
+    public static int RowCountOf(string path)
+    {
+        using var reader = Open(path);
+        return reader.RowCount;
+    }
+
+    /// <summary>
     /// Whether a column holds numbers. Lets a caller separate metadata from sample columns by TYPE
     /// rather than by name, which is the only way for matrices whose metadata columns are derived
     /// per run (corrected_peptides carries protein_group / leading_*). Mirrors

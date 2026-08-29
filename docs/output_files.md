@@ -26,6 +26,7 @@ output_dir/
 │   ├── _pep_bucket=0/*.parquet     #   one directory per bucket; count scales with cohort size
 │   └── ...
 ├── merged_data.cache.json          # Fingerprints, for detecting when a re-merge is needed
+├── stage_cache.json                # Per-stage fingerprints, for reusing unchanged stages
 ├── peptides_rollup_residuals.parquet  # Per-TRANSITION median-polish residuals (if include_residuals)
 ├── proteins_raw_residuals.parquet  # Per-PEPTIDE median-polish residuals (if include_residuals)
 ├── corrected_peptides_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
@@ -495,6 +496,39 @@ injection.
 > `corrected_proteins_residuals` by the protein-level one. Since the arms are corrected independently
 > (see `peptides_log2_internal.parquet`), that is the correct behavior rather than an inconsistency -
 > but it does mean the two files are not on a common scale and should not be pooled.
+
+---
+
+### stage_cache.json
+
+**Purpose**: lets a re-run into this directory skip the stages whose inputs and settings have not
+changed. One entry per stage: the fingerprint it was produced with, and the files it produced.
+
+A stage's fingerprint covers the fingerprints of the stages upstream of it (so invalidation chains),
+the external files it reads by path (FASTA, spectral library), the config keys it declares in
+`StageDependencies`, and the PRISM version — **any release re-runs everything**, rather than trusting
+that a code change did not move a number. Reuse additionally requires every file the entry claims to
+still exist and be non-empty, so deleting an output by hand correctly forces it to be rebuilt.
+
+What this means in practice: change `protein_rollup.method` and only the protein arm re-runs — the
+Skyline export, the merge, the transition rollup, the peptide normalization and the parsimony grouping
+are all reused, and `corrected_peptides.parquet` is byte-identical to the previous run. Change
+`transition_rollup.method` and everything downstream of it rebuilds.
+
+`prism run --force-reprocess` reuses nothing (but still records, so the next run benefits). Deleting
+this file has the same effect for one run.
+
+> [!IMPORTANT]
+> **Stage reuse applies to closed `.sky` documents and pre-exported reports.** A closed document also
+> gets its export reused, recorded in `skyline-reports/<label>.export.json` and keyed on the document's
+> size, last-write-time and the PRISM version. A **running** Skyline gets neither: a live document can
+> hold unsaved edits the `.sky` on disk knows nothing about, and the RPC surface exposes no document
+> revision to key on, so PRISM re-exports every run — and the fresh export's timestamp then invalidates
+> the merge and every stage below it. Attached-mode runs are no slower than before, just not faster.
+>
+> **Parsimony is always recomputed.** `protein_groups.csv` stores only the count of each group's
+> all-mapped peptides, so a group read back from it would quantify from the parsimony-assigned set —
+> silently dropping every shared peptide. Making it cacheable means persisting that set losslessly.
 
 ---
 
