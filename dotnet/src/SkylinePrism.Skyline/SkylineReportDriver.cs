@@ -66,6 +66,7 @@ public sealed class SkylineReportDriver
         {
             _log($"Exported PRISM report (parquet): {prismParquet} "
                  + $"({new FileInfo(prismParquet).Length:N0} bytes)");
+            DeleteSupersededCsv(workDir, label);
             return new ExportedReports(
                 prismParquet, true,
                 ExportMetadataReport(workDir, metadataReportName, batchAnnotation, label), docPath, label);
@@ -83,6 +84,34 @@ public sealed class SkylineReportDriver
     }
 
     /// <summary>The metadata CSV file name paired with a given transition-report label.</summary>
+    /// <summary>
+    /// Remove the CSV left by a PREVIOUS run that fell back, now that a parquet has replaced it. The
+    /// two are alternatives for the same input and only one is ever read, so keeping the loser costs
+    /// real space - the CSV of a large cohort is ~20x the parquet, tens of GB - and leaves two files a
+    /// user can pick between by hand, one of them stale.
+    /// <para>
+    /// Only the file this exporter would itself have written (<c>&lt;label&gt;.csv</c>, beside the
+    /// parquet it just made) is removed, never anything else in the directory.
+    /// </para>
+    /// </summary>
+    private void DeleteSupersededCsv(string workDir, string label)
+    {
+        try
+        {
+            var csv = Path.Combine(workDir, label + ".csv");
+            if (!File.Exists(csv))
+                return;
+            var bytes = new FileInfo(csv).Length;
+            File.Delete(csv);
+            _log($"Removed the superseded CSV export {csv} ({bytes:N0} bytes) - the parquet replaces it.");
+        }
+        catch (Exception ex)
+        {
+            // Never fail an export over cleanup; the stale file is wasteful, not wrong.
+            _log($"Could not remove the superseded CSV export: {ex.Message}");
+        }
+    }
+
     public static string MetadataFileName(string documentLabel) => documentLabel + ".metadata.csv";
 
     /// <summary>
