@@ -44,6 +44,7 @@ public sealed class ProteinList
         {
             Name = EvMarkersName,
             ColorHex = "#2ca02c",
+            Visible = false,
             // Eighteen canonical EV proteins, by gene symbol, grouped by what they are:
             //   tetraspanins            CD9, CD63, CD81
             //   ESCRT / biogenesis      TSG101, PDCD6IP (ALIX), SDCBP (syntenin), VPS4B
@@ -63,10 +64,79 @@ public sealed class ProteinList
                 "HSPA8", "ITGB1", "EHD1",
             },
         },
+        new ProteinList
+        {
+            Name = GlomerulusName,
+            ColorHex = "#1f77b4",
+            Visible = false,
+            // Structural markers of glomerular tissue, for normalizing single-glomerulus work by how
+            // much glomerulus a dissection actually captured:
+            //   GBM collagen IV      COL4A3/4/5 - the alpha3-4-5 network, GBM-specific. COL4A1/COL4A2
+            //                        are deliberately absent: they are ubiquitous basement membrane and
+            //                        would make the score track any BM, not this one.
+            //   GBM laminin          LAMA5, LAMB2, LAMC1 (laminin-521)
+            //   BM proteoglycan      AGRN, HSPG2, NID1
+            //   glomerular endothel. EHD3 (glomerular-endothelium enriched), EMCN, PECAM1
+            //   mesangium            ITGA8, PDGFRB
+            //   podocyte             PODXL, SYNPO, CD2AP, PTPRO
+            //
+            // Weighted toward structure ON PURPOSE. The obvious podocyte markers - NPHS1, NPHS2 - are
+            // left out because podocyte loss IS the phenotype in most glomerular disease, and a score
+            // dominated by them would regress out the finding rather than the capture. The four
+            // podocyte proteins here are a minority of the panel so it still tracks podocyte-bearing
+            // tissue without PC1 becoming a podocyte-injury axis.
+            //
+            // Check before trusting it on a new cohort: how many are quantified, and whether PC1
+            // separates large sections from small ones (capture, what you want) or diseased from
+            // control (pathology, which you do not want to remove).
+            Members =
+            {
+                "COL4A3", "COL4A4", "COL4A5",
+                "LAMA5", "LAMB2", "LAMC1",
+                "AGRN", "HSPG2", "NID1",
+                "EHD3", "EMCN", "PECAM1",
+                "ITGA8", "PDGFRB",
+                "PODXL", "SYNPO", "CD2AP", "PTPRO",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = TubularContaminationName,
+            ColorHex = "#d62728",
+            Visible = false,
+            ShowLabels = true,
+            // NOT a normalizer - a readout. Hand-dissected or microdissected glomeruli carry tubular
+            // fragments, and these proteins are abundant enough that a little carry-over is obvious on
+            // the dynamic-range plot. Spread across nephron segments so the plot says WHICH segment
+            // came along:
+            //   proximal tubule    LRP2 (megalin), CUBN (cubilin), SLC34A1, SLC5A2, MIOX, ACSM2A,
+            //                      ACSM2B, ANPEP, GGT1, PDZK1
+            //   thick ascending    UMOD (uromodulin), SLC12A1
+            //   distal / collecting SLC12A3, AQP2
+            //   proximal + thin    AQP1
+            //
+            // Normalizing to these would be backwards: their abundance is the contamination, not the
+            // thing being measured.
+            Members =
+            {
+                "LRP2", "CUBN", "SLC34A1", "SLC5A2", "MIOX", "ACSM2A", "ACSM2B", "ANPEP", "GGT1",
+                "PDZK1",
+                "UMOD", "SLC12A1",
+                "SLC12A3", "AQP2",
+                "AQP1",
+            },
+        },
     };
 
     /// <summary>Name of the shipped EV panel, so callers do not spell it out.</summary>
     public const string EvMarkersName = "EV markers";
+
+    /// <summary>Structural glomerular markers - see the list's own comment on what is left out and why.</summary>
+    public const string GlomerulusName = "Glomerulus";
+
+    /// <summary>Tubular markers, for spotting carry-over on the plot. Never a normalizer.</summary>
+    public const string TubularContaminationName = "Tubular contamination";
 
     public ProteinList Clone() => new()
     {
@@ -155,11 +225,13 @@ public sealed class ProteinListSet
         or "uniprot id" or "protein name" or "entry" or "id";
 
     /// <summary>
-    /// Index the visible lists for fast lookup. Returns a matcher from an <see cref="AbundanceEntry"/> to
-    /// the first visible list that claims it (list order = priority, so an earlier list wins a protein
-    /// that appears in two).
+    /// Index the visible lists for fast lookup - the user's and the shipped ones alike, so a panel PRISM
+    /// ships can highlight proteins on the plot without being copied into the user's file first (shipped
+    /// lists start invisible, so nothing is colored until it is asked for). Returns a matcher from an
+    /// <see cref="AbundanceEntry"/> to the first visible list that claims it (list order = priority, so
+    /// an earlier list wins a protein that appears in two, and the user's lists come first).
     /// </summary>
-    public ProteinListMatcher BuildMatcher() => new(Lists.Where(l => l.Visible).ToList());
+    public ProteinListMatcher BuildMatcher() => new(WithBuiltIns().Where(l => l.Visible).ToList());
 
     /// <summary>
     /// The user's lists followed by any shipped list they have not overridden, which is what a picker

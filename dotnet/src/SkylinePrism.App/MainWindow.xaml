@@ -321,6 +321,18 @@
                             <ComboBoxItem>Protein</ComboBoxItem>
                             <ComboBoxItem>Peptide</ComboBoxItem>
                         </ComboBox>
+                        <TextBlock x:Name="RangeRollupLabel" Text="Rollup:" VerticalAlignment="Center"
+                                   Margin="16,0,4,0" />
+                        <ComboBox x:Name="RangeRollupCombo" Width="130" SelectedIndex="0"
+                                  SelectionChanged="OnRangeRollupChanged"
+                                  ToolTip="View the proteins under a different rollup than the run used. 'As run' reads corrected_proteins.parquet; every other choice re-rolls corrected_peptides.parquet with that method, without re-running parsimony or the protein-level normalization - so it shows the shape and ordering that method gives, not the run's exact numbers.">
+                            <ComboBoxItem>As run</ComboBoxItem>
+                            <ComboBoxItem>Sum</ComboBoxItem>
+                            <ComboBoxItem>Median polish</ComboBoxItem>
+                            <ComboBoxItem>Top N</ComboBoxItem>
+                            <ComboBoxItem>MaxLFQ</ComboBoxItem>
+                            <ComboBoxItem>iBAQ</ComboBoxItem>
+                        </ComboBox>
                         <TextBlock Text="Replicates:" VerticalAlignment="Center" Margin="16,0,4,0" />
                         <ComboBox x:Name="RangeSampleCombo" Width="210" IsEditable="True" IsReadOnly="True"
                                   ToolTip="Which replicates to average. Tick none for All.">
@@ -334,10 +346,14 @@
                         <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
                                 Click="OnManageProteinLists"
                                 ToolTip="Define named protein lists with colors - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
-                        <Button Content="Reload" Padding="10,2" Margin="8,0,0,0" Click="OnRangeReload"
+                        <Button x:Name="RangeReloadButton" Content="Reload" Padding="10,2" Margin="8,0,0,0"
+                                Click="OnRangeReload"
                                 ToolTip="Re-read the corrected matrices from the output directory above." />
                         <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"
                                    Text="Click a point to select it in Skyline; right-click for labels." />
+                        <ProgressBar x:Name="RangeProgress" Width="120" Height="12" Margin="12,0,0,0"
+                                     Minimum="0" Maximum="1" VerticalAlignment="Center"
+                                     Visibility="Collapsed" />
                         <TextBlock x:Name="RangeStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                    Foreground="#888" TextWrapping="Wrap" />
                     </WrapPanel>

@@ -12,9 +12,9 @@ using SkylinePrism.Core.Qc;
 namespace SkylinePrism.App;
 
 /// <summary>
-/// Editor for the user's protein lists (Dynamic Range tab). Edits a COPY and only hands it back on OK, so
-/// Cancel genuinely discards - these lists are persisted per user and shared across every project, which
-/// makes an accidental edit expensive.
+/// Editor for the protein lists (Dynamic Range tab) - the user's own and the ones PRISM ships. Edits a
+/// COPY and only hands it back on OK, so Cancel genuinely discards - these lists are persisted per user
+/// and shared across every project, which makes an accidental edit expensive.
 /// </summary>
 public partial class ProteinListWindow : Window
 {
@@ -34,7 +34,11 @@ public partial class ProteinListWindow : Window
     {
         InitializeComponent();
 
-        foreach (var list in source.Lists)
+        // Seeded from WithBuiltIns, not from Lists: the panels PRISM ships (EV markers, Glomerulus,
+        // Tubular contamination) show up here alongside the user's own, so they can be ticked on for the
+        // plot or edited into a cohort-specific variant. They arrive unticked, and a name the user has
+        // already defined wins - so an override replaces the shipped one rather than doubling it.
+        foreach (var list in source.WithBuiltIns())
             _rows.Add(new ListRow(list.Clone()));
         ListsBox.ItemsSource = _rows;
         ColorCombo.ItemsSource = Palette.Select(p => new ColorChoice(p.Name, p.Hex)).ToList();

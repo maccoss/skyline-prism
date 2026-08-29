@@ -97,7 +97,7 @@ makes total signal equal by construction.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `false` | Off unless asked for — it changes every reported abundance |
-| `protein_list` | — | Name of the marker list: one of your saved lists, or the shipped `EV markers` panel |
+| `protein_list` | — | Name of the marker list: one of your saved lists, or a shipped panel (`EV markers`, `Glomerulus`). `Tubular contamination` also ships, but it is a readout for the Dynamic Range plot — normalizing to it would remove the contamination it exists to reveal |
 | `protein_list_file` | — | A file of members instead (one identifier per line, or a CSV's first column). Wins over `protein_list`, and is the reproducible form — a name depends on the machine's saved lists, a path does not |
 | `method` | `pc1` | `pc1` (first principal component of the z-scored markers) or `mean` |
 

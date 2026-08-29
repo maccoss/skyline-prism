@@ -31,6 +31,40 @@ as the GitHub Release description and fails if it is missing.
   them from results read off these files. Fewer than 3 quantified markers is an error, and a PC1 under
   40% of marker variance is warned about.
 
+- **Two kidney panels ship alongside the EV one**, and shipped panels now reach the Dynamic Range plot
+  without being copied into your own list file first. All three appear in **Protein lists...** and can be
+  edited into cohort-specific variants; a list of yours with the same name replaces the shipped one. They
+  arrive **unticked**, so nothing is colored until asked for.
+
+  - **`Glomerulus`** - 18 structural markers of glomerular tissue (GBM collagen IV alpha-3/4/5 and
+    laminin, basement-membrane proteoglycans, glomerular endothelium, mesangium, podocytes), for
+    normalizing single-glomerulus work by how much glomerulus a dissection actually captured. Weighted
+    toward structure on purpose: `NPHS1`/`NPHS2` are left out because podocyte loss *is* the phenotype in
+    most glomerular disease and a score built on them would regress out the finding along with the
+    capture, and `COL4A1`/`COL4A2` because they are ubiquitous basement membrane.
+  - **`Tubular contamination`** - 15 proximal-tubule, thick-ascending-limb and distal/collecting markers.
+    A **readout**, not a normalizer: dissected glomeruli carry tubular fragments, and these are abundant
+    enough that carry-over is visible on the plot. Spread across nephron segments so the plot says which
+    segment came along.
+
+- **View the Dynamic Range plot under any protein rollup**, regardless of what the run used. A new
+  **Rollup** drop-down offers **sum**, **median polish**, **top N**, **MaxLFQ** and **iBAQ**; **As run**
+  (the default) keeps reading `corrected_proteins.parquet`.
+
+  The method decides what the y axis *is*, which the plot could previously only state in its label. A
+  summing method carries the peptide count into the answer - on a real cohort C4A (121 peptides) leads
+  Skyline's summed view and sits below ITIH2 (44 peptides) under median polish - while iBAQ divides by
+  the theoretical peptide count and is the only one of them meant for comparing one protein against
+  another.
+
+  Any choice but **As run** re-rolls `corrected_peptides.parquet` with that method, using the run's own
+  `min_peptides` / `topn` so the method is the only thing that changes. It does not re-run parsimony or
+  the protein-level normalization and batch correction, and the status line says
+  `[recomputed from corrected_peptides]` so the two are never confused. iBAQ takes its FASTA from the
+  run's `protein_rollup.ibaq.fasta_path` or `parsimony.fasta_path`; without one it divides by the
+  observed peptide count and says so. The digest and the rollup run off the UI thread behind a progress
+  bar, and the theoretical counts are cached.
+
 ## Bug Fixes
 
 ## Performance
