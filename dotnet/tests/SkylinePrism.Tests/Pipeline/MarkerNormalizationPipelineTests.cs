@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Config;
@@ -53,12 +54,16 @@ public class MarkerNormalizationPipelineTests : IDisposable
         return c;
     }
 
-    private string RunOnce(Action<PrismConfig>? tweak = null)
+    private string RunOnce(Action<PrismConfig>? tweak = null) => RunLogged(out _, tweak);
+
+    private string RunLogged(out List<string> log, Action<PrismConfig>? tweak = null)
     {
         var outDir = Path.Combine(_dir, "run_" + Guid.NewGuid().ToString("N")[..6]);
         var config = Config();
         tweak?.Invoke(config);
-        PrismPipeline.Run(Inputs(), outDir, config, null, _ => { });
+        var lines = new List<string>();
+        PrismPipeline.Run(Inputs(), outDir, config, null, lines.Add);
+        log = lines;
         return outDir;
     }
 
@@ -275,4 +280,50 @@ public class MarkerNormalizationPipelineTests : IDisposable
 
     private static byte[] Hash(string path) =>
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path));
+
+    /// <summary>
+    /// A member written "&lt;token&gt; = &lt;label&gt;" normalizes on its token, and the stage's report does
+    /// not then claim it was missing. Both halves of that were broken by the labels: the members reach
+    /// the matcher through <c>MatchToken</c>, but the "not quantified" list compared the WHOLE member
+    /// string against identifiers from the data, so every labelled member - the entire contaminants
+    /// panel - was reported as not quantified on a run where it had been found.
+    /// </summary>
+    [Fact]
+    public void ALabelledMemberMatchesOnItsTokenAndIsNotReportedMissing()
+    {
+        var plain = RunOnce();
+        var members = AllProteins(Path.Combine(plain, "corrected_proteins.parquet"));
+        // Same panel, written with display labels - the run must be indifferent to them.
+        File.WriteAllLines(_listFile, members.Select(m => $"{m} = Marker for {m}"));
+
+        RunLogged(out var log, c =>
+        {
+            c.MarkerNormalization.Enabled = true;
+            c.MarkerNormalization.ProteinListFile = _listFile;
+        });
+
+        var line = Assert.Single(log, l => l.Contains("Markers:", StringComparison.Ordinal));
+        Assert.Contains($"{members.Length} of {members.Length} quantified", line);
+        Assert.DoesNotContain("not quantified", line);
+    }
+
+    /// <summary>...and a member that really is absent is still named, by its LABEL - the half a reader
+    /// can act on. Reporting the raw "P00761 = Trypsin (porcine)" back at them would be noise.</summary>
+    [Fact]
+    public void AnAbsentMemberIsReportedByItsLabel()
+    {
+        var plain = RunOnce();
+        var members = AllProteins(Path.Combine(plain, "corrected_proteins.parquet"));
+        File.WriteAllLines(_listFile, members.Append("P00761 = Trypsin (porcine)"));
+
+        RunLogged(out var log, c =>
+        {
+            c.MarkerNormalization.Enabled = true;
+            c.MarkerNormalization.ProteinListFile = _listFile;
+        });
+
+        var line = Assert.Single(log, l => l.Contains("Markers:", StringComparison.Ordinal));
+        Assert.Contains("not quantified: Trypsin (porcine)", line);
+        Assert.DoesNotContain("P00761", line);
+    }
 }

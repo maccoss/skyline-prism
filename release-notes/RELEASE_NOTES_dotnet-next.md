@@ -6,7 +6,34 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
-- **Twenty-nine panels ship**, bringing the predefined set to 60. Eighteen processes and pathways: oxidative phosphorylation,
+- **The Predefined tab groups its panels under collapsible category headings** - Normalizers, Plasma and
+  blood, Endothelial, Epithelial, Readouts and contamination, Pathways and processes, and Brain and
+  neurodegeneration. At 65 panels a flat list was no longer something anyone read top to bottom, and the
+  headings carry the distinction that matters most about a panel: whether its abundance is the scale you
+  are dividing by or the result you are looking for. **My lists** stays flat - a handful of your own needs
+  no navigation, and categorising them would mean being asked for a category every time you make one.
+
+- **Contaminants are shown by protein name rather than bare accession.** A member may now be written
+  `<accession> = <name>` - `P00761 = Trypsin (porcine)`, `P02769 = Serum albumin (bovine, BSA)` - where
+  **everything left of the `=` is matched and everything right of it is only displayed**. The whole
+  `Common contaminants (cRAP)` panel is labeled this way. The accessions were never optional: these are
+  non-human proteins, and `ALB` for bovine serum albumin matches *human* albumin. Neither is the UniProt
+  entry name a way out - `ALBU_BOVIN` reduces to the token `ALBU`, and so does human `ALBU_HUMAN`, because
+  species suffixes are stripped so panels work across human and mouse. The syntax works in your own lists
+  too.
+
+- **Five more pathways**, bringing the predefined set to 65: `Cell cycle and proliferation`,
+  `Epithelial-mesenchymal transition`, `Hypoxia response`, `Glucose and lipid metabolism` and
+  `Insulin signaling`. All display-only.
+
+  Two are read differently from a normal panel, and say so in the tool. **Insulin signaling is regulated
+  by phosphorylation, not abundance** - its members are present whether or not the cascade is active, so a
+  flat panel is the expected result and says nothing about signalling; it earns its place on a
+  phospho-enriched run. For abundance work, `Glucose and lipid metabolism` measures what that pathway
+  *does*. **Epithelial-mesenchymal transition is read as a balance**, not a total: its epithelial half
+  (CDH1, claudins, keratins) and mesenchymal half (VIM, CDH2, FN1) move in opposite directions.
+
+- **Twenty-nine more panels ship.** Eighteen processes and pathways: oxidative phosphorylation,
   glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin
   cytoskeleton, antigen presentation, acute phase response, chaperones/proteostasis, and
   redox/antioxidant, DNA damage repair, autophagy, unfolded protein response, innate immune signaling,
@@ -43,6 +70,13 @@ as the GitHub Release description and fails if it is missing.
   already said content.
 
 ## Bug Fixes
+
+- **A marker list written with display labels normalizes, and its log no longer claims every member was
+  missing.** The members reach the matcher stripped of their labels, but the stage's "not quantified"
+  list compared the *whole* member string against the identifiers in the data - so a labeled member never
+  matched anything and every one of them was reported absent on a run where they had all been found. The
+  same comparison also mis-reported members written as accessions, which are checked off by gene symbol
+  above; both now compare on the match token, and report the label, which is the half you can act on.
 
 - **A failed headless export no longer passes off the previous export as its own output.** The parquet
   result was accepted on its PAR1 marker alone, which says the bytes at that path are parquet - not that

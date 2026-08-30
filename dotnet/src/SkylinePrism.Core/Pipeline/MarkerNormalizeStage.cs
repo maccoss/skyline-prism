@@ -70,8 +70,23 @@ internal static class MarkerNormalizeStage
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // A member is checked off by whichever identifier it was written as, so the "not quantified" list
+        // holds only members that really found nothing. Two things it must not confuse itself with: a
+        // member keyed by accession is reported by gene symbol above, and a labelled member
+        // ("P00761 = Trypsin (porcine)") never equals any identifier at all. Compare on the match token,
+        // and report the label - which is the half a reader can act on.
+        var quantified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var i in markerRows)
+        {
+            if (accession?[i] is { Length: > 0 } a) quantified.Add(a);
+            if (gene?[i] is { Length: > 0 } g) quantified.Add(g);
+            if (name?[i] is { Length: > 0 } n) quantified.Add(n);
+        }
+
         var missing = list.Members
-            .Where(m => !found.Contains(m, StringComparer.OrdinalIgnoreCase))
+            .Where(m => !quantified.Contains(ProteinList.MatchToken(m)))
+            .Select(ProteinList.DisplayName)
             .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
             .ToList();
 

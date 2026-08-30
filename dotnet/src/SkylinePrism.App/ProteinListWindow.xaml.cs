@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Windows.Data;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -48,7 +49,13 @@ public partial class ProteinListWindow : Window
                 _shipped.Add(new ListRow(list.Clone()));
 
         ListsBox.ItemsSource = _rows;
-        ShippedBox.ItemsSource = _shipped;
+
+        // 65 shipped panels is not a list anyone reads top to bottom, so group them under collapsible
+        // category headings. The user's own stay flat - a handful needs no navigation, and giving them
+        // categories would mean asking for one every time a list is created.
+        var shippedView = new CollectionViewSource { Source = _shipped };
+        shippedView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ListRow.Category)));
+        ShippedBox.ItemsSource = shippedView.View;
         ColorCombo.ItemsSource = Palette.Select(p => new ColorChoice(p.Name, p.Hex)).ToList();
         if (_rows.Count > 0)
             ListsBox.SelectedIndex = 0;
@@ -261,6 +268,7 @@ public partial class ProteinListWindow : Window
         public ProteinList Model { get; }
 
         public string Name => Model.Name;
+        public string Category => string.IsNullOrWhiteSpace(Model.Category) ? "Other" : Model.Category;
         public string CountLabel => $"({Model.Members.Count})";
         public Brush Brush => ColorChoice.BrushFor(Model.ColorHex);
 

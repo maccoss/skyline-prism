@@ -91,11 +91,17 @@ public class BuiltInProteinListTests
     public void TheContaminantPanelUsesAccessionsNotGeneSymbols()
     {
         var crap = ProteinList.BuiltIns.Single(l => l.Name.Contains("cRAP", StringComparison.Ordinal));
+        var tokens = crap.Members.Select(ProteinList.MatchToken).ToList();
 
-        Assert.Contains("P00761", crap.Members);           // porcine trypsin
-        Assert.Contains("P02769", crap.Members);           // bovine serum albumin
+        Assert.Contains("P00761", tokens);                 // porcine trypsin
+        Assert.Contains("P02769", tokens);                 // bovine serum albumin
         foreach (var dangerous in new[] { "ALB", "TRYP", "PRSS1", "CASB", "LYZ" })
-            Assert.DoesNotContain(dangerous, crap.Members, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain(dangerous, tokens, StringComparer.OrdinalIgnoreCase);
+
+        // Every member is labelled, and the label is what a reader sees. The names are the reason the
+        // panel is readable at all, so a member that lost its label is a regression, not a detail.
+        Assert.All(crap.Members, m => Assert.NotEqual(ProteinList.MatchToken(m), ProteinList.DisplayName(m)));
+        Assert.Equal("Trypsin (porcine)", ProteinList.DisplayName(crap.Members.First(m => m.StartsWith("P00761", StringComparison.Ordinal))));
     }
 
     /// <summary>
@@ -249,7 +255,7 @@ public class BuiltInProteinListTests
         var crap = ProteinList.BuiltIns.Single(l => l.Name.Contains("cRAP", StringComparison.Ordinal));
 
         Assert.DoesNotContain("ENO1", house.Members, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains("P00924", crap.Members);
+        Assert.Contains("P00924", crap.Members.Select(ProteinList.MatchToken));
     }
 
     /// <summary>
@@ -371,5 +377,89 @@ public class BuiltInProteinListTests
             var panel = ProteinList.BuiltIns.Single(l => l.Name == name);
             Assert.False(panel.DisplayOnly, $"{name} is meant to be usable as a normalizer");
         }
+    }
+
+    /// <summary>
+    /// A member is "&lt;token&gt; = &lt;label&gt;", and only the token is matched. This is what lets the
+    /// contaminants panel read as protein names while still matching on accessions - the two halves are
+    /// independent, and the label may be anything, including text that would be a terrible match token.
+    /// </summary>
+    [Theory]
+    [InlineData("P00761 = Trypsin (porcine)", "P00761", "Trypsin (porcine)")]
+    [InlineData("P00761=Trypsin", "P00761", "Trypsin")]           // spaces around the separator optional
+    [InlineData("  ALB  ", "ALB", "ALB")]                          // unlabelled: the member is both
+    [InlineData("CD9", "CD9", "CD9")]
+    [InlineData("P02769 = ", "P02769", "P02769")]                  // empty label falls back to the token
+    [InlineData("A = B = C", "A", "B = C")]                        // first separator wins; label keeps the rest
+    public void AMemberSplitsIntoAMatchTokenAndALabel(string member, string token, string label)
+    {
+        Assert.Equal(token, ProteinList.MatchToken(member));
+        Assert.Equal(label, ProteinList.DisplayName(member));
+    }
+
+    /// <summary>
+    /// The label must not reach the matcher. A contaminant labelled "Serum albumin (bovine, BSA)" that
+    /// matched on its label would fire on human albumin - exactly the collision the accession-only rule
+    /// exists to prevent, reintroduced through the readability change.
+    /// </summary>
+    [Fact]
+    public void ALabelIsDisplayedButNeverMatched()
+    {
+        var crap = ProteinList.BuiltIns.Single(l => l.Name.Contains("cRAP", StringComparison.Ordinal)).Clone();
+        crap.Visible = true;
+        var matcher = ProteinListSet.MatcherFor(crap);
+
+        Assert.NotNull(matcher.Match("P02769", null, null));            // bovine BSA, by accession
+        Assert.Null(matcher.Match("P02768", "ALB", "ALBU_HUMAN"));      // human albumin stays clean
+        Assert.Null(matcher.Match(null, "Albumin", null));
+        Assert.Null(matcher.Match(null, "Trypsin", null));
+    }
+
+    /// <summary>
+    /// Every shipped panel sits under a heading in the Predefined tab. A panel with no category would
+    /// land in a stray "Other" group - not broken, but the kind of thing nobody notices until a user
+    /// asks where a panel went.
+    /// </summary>
+    [Fact]
+    public void EveryShippedPanelHasACategory()
+    {
+        Assert.All(ProteinList.BuiltIns, panel =>
+            Assert.False(string.IsNullOrWhiteSpace(panel.Category), $"{panel.Name} has no category"));
+
+        // Endothelial and epithelial are deliberately SEPARATE headings: they are different tissues
+        // that happen to alliterate, and one combined group reads as a filing error.
+        var categories = ProteinList.BuiltIns.Select(l => l.Category).Distinct().ToList();
+        Assert.Contains("Endothelial", categories);
+        Assert.Contains("Epithelial", categories);
+    }
+
+    /// <summary>A category survives the clone the GUI takes when a panel is copied or ticked.</summary>
+    [Fact]
+    public void CloningKeepsTheCategory()
+    {
+        var panel = ProteinList.BuiltIns.First(l => l.Category == "Endothelial");
+
+        Assert.Equal(panel.Category, panel.Clone().Category);
+    }
+
+    /// <summary>
+    /// Insulin signaling is display-only for a reason worth pinning: the pathway is regulated by
+    /// PHOSPHORYLATION, so normalizing abundance to it would divide by something that does not move
+    /// with the biology being asked about.
+    /// </summary>
+    [Theory]
+    [InlineData("Cell cycle and proliferation")]
+    [InlineData("Epithelial-mesenchymal transition")]
+    [InlineData("Hypoxia response")]
+    [InlineData("Glucose and lipid metabolism")]
+    [InlineData("Insulin signaling")]
+    public void TheMetabolicAndProliferativePanelsShipDisplayOnly(string name)
+    {
+        var panel = ProteinList.BuiltIns.Single(l => l.Name == name);
+
+        Assert.True(panel.DisplayOnly);
+        Assert.False(panel.Visible);
+        Assert.Equal("Pathways and processes", panel.Category);
+        Assert.True(panel.Members.Count >= 20, $"{name} is too thin to read a programme from");
     }
 }
