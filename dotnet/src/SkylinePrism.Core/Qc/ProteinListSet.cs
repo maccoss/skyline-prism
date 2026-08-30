@@ -24,6 +24,20 @@ public sealed class ProteinList
     public bool ShowLabels { get; set; }
 
     /// <summary>
+    /// This list describes something to LOOK at, never a denominator to divide by, and
+    /// <c>marker_normalization</c> refuses it.
+    ///
+    /// <para>Two kinds of list are display-only, for the same underlying reason: their abundance is the
+    /// signal, not the scale. A readout like Hemolysis or Tubular contamination measures the problem -
+    /// normalizing to it removes the evidence. A pathway measures biology - normalizing to it removes the
+    /// finding. Both are perfectly good highlight sets and catastrophic normalizers.</para>
+    ///
+    /// <para>A flag rather than a note in the docs because the failure is silent: the run succeeds, the
+    /// numbers look plausible, and what was regressed out is exactly what was being studied.</para>
+    /// </summary>
+    public bool DisplayOnly { get; set; }
+
+    /// <summary>
     /// Members as the user typed them. Matched against accession, gene name AND protein name, so a list
     /// may be written in whichever form the user has it - "P02768", "ALB" and "sp|P02768|ALBU_HUMAN" all
     /// match the same protein.
@@ -67,6 +81,7 @@ public sealed class ProteinList
         ColorHex = ColorHex,
         Visible = Visible,
         ShowLabels = ShowLabels,
+        DisplayOnly = DisplayOnly,
         Members = new List<string>(Members),
     };
 }
@@ -292,6 +307,13 @@ public sealed class ProteinListSet
             return null;
 
         var found = Load(setPath).Find(name);
+        if (found is { DisplayOnly: true })
+            throw new InvalidOperationException(
+                $"marker_normalization.protein_list '{found.Name}' is a display-only panel and cannot "
+                + "define a normalization. Its abundance is the thing being looked for - a readout "
+                + "measures a problem, a pathway measures biology - so dividing by it removes exactly "
+                + "what you are trying to see. Highlight it on a plot instead, and normalize against a "
+                + "panel that tracks how much material was captured.");
         if (found is null)
             throw new InvalidOperationException(
                 $"marker_normalization.protein_list '{name}' was not found. Available: "
