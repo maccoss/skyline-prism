@@ -1175,7 +1175,7 @@ public partial class MainWindow : Window
     /// replicates peaked at ~1.26 GB resident, and memory scales linearly with concurrency (3 at once
     /// peaked at 3.7 GB). 2.5 GB leaves headroom for documents larger than that.
     /// </summary>
-    private const double GbPerConcurrentExport = 2.5;
+    internal const double GbPerConcurrentExport = 2.5;
 
     /// <summary>Hard cap on concurrent exports: past this the work is disk-bound, not CPU-bound.</summary>
     private const int MaxConcurrentExports = 4;
@@ -1208,16 +1208,121 @@ public partial class MainWindow : Window
             return 1; // can't size the budget - stay sequential
         }
 
-        // Spend at most 60% of RAM on exports; the merge that follows sizes itself against RAM too, but it
-        // runs after every export has exited, so the two never overlap.
-        var byMemory = (int)Math.Floor(totalGb * 0.6 / GbPerConcurrentExport);
+        // The budget is a FUNCTION OF THE LARGEST DOCUMENT, not a constant. See PerExportGb.
+        var perExportGb = PerExportGb(inputs, out var largest, out var largestGb);
+
+        var byMemory = ExportsThatFit(totalGb, perExportGb);
+
+        // byMemory == 0 means not even ONE export is expected to fit. Clamping silently to 1 - which is
+        // what this did - tells the user nothing and then fails deep inside Skyline, which reports memory
+        // exhaustion as a stall rather than an error. Say it plainly instead, with the number that would
+        // let them act: an open Skyline holding a big document is usually the difference.
+        if (byMemory == 0)
+        {
+            var freeGb = FreePhysicalGb();
+            Log($"WARNING: '{largest}' is {largestGb:N1} GB, so one export alone is expected to need "
+                + $"about {perExportGb:N0} GB - more than the {totalGb * MemoryFractionForExports:N0} GB budgeted from this "
+                + $"machine's {totalGb:N0} GB."
+                + (freeGb is not null ? $" About {freeGb:N0} GB is free right now." : "")
+                + " Exporting one at a time; close other Skyline windows first, because a Skyline that "
+                + "runs out of memory stops making progress and does not recover when memory is freed.");
+            return 1;
+        }
+
         var degree = Math.Max(1, Math.Min(Math.Min(byMemory, MaxConcurrentExports), exporting));
         if (degree > 1)
-            Log($"Exporting up to {degree} documents at a time "
-                + $"({totalGb:N0} GB RAM, budgeting {GbPerConcurrentExport:N1} GB per export).");
+            Log($"Exporting up to {degree} documents at a time ({totalGb:N0} GB RAM, budgeting "
+                + $"{perExportGb:N1} GB per export for '{largest}' at {largestGb:N1} GB).");
         else
-            Log($"Exporting one document at a time ({totalGb:N0} GB RAM is not enough to overlap safely).");
+            Log($"Exporting one document at a time: '{largest}' is {largestGb:N1} GB, so each export is "
+                + $"budgeted {perExportGb:N1} GB and {totalGb:N0} GB RAM is not enough to overlap safely.");
         return degree;
+    }
+
+    /// <summary>
+    /// RAM to assume for ONE concurrent export, from the largest document being exported.
+    ///
+    /// <para><b>Why this cannot be a constant.</b> It was one - 2.5 GB - and the benchmark behind it
+    /// varied CONCURRENCY while holding document size fixed: a 5 MB .sky with a 116 MB .skyd peaked at
+    /// 1.26 GB, three at once at 3.7 GB, so 2.5 GB looked like generous headroom. At that size the
+    /// figure is almost entirely Skyline's fixed baseline, so the measurement could not see the term
+    /// that dominates on a big document. Measured on a 2-plate cohort of 11.3 GB documents: 22.4 GB and
+    /// 17.2 GB resident, roughly 1.5-2x the .sky. The constant was off by about 8x, and PRISM chose two
+    /// concurrent exports on a 64 GB machine, ran it down to 4.5 GB free, and starved one of them.</para>
+    ///
+    /// <para><b>Sized off the LARGEST input, not the mean.</b> One 11 GB document among ninety small
+    /// ones still needs its own headroom, and an average would hide it entirely.</para>
+    ///
+    /// <para>The <see cref="GbPerConcurrentExport"/> floor keeps the many-small-documents case exactly
+    /// as it was: for a 100 MB document the baseline still dominates, the floor still applies, and the
+    /// chosen concurrency is unchanged.</para>
+    /// </summary>
+    internal static double PerExportGb(
+        IReadOnlyList<PrismInput> inputs, out string largest, out double largestGb)
+    {
+        largest = "";
+        long largestBytes = 0;
+        foreach (var input in inputs)
+        {
+            if (input.Kind == PrismInputKind.ReportFile || string.IsNullOrEmpty(input.Path))
+                continue; // nothing is exported, so nothing is loaded
+            try
+            {
+                var info = new FileInfo(input.Path);
+                if (!info.Exists || info.Length <= largestBytes)
+                    continue;
+                largestBytes = info.Length;
+                largest = input.DisplayName;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unsizable input - the floor still applies.
+            }
+        }
+        largestGb = largestBytes / (1024.0 * 1024 * 1024);
+        return PerExportGbForBytes(largestBytes);
+    }
+
+    /// <summary>The budget arithmetic alone, so it can be tested without an 11 GB fixture on disk.</summary>
+    internal static double PerExportGbForBytes(long largestSkyBytes) =>
+        Math.Max(GbPerConcurrentExport, SkyToMemoryFactor * largestSkyBytes / (1024.0 * 1024 * 1024));
+
+    /// <summary>
+    /// How many exports of <paramref name="perExportGb"/> fit in 60% of this machine's RAM. ZERO is a
+    /// meaningful answer - not even one is expected to fit - and the caller must say so rather than
+    /// clamping silently, which is what hid the problem before.
+    /// </summary>
+    internal static int ExportsThatFit(double totalGb, double perExportGb) =>
+        perExportGb <= 0 ? 0 : (int)Math.Floor(totalGb * MemoryFractionForExports / perExportGb);
+
+    /// <summary>
+    /// Share of RAM exports may use. The merge that follows sizes itself against RAM too, but it runs
+    /// after every export has exited, so the two never overlap.
+    /// </summary>
+    private const double MemoryFractionForExports = 0.6;
+
+    /// <summary>
+    /// Resident memory a headless Skyline needs per GB of .sky, measured at 1.5x and 2.0x on two 11.3 GB
+    /// documents. 2.0 takes the worse of the two rather than the average: under-budgeting does not merely
+    /// slow the run down, it wedges a Skyline permanently.
+    /// </summary>
+    internal const double SkyToMemoryFactor = 2.0;
+
+    /// <summary>Physical RAM currently free, or null when it cannot be read. Advisory only.</summary>
+    private static double? FreePhysicalGb()
+    {
+        try
+        {
+            var info = GC.GetGCMemoryInfo();
+            if (info.TotalAvailableMemoryBytes <= 0)
+                return null;
+            var free = info.TotalAvailableMemoryBytes - info.MemoryLoadBytes;
+            return free > 0 ? free / (1024.0 * 1024 * 1024) : 0;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private void SetInputStatus(PrismInput input, string status)
