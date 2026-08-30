@@ -98,7 +98,7 @@ public class BuiltInProteinListTests
         foreach (var dangerous in new[] { "ALB", "TRYP", "PRSS1", "CASB", "LYZ" })
             Assert.DoesNotContain(dangerous, tokens, StringComparer.OrdinalIgnoreCase);
 
-        // Every member is labelled, and the label is what a reader sees. The names are the reason the
+        // Every member is labeled, and the label is what a reader sees. The names are the reason the
         // panel is readable at all, so a member that lost its label is a regression, not a detail.
         Assert.All(crap.Members, m => Assert.NotEqual(ProteinList.MatchToken(m), ProteinList.DisplayName(m)));
         Assert.Equal("Trypsin (porcine)", ProteinList.DisplayName(crap.Members.First(m => m.StartsWith("P00761", StringComparison.Ordinal))));
@@ -387,7 +387,7 @@ public class BuiltInProteinListTests
     [Theory]
     [InlineData("P00761 = Trypsin (porcine)", "P00761", "Trypsin (porcine)")]
     [InlineData("P00761=Trypsin", "P00761", "Trypsin")]           // spaces around the separator optional
-    [InlineData("  ALB  ", "ALB", "ALB")]                          // unlabelled: the member is both
+    [InlineData("  ALB  ", "ALB", "ALB")]                          // unlabeled: the member is both
     [InlineData("CD9", "CD9", "CD9")]
     [InlineData("P02769 = ", "P02769", "P02769")]                  // empty label falls back to the token
     [InlineData("A = B = C", "A", "B = C")]                        // first separator wins; label keeps the rest
@@ -398,7 +398,7 @@ public class BuiltInProteinListTests
     }
 
     /// <summary>
-    /// The label must not reach the matcher. A contaminant labelled "Serum albumin (bovine, BSA)" that
+    /// The label must not reach the matcher. A contaminant labeled "Serum albumin (bovine, BSA)" that
     /// matched on its label would fire on human albumin - exactly the collision the accession-only rule
     /// exists to prevent, reintroduced through the readability change.
     /// </summary>
@@ -461,5 +461,91 @@ public class BuiltInProteinListTests
         Assert.False(panel.Visible);
         Assert.Equal("Pathways and processes", panel.Category);
         Assert.True(panel.Members.Count >= 20, $"{name} is too thin to read a programme from");
+    }
+
+    /// <summary>
+    /// The contaminants panel must not claim a HUMAN protein. This is the test the panel needed and did
+    /// not have: it carried the UniProt entry names ENO1_YEAST and TRYP_PIG, and the matcher strips
+    /// species suffixes so panels work across human and mouse - so they reduced to the tokens ENO1 and
+    /// TRYP, which are exactly the two collisions the panel's own comment says accessions exist to
+    /// prevent. Every human run colored abundant alpha-enolase as a contaminant and, because this panel
+    /// is declared before Glycolysis, took ENO1 from the panel it belongs to.
+    /// <para>
+    /// The existing accession/gene-symbol tests could not see it: they check the RAW member strings,
+    /// and "ENO1_YEAST" is neither the symbol "ENO1" nor a collision until the matcher tokenizes it.
+    /// This one asks the matcher.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("P06733", "ENO1", "ENOA_HUMAN")]      // alpha-enolase: abundant in every human sample
+    [InlineData("P07477", "PRSS1", "TRY1_HUMAN")]     // human trypsin-1
+    [InlineData("P02768", "ALB", "ALBU_HUMAN")]       // human serum albumin
+    [InlineData("P04406", "GAPDH", "G3P_HUMAN")]
+    public void TheContaminantPanelNeverClaimsAHumanProtein(string accession, string gene, string name)
+    {
+        var crap = ProteinList.BuiltIns.Single(l => l.Name.Contains("cRAP", StringComparison.Ordinal)).Clone();
+        crap.Visible = true;
+
+        Assert.Null(ProteinListSet.MatcherFor(crap).Match(accession, gene, name));
+    }
+
+    /// <summary>
+    /// ...and no shipped panel may contain a member that tokenizes to a bare human gene symbol it did
+    /// not mean. Stated as a rule rather than a list, so the next entry name added anywhere trips it.
+    /// </summary>
+    [Fact]
+    public void TheContaminantPanelIsAccessionsOnly()
+    {
+        var crap = ProteinList.BuiltIns.Single(l => l.Name.Contains("cRAP", StringComparison.Ordinal));
+
+        Assert.All(crap.Members, m =>
+        {
+            var token = ProteinList.MatchToken(m);
+            Assert.DoesNotContain('_', token);   // an entry name; its species suffix is stripped away
+            // The official UniProt accession pattern. A gene symbol ("ENO1", "ALB") and an entry name
+            // both fail it, which is the whole point.
+            Assert.Matches("^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2})$", token);
+        });
+    }
+
+    /// <summary>
+    /// Whoever wins ENO1 across the whole shipped set, it is not the contaminants panel. List order is
+    /// priority, so a contaminant member that over-matches does not merely add a wrong color - it takes
+    /// the protein away from the panel that should have had it.
+    /// </summary>
+    [Fact]
+    public void GlycolysisKeepsEno1AcrossTheWholeShippedSet()
+    {
+        var set = new ProteinListSet();
+        foreach (var panel in ProteinList.BuiltIns)
+        {
+            var copy = panel.Clone();
+            copy.Visible = true;
+            set.Lists.Add(copy);
+        }
+
+        Assert.Equal("Glycolysis", set.BuildMatcher().Match("P06733", "ENO1", "ENOA_HUMAN")?.Name);
+    }
+
+    /// <summary>
+    /// A comma inside a display label does not split the member. The editor and the file importer both
+    /// treat commas as member separators - a pasted spreadsheet row is the common case - and three
+    /// shipped contaminants carry a comma inside their label, so the naive split turned
+    /// "P02769 = Serum albumin (bovine, BSA)" into a member that still matched and a "BSA)" that never
+    /// could.
+    /// </summary>
+    [Theory]
+    [InlineData("P02769 = Serum albumin (bovine, BSA)", 1)]
+    [InlineData("P00924 = Enolase 1 (yeast, spike-in)", 1)]
+    [InlineData("CD9, CD63, CD81", 3)]                  // no label: still a spreadsheet row
+    [InlineData("CD9; CD63", 2)]
+    [InlineData("", 0)]
+    public void ALabelKeepsItsCommas(string line, int expected)
+    {
+        var members = ProteinList.SplitMemberLine(line).ToList();
+
+        Assert.Equal(expected, members.Count);
+        if (expected == 1)
+            Assert.Equal(line.Trim(), members[0]);
     }
 }

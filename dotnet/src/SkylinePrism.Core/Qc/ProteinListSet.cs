@@ -39,7 +39,7 @@ public sealed class ProteinList
 
     /// <summary>
     /// Which heading this panel sits under in the Predefined tab. Empty for a user's own list, which
-    /// lives in its own tab and is not categorised - at 65 shipped panels a flat list is unreadable,
+    /// lives in its own tab and is not categorized - at 65 shipped panels a flat list is unreadable,
     /// while a handful of the user's own is not.
     /// </summary>
     public string Category { get; set; } = "";
@@ -75,6 +75,26 @@ public sealed class ProteinList
 
         var label = member[(i + 1)..].Trim();
         return label.Length > 0 ? label : MatchToken(member);
+    }
+
+    /// <summary>
+    /// Split one typed or pasted line into members. Commas and semicolons separate members - a row
+    /// pasted from a spreadsheet is the common case - EXCEPT on a line carrying a display label, where
+    /// the label owns the rest of the line. Three shipped contaminants have a comma inside their label
+    /// ("P02769 = Serum albumin (bovine, BSA)"), and splitting those produced a member that matched
+    /// nothing and a permanent "not quantified" entry from a panel that was in fact complete.
+    /// </summary>
+    public static IEnumerable<string> SplitMemberLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0)
+            return Array.Empty<string>();
+
+        return trimmed.Contains(LabelSeparator)
+            ? new[] { trimmed }
+            : trimmed.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0);
     }
 
     /// <summary>
@@ -201,7 +221,11 @@ public sealed class ProteinListSet
             var line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
                 continue;
-            var first = line.Split(',', '\t')[0].Trim().Trim('"');
+            // A labeled line is taken whole; only an unlabeled one is treated as a spreadsheet row
+            // whose first field is the identifier.
+            var first = (line.Contains(ProteinList.LabelSeparator)
+                ? line
+                : line.Split(',', '\t')[0]).Trim().Trim('"');
             if (first.Length == 0)
                 continue;
             // Skip a spreadsheet header row like "Accession" / "Gene" / "Protein".

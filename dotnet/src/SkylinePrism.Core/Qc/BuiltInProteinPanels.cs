@@ -394,11 +394,20 @@ internal static class BuiltInProteinPanels
             // Listed by ACCESSION, not gene symbol, and that is not a style choice. These are non-human proteins:
             // 'ALB' for bovine serum albumin would match human albumin - the most abundant protein in a plasma
             // sample - and 'TRYP' would match human trypsin-1. Accessions cannot collide that way.
+            //
+            // The UniProt ENTRY name is not a way around that, which is subtler and cost this panel two
+            // members: the matcher strips species suffixes so panels work across human and mouse, so
+            // 'ENO1_YEAST' reduces to the token 'ENO1' and 'TRYP_PIG' to 'TRYP' - the very collisions
+            // named above. Carrying them meant every human run colored abundant alpha-enolase as a
+            // contaminant, labeled it "yeast, spike-in", and - because this panel is declared before
+            // Glycolysis, and the first list to claim a protein wins - took ENO1 away from the panel it
+            // belongs to. The accessions cover both spike-ins. Do not add an entry name back here, in any
+            // species.
+            //
             // A starting set, not an exhaustive one. Import the cRAP FASTA your search actually uses to extend it.
             Members =
             {
                 "P00761 = Trypsin (porcine)",
-                "TRYP_PIG = Trypsin (porcine)",
                 "P00760 = Trypsin (bovine)",
                 "P02769 = Serum albumin (bovine, BSA)",
                 "P00698 = Lysozyme C (chicken)",
@@ -406,7 +415,6 @@ internal static class BuiltInProteinPanels
                 "P22629 = Streptavidin (S. avidinii)",
                 "P02662 = alpha-S1-casein (bovine)",
                 "P00924 = Enolase 1 (yeast, spike-in)",
-                "ENO1_YEAST = Enolase 1 (yeast, spike-in)",
                 "P02663 = alpha-S2-casein (bovine)",
                 "P02666 = beta-casein (bovine)",
                 "P02668 = kappa-casein (bovine)",
@@ -1021,7 +1029,7 @@ internal static class BuiltInProteinPanels
             ColorHex = "#8c564b",
             Visible = false,
             DisplayOnly = true,
-            // Sensing, signalling and the major repair pathways together: MRN and the ATM/ATR kinases, homologous
+            // Sensing, signaling and the major repair pathways together: MRN and the ATM/ATR kinases, homologous
             // recombination, non-homologous end joining, mismatch repair, nucleotide and base excision.
             // Most of these are low-abundance nuclear proteins, so expect sparse coverage outside a deep
             // whole-cell measurement - and treat their presence in a secretome or EV prep as contamination.
@@ -1078,7 +1086,7 @@ internal static class BuiltInProteinPanels
             Visible = false,
             DisplayOnly = true,
             // Pattern recognition through to the inflammasome and its cytokines. In plasma the abundant members
-            // (S100A8/A9, LBP, CD14) dominate and the signalling components are usually absent - a panel that
+            // (S100A8/A9, LBP, CD14) dominate and the signaling components are usually absent - a panel that
             // reads very differently in tissue than in fluid.
             Members =
             {
@@ -1326,8 +1334,8 @@ internal static class BuiltInProteinPanels
             // The metabolic layer of diabetes and metabolic disease - the part bottom-up MS actually measures.
             // Glycogen handling, gluconeogenesis, the pentose phosphate shunt, de novo lipogenesis and lipid
             // droplets, plus the plasma readouts (ADIPOQ, LEP, RBP4, the IGFBPs) that travel with them.
-            // Companion to Insulin signaling below: this panel is what the signalling CHANGES, and unlike the
-            // signalling it is abundant enough to see.
+            // Companion to Insulin signaling below: this panel is what the signaling CHANGES, and unlike the
+            // signaling it is abundant enough to see.
             Members =
             {
                 "SLC2A1", "SLC2A4", "GYS1", "PYGL", "PYGM", "PPP1R3A", "GBE1", "AGL", "PCK1",
@@ -1346,9 +1354,9 @@ internal static class BuiltInProteinPanels
             DisplayOnly = true,
             // The canonical INSR -> IRS -> PI3K -> AKT -> mTOR cascade and its brakes (PTEN, TSC1/2, FOXO1).
             // 
-            // READ THIS ONE DIFFERENTLY. Insulin signalling is regulated by PHOSPHORYLATION, not by abundance:
+            // READ THIS ONE DIFFERENTLY. Insulin signaling is regulated by PHOSPHORYLATION, not by abundance:
             // these proteins are present whether or not the pathway is active, so a flat panel is the expected
-            // result and says nothing about signalling. Several members (INSR, IRS1, IRS2, MTOR) are also large,
+            // result and says nothing about signaling. Several members (INSR, IRS1, IRS2, MTOR) are also large,
             // low-abundance and poorly covered in a standard bottom-up run, so gaps here are coverage rather than
             // biology.
             // It earns its place on a PHOSPHO-enriched run, where the sites are the measurement - AKT1 S473,

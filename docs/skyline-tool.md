@@ -201,7 +201,9 @@ Two details worth knowing:
   non-human proteins: `ALB` for bovine serum albumin would match *human* albumin, and `ENO1` would match a
   yeast enolase spike-in rather than the housekeeper. Nor is the UniProt entry name safe: `ALBU_BOVIN`
   reduces to `ALBU`, and so does human `ALBU_HUMAN`, because species suffixes are stripped so panels work
-  across human and mouse.
+  across human and mouse. The panel carried `ENO1_YEAST` and `TRYP_PIG` until that was noticed, which
+  colored human alpha-enolase as a contaminant on every human run; a test now holds every member of the
+  panel to the UniProt accession pattern.
 
   So that the panel is still readable, a member may be written `<accession> = <name>` —
   `P00761 = Trypsin (porcine)`. **Everything left of the `=` is matched; everything right of it is only

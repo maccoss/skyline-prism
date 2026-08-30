@@ -48,7 +48,8 @@
                         <Button Content="Duplicate to my lists" Padding="12,3" Click="OnDuplicateShipped"
                                 ToolTip="Make an editable copy under My lists. The predefined panel is left alone, so it keeps meaning the same thing on every machine." />
                     </StackPanel>
-                    <ListBox x:Name="ShippedBox" SelectionChanged="OnSelectedListChanged">
+                    <ListBox x:Name="ShippedBox" SelectionChanged="OnSelectedListChanged"
+                             IsSynchronizedWithCurrentItem="False">
                         <ListBox.GroupStyle>
                             <GroupStyle>
                                 <GroupStyle.ContainerStyle>

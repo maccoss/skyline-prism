@@ -431,7 +431,7 @@ public sealed class HeadlessSkylineExporter
     /// not whether this run wrote them. When a headless export failed before Skyline ever received its
     /// arguments, the file left by a PREVIOUS export was still there, still valid parquet, and was logged
     /// as "Exported ... bytes, parquet" and handed to the merge. Observed on a 2-plate cohort: a run
-    /// silently analysed a report exported 25 days earlier, from a version of the .sky that had since been
+    /// silently analyzed a report exported 25 days earlier, from a version of the .sky that had since been
     /// re-integrated. <see cref="TryReuseExport"/> is the ONLY place a previous export may be adopted,
     /// and it checks the document and the tool version first.</para>
     ///

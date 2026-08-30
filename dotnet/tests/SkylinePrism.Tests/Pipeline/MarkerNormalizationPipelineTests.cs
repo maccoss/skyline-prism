@@ -285,11 +285,11 @@ public class MarkerNormalizationPipelineTests : IDisposable
     /// A member written "&lt;token&gt; = &lt;label&gt;" normalizes on its token, and the stage's report does
     /// not then claim it was missing. Both halves of that were broken by the labels: the members reach
     /// the matcher through <c>MatchToken</c>, but the "not quantified" list compared the WHOLE member
-    /// string against identifiers from the data, so every labelled member - the entire contaminants
+    /// string against identifiers from the data, so every labeled member - the entire contaminants
     /// panel - was reported as not quantified on a run where it had been found.
     /// </summary>
     [Fact]
-    public void ALabelledMemberMatchesOnItsTokenAndIsNotReportedMissing()
+    public void ALabeledMemberMatchesOnItsTokenAndIsNotReportedMissing()
     {
         var plain = RunOnce();
         var members = AllProteins(Path.Combine(plain, "corrected_proteins.parquet"));

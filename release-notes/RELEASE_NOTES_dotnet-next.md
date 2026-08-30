@@ -11,7 +11,7 @@ as the GitHub Release description and fails if it is missing.
   neurodegeneration. At 65 panels a flat list was no longer something anyone read top to bottom, and the
   headings carry the distinction that matters most about a panel: whether its abundance is the scale you
   are dividing by or the result you are looking for. **My lists** stays flat - a handful of your own needs
-  no navigation, and categorising them would mean being asked for a category every time you make one.
+  no navigation, and categorizing them would mean being asked for a category every time you make one.
 
 - **Contaminants are shown by protein name rather than bare accession.** A member may now be written
   `<accession> = <name>` - `P00761 = Trypsin (porcine)`, `P02769 = Serum albumin (bovine, BSA)` - where
@@ -28,7 +28,7 @@ as the GitHub Release description and fails if it is missing.
 
   Two are read differently from a normal panel, and say so in the tool. **Insulin signaling is regulated
   by phosphorylation, not abundance** - its members are present whether or not the cascade is active, so a
-  flat panel is the expected result and says nothing about signalling; it earns its place on a
+  flat panel is the expected result and says nothing about signaling; it earns its place on a
   phospho-enriched run. For abundance work, `Glucose and lipid metabolism` measures what that pathway
   *does*. **Epithelial-mesenchymal transition is read as a balance**, not a total: its epithelial half
   (CDH1, claudins, keratins) and mesenchymal half (VIM, CDH2, FN1) move in opposite directions.
@@ -71,6 +71,40 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **The contaminants panel no longer claims human alpha-enolase.** `Common contaminants (cRAP)` carried
+  the UniProt entry names `ENO1_YEAST` and `TRYP_PIG` alongside its accessions, and panel matching strips
+  species suffixes so a panel works across human and mouse - so those reduced to the tokens `ENO1` and
+  `TRYP`, the exact collisions the panel is written in accessions to avoid. On any human run, abundant
+  alpha-enolase was colored as a contaminant and labeled "yeast, spike-in"; and because the panel is
+  declared before `Glycolysis` and the first list to claim a protein wins, ENO1 was taken from the panel
+  it belongs to. The accessions `P00924` and `P00761` already cover both spike-ins. Every member of the
+  panel is now checked against the UniProt accession pattern, so no entry name can return.
+
+- **A comma inside a display label no longer splits the member in two.** The list editor and the members
+  file importer both treat commas as separators, so a spreadsheet row can be pasted in - which tore
+  `P02769 = Serum albumin (bovine, BSA)` into a member that still matched and a `BSA)` that never could.
+  A line carrying a label is now taken whole; a line without one still splits on commas, semicolons and
+  tabs.
+
+- **Stopping a run now shuts down every headless Skyline it started.** The guard that stops one export
+  from killing another's Skyline was also applied on cancellation, where it is wrong: the exports share
+  the run's cancellation token, so all of them are stopping and none is left for an unrecognized Skyline
+  to belong to. Cancelling a two-document export left both Skylines running, holding their documents
+  open, with nothing remaining to reap them.
+
+- **A caller's timeout now bounds the wait for Skyline to start.** The startup wait answered only to its
+  own limits, so a caller that passed an explicit bound - the isolation-scheme import passes 5 minutes so
+  it can never hold a run up, and `PRISM_ISOLATION_TIMEOUT_SEC` shortens it further - could still be held
+  for the full base-plus-extended startup before its deadline was consulted at all.
+
+- **The marker report no longer mis-reports which members were found.** It compared each member against
+  the raw identifier columns, so any member the matcher reached by tokenization - a member of an
+  indistinguishable group like `H2AC11 / H2AC18 / H2AJ`, an entry name, an isoform-suffixed accession -
+  was listed as "not quantified" on a run where it had matched. It now asks the matcher itself, counts in
+  members so the two halves of the sentence share a basis (a protein with an empty gene column previously
+  counted toward neither, so a panel that matched everything could report "0 of 14 quantified"), and does
+  not name the same protein twice.
+
 - **A marker list written with display labels normalizes, and its log no longer claims every member was
   missing.** The members reach the matcher stripped of their labels, but the stage's "not quantified"
   list compared the *whole* member string against the identifiers in the data - so a labeled member never
@@ -82,7 +116,7 @@ as the GitHub Release description and fails if it is missing.
   result was accepted on its PAR1 marker alone, which says the bytes at that path are parquet - not that
   this run wrote them. When an export failed before Skyline received its arguments, the file left by an
   earlier run was still sitting there, so the log said `Exported ... 1,377,315,301 bytes, parquet` and
-  handed it to the merge. Observed on a 2-plate cohort, which silently analysed a report exported 25 days
+  handed it to the merge. Observed on a 2-plate cohort, which silently analyzed a report exported 25 days
   earlier, from a version of the `.sky` that had since been re-integrated. The transition report, the CSV
   fallback and the replicate metadata are each now cleared before re-export and must be replaced by the
   run that claims them; otherwise the export fails instead of reporting stale numbers. Reusing an

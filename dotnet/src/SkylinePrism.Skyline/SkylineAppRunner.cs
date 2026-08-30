@@ -174,7 +174,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 throw new InvalidOperationException($"Could not launch {_installation.AppName}.");
         }
 
-        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken))
+        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, timeout))
         {
             case StartupResult.Connected:
                 break;
@@ -185,13 +185,14 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 KillSpawned(preexisting, log);
                 throw new InvalidOperationException(
                     $"{_installation.AppName} started but never connected on the command pipe within "
-                    + $"{_maxStartupTimeout.TotalMinutes:F0} min.");
+                    + $"{Min(_maxStartupTimeout, timeout).TotalMinutes:F1} min.");
 
             default:
                 throw new InvalidOperationException(
-                    $"{_installation.AppName} did not start within {_startupTimeout.TotalSeconds:F0}s "
-                    + "(no connection on the command pipe). Another export may be saturating the "
-                    + "machine - try exporting one document at a time.");
+                    $"{_installation.AppName} did not start within "
+                    + $"{Min(_startupTimeout, timeout).TotalSeconds:F0}s (no connection on the command "
+                    + "pipe). Another export may be saturating the machine - try exporting one document "
+                    + "at a time.");
         }
 
         using (var writer = new StreamWriter(serverStream))
@@ -211,7 +212,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         using var outPipe = new NamedPipeClientStream(outPipeName);
         try
         {
-            outPipe.Connect((int)_startupTimeout.TotalMilliseconds);
+            outPipe.Connect((int)Min(_startupTimeout, timeout).TotalMilliseconds);
         }
         catch (TimeoutException)
         {
@@ -271,7 +272,9 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         }
         catch (OperationCanceledException)
         {
-            KillSpawned(preexisting, log);
+            // The whole run is stopping, so reap even with other exports in flight - they are cancelling
+            // on the same token, and each is doing this for its own Skyline.
+            KillSpawned(preexisting, log, allStopping: true);
             throw;
         }
 
@@ -309,12 +312,19 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// AND it must have no main window - the headless instance has none, an interactive one always
     /// does. A Skyline the user opens by hand mid-run fails the second test.
     /// </summary>
-    private static void KillSpawned(HashSet<int> preexisting, Action<string> log)
+    /// <param name="allStopping">
+    /// True when EVERY in-flight export is being abandoned, not just this one - which is the case on
+    /// cancellation, because the token is the run's and they all observe it together. The concurrency
+    /// guard below must not apply then: there is no export left for an unrecognized Skyline to belong
+    /// to, and declining to reap leaves one holding its document open with nothing to stop it.
+    /// </param>
+    private static void KillSpawned(HashSet<int> preexisting, Action<string> log, bool allStopping = false)
     {
         // A third guard, for the case the two below cannot cover: with another export in flight, a
         // headless Skyline that appeared after WE launched may well be ITS Skyline, quietly exporting a
-        // different document. "Not preexisting" is only meaningful when we are the only one launching.
-        if (Volatile.Read(ref _inFlight) > 1)
+        // different document. "Not preexisting" is only meaningful when we are the only one launching -
+        // or when nothing is left running, which is what allStopping says.
+        if (!allStopping && Volatile.Read(ref _inFlight) > 1)
         {
             log("    Leaving any headless Skyline running: another export is in flight and the one to "
                 + "stop cannot be told from the one still working.");
@@ -407,8 +417,15 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// </summary>
     private StartupResult WaitForConnection(
         NamedPipeServerStream serverStream, HashSet<int> preexisting, Action<string> log,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, TimeSpan? timeout)
     {
+        // The caller's bound caps BOTH startup deadlines. Without this the extending wait below answers
+        // only to its own limits, so a caller that documented "give up after this long" - the isolation
+        // importer passes 5 min precisely so it can never hold a run up - waited the full base plus
+        // extended startup before its deadline was consulted for the first time.
+        var baseDeadline = Min(_startupTimeout, timeout);
+        var maxDeadline = Min(_maxStartupTimeout, timeout);
+
         using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connecting = serverStream.WaitForConnectionAsync(giveUp.Token);
 
@@ -440,12 +457,12 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             }
 
             var waited = DateTime.UtcNow - start;
-            if (waited < _startupTimeout)
+            if (waited < baseDeadline)
                 continue;
 
             // Past the base deadline. Only a Skyline that is actually up earns more time.
             var running = StartedSkylineIsRunning(preexisting);
-            if (!running || waited >= _maxStartupTimeout)
+            if (!running || waited >= maxDeadline)
             {
                 giveUp.Cancel();
                 return running ? StartupResult.StartedButNeverConnected : StartupResult.NeverStarted;
@@ -453,12 +470,16 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             if (!extended)
             {
                 log($"    {_installation.AppName} is taking longer than "
-                    + $"{_startupTimeout.TotalSeconds:F0}s to start but is running; still waiting "
-                    + $"(up to {_maxStartupTimeout.TotalMinutes:F0} min).");
+                    + $"{baseDeadline.TotalSeconds:F0}s to start but is running; still waiting "
+                    + $"(up to {maxDeadline.TotalMinutes:F1} min).");
                 extended = true;
             }
         }
     }
+
+    /// <summary>The shorter of a fixed startup deadline and the caller's overall bound, if it gave one.</summary>
+    private static TimeSpan Min(TimeSpan fixedDeadline, TimeSpan? callerBound) =>
+        callerBound is null || callerBound.Value > fixedDeadline ? fixedDeadline : callerBound.Value;
 
     /// <summary>How often the connection wait wakes to re-check the deadline and the process list.</summary>
     private static readonly TimeSpan StartupPollInterval = TimeSpan.FromSeconds(1);

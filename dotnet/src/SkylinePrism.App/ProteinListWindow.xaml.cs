@@ -55,6 +55,11 @@ public partial class ProteinListWindow : Window
         // categories would mean asking for one every time a list is created.
         var shippedView = new CollectionViewSource { Source = _shipped };
         shippedView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ListRow.Category)));
+        // ShippedBox sets IsSynchronizedWithCurrentItem="False" explicitly: its default (null) means
+        // "synchronize IF the source is an ICollectionView", so handing it a view - as of this change -
+        // would silently start selecting the view's current item, which begins at row 0. The two boxes
+        // arbitrate selection between themselves below; WPF currency doing it as well is one owner too
+        // many.
         ShippedBox.ItemsSource = shippedView.View;
         ColorCombo.ItemsSource = Palette.Select(p => new ColorChoice(p.Name, p.Hex)).ToList();
         if (_rows.Count > 0)
@@ -109,9 +114,12 @@ public partial class ProteinListWindow : Window
         if (!ReferenceEquals(sender, ListTabs) || !IsInitialized)
             return;
         // Bind whatever the newly shown tab has selected, so the detail pane never describes a row the
-        // user can no longer see.
+        // user can no longer see. My lists opens on its first row; the Predefined tab does NOT, because
+        // its groups start collapsed - selecting into one would fill the detail pane with a panel that
+        // has no visible row, which is the very thing this is here to prevent. Its headings are the
+        // starting point there.
         var box = ListTabs.SelectedIndex == 0 ? ListsBox : ShippedBox;
-        if (box.SelectedItem is null && box.Items.Count > 0)
+        if (ReferenceEquals(box, ListsBox) && box.SelectedItem is null && box.Items.Count > 0)
             box.SelectedIndex = 0;
         BindDetail(box.SelectedItem as ListRow);
     }
@@ -128,6 +136,7 @@ public partial class ProteinListWindow : Window
         var copy = row.Model.Clone();
         copy.Name = UniqueName(copy.Name);
         copy.Visible = false; // a new list starts hidden, like every other list PRISM adds
+        copy.Category = "";   // My lists is flat; a heading carried over here is stored and never read
         var added = new ListRow(copy);
         _rows.Add(added);
         ListTabs.SelectedIndex = 0;
@@ -195,9 +204,8 @@ public partial class ProteinListWindow : Window
         if (_suppress || _current is null)
             return;
         _current.Model.Members = MembersBox.Text
-            .Split(new[] { '\r', '\n', ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(m => m.Trim())
-            .Where(m => m.Length > 0)
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(ProteinList.SplitMemberLine)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _current.Refresh();

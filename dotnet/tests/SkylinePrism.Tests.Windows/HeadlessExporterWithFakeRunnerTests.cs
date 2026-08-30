@@ -297,7 +297,7 @@ public class HeadlessExporterWithFakeRunnerTests
     /// <summary>
     /// The worst failure this class has produced: an export that never reached Skyline reported the file
     /// a PREVIOUS export had left at the same path as its own output. It is valid parquet, so the PAR1
-    /// check passed it, and a 2-plate cohort was analysed against a report exported 25 days earlier from a
+    /// check passed it, and a 2-plate cohort was analyzed against a report exported 25 days earlier from a
     /// since-re-integrated document - logged as "Exported ... bytes, parquet", with no warning anywhere.
     /// A stale export may only be adopted by TryReuseExport, which checks the document first.
     /// </summary>
