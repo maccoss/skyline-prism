@@ -270,10 +270,11 @@ public sealed class HeadlessSkylineExporter
         {
             var replicatesSkyr = Path.Combine(workDir, label + ".PRISM-Replicates.skyr");
             ReplicatesReportBuilder.WriteSkyr(replicatesSkyr, annotations);
+            var beforeMetadata = ClearPreviousExport(metadataCsv);
             _runner.Run(
                 BuildArgs(skyPath, replicatesSkyr, ReplicatesReportBuilder.ViewName, metadataCsv),
                 _log, cancellationToken);
-            if (File.Exists(metadataCsv) && new FileInfo(metadataCsv).Length > 0)
+            if (beforeMetadata.WasReplaced(metadataCsv) && new FileInfo(metadataCsv).Length > 0)
             {
                 metadataResult = metadataCsv;
                 _log($"Exported replicate metadata to {metadataCsv}.");
@@ -316,8 +317,10 @@ public sealed class HeadlessSkylineExporter
     /// default probe path) and it dies with "Could not load file or assembly 'Parquet'".</para>
     ///
     /// <para>So parquet is attempted whenever the runner claims support, and the result is still verified
-    /// by its PAR1 magic rather than trusted - if anything goes wrong we silently produce CSV, which the
-    /// pipeline handles identically.</para>
+    /// rather than trusted - it must be parquet by its PAR1 magic AND be a file this run actually wrote
+    /// (<see cref="ClearPreviousExport"/>). If anything goes wrong we silently produce CSV, which the
+    /// pipeline handles identically; if THAT fails too, the export fails loudly rather than quietly
+    /// reporting whatever was left at the path.</para>
     /// </summary>
     private (string Path, bool IsParquet) ExportTransitionReport(
         string skyPath, string workDir, string label, string? prismSkyr, CancellationToken cancellationToken)
@@ -328,6 +331,7 @@ public sealed class HeadlessSkylineExporter
         var parquet = Path.Combine(workDir, label + ".parquet");
         if (_runner.SupportsParquet)
         {
+            var before = ClearPreviousExport(parquet);
             try
             {
                 // No --report-format: the extension selects parquet.
@@ -342,7 +346,7 @@ public sealed class HeadlessSkylineExporter
                 _log($"Parquet export failed ({ex.Message}); falling back to CSV.");
             }
 
-            if (ParquetMagic.IsValid(parquet))
+            if (before.WasReplaced(parquet) && ParquetMagic.IsValid(parquet))
             {
                 _log($"Exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
                 // A CSV from a previous run that fell back is superseded by this parquet; the two are
@@ -361,13 +365,77 @@ public sealed class HeadlessSkylineExporter
         }
 
         var csv = Path.Combine(workDir, label + ".csv");
+        var beforeCsv = ClearPreviousExport(csv);
         _runner.Run(BuildArgs(skyPath, prismSkyr, "PRISM", csv, format: "csv"), _log, cancellationToken);
-        if (!File.Exists(csv) || new FileInfo(csv).Length == 0)
+        if (!beforeCsv.WasReplaced(csv) || new FileInfo(csv).Length == 0)
             throw new InvalidOperationException(
                 $"Skyline did not produce a PRISM report for {Path.GetFileName(skyPath)}. "
                 + "See the log above for its output.");
         _log($"Exported {csv} ({new FileInfo(csv).Length:N0} bytes, invariant CSV).");
         return (csv, false);
+    }
+
+    /// <summary>
+    /// What a file looked like before an export ran, so the export's own output can be told apart from
+    /// whatever was already sitting at that path.
+    /// </summary>
+    private readonly record struct FileStamp(bool Existed, long Length, long LastWriteUtcTicks)
+    {
+        public static FileStamp Of(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                return info.Exists
+                    ? new FileStamp(true, info.Length, info.LastWriteTimeUtc.Ticks)
+                    : default;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unreadable counts as "not there": the export has to produce something we can stat.
+                return default;
+            }
+        }
+
+        /// <summary>
+        /// True when <paramref name="path"/> now holds a file the export just wrote - it exists, and it
+        /// is not byte-for-byte the same file that was there beforehand.
+        /// </summary>
+        public bool WasReplaced(string path)
+        {
+            var now = Of(path);
+            return now.Existed && now != this;
+        }
+    }
+
+    /// <summary>
+    /// Delete a previous export at <paramref name="path"/> and return what was there, so a failed run
+    /// cannot pass the old file off as its own output.
+    ///
+    /// <para><b>Why this is not paranoia.</b> The parquet result used to be accepted on
+    /// <see cref="ParquetMagic.IsValid"/> alone, which asks whether the bytes at that path are parquet -
+    /// not whether this run wrote them. When a headless export failed before Skyline ever received its
+    /// arguments, the file left by a PREVIOUS export was still there, still valid parquet, and was logged
+    /// as "Exported ... bytes, parquet" and handed to the merge. Observed on a 2-plate cohort: a run
+    /// silently analysed a report exported 25 days earlier, from a version of the .sky that had since been
+    /// re-integrated. <see cref="TryReuseExport"/> is the ONLY place a previous export may be adopted,
+    /// and it checks the document and the tool version first.</para>
+    ///
+    /// <para>Deletion is best-effort - a share that will not let go of the file is not worth failing the
+    /// run over - because <see cref="FileStamp.WasReplaced"/> is what actually decides, and it is
+    /// unaffected by whether the delete worked.</para>
+    /// </summary>
+    private FileStamp ClearPreviousExport(string path)
+    {
+        var before = FileStamp.Of(path);
+        if (!before.Existed)
+            return before;
+
+        var written = new DateTime(before.LastWriteUtcTicks, DateTimeKind.Utc).ToLocalTime();
+        _log($"Discarding the previous export at {path} ({before.Length:N0} bytes, "
+             + $"written {written:yyyy-MM-dd HH:mm}) before re-exporting.");
+        TryDelete(path);
+        return before;
     }
 
     private void TryDelete(string path)

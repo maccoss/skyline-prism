@@ -294,6 +294,88 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Contains("did not produce a PRISM report", ex.Message);
     }
 
+    /// <summary>
+    /// The worst failure this class has produced: an export that never reached Skyline reported the file
+    /// a PREVIOUS export had left at the same path as its own output. It is valid parquet, so the PAR1
+    /// check passed it, and a 2-plate cohort was analysed against a report exported 25 days earlier from a
+    /// since-re-integrated document - logged as "Exported ... bytes, parquet", with no warning anywhere.
+    /// A stale export may only be adopted by TryReuseExport, which checks the document first.
+    /// </summary>
+    [Fact]
+    public void Export_DoesNotAdoptAStaleParquet_WhenTheExportFails()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        Directory.CreateDirectory(work);
+
+        // Left by an earlier, successful export of an older version of the document.
+        var stale = Path.Combine(work, "PlateA.parquet");
+        WriteParquet(stale);
+
+        // Skyline never starts, so neither the parquet attempt nor the CSV fallback writes anything.
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, _) => throw new IOException("Pipe is broken."),
+        };
+
+        // Whatever the failure is, it must surface. The CSV fallback's own exception is what escapes here
+        // (it is fatal by design); what matters is that nothing is returned.
+        Assert.ThrowsAny<Exception>(
+            () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
+        Assert.False(File.Exists(stale), "the stale parquet should have been discarded, not adopted");
+    }
+
+    /// <summary>
+    /// The same trap without an exception to notice: a runner that "succeeds" but writes nothing, over a
+    /// stale file. Freshness is what decides, not the runner's silence.
+    /// </summary>
+    [Fact]
+    public void Export_DoesNotAdoptAStaleCsv_WhenTheRunnerWritesNothing()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        Directory.CreateDirectory(work);
+        WriteCsv(Path.Combine(work, "PlateA.csv"));
+
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, _) => { /* write nothing */ } };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
+        Assert.Contains("did not produce a PRISM report", ex.Message);
+    }
+
+    /// <summary>
+    /// Metadata has its own copy of the trap, and adopting a stale one is quieter than it looks: sample
+    /// types and batches would come from an older document instead of being inferred from names, which is
+    /// a different reference/QC split and therefore different ComBat - with the log saying "Exported".
+    /// </summary>
+    [Fact]
+    public void Export_DoesNotAdoptStaleMetadata_WhenOnlyTheMetadataExportFails()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        Directory.CreateDirectory(work);
+        WriteCsv(Path.Combine(work, "PlateA.metadata.csv"));
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".metadata.csv", StringComparison.Ordinal))
+                    throw new IOException("Pipe is broken.");
+                WriteParquet(file);
+            },
+        };
+
+        var result = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(result.InputIsParquet); // the transition report itself was fine
+        Assert.Null(result.ReplicatesCsv);
+    }
+
     [Fact]
     public void Export_NamesFilesAfterTheDocumentLabel_SoTheMergeDerivesTheRightBatch()
     {

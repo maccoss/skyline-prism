@@ -1,5 +1,7 @@
+using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using SkylinePrism.Skyline;
 using Xunit;
 
@@ -87,6 +89,29 @@ public class SkylineAppRunnerTests
             return; // only one channel installed here; nothing to order
 
         Assert.Equal("Skyline-daily", apps[0]);
+    }
+
+    /// <summary>
+    /// A Skyline that never connects must be reported as a startup timeout - the one thing the caller can
+    /// act on. It used to surface as <c>IOException: Pipe is broken.</c> instead: giving up on the
+    /// synchronous WaitForConnection meant connecting a dummy client to our own pipe, the waiter counted
+    /// that as Skyline, and Run then wrote the arguments to an already-disposed client. That message sent
+    /// a real investigation after Skyline and the network share, when the cause was this timeout - and it
+    /// was nondeterministic, so the very next call reported the same failure honestly.
+    /// </summary>
+    [Fact]
+    public void Run_ReportsAStartupTimeout_NotABrokenPipe()
+    {
+        // A shortcut that does not exist: cmd.exe fails immediately, so nothing ever connects.
+        var installation = new SkylineAppRunner.Installation(
+            "Skyline", Path.Combine(Path.GetTempPath(), "prism_no_such_" + Guid.NewGuid().ToString("N") + ".appref-ms"));
+        var runner = new SkylineAppRunner(installation, TimeSpan.FromSeconds(1));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
+
+        Assert.Contains("did not start", ex.Message);
+        Assert.DoesNotContain("Pipe is broken", ex.Message);
     }
 
     [Fact]
