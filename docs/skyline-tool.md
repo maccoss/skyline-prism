@@ -124,7 +124,14 @@ is one score per replicate for the whole run, with no before/after and no peptid
   marker's share of the axis and says so when it is over half: a panel carried by one protein is a
   single-protein normalization wearing a panel's clothes.
 
-The replicate picker applies to **Marker score**, so a suspicious group can be isolated.
+The replicate picker applies to **Marker score**, so a suspicious group can be isolated. **Group-by** is
+greyed out for **Marker loadings**, which draws one bar per protein in the panel — grouping or filtering
+replicates cannot change it.
+
+Marker score refuses to draw above 12 Group-by values and names a better column instead: one column per
+subject cannot show whether the *study's* groups separate, which is the only question it asks. Past six
+groups the legend gives way to per-group counts on the tick labels, so a group of 2 and a group of 40
+stay distinguishable.
 
 ### Protein lists
 
