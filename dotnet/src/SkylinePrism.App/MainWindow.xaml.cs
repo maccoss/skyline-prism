@@ -1624,6 +1624,14 @@ public partial class MainWindow : Window
         QcLevelCombo.IsEnabled = !isRt && !isMarker;       // RT plots: peptide only
         QcViewCombo.IsEnabled = !beforeAfter && !isMarker; // RT-binned CV shows before AND after
 
+        // Marker loadings is per-MARKER, not per-sample: it plots one bar for each protein in the panel,
+        // so grouping and filtering replicates cannot change it. Leaving those live invites the reading
+        // that the bars are group-specific, which they are not. Marker score is the opposite - Group-by
+        // is the entire question there - so it keeps both.
+        var perMarker = kind == "Marker loadings";
+        QcGroupByCombo.IsEnabled = !perMarker;
+        QcGroupCombo.IsEnabled = !perMarker;
+
         // "Control correlation" is about the CONTROLS: the useful reading is that QC samples correlate
         // with each other and standards with each other, but the two do not cross. Showing every sample
         // buries that in the unknowns, and disagrees with the HTML report, which computes this heatmap
@@ -1649,6 +1657,7 @@ public partial class MainWindow : Window
         QcPlot.Visibility = Visibility.Visible;
         var plt = QcPlot.Plot;
         plt.Clear();
+        QcPlotChrome.Reset(plt);
         if (!_qcData.TryGetValue($"{view}|{level}", out var d) || d.Samples.Count < 2)
         {
             plt.Title($"No {view} {level} data yet - run PRISM first.");
@@ -1822,6 +1831,7 @@ public partial class MainWindow : Window
         QcPlot.Visibility = Visibility.Visible;
         var plt = QcPlot.Plot;
         plt.Clear();
+        QcPlotChrome.Reset(plt);
         plt.Title(msg);
         QcPlot.Refresh();
     }
@@ -1935,6 +1945,12 @@ public partial class MainWindow : Window
     /// judgement cannot be automated - the same separation is what you would expect if the biology
     /// really does change the marked material - which is why this is a plot rather than a warning.</para>
     /// </summary>
+    /// <summary>
+    /// Above this many Group-by values the strip plot stops answering its question. Chosen to comfortably
+    /// fit a study design (arms, timepoints, batches) and to exclude an identifier column.
+    /// </summary>
+    private const int MaxMarkerScoreGroups = 12;
+
     private void DrawMarkerScore(Plot plt, IReadOnlyList<string> samples, string? column)
     {
         if (_markerReport is null || _markerReport.Samples.Count == 0)
@@ -1969,6 +1985,15 @@ public partial class MainWindow : Window
         }
 
         var ordered = groups.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
+        if (ordered.Count > MaxMarkerScoreGroups)
+        {
+            // Grouping by a per-subject or per-replicate column gives one column per sample and answers
+            // nothing: the question is whether the STUDY's groups separate, and 45 groups of two cannot
+            // show that. Say which column to try instead of drawing something unreadable.
+            plt.Title($"{column} has {ordered.Count} values - too many to compare. "
+                + "Group by a study factor (condition, timepoint, batch).");
+            return;
+        }
         var rng = new Random(11); // fixed seed: the jitter must not move when the plot is redrawn
         var colorIndex = 0;
         for (var g = 0; g < ordered.Count; g++)
@@ -1982,14 +2007,21 @@ public partial class MainWindow : Window
             markers.MarkerSize = 12;
             markers.LegendText = $"{label} (n={points.Count})";
         }
+        // The x ticks already name every group, so the legend only earns its space for a few of them.
+        if (ordered.Count <= 6)
+            plt.ShowLegend();
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
             ordered.Select((kv, i) => new ScottPlot.Tick(i, kv.Key)).ToArray());
         plt.Axes.SetLimitsX(-0.6, ordered.Count - 0.4);
         plt.YLabel("Marker score (PC1)");
-        plt.ShowLegend();
+        // Both axes, always: the shared plot is reset between kinds, so an axis this method leaves
+        // unlabeled stays unlabeled rather than inheriting the previous plot's meaning.
+        plt.XLabel(string.IsNullOrEmpty(column) ? "All samples" : column);
+        // Short enough to survive the plot width. The reasoning lives in the docs; a title clipped
+        // mid-sentence teaches nobody anything.
         plt.Title(ordered.Count > 1
-            ? "Separation between these groups means the panel tracks the phenotype, not the capture"
-            : "Set Group-by to the study condition to check the panel against it");
+            ? "Groups separating here means the panel tracks the phenotype"
+            : "Set Group-by to the study condition to check this panel");
     }
 
     /// <summary>
@@ -2026,6 +2058,7 @@ public partial class MainWindow : Window
         plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
             ordered.Select((t, i) => new ScottPlot.Tick(ordered.Count - 1 - i, t.Marker)).ToArray());
         plt.XLabel("PC1 loading");
+        plt.YLabel("Marker");
 
         var share = _markerReport.LargestLoadingShare();
         var opposing = ordered.Count(t => t.Loading < 0);
