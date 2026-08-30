@@ -235,6 +235,10 @@ public sealed class HeadlessSkylineExporter
         if (TryReuseExport(skyPath, workDir, label, batchAnnotation) is { } reused)
             return reused;
 
+        // Before writing new sidecars, clear any this document left behind when a previous run was
+        // stopped. Done after the reuse check so a cached export is still returned without touching disk.
+        SweepStaleSidecars(workDir, label);
+
         // Read the header for the replicate annotation names, so the generated metadata report carries the
         // same columns the Replicates grid would show for an open document.
         var info = SkyDocumentInfo.TryRead(skyPath, _log);
@@ -441,10 +445,51 @@ public sealed class HeadlessSkylineExporter
     /// longer ends in ".metadata.csv" - and the report kind is told apart by exactly that suffix. Skyline
     /// also picks the export format from the extension, which this keeps intact either way.
     /// </remarks>
+    /// <summary>
+    /// Marks a file as an export in progress that some run owns. Public because a sidecar is named after
+    /// its destination and therefore MATCHES the destination's own patterns - notably
+    /// <c>*.metadata.csv</c>, which the GUI globs to find every document's replicate report. A reader of
+    /// that directory has to be able to tell the two apart; <see cref="IsSidecar"/> is how.
+    /// </summary>
+    public const string SidecarPrefix = ".prism-partial-";
+
+    /// <summary>Whether <paramref name="path"/> is an in-progress export rather than a finished one.</summary>
+    public static bool IsSidecar(string path) =>
+        Path.GetFileName(path).StartsWith(SidecarPrefix, StringComparison.Ordinal);
+
     private static string SidecarFor(string finalPath) =>
         Path.Combine(
             Path.GetDirectoryName(finalPath) ?? ".",
-            ".prism-partial-" + Guid.NewGuid().ToString("N")[..8] + "." + Path.GetFileName(finalPath));
+            SidecarPrefix + Guid.NewGuid().ToString("N")[..8] + "." + Path.GetFileName(finalPath));
+
+    /// <summary>
+    /// Remove sidecars left for this document by a run that did not finish - a Stop, a crash, a reboot.
+    ///
+    /// <para>Every path that completes cleans up after itself, so the only way one survives is that the
+    /// process died holding it. Nothing else would ever remove it: it is named after a GUID no later run
+    /// knows, and it is a full report, so a killed export of this cohort strands 1.4 GB (and tens of GB
+    /// on a large one) under a name no human would recognise as garbage. Sweeping at the start of the
+    /// next export of the SAME label is the one moment we can be certain the file is not in use -
+    /// labels are unique per run, so no other in-flight export can own it.</para>
+    /// </summary>
+    private void SweepStaleSidecars(string workDir, string label)
+    {
+        try
+        {
+            foreach (var stale in Directory.EnumerateFiles(workDir, SidecarPrefix + "*." + label + ".*"))
+            {
+                var bytes = new FileInfo(stale).Length;
+                TryDelete(stale);
+                if (!File.Exists(stale))
+                    _log($"Removed an unfinished export left by an earlier run: "
+                         + $"{Path.GetFileName(stale)} ({bytes:N0} bytes).");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Housekeeping only - never worth failing an export over.
+        }
+    }
 
     private static bool HasContent(string path)
     {

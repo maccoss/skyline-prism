@@ -1317,6 +1317,12 @@ public partial class MainWindow : Window
 
         var files = Directory.EnumerateFiles(reportsDir, "*.metadata.csv")
             .Concat(Directory.EnumerateFiles(reportsDir, "Metadata.csv"))
+            // A sidecar is named after its destination, so an unfinished
+            // ".prism-partial-<hex>.<label>.metadata.csv" matches the glob above. Left by a stopped run,
+            // it would be read as a document's replicate metadata under the bogus label
+            // ".prism-partial-<hex>.<label>" - and, because a leading dot sorts first, its rows would
+            // seed every bare replicate-name key before the real files are read.
+            .Where(f => !HeadlessSkylineExporter.IsSidecar(f))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();

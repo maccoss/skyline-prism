@@ -509,6 +509,48 @@ public class BuiltInProteinListTests
     }
 
     /// <summary>
+    /// Every shipped panel belongs to one of the declared headings. The Predefined tab groups on
+    /// Category and substitutes "Other" for a blank one, so a panel added without a category does not
+    /// fail anything - it just appears under an eighth heading that exists only because of the fallback,
+    /// inside a collapsed group where nobody looks. Stated as a closed set so a typo trips it too.
+    /// </summary>
+    [Fact]
+    public void EveryShippedPanelHasADeclaredCategory()
+    {
+        var declared = new[]
+        {
+            "Normalizers", "Plasma and blood", "Endothelial", "Epithelial",
+            "Readouts and contamination", "Pathways and processes", "Brain and neurodegeneration",
+        };
+
+        Assert.All(ProteinList.BuiltIns, panel =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(panel.Category), $"'{panel.Name}' has no category");
+            Assert.Contains(panel.Category, declared);
+        });
+    }
+
+    /// <summary>
+    /// An '=' only separates a display label when it comes before any field separator. A pasted
+    /// spreadsheet row can carry one that means nothing here, and swallowing the whole row into a single
+    /// member gave it a match token of the entire line - matching nothing, and reported as permanently
+    /// "not quantified" with no visible cause.
+    /// </summary>
+    [Theory]
+    [InlineData("P02769 = Serum albumin (bovine, BSA)", 1, "P02769")]  // label owns the commas
+    [InlineData("P02768,ALB,Albumin", 3, "P02768")]                    // plain spreadsheet row
+    [InlineData("P02768,ALB,ratio H/L=1.2", 3, "P02768")]              // '=' after a comma is not a label
+    [InlineData("P00761;P02769", 2, "P00761")]
+    public void SplitMemberLine_TreatsEqualsAsALabelOnlyBeforeAnyFieldSeparator(
+        string line, int expectedCount, string expectedFirstToken)
+    {
+        var members = ProteinList.SplitMemberLine(line).ToList();
+
+        Assert.Equal(expectedCount, members.Count);
+        Assert.Equal(expectedFirstToken, ProteinList.MatchToken(members[0]));
+    }
+
+    /// <summary>
     /// Whoever wins ENO1 across the whole shipped set, it is not the contaminants panel. List order is
     /// priority, so a contaminant member that over-matches does not merely add a wrong color - it takes
     /// the protein away from the panel that should have had it.

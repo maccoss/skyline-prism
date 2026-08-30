@@ -90,11 +90,29 @@ public sealed class ProteinList
         if (trimmed.Length == 0)
             return Array.Empty<string>();
 
-        return trimmed.Contains(LabelSeparator)
+        return HasLabel(trimmed)
             ? new[] { trimmed }
             : trimmed.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(p => p.Trim())
                 .Where(p => p.Length > 0);
+    }
+
+    /// <summary>
+    /// Whether a line carries a display label, rather than merely containing an '=' somewhere.
+    ///
+    /// <para>The separator only counts BEFORE the first field separator, because a pasted spreadsheet row
+    /// can carry an '=' that means nothing here - a formula remnant, a note like "H/L=1.2", a description
+    /// with an equals in it. Treating those as labels swallowed the whole row into one member, whose match
+    /// token was then the entire line and matched nothing: a permanent "not quantified" entry with no
+    /// visible cause.</para>
+    /// </summary>
+    private static bool HasLabel(string line)
+    {
+        var separator = line.IndexOf(LabelSeparator);
+        if (separator < 0)
+            return false;
+        var field = line.IndexOfAny(new[] { ',', ';', '\t' });
+        return field < 0 || separator < field;
     }
 
     /// <summary>
@@ -222,10 +240,9 @@ public sealed class ProteinListSet
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
                 continue;
             // A labeled line is taken whole; only an unlabeled one is treated as a spreadsheet row
-            // whose first field is the identifier.
-            var first = (line.Contains(ProteinList.LabelSeparator)
-                ? line
-                : line.Split(',', '\t')[0]).Trim().Trim('"');
+            // whose first field is the identifier. "Labeled" means the '=' comes before any field
+            // separator - see ProteinList.SplitMemberLine, which this must agree with.
+            var first = (ProteinList.SplitMemberLine(line).FirstOrDefault() ?? "").Trim('"');
             if (first.Length == 0)
                 continue;
             // Skip a spreadsheet header row like "Accession" / "Gene" / "Protein".

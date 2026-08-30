@@ -206,7 +206,11 @@ public partial class ProteinListWindow : Window
         _current.Model.Members = MembersBox.Text
             .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .SelectMany(ProteinList.SplitMemberLine)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Deduplicated on the MATCH token, not the raw text: "P00761" and "P00761 = Trypsin
+            // (porcine)" are the same protein written two ways, and keeping both matches it once while
+            // counting it twice - so a complete panel reports "13 of 14 quantified". First occurrence
+            // wins, which is what the user sees at the top of the box.
+            .DistinctBy(ProteinList.MatchToken, StringComparer.OrdinalIgnoreCase)
             .ToList();
         _current.Refresh();
     }

@@ -174,7 +174,14 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 throw new InvalidOperationException($"Could not launch {_installation.AppName}.");
         }
 
-        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, timeout))
+        // ONE absolute deadline for the whole call, not a fresh copy of `timeout` per phase. Each phase
+        // gets what is LEFT of it: startup, the output-pipe connect and the read loop are sequential
+        // steps of one call, so giving each the full bound made a caller's stated limit a per-step limit.
+        // SkylineIsolationImporter passes 5 min "precisely so it can never hold a run up" - and a Skyline
+        // slow at every step could take three times that before anything gave up.
+        var callDeadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
+
+        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, Remaining(callDeadline)))
         {
             case StartupResult.Connected:
                 break;
@@ -185,12 +192,12 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 KillSpawned(preexisting, log);
                 throw new InvalidOperationException(
                     $"{_installation.AppName} started but never connected on the command pipe within "
-                    + $"{Min(_maxStartupTimeout, timeout).TotalMinutes:F1} min.");
+                    + $"{Min(_maxStartupTimeout, Remaining(callDeadline)).TotalMinutes:F1} min.");
 
             default:
                 throw new InvalidOperationException(
                     $"{_installation.AppName} did not start within "
-                    + $"{Min(_startupTimeout, timeout).TotalSeconds:F0}s (no connection on the command "
+                    + $"{Min(_startupTimeout, Remaining(callDeadline)).TotalSeconds:F0}s (no connection on the command "
                     + "pipe). Another export may be saturating the machine - try exporting one document "
                     + "at a time.");
         }
@@ -212,7 +219,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         using var outPipe = new NamedPipeClientStream(outPipeName);
         try
         {
-            outPipe.Connect((int)Min(_startupTimeout, timeout).TotalMilliseconds);
+            outPipe.Connect((int)Min(_startupTimeout, Remaining(callDeadline)).TotalMilliseconds);
         }
         catch (TimeoutException)
         {
@@ -245,7 +252,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         }) { IsBackground = true, Name = "SkylineAppRunner output" };
         readerThread.Start();
 
-        var deadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
+        var deadline = callDeadline;
         try
         {
             while (true)
@@ -480,6 +487,19 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// <summary>The shorter of a fixed startup deadline and the caller's overall bound, if it gave one.</summary>
     private static TimeSpan Min(TimeSpan fixedDeadline, TimeSpan? callerBound) =>
         callerBound is null || callerBound.Value > fixedDeadline ? fixedDeadline : callerBound.Value;
+
+    /// <summary>
+    /// What is left of the caller's overall bound, or null when it gave none. Never negative: an
+    /// exhausted budget is zero, which every consumer here reads as "give up now" rather than as a
+    /// negative timeout they would have to special-case.
+    /// </summary>
+    private static TimeSpan? Remaining(DateTime? deadline)
+    {
+        if (deadline is null)
+            return null;
+        var left = deadline.Value - DateTime.UtcNow;
+        return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+    }
 
     /// <summary>How often the connection wait wakes to re-check the deadline and the process list.</summary>
     private static readonly TimeSpan StartupPollInterval = TimeSpan.FromSeconds(1);
