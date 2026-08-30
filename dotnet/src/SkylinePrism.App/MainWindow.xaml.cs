@@ -1171,9 +1171,15 @@ public partial class MainWindow : Window
     private string? SkylineCmdPathOverride { get; set; }
 
     /// <summary>
-    /// Peak RAM to assume per concurrent headless export. Measured: a 5 MB .sky with a 116 MB .skyd and 87
-    /// replicates peaked at ~1.26 GB resident, and memory scales linearly with concurrency (3 at once
-    /// peaked at 3.7 GB). 2.5 GB leaves headroom for documents larger than that.
+    /// FLOOR under the per-export budget, not the budget itself - see <see cref="PerExportGb"/>, which
+    /// scales with the largest document and takes whichever is greater.
+    ///
+    /// <para>It comes from a measurement of a SMALL document: a 5 MB .sky with a 116 MB .skyd and 87
+    /// replicates peaked at ~1.26 GB resident, three at once at 3.7 GB. At that size the figure is
+    /// almost entirely Skyline's fixed baseline, which is exactly what makes it a good floor and a
+    /// terrible estimate: this constant used to BE the budget, with a comment claiming it "leaves
+    /// headroom for documents larger than that", and on 11.3 GB documents the real figure was 22.4 GB.
+    /// Do not restore that reading of it.</para>
     /// </summary>
     internal const double GbPerConcurrentExport = 2.5;
 
@@ -1308,22 +1314,50 @@ public partial class MainWindow : Window
     /// </summary>
     internal const double SkyToMemoryFactor = 2.0;
 
-    /// <summary>Physical RAM currently free, or null when it cannot be read. Advisory only.</summary>
+    /// <summary>
+    /// Physical RAM free RIGHT NOW, or null when it cannot be read. Advisory only.
+    ///
+    /// <para>Read from the OS, NOT from <c>GC.GetGCMemoryInfo()</c>. That struct's
+    /// <c>MemoryLoadBytes</c> is a snapshot taken at the last garbage collection, and this runs early in
+    /// a GUI session where a significant GC may not have happened yet - so it can report a nearly full
+    /// machine as nearly empty. This figure is the one actionable number in a warning about whether
+    /// closing Skyline would help, so a stale one is worse than none at all.</para>
+    /// </summary>
     private static double? FreePhysicalGb()
     {
         try
         {
-            var info = GC.GetGCMemoryInfo();
-            if (info.TotalAvailableMemoryBytes <= 0)
-                return null;
-            var free = info.TotalAvailableMemoryBytes - info.MemoryLoadBytes;
-            return free > 0 ? free / (1024.0 * 1024 * 1024) : 0;
+            // GlobalMemoryStatusEx via the same counter Task Manager shows.
+            var status = new MemoryStatusEx();
+            return GlobalMemoryStatusEx(status)
+                ? status.ullAvailPhys / (1024.0 * 1024 * 1024)
+                : null;
         }
         catch (Exception)
         {
+            // Advisory only - the warning is still worth printing without the free-memory clause.
             return null;
         }
     }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+        CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private sealed class MemoryStatusEx
+    {
+        public uint dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(MemoryStatusEx));
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx([System.Runtime.InteropServices.In, System.Runtime.InteropServices.Out] MemoryStatusEx lpBuffer);
 
     private void SetInputStatus(PrismInput input, string status)
     {

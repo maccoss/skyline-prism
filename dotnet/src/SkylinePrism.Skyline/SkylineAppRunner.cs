@@ -50,6 +50,9 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// </summary>
     private readonly TimeSpan _maxStartupTimeout;
 
+    /// <summary>How long Skyline may print nothing before the command is abandoned.</summary>
+    private readonly TimeSpan _idleTimeout;
+
     /// <param name="maxStartupTimeout">
     /// The backstop for the extended wait; never shorter than <paramref name="startupTimeout"/>, since a
     /// cap below the base deadline could never be reached and would silently do nothing. Injectable so a
@@ -57,32 +60,17 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// whenever ANY Skyline appears during the wait, which on a developer machine or a shared agent is
     /// not something a test can rule out.
     /// </param>
-    /// <summary>
-    /// How long Skyline may say NOTHING before the export is abandoned.
-    ///
-    /// <para><b>Silence, not total duration.</b> A wall-clock bound on the whole export cannot be set
-    /// without knowing how long the document should take, and that is exactly what is unknowable: a
-    /// legitimate export of an 11 GB document runs 20-45 minutes, and a bound generous enough for the
-    /// largest cohort is useless for catching a stall in a small one. Silence has no such problem.
-    /// Skyline narrates continuously - "Opening file...", "4%", "31% - Writing row 22,210,657" - and on
-    /// the exports measured here the longest gap between lines was under a minute. A stalled one goes
-    /// quiet and stays quiet: 7 hours 35 minutes on the run that prompted this work, and an hour on a
-    /// second one, both ending with a Skyline that had stopped accumulating CPU entirely.</para>
-    ///
-    /// <para>20 minutes is far above any observed healthy gap and far below either stall. Deliberately
-    /// NOT combined with a CPU-liveness check on the Skyline process: with several exports in flight
-    /// there is no way to tell which process is ours - the same reason
-    /// <see cref="KillSpawned"/> declines to reap under concurrency - so a CPU signal would either be
-    /// unavailable exactly when it is needed or would read another export's work as our own.</para>
-    /// </summary>
-    private readonly TimeSpan _idleTimeout;
-
+    /// <param name="idleTimeout">
+    /// How long Skyline may say NOTHING before the command is abandoned; defaults to
+    /// <see cref="SkylineIdleWatchdog.DefaultLimit"/>. See that class for why the bound is on silence
+    /// rather than total duration. Injectable so a test need not wait twenty minutes for nothing.
+    /// </param>
     public SkylineAppRunner(
         Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null,
         TimeSpan? idleTimeout = null)
     {
         _installation = installation;
-        _idleTimeout = idleTimeout ?? TimeSpan.FromMinutes(20);
+        _idleTimeout = idleTimeout ?? SkylineIdleWatchdog.DefaultLimit;
         // A cold ClickOnce start (plus the update check Skyline does on launch) can take a while; the
         // official runner waits 15 s, which is too tight on a first run of the day.
         //
@@ -239,9 +227,22 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         // surface, since there is no exit code to read.
         StringBuilder errors;
         using var outPipe = new NamedPipeClientStream(outPipeName);
+
+        // Distinguish "Skyline is unresponsive" from "the caller's budget ran out on the way here".
+        // Without this, an exhausted budget makes Remaining() zero, Connect(0) fails instantly, and the
+        // blame lands on Skyline for never opening a pipe it was given no time to open - the same
+        // misdiagnosis as the "Pipe is broken." message this class was fixed for.
+        var outPipeBudget = Remaining(callDeadline);
+        if (outPipeBudget == TimeSpan.Zero)
+        {
+            KillSpawned(preexisting, log);
+            throw new TimeoutException(
+                $"{_installation.AppName} connected, but the {timeout!.Value.TotalMinutes:F0} min allowed "
+                + "for this command was already spent getting it started, so it was stopped.");
+        }
         try
         {
-            outPipe.Connect((int)Min(_startupTimeout, Remaining(callDeadline)).TotalMilliseconds);
+            outPipe.Connect((int)Min(_startupTimeout, outPipeBudget).TotalMilliseconds);
         }
         catch (TimeoutException)
         {
@@ -277,7 +278,8 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         try
         {
             errors = ConsumeOutput(
-                lines, log, _installation.AppName, _idleTimeout, callDeadline, cancellationToken);
+                lines, log, _installation.AppName, _idleTimeout, callDeadline, cancellationToken,
+                totalBound: timeout);
         }
         catch (TimeoutException)
         {
@@ -519,14 +521,19 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// start a real Skyline and wait twenty minutes for it to say nothing.</para>
     /// </summary>
     /// <param name="utcNow">Injected clock; defaults to the real one.</param>
+    /// <param name="totalBound">
+    /// The caller's overall bound, carried alongside <paramref name="deadline"/> only so the message can
+    /// name it. Reporting "did not finish within the time allowed" without the number leaves a reader
+    /// unable to tell a 5-minute bound from a 60-minute one, or which caller set it.
+    /// </param>
     internal static StringBuilder ConsumeOutput(
         BlockingCollection<string> lines, Action<string> log, string appName, TimeSpan idleTimeout,
-        DateTime? deadline, CancellationToken cancellationToken, Func<DateTime>? utcNow = null)
+        DateTime? deadline, CancellationToken cancellationToken, Func<DateTime>? utcNow = null,
+        TimeSpan? totalBound = null)
     {
         var now = utcNow ?? (() => DateTime.UtcNow);
+        var idleWatch = new SkylineIdleWatchdog(appName, idleTimeout, now);
         var errors = new StringBuilder();
-        var lastOutput = now();
-        var warnedIdle = false;
 
         while (true)
         {
@@ -535,8 +542,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             if (lines.TryTake(out var line, (int)PollInterval.TotalMilliseconds, cancellationToken))
             {
                 log("    " + line);
-                lastOutput = now();
-                warnedIdle = false;
+                idleWatch.SawOutput();
                 if (IsErrorLine(line))
                     errors.AppendLine(line.Trim());
                 continue;
@@ -546,22 +552,11 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
 
             if (deadline is not null && now() > deadline)
                 throw new TimeoutException(
-                    $"{appName} did not finish within the time allowed and was stopped.");
+                    $"{appName} did not finish within "
+                    + (totalBound is null ? "the time allowed" : $"{totalBound.Value.TotalMinutes:F0} min")
+                    + " and was stopped.");
 
-            var idle = now() - lastOutput;
-            if (idle >= idleTimeout)
-                throw new TimeoutException(
-                    $"{appName} stopped reporting progress {idle.TotalMinutes:F0} min ago and was "
-                    + "stopped. A Skyline that runs out of memory stalls exactly like this and does not "
-                    + "recover - export fewer documents at a time, or close other Skyline windows, and "
-                    + "try again.");
-
-            if (!warnedIdle && idle >= idleTimeout / 2)
-            {
-                log($"    (no output from {appName} for {idle.TotalMinutes:F0} min; "
-                    + $"giving up at {idleTimeout.TotalMinutes:F0})");
-                warnedIdle = true;
-            }
+            idleWatch.ThrowIfStalled(log);
         }
     }
 

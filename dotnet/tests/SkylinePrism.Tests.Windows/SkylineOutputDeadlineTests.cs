@@ -104,10 +104,13 @@ public class SkylineOutputDeadlineTests
 
         var ex = Assert.Throws<TimeoutException>(() => SkylineAppRunner.ConsumeOutput(
             lines, _ => { }, "Skyline-daily", Idle, deadline, CancellationToken.None,
-            utcNow: () => { clock.Advance(TimeSpan.FromMinutes(1)); return clock.UtcNow; }));
+            utcNow: () => { clock.Advance(TimeSpan.FromMinutes(1)); return clock.UtcNow; },
+            totalBound: TimeSpan.FromMinutes(2)));
 
-        // The overall bound expires first here (2 min vs the 20 min idle bound), so that is what is said.
-        Assert.Contains("did not finish within the time allowed", ex.Message);
+        // The overall bound expires first here (2 min vs the 20 min idle bound), so that is what is said -
+        // and it must name the number. "Within the time allowed" leaves a reader unable to tell a
+        // 5-minute bound from a 60-minute one, or which caller set it.
+        Assert.Contains("did not finish within 2 min", ex.Message);
     }
 
     /// <summary>

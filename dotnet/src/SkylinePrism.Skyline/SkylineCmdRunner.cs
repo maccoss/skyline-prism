@@ -47,6 +47,10 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
     /// see <see cref="ISkylineCommandRunner.Run"/>. On expiry the process is killed and a
     /// <see cref="TimeoutException"/> is thrown.
     /// </para>
+    /// <para>
+    /// A SILENCE bound always applies regardless, because "none" above must not mean "forever" - see
+    /// <see cref="SkylineIdleWatchdog"/>.
+    /// </para>
     /// </summary>
     public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
         TimeSpan? timeout = null)
@@ -68,15 +72,25 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stderr = new StringBuilder();
+
+        // Bounded on SILENCE as well as on the caller's optional total. Without this the fallback runner
+        // had no bound at all - `timeout` defaults to null for report export, deliberately, because an
+        // export legitimately takes an hour - so a SkylineCmd that stalled blocked the run forever, which
+        // is exactly the failure the app runner's bound was added to prevent. See SkylineIdleWatchdog.
+        var idleWatch = new SkylineIdleWatchdog("SkylineCmd");
+
         process.OutputDataReceived += (_, e) =>
         {
-            if (!string.IsNullOrWhiteSpace(e.Data))
-                log("    " + e.Data);
+            if (string.IsNullOrWhiteSpace(e.Data))
+                return;
+            idleWatch.SawOutput();
+            log("    " + e.Data);
         };
         process.ErrorDataReceived += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
+            idleWatch.SawOutput();
             log("    " + e.Data);
             stderr.AppendLine(e.Data);
         };
@@ -101,6 +115,15 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
                 throw new TimeoutException(
                     $"SkylineCmd did not finish within {timeout!.Value.TotalMinutes:F0} min "
                     + "and was stopped.");
+            }
+            try
+            {
+                idleWatch.ThrowIfStalled(log);
+            }
+            catch (TimeoutException)
+            {
+                TryKill(process, log);
+                throw;
             }
         }
         process.WaitForExit();
