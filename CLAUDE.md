@@ -883,7 +883,7 @@ Steps:
    `SkylinePrism.zip` -> extracts and launch-verifies the exe). Confirm `prism --version` prints
    `{version}.0`.
 4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml`), run
-   `/pw-self-review`, then **squash-merge** it (`gh pr merge --squash --delete-branch`). Always squash,
+   `/code-review`, then **squash-merge** it (`gh pr merge --squash --delete-branch`). Always squash,
    for every PR, not just releases - `main` keeps one commit per change. Write the squash commit
    message deliberately; it is the permanent record, and the default (a concatenation of the branch's
    commits) is not.
