@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/maccoss/skyline-prism?display_name=tag&label=release)](https://github.com/maccoss/skyline-prism/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/maccoss/skyline-prism/total?label=downloads&color=success)](https://github.com/maccoss/skyline-prism/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
 **PRISM** normalizes transition-level LC-MS proteomics data exported from [Skyline](https://skyline.ms) and produces robust peptide- and
 protein-level quantities. It uses Tukey median polish for outlier-tolerant rollups, retention-time-aware
@@ -60,13 +60,13 @@ written back in **linear** scale (all internal processing is on log2).
 
 ## Install
 
-### Prerequisite: the .NET 8 runtime
+### Prerequisite: the .NET 10 runtime
 
 Both the `prism` CLI and the Skyline external tool are **framework-dependent** — they share one
-.NET 8 runtime that you install once (this keeps the downloads small). Install it before running
+.NET 10 runtime that you install once (this keeps the downloads small). Install it before running
 either tool:
 
-| Platform | Install the .NET 8 runtime |
+| Platform | Install the .NET 10 runtime |
 |---|---|
 | **Windows** | `winget install Microsoft.DotNet.DesktopRuntime.8` — the **Desktop** Runtime covers both the CLI and the Skyline tool. |
 | **macOS** | `brew install dotnet@8`, or the installer from the link below (Apple Silicon = arm64, Intel = x64). |
@@ -108,17 +108,17 @@ xattr -dr com.apple.quarantine "$HOME/.local/prism-osx-arm64"   # if Gatekeeper 
 prism --version
 ```
 
-**Build from source** instead (requires the [.NET 8 SDK](https://dotnet.microsoft.com/download)):
+**Build from source** instead (requires the [.NET 10 SDK](https://dotnet.microsoft.com/download)):
 ```bash
 git clone https://github.com/maccoss/skyline-prism
 cd skyline-prism/dotnet
 dotnet build SkylinePrism.CrossPlatform.slnf -c Release
-# the CLI is src/SkylinePrism.Cli/bin/Release/net8.0/prism(.exe)
+# the CLI is src/SkylinePrism.Cli/bin/Release/net10.0/prism(.exe)
 ```
 
 ### Skyline external tool (Windows)
 
-Install the **.NET 8 Desktop Runtime** (see the prerequisite above —
+Install the **.NET 10 Desktop Runtime** (see the prerequisite above —
 `winget install Microsoft.DotNet.DesktopRuntime.8`), then download `SkylinePrism.zip` from
 [Releases](https://github.com/maccoss/skyline-prism/releases) (or build it — see below) and install
 it in Skyline via **Tools → Tool Store → Install from file**. The tool appears under the Tools menu

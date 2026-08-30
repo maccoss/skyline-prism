@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <!-- Plain net8.0 so the full parity + unit suite runs on ubuntu / macos / windows. -->
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>SkylinePrism.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>

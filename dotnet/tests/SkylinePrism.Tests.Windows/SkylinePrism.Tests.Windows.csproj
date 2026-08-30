@@ -3,7 +3,7 @@
   <PropertyGroup>
     <!-- Windows-only smoke tests for the RPC framing (SkylinePrism.Skyline) and WPF
          view-models (SkylinePrism.App). Gated to the windows CI runner. -->
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <RootNamespace>SkylinePrism.Tests.Windows</RootNamespace>
     <IsPackable>false</IsPackable>

@@ -5,7 +5,7 @@
          APIs that are Windows-only at runtime, and Skyline itself is Windows-only.
          This project is the ONLY place the vendored SkylineTool sources are
          link-compiled, which keeps SkylinePrism.Core cross-platform. -->
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>SkylinePrism.Skyline</RootNamespace>
     <!-- The vendored SkylineTool sources predate nullable reference types. -->
     <Nullable>disable</Nullable>

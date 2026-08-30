@@ -18,7 +18,7 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 
 ## Project Overview
 
-**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) normalizes LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction. It ships as a cross-platform `prism` CLI and a Windows Skyline external tool, both built from the .NET 8 code under `dotnet/`.
+**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) normalizes LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction. It ships as a cross-platform `prism` CLI and a Windows Skyline external tool, both built from the .NET 10 code under `dotnet/`.
 
 > [!NOTE]
 > PRISM began as a Python package (`skyline-prism` on PyPI). That engine was **retired and removed** after its last release, `v26.4.4`; the C# code reproduced its numbers to 1e-9 on the deterministic stages. Older Python releases remain available from the `v*` tags and PyPI but are unmaintained. Do not add Python engine code back, and do not describe PRISM as a Python package.
@@ -194,7 +194,7 @@ Stage 5b: QC Report Generation (HTML + plots)
 skyline-prism/
 ├── dotnet/
 │   ├── src/
-│   │   ├── SkylinePrism.Core/       # Platform-neutral engine (net8.0)
+│   │   ├── SkylinePrism.Core/       # Platform-neutral engine (net10.0)
 │   │   │   ├── Pipeline/            # PrismPipeline (stage orchestration), NormalizeCorrectStage,
 │   │   │   │                        #   StreamingNormalizeCorrect, Provenance (parameters.json)
 │   │   │   ├── Rollup/              # TukeyMedianPolish, TransitionRollup, ProteinRollup,
@@ -209,7 +209,7 @@ skyline-prism/
 │   │   │   ├── Numerics/            # Stats, Lowess, Pca, LinAlg, Kde
 │   │   │   ├── Config/              # PrismConfig, ConfigTemplate, ConfigWriter
 │   │   │   └── Visualization/       # PlotRenderer (ScottPlot/SkiaSharp)
-│   │   ├── SkylinePrism.Cli/        # `prism` CLI (net8.0, cross-platform)
+│   │   ├── SkylinePrism.Cli/        # `prism` CLI (net10.0, cross-platform)
 │   │   ├── SkylinePrism.Skyline/    # Skyline JSON-RPC + headless export (Windows)
 │   │   └── SkylinePrism.App/        # WPF Skyline external tool / standalone GUI (Windows)
 │   ├── tests/
@@ -279,7 +279,23 @@ path). `Core/Qc/BatchCorrectionEvaluator.cs` decides the opt-in `auto_revert`.
 
 ### Building
 
-Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download).
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+
+> [!NOTE]
+> **Why .NET 10, and what a bump costs.** .NET 10 is the current LTS (support to Nov 2028); .NET 8's LTS
+> ended Nov 2026, which is what prompted the move. The version is pinned in five places that must agree -
+> `global.json` at the repo root AND under `dotnet/`, every `<TargetFramework>`, and `dotnet-version:` in
+> both workflows - so a partial bump builds locally and fails in CI, or vice versa.
+>
+> The artifacts are **framework-dependent by design**, so a major bump means every user installs a new
+> runtime before the tool will start. That is a coordinated upgrade for a lab, not a silent one; do not
+> do it for a minor gain.
+>
+> **Verify DuckDB, not just the test suite.** A runtime change moves GC and marshalling behavior, which
+> is precisely where DuckDB.NET has failed here before (see the caution below: `AccessViolation` and bare
+> segfaults, reproduced across two DuckDB versions and four configurations). A green `dotnet test` says
+> nothing about it - run a real cohort through Stage 1 and Stage 2. The .NET 10 move was checked that
+> way on a 47M-row, 93-sample cohort.
 
 ```bash
 cd dotnet
@@ -727,7 +743,7 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    Windows**. A cross-platform GUI (Avalonia et al.) was considered and declined - Skyline itself is
    Windows-only, so the attached mode could never be portable, and the standalone case is served by the
    CLI. Consequences to respect:
-   - Do **not** port `SkylinePrism.App` to another UI framework, and do not add a `net8.0` target to it.
+   - Do **not** port `SkylinePrism.App` to another UI framework, and do not add a `net10.0` target to it.
    - GUI-only helpers may sit in `SkylinePrism.App` and depend on the Windows-only
      `SkylinePrism.Skyline` (e.g. `PrismInput`, `StandaloneShortcut`); they do **not** need to move to
      Core "for portability".
@@ -798,7 +814,7 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 
 ## Release Process
 
-PRISM ships as the **C# (.NET 8)** tools - the `prism` CLI and the Windows Skyline external tool -
+PRISM ships as the **C# (.NET 10)** tools - the `prism` CLI and the Windows Skyline external tool -
 published to GitHub Releases. There is one release track.
 
 > [!NOTE]
@@ -876,12 +892,12 @@ Steps:
    (Releases up to and including v26.7.1 were published with an empty body, before the workflow checked
    out the repo; they have since been backfilled with `gh release edit --notes-file`.)
 
-Artifacts (7 assets, all **framework-dependent** - the .NET 8 runtime is NOT bundled; users install
+Artifacts (7 assets, all **framework-dependent** - the .NET 10 runtime is NOT bundled; users install
 it once):
 
-- `SkylinePrism.zip` - the Windows Skyline external tool (needs the .NET 8 **Desktop** Runtime).
+- `SkylinePrism.zip` - the Windows Skyline external tool (needs the .NET 10 **Desktop** Runtime).
 - `prism-{win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64}.{zip,tar.gz}` - the CLI, one
-  native build per platform (needs the base .NET 8 Runtime).
+  native build per platform (needs the base .NET 10 Runtime).
 
 Framework-dependent is deliberate (small downloads, one shared runtime). Archives are still ~20-45 MB
 because they bundle the app's native deps (DuckDB, SkiaSharp), not the runtime. To publish a bare
