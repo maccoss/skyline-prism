@@ -451,7 +451,16 @@ public sealed class HeadlessSkylineExporter
     /// <c>*.metadata.csv</c>, which the GUI globs to find every document's replicate report. A reader of
     /// that directory has to be able to tell the two apart; <see cref="IsSidecar"/> is how.
     /// </summary>
-    public const string SidecarPrefix = ".prism-partial-";
+    /// <remarks>
+    /// No LEADING DOT, deliberately. An SMB server commonly applies the Unix dot-file convention as the
+    /// DOS hidden attribute, and the attribute survives the promotion: measured on
+    /// \\...\DataAnalysis, both a 1.4 GB parquet and its metadata CSV arrived at their final names as
+    /// "Hidden, Archive", while the files PRISM writes directly (the stamp, the .skyr) were plain
+    /// "Archive". The export still works - Directory.EnumerateFiles returns hidden files, so the pipeline
+    /// finds them - but the user sees an empty folder in Explorer and concludes the export failed. It
+    /// took exactly that wrong turn during review.
+    /// </remarks>
+    public const string SidecarPrefix = "prism-partial-";
 
     /// <summary>Whether <paramref name="path"/> is an in-progress export rather than a finished one.</summary>
     public static bool IsSidecar(string path) =>
@@ -515,6 +524,7 @@ public sealed class HeadlessSkylineExporter
         try
         {
             File.Move(sidecar, finalPath, overwrite: true);
+            ClearHidden(finalPath);
             if (previous > 0)
                 _log($"Replaced the previous export at {finalPath} ({previous:N0} bytes).");
             return true;
@@ -524,6 +534,25 @@ public sealed class HeadlessSkylineExporter
             _log($"Could not put the new export in place at {finalPath} ({ex.Message}); "
                  + "the previous export there is unchanged.");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Make sure a finished export is visible. Belt and braces beside the dot-free
+    /// <see cref="SidecarPrefix"/>: whatever a given server decides about the name it was written under,
+    /// the file the user is told about must not be hidden when they go looking for it.
+    /// </summary>
+    private static void ClearHidden(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.Hidden) != 0)
+                File.SetAttributes(path, attributes & ~FileAttributes.Hidden);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cosmetic - never worth failing a good export over.
         }
     }
 

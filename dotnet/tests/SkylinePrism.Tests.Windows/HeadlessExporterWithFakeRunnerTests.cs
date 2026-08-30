@@ -337,7 +337,7 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Equal(staleBytes, File.ReadAllBytes(stale));
 
         // ...and the failed attempt leaves nothing behind for the next run to trip over.
-        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
+        Assert.Empty(Directory.GetFiles(work, HeadlessSkylineExporter.SidecarPrefix + "*"));
     }
 
     /// <summary>
@@ -357,12 +357,12 @@ public class HeadlessExporterWithFakeRunnerTests
         Directory.CreateDirectory(work);
 
         // What a killed run leaves: named for this label, never promoted, never deleted.
-        var orphanReport = Path.Combine(work, ".prism-partial-deadbeef.PlateA.parquet");
-        var orphanMetadata = Path.Combine(work, ".prism-partial-deadbeef.PlateA.metadata.csv");
+        var orphanReport = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "deadbeef.PlateA.parquet");
+        var orphanMetadata = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "deadbeef.PlateA.metadata.csv");
         WriteParquet(orphanReport);
         WriteCsv(orphanMetadata);
         // Another document's orphan must survive - it may belong to an export running right now.
-        var otherDocument = Path.Combine(work, ".prism-partial-cafebabe.PlateB.parquet");
+        var otherDocument = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "cafebabe.PlateB.parquet");
         WriteParquet(otherDocument);
 
         var runner = new FakeRunner(supportsParquet: true)
@@ -388,10 +388,18 @@ public class HeadlessExporterWithFakeRunnerTests
     [Fact]
     public void IsSidecar_RecognizesAnUnfinishedExportButNotAFinishedOne()
     {
-        Assert.True(HeadlessSkylineExporter.IsSidecar(@"C:\x\.prism-partial-deadbeef.PlateA.metadata.csv"));
-        Assert.True(HeadlessSkylineExporter.IsSidecar(@"C:\x\.prism-partial-deadbeef.PlateA.parquet"));
+        var side = @"C:\x\" + HeadlessSkylineExporter.SidecarPrefix;
+        Assert.True(HeadlessSkylineExporter.IsSidecar(side + "deadbeef.PlateA.metadata.csv"));
+        Assert.True(HeadlessSkylineExporter.IsSidecar(side + "deadbeef.PlateA.parquet"));
         Assert.False(HeadlessSkylineExporter.IsSidecar(@"C:\x\PlateA.metadata.csv"));
         Assert.False(HeadlessSkylineExporter.IsSidecar(@"C:\x\PlateA.parquet"));
+
+        // NO LEADING DOT. An SMB server maps the Unix dot-file convention onto the DOS hidden attribute,
+        // and the promoted export inherits it: measured on a real share, a 1.4 GB parquet and its
+        // metadata arrived at their final names as "Hidden, Archive" while the files PRISM writes
+        // directly were plain "Archive". The pipeline still finds them; the user opening the folder does
+        // not, and concludes the export failed.
+        Assert.False(HeadlessSkylineExporter.SidecarPrefix.StartsWith('.'));
     }
 
     /// <summary>
@@ -434,7 +442,7 @@ public class HeadlessExporterWithFakeRunnerTests
         // The previous export survived the failed attempt intact.
         Assert.True(File.Exists(first.InputPath));
         Assert.Equal(cached, File.ReadAllBytes(first.InputPath));
-        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
+        Assert.Empty(Directory.GetFiles(work, HeadlessSkylineExporter.SidecarPrefix + "*"));
     }
 
     /// <summary>
