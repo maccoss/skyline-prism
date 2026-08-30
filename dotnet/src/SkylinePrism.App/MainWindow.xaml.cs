@@ -576,7 +576,10 @@ public partial class MainWindow : Window
         var keep = select ?? MarkerNormListCombo.SelectedItem as string;
 
         MarkerNormListCombo.Items.Clear();
-        foreach (var list in _proteinLists.WithBuiltIns())
+        // Display-only panels are REFUSED by marker normalization, so listing them here would offer a
+        // guaranteed error - and with readouts, pathways and disease panels shipped, they are now most of
+        // the set. Omitting them halves the picker and removes a whole class of mistake before it is made.
+        foreach (var list in _proteinLists.WithBuiltIns().Where(l => !l.DisplayOnly))
             MarkerNormListCombo.Items.Add(list.Name);
 
         if (!string.IsNullOrWhiteSpace(keep))

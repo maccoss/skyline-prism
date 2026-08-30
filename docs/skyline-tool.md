@@ -145,7 +145,7 @@ same one set of lists; a list created from either place is immediately selectabl
 
 ### Predefined and your own
 
-The editor has two tabs. **Predefined** holds the 40 panels PRISM ships; **My lists** holds yours. The
+The editor has two tabs. **Predefined** holds the 60 panels PRISM ships; **My lists** holds yours. The
 split is not cosmetic: a predefined panel is **read-only**, so it means the same thing on every machine,
 which is what makes one citable in a methods section. **Duplicate to my lists** makes an editable copy.
 Ticking a predefined panel stores only whether it is shown and labeled — not a copy of its members — so a
@@ -166,7 +166,8 @@ Three kinds are mixed in the predefined set, and the difference matters more tha
 | **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial mass` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion |
 | **Identity** | Endothelial (arterial, venous, capillary, pan, brain/BBB, liver sinusoidal, kidney glomerular), epithelial (pan, kidney tubule, intestine, lung), plasma, immunoglobulin/complement, lipoproteins, platelet microparticles, `EV markers (extended)` | What a cell or tissue type *is*. Good for highlighting; usable as a normalizer only if the biology under study does not change that cell type's abundance |
 | **Readouts** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for, so dividing by it removes the evidence |
-| **Pathways** | `Oxidative phosphorylation`, `Glycolysis`, `TCA cycle`, `Proteasome`, `Lysosome`, `Spliceosome and hnRNP`, `Extracellular matrix`, `Actin cytoskeleton`, `Antigen presentation (MHC)`, `Acute phase response`, `Chaperones and proteostasis`, `Redox and antioxidant` | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
+| **Pathways** | Oxidative phosphorylation, glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin cytoskeleton, antigen presentation, acute phase response, chaperones, redox, DNA damage repair, autophagy, unfolded protein response, innate immune signaling, apoptosis, fatty acid oxidation | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
+| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin`, `White matter`, `Grey matter` (identity/composition); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types and dissection composition can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result |
 
 **Readouts and pathways are refused by `marker_normalization`** rather than merely discouraged — naming
 one gives an error explaining why. Both fail for the same reason: their abundance is the signal, not the

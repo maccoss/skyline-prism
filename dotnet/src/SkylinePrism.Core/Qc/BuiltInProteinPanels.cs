@@ -765,5 +765,412 @@ internal static class BuiltInProteinPanels
                 "GLRX", "NQO1", "HMOX1", "GCLM",
             },
         },
+
+        // ---- Neurobiology and cellular processes ----------------------------------------------------
+        // The brain cell-type panels are IDENTITY sets and may normalize; the disease and process panels
+        // are DisplayOnly, because in a study of them their abundance is the result. Synaptic proteins
+        // are the closest call and are display-only deliberately - see that panel's note.
+
+        new ProteinList
+        {
+            Name = "Neuronal markers",
+            ColorHex = "#1f77b4",
+            Visible = false,
+            ShowLabels = true,
+            // Neuron identity: neurofilaments, neuron-specific tubulin and enolase, and the cytoskeletal and
+            // vesicle proteins that go with them. An IDENTITY panel, so it can serve as a denominator - 'per unit
+            // of neuron' - but only where neuronal loss is not itself the phenotype. In most neurodegeneration it
+            // is; use Histones (per cell) or a structural panel there instead.
+            // NEFL doubles as a CSF/plasma axonal-damage biomarker, so in a fluid matrix expect it to behave as a
+            // readout rather than as tissue identity.
+            Members =
+            {
+                "NEFL", "NEFM", "NEFH", "INA", "TUBB3", "ENO2", "MAP2", "MAPT", "SYN1", "SYT1",
+                "STMN2", "UCHL1", "RBFOX3", "SNAP25", "NRGN", "GAP43", "CAMK2A", "THY1", "BASP1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Astrocyte markers",
+            ColorHex = "#2ca02c",
+            Visible = false,
+            ShowLabels = true,
+            // Astrocyte identity. GFAP and AQP4 are the canonical pair; ALDH1L1 and SLC1A2/SLC1A3 (GLT-1/GLAST)
+            // add metabolic and transporter coverage. GFAP rises with reactive astrogliosis, so a high signal can
+            // mean more astrocytes OR the same astrocytes activated - the panel cannot tell those apart.
+            Members =
+            {
+                "GFAP", "AQP4", "ALDH1L1", "SLC1A2", "SLC1A3", "S100B", "GJA1", "GLUL", "CLU",
+                "APOE", "VIM", "SPARCL1", "ALDOC", "MT3", "CD44",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Microglia markers",
+            ColorHex = "#d62728",
+            Visible = false,
+            ShowLabels = true,
+            // Microglial identity, split between homeostatic (P2RY12, TMEM119, CX3CR1) and activation-associated
+            // (CD68, TREM2, TYROBP, C1Q) members. That split is the useful part: the same panel reads differently
+            // depending on which half is carrying it, so look at the members rather than the total.
+            Members =
+            {
+                "AIF1", "P2RY12", "TMEM119", "CX3CR1", "CSF1R", "ITGAM", "CD68", "TREM2", "TYROBP",
+                "C1QA", "C1QB", "C1QC", "SPI1", "LAPTM5", "CTSS", "HEXB", "FCER1G",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Oligodendrocyte and myelin",
+            ColorHex = "#9467bd",
+            Visible = false,
+            ShowLabels = true,
+            // Myelin and the cells that make it. Among the most abundant proteins in white matter, so on a brain
+            // abundance plot this panel sits at the top and is a good orientation marker.
+            // White-matter content varies with dissection, which makes this a plausible capture denominator for
+            // brain tissue - and a bad one in demyelinating disease, where myelin loss is the finding.
+            Members =
+            {
+                "MBP", "PLP1", "MOG", "MAG", "CNP", "MOBP", "MAL", "CLDN11", "SIRT2", "UGT8",
+                "ERMN", "ASPA", "OLIG1", "OLIG2", "SOX10", "TF", "QDPR",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Alzheimer's disease",
+            ColorHex = "#a8341f",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // The proteins defining the AD lesions and the genetics around them: APP and its secretase machinery,
+            // MAPT, APOE, and the risk-gene products detectable by MS. VGF, SMOC1, CHI3L1 and NPTX2 are included as
+            // CSF/plasma markers that have held up across cohorts.
+            // DISPLAY ONLY, emphatically: in an AD study these ARE the finding, and normalizing to them would
+            // regress out the disease and leave a tidy null result.
+            // MAPT and APOE also sit in the neuronal and astrocyte panels - the same protein is identity there and
+            // pathology here, which is the distinction these panels exist to keep straight.
+            Members =
+            {
+                "APP", "MAPT", "APOE", "PSEN1", "PSEN2", "BACE1", "NCSTN", "APH1A", "PSENEN",
+                "ITM2B", "CLU", "CR1", "PICALM", "TREM2", "SORL1", "BIN1", "CD2AP", "MS4A4A",
+                "INPP5D", "VGF", "SMOC1", "CHI3L1", "NPTX2", "SCG2", "GAP43",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Parkinson's disease",
+            ColorHex = "#7a5c12",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // PD_MARKERS from the SEA-AD pilot notebooks, kept as the lab uses it. Two companion panels
+            // below carve out the parts that ask different questions: the LRRK2-RAB substrates, and the
+            // lysosomal arm.
+            //
+            // Two halves, and the split is the useful part. The familial-PD gene products (SNCA, LRRK2, PRKN,
+            // PINK1, PARK7, VPS35, GBA1) say what is going wrong; the dopaminergic markers (TH, SLC6A3, SLC18A2,
+            // DDC, ALDH1A1) say how much substantia nigra is left, since those neurons are what PD destroys.
+            // DISPLAY ONLY for both halves. The gene products are the pathology, and the dopaminergic markers are
+            // the loss being measured - normalizing to either erases the result.
+            // LRRK2 is large and low-abundance; do not read its absence as biology.
+            Members =
+            {
+                "SNCA", "SNCB", "SNCG", "LRRK2", "PRKN", "PINK1", "PARK7", "VPS35", "DNAJC6",
+                "GBA", "GLB1", "RAB10", "RAB8A", "RAB12", "RAB29", "RAB35", "GAK", "ATP13A2",
+                "SYNJ1", "TMEM175", "SCARB2", "VPS13C", "GALC", "SMPD1", "UCHL1", "GRN", "CTSB",
+                "CTSD", "CTSL", "CTSS", "CTSZ", "CTSA", "CTSF", "TH", "DDC", "CALB1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "ALS and FTD",
+            ColorHex = "#0f6e78",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // The two share genetics and pathology, so one panel covers both: the RNA-binding proteins that
+            // mislocalize (TARDBP, FUS, MATR3, HNRNPA1/A2B1), the autophagy-adjacent genes (SQSTM1, OPTN, VCP,
+            // UBQLN2, TBK1), SOD1, and the neurofilaments that report axonal damage in CSF and plasma.
+            // DISPLAY ONLY. NEFL in particular is a damage READOUT - it rises because axons are dying, so
+            // normalizing to it would divide the signal by the disease.
+            // C9orf72 is the commonest genetic cause and among the hardest to detect by bottom-up MS; treat its
+            // absence as a coverage statement, not a biological one.
+            Members =
+            {
+                "TARDBP", "FUS", "SOD1", "C9orf72", "OPTN", "SQSTM1", "VCP", "UBQLN2", "TBK1",
+                "MATR3", "HNRNPA1", "HNRNPA2B1", "PFN1", "CHMP2B", "ANXA11", "TIA1", "SETX",
+                "ATXN2", "NEFL", "NEFH", "CHAT", "SLC18A3",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Huntington's disease",
+            ColorHex = "#9467bd",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // HTT itself, its interactors, and the striatal medium spiny neuron markers that report the cell type
+            // HD destroys (PPP1R1B/DARPP-32, PDE10A, DRD1, DRD2, ADORA2A, GPR88, RGS9, ARPP21, PENK).
+            // DISPLAY ONLY: the MSN markers ARE the degeneration being measured.
+            // A limit worth stating plainly - bottom-up MS cannot distinguish mutant from wild-type HTT. The polyQ
+            // expansion sits in one N-terminal tryptic region and standard workflows do not resolve it, so this
+            // panel measures HTT abundance and striatal content, never allele status.
+            Members =
+            {
+                "HTT", "HAP1", "HIP1", "HIP1R", "BDNF", "PPP1R1B", "PDE10A", "DRD1", "DRD2",
+                "ADORA2A", "GPR88", "RGS9", "ARPP21", "PENK", "TAC1", "CALB1", "ATXN1", "ATXN2",
+                "ATXN3", "TBP",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Synaptic proteins",
+            ColorHex = "#e377c2",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // Pre- and postsynaptic machinery: SNAREs, synaptic vesicle proteins and the postsynaptic density.
+            // DISPLAY ONLY by default because synapse loss is the phenotype in most neurodegeneration, so
+            // normalizing to it removes the very thing being measured. A synaptosome preparation that genuinely
+            // wants 'per unit of synapse' is a legitimate exception - duplicate this panel into a list of your own
+            // and use that, which makes the choice explicit rather than accidental.
+            Members =
+            {
+                "SNAP25", "SYP", "SYN1", "SYN2", "SYT1", "VAMP2", "STX1A", "STX1B", "STXBP1",
+                "CPLX1", "CPLX2", "SV2A", "DLG4", "SHANK3", "HOMER1", "GRIN1", "GRIA2", "NRGN",
+                "SYNGR1", "SYNPO", "RAB3A", "NSF", "AP2B1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "DNA damage repair",
+            ColorHex = "#8c564b",
+            Visible = false,
+            DisplayOnly = true,
+            // Sensing, signalling and the major repair pathways together: MRN and the ATM/ATR kinases, homologous
+            // recombination, non-homologous end joining, mismatch repair, nucleotide and base excision.
+            // Most of these are low-abundance nuclear proteins, so expect sparse coverage outside a deep
+            // whole-cell measurement - and treat their presence in a secretome or EV prep as contamination.
+            Members =
+            {
+                "ATM", "ATR", "CHEK1", "CHEK2", "TP53BP1", "MDC1", "MRE11", "RAD50", "NBN",
+                "RAD51", "BRCA1", "BRCA2", "PARP1", "XRCC1", "XRCC5", "XRCC6", "PRKDC", "LIG1",
+                "LIG3", "LIG4", "ERCC1", "XPA", "XPC", "MSH2", "MSH6", "MLH1", "PMS2", "PCNA",
+                "RPA1", "RPA2", "FEN1", "APEX1", "OGG1", "UNG", "POLB", "SMC1A", "RIF1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Autophagy",
+            ColorHex = "#17becf",
+            Visible = false,
+            DisplayOnly = true,
+            // Cargo receptors, the ATG conjugation machinery and the LC3/GABARAP family. SQSTM1 and the LC3s are
+            // the ones usually read as a flux marker, with the standing caveat that a single timepoint cannot
+            // distinguish more autophagy from blocked degradation.
+            Members =
+            {
+                "SQSTM1", "MAP1LC3B", "GABARAP", "GABARAPL1", "GABARAPL2", "NBR1", "OPTN",
+                "CALCOCO2", "TAX1BP1", "ATG3", "ATG5", "ATG7", "ATG12", "ATG16L1", "BECN1",
+                "WIPI2", "ULK1", "RB1CC1", "VPS35", "LAMP1", "CTSD",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Unfolded protein response",
+            ColorHex = "#7a5c12",
+            Visible = false,
+            DisplayOnly = true,
+            // ER stress sensing and the ER folding machinery it drives. HSPA5 (BiP) is the hub and is also in the
+            // chaperone panel; PDIA3, CALR and CANX are shared with antigen presentation, where they are loading
+            // machinery rather than a stress response.
+            Members =
+            {
+                "HSPA5", "DDIT3", "ATF4", "ATF6", "EIF2AK3", "ERN1", "XBP1", "EDEM1", "SEL1L",
+                "HERPUD1", "DNAJB9", "DNAJC3", "PDIA3", "PDIA4", "PDIA6", "P4HB", "CALR", "CANX",
+                "HYOU1", "SDF2L1", "MANF", "CRELD2",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Innate immune signaling",
+            ColorHex = "#ff7f0e",
+            Visible = false,
+            DisplayOnly = true,
+            // Pattern recognition through to the inflammasome and its cytokines. In plasma the abundant members
+            // (S100A8/A9, LBP, CD14) dominate and the signalling components are usually absent - a panel that
+            // reads very differently in tissue than in fluid.
+            Members =
+            {
+                "TLR2", "TLR4", "CD14", "LBP", "MYD88", "IRAK4", "TRAF6", "NFKB1", "NFKB2", "RELA",
+                "NLRP3", "PYCARD", "CASP1", "IL1B", "IL18", "S100A8", "S100A9", "S100A12", "HMGB1",
+                "TNFAIP3", "STAT1", "STAT3", "ISG15", "MX1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Apoptosis",
+            ColorHex = "#5b6b70",
+            Visible = false,
+            DisplayOnly = true,
+            // Initiator and executioner caspases, the BCL2 family on both sides, and the apoptosome. CYCS is
+            // shared with oxidative phosphorylation - it is an ETC component until it is in the cytosol, which no
+            // abundance measurement can distinguish.
+            Members =
+            {
+                "CASP3", "CASP6", "CASP7", "CASP8", "CASP9", "BAX", "BAK1", "BID", "BCL2",
+                "BCL2L1", "MCL1", "BAD", "CYCS", "APAF1", "DIABLO", "XIAP", "BIRC2", "BIRC5",
+                "PARP1", "FAS", "FADD", "TP53", "AIFM1", "ENDOG",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Fatty acid oxidation",
+            ColorHex = "#2c6b3f",
+            Visible = false,
+            DisplayOnly = true,
+            // Carnitine shuttle and the mitochondrial beta-oxidation spiral. Sits inside the mitochondrion, so
+            // read it alongside Mitochondrial content: a rise in both is more mitochondrion, a rise in this one
+            // alone is a shift in what those mitochondria are doing.
+            Members =
+            {
+                "CPT1A", "CPT2", "SLC25A20", "CRAT", "ACADVL", "ACADM", "ACADS", "ACADL", "ACAD9",
+                "HADHA", "HADHB", "ECHS1", "ECI1", "ACAA2", "ACAT1", "HADH", "ETFA", "ETFB",
+                "ETFDH", "ACOX1", "CROT",
+            },
+        },
+
+        // ---- Tissue composition ---------------------------------------------------------------------
+        // What a dissection actually contained, as opposed to which cell types are present. The pair is
+        // meant to be read as a ratio - see either panel's note.
+
+        new ProteinList
+        {
+            Name = "White matter",
+            ColorHex = "#5b6b70",
+            Visible = false,
+            ShowLabels = true,
+            // The five-marker myelin set used across the SEA-AD pilot notebooks (WM_GENES), kept exactly
+            // as the lab uses it so a panel here reproduces those figures rather than approximating them.
+            // Deliberately minimal - PLP1 and MBP alone carry most of the signal. If a cohort needs
+            // sharper discrimination, CLDN11, ASPA, OPALIN, MOBP and UGT8 are the usual additions;
+            // duplicate this panel rather than editing it, so the SEA-AD definition stays intact.
+            //
+            // How much white matter a dissection captured. Myelin dominates it, so this overlaps
+            // 'Oligodendrocyte and myelin' heavily - and the two exist separately for the same reason 'Kidney
+            // tubule epithelial' and 'Tubular contamination' do. That panel asks which cell type this is; this one
+            // asks what got dissected, which is the question when cortical samples vary in how much subcortical
+            // white matter came along.
+            // NOT display-only: white-matter content is a capture variable, so 'per unit of grey matter' is a
+            // legitimate denominator for cortical work - pair it with Grey matter below and use the ratio.
+            // In a demyelinating disease it stops being capture and becomes the finding; do not normalize then.
+            Members =
+            {
+                "PLP1", "MBP", "MOG", "MAG", "CNP",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Grey matter",
+            ColorHex = "#0f6e78",
+            Visible = false,
+            ShowLabels = true,
+            // The four-marker synaptic set used across the SEA-AD pilot notebooks (GM_GENES), kept exactly
+            // as the lab uses it.
+            //
+            // MEASURED CAUTION, from the SEA-AD MTG pilot (73 donors with both GM area and pathology):
+            // this panel correlates with measured GM fraction at r = +0.37, but it also declines with
+            // pathology - r = -0.14 with Braak and -0.22 with CERAD. All four members are synaptic, and
+            // synapse loss is the AD phenotype, so in a neurodegeneration cohort part of what it measures
+            // IS the disease. Fine for reporting composition; treat it with suspicion as a denominator
+            // there, because residualizing on it removes some of the finding.
+            // (Of the four, only SYN1 was independent of both pathology scales.) For sharper cell-type discrimination SLC17A7, GAD1/GAD2 and ATP1A3 are
+            // the usual additions - duplicate rather than edit, so the SEA-AD definition stays intact.
+            //
+            // The complement of White matter: neuronal and synaptic density, which is what grey matter is made of.
+            // Discriminating members rather than merely abundant ones - SLC17A7 and GAD1/GAD2 for excitatory and
+            // inhibitory neurons, ATP1A3 for the neuronal sodium pump, CAMK2A and NRGN for cortical neuropil.
+            // Used as a pair with White matter, the RATIO is the useful readout: it says how consistent the
+            // dissection was across a cohort before any of the biology is interpreted.
+            // The same caution as Neuronal markers - where neuronal loss IS the phenotype, this measures the
+            // disease rather than the capture, and Histones (per cell) is the safer denominator.
+            Members =
+            {
+                "SYP", "SNAP25", "SYN1", "DLG4",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Parkinson's disease (RAB substrates)",
+            ColorHex = "#d9b654",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // PD_RAB from the SEA-AD notebooks: the RAB GTPases LRRK2 phosphorylates. Separate from the main PD
+            // panel because they ask a mechanistic question rather than a pathology one - LRRK2 activity, read
+            // through its substrates.
+            // Bottom-up abundance cannot see that activity; the informative measurement is the phosphosite (RAB10
+            // T73 and its equivalents), which needs a phospho-enriched run. Read this panel as coverage - are the
+            // substrates present at all - not as activation.
+            Members =
+            {
+                "RAB10", "RAB8A", "RAB12", "RAB29", "RAB35", "RAB3A",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Parkinson's disease (lysosomal)",
+            ColorHex = "#8c564b",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // PD_LYSOSOMAL from the SEA-AD notebooks: the lysosomal arm of PD genetics, with GBA1 the commonest
+            // genetic risk factor and the cathepsins and glycosidases around it.
+            // Overlaps the generic Lysosome panel heavily and deliberately - that one asks how much lysosome a
+            // sample has, this one asks about the PD-implicated subset. Same proteins, different question.
+            Members =
+            {
+                "GBA", "GBA2", "GLB1", "GALC", "SMPD1", "GRN", "SCARB2", "ATP13A2", "TMEM175",
+                "PSAP", "HEXA", "HEXB", "LAMP1", "LAMP2", "NEU1", "ASAH1", "NPC1", "NPC2", "ARSA",
+                "MAN2B1", "GUSB", "NAGLU", "TPP1", "GALNS", "CTSB", "CTSD", "CTSL", "CTSZ", "CTSA",
+                "CTSF", "CTSS", "CTSH",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Brain fluid-like proteins",
+            ColorHex = "#5b6b70",
+            Visible = false,
+            ShowLabels = true,
+            DisplayOnly = true,
+            // FLUID_LIKE from the SEA-AD notebooks: brain proteins that behave the way CSF/plasma markers do, so a
+            // tissue measurement of them can be read alongside fluid cohorts.
+            // A bridging set rather than a pathway - useful for asking whether a tissue finding has any prospect of
+            // being seen in an accessible matrix.
+            Members =
+            {
+                "VGF", "CHI3L1", "GPNMB", "SPP1", "CLU", "A2M", "APOD", "SERPINA3", "CST3", "B2M",
+                "YWHAZ", "ALDOA", "ENO2", "NPTX2", "PKM", "YWHAG", "CALB1", "PEBP1", "CNTN1",
+                "NCAM1",
+            },
+        },
     };
 }
