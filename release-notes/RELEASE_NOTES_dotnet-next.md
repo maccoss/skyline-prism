@@ -117,11 +117,18 @@ as the GitHub Release description and fails if it is missing.
   this run wrote them. When an export failed before Skyline received its arguments, the file left by an
   earlier run was still sitting there, so the log said `Exported ... 1,377,315,301 bytes, parquet` and
   handed it to the merge. Observed on a 2-plate cohort, which silently analyzed a report exported 25 days
-  earlier, from a version of the `.sky` that had since been re-integrated. The transition report, the CSV
-  fallback and the replicate metadata are each now cleared before re-export and must be replaced by the
-  run that claims them; otherwise the export fails instead of reporting stale numbers. Reusing an
-  unchanged document's previous export is unaffected - that path checks the document and tool version
-  first.
+  earlier, from a version of the `.sky` that had since been re-integrated.
+
+  Skyline now writes each report - the transition report, the CSV fallback and the replicate metadata -
+  to a sidecar file this run owns, which is moved into place only once it is known good. That answers
+  "did this run write this file" directly, instead of inferring it, and has two consequences worth
+  knowing. **A failed re-export no longer destroys a usable cached export**: the first fix deleted the
+  destination up front, so a transient Skyline failure threw away the most expensive step of a re-run and
+  cost a full re-export on the next attempt too. And a correct export is no longer rejected: freshness had
+  been decided by file size and modification time, so re-exporting an unchanged document to a share that
+  refused the delete, with second-granular timestamps, produced a byte-identical file that read as "not
+  replaced" and failed. Reusing an unchanged document's previous export is unaffected - that path checks
+  the document and tool version first.
 
 - **A Skyline that never starts is reported as a startup timeout instead of `Pipe is broken.`**
   Abandoning the wait for Skyline's callback meant connecting a dummy client to PRISM's own pipe to

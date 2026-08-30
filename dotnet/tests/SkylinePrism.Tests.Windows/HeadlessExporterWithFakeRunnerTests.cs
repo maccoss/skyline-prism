@@ -319,11 +319,68 @@ public class HeadlessExporterWithFakeRunnerTests
             OnRun = (_, _) => throw new IOException("Pipe is broken."),
         };
 
+        var staleBytes = File.ReadAllBytes(stale);
+
         // Whatever the failure is, it must surface. The CSV fallback's own exception is what escapes here
-        // (it is fatal by design); what matters is that nothing is returned.
+        // (it is fatal by design); what matters is that nothing is returned - that throw IS the
+        // non-adoption, because there is no path handed back for the merge to read.
         Assert.ThrowsAny<Exception>(
             () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
-        Assert.False(File.Exists(stale), "the stale parquet should have been discarded, not adopted");
+
+        // The stale file is deliberately still there. Not adopting it and destroying it are different
+        // things, and this test used to demand the second: the export deleted the destination up front,
+        // so a re-export that then failed threw away a perfectly usable cached export - the single most
+        // expensive step of a re-run - over a transient error. Skyline now writes to a sidecar, so a
+        // failure cannot reach the destination at all. It can still only be picked up again through
+        // TryReuseExport, which checks the document and the tool version first.
+        Assert.True(File.Exists(stale), "a failed export must not destroy the previous one");
+        Assert.Equal(staleBytes, File.ReadAllBytes(stale));
+
+        // ...and the failed attempt leaves nothing behind for the next run to trip over.
+        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
+    }
+
+    /// <summary>
+    /// The point of the sidecar, stated positively: a re-export that fails leaves the previous export
+    /// not merely present but REUSABLE. Deleting up front made a transient Skyline failure cost a full
+    /// re-export of a multi-GB document on the next attempt as well.
+    /// </summary>
+    [Fact]
+    public void Export_LeavesTheCachedExportReusable_WhenAReExportFails()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+
+        var fail = false;
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (fail)
+                    throw new IOException("Pipe is broken.");
+                if (file.EndsWith(".metadata.csv", StringComparison.Ordinal))
+                    WriteCsv(file);
+                else
+                    WriteParquet(file);
+            },
+        };
+
+        // A good export, cached.
+        var first = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        Assert.NotNull(first.ReplicatesCsv);
+        var cached = File.ReadAllBytes(first.InputPath);
+
+        // Something makes the document look changed, so the cache is bypassed - and the re-export fails.
+        File.SetLastWriteTimeUtc(sky, File.GetLastWriteTimeUtc(sky).AddMinutes(5));
+        fail = true;
+        Assert.ThrowsAny<Exception>(
+            () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
+
+        // The previous export survived the failed attempt intact.
+        Assert.True(File.Exists(first.InputPath));
+        Assert.Equal(cached, File.ReadAllBytes(first.InputPath));
+        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
     }
 
     /// <summary>
