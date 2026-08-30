@@ -6,7 +6,34 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
-- **Twenty-nine panels ship**, bringing the predefined set to 60. Eighteen processes and pathways: oxidative phosphorylation,
+- **The Predefined tab groups its panels under collapsible category headings** - Normalizers, Plasma and
+  blood, Endothelial, Epithelial, Readouts and contamination, Pathways and processes, and Brain and
+  neurodegeneration. At 65 panels a flat list was no longer something anyone read top to bottom, and the
+  headings carry the distinction that matters most about a panel: whether its abundance is the scale you
+  are dividing by or the result you are looking for. **My lists** stays flat - a handful of your own needs
+  no navigation, and categorizing them would mean being asked for a category every time you make one.
+
+- **Contaminants are shown by protein name rather than bare accession.** A member may now be written
+  `<accession> = <name>` - `P00761 = Trypsin (porcine)`, `P02769 = Serum albumin (bovine, BSA)` - where
+  **everything left of the `=` is matched and everything right of it is only displayed**. The whole
+  `Common contaminants (cRAP)` panel is labeled this way. The accessions were never optional: these are
+  non-human proteins, and `ALB` for bovine serum albumin matches *human* albumin. Neither is the UniProt
+  entry name a way out - `ALBU_BOVIN` reduces to the token `ALBU`, and so does human `ALBU_HUMAN`, because
+  species suffixes are stripped so panels work across human and mouse. The syntax works in your own lists
+  too.
+
+- **Five more pathways**, bringing the predefined set to 65: `Cell cycle and proliferation`,
+  `Epithelial-mesenchymal transition`, `Hypoxia response`, `Glucose and lipid metabolism` and
+  `Insulin signaling`. All display-only.
+
+  Two are read differently from a normal panel, and say so in the tool. **Insulin signaling is regulated
+  by phosphorylation, not abundance** - its members are present whether or not the cascade is active, so a
+  flat panel is the expected result and says nothing about signaling; it earns its place on a
+  phospho-enriched run. For abundance work, `Glucose and lipid metabolism` measures what that pathway
+  *does*. **Epithelial-mesenchymal transition is read as a balance**, not a total: its epithelial half
+  (CDH1, claudins, keratins) and mesenchymal half (VIM, CDH2, FN1) move in opposite directions.
+
+- **Twenty-nine more panels ship.** Eighteen processes and pathways: oxidative phosphorylation,
   glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin
   cytoskeleton, antigen presentation, acute phase response, chaperones/proteostasis, and
   redox/antioxidant, DNA damage repair, autophagy, unfolded protein response, innate immune signaling,
@@ -44,16 +71,64 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **The contaminants panel no longer claims human alpha-enolase.** `Common contaminants (cRAP)` carried
+  the UniProt entry names `ENO1_YEAST` and `TRYP_PIG` alongside its accessions, and panel matching strips
+  species suffixes so a panel works across human and mouse - so those reduced to the tokens `ENO1` and
+  `TRYP`, the exact collisions the panel is written in accessions to avoid. On any human run, abundant
+  alpha-enolase was colored as a contaminant and labeled "yeast, spike-in"; and because the panel is
+  declared before `Glycolysis` and the first list to claim a protein wins, ENO1 was taken from the panel
+  it belongs to. The accessions `P00924` and `P00761` already cover both spike-ins. Every member of the
+  panel is now checked against the UniProt accession pattern, so no entry name can return.
+
+- **A comma inside a display label no longer splits the member in two.** The list editor and the members
+  file importer both treat commas as separators, so a spreadsheet row can be pasted in - which tore
+  `P02769 = Serum albumin (bovine, BSA)` into a member that still matched and a `BSA)` that never could.
+  A line carrying a label is now taken whole; a line without one still splits on commas, semicolons and
+  tabs.
+
+- **Stopping a run now shuts down every headless Skyline it started.** The guard that stops one export
+  from killing another's Skyline was also applied on cancellation, where it is wrong: the exports share
+  the run's cancellation token, so all of them are stopping and none is left for an unrecognized Skyline
+  to belong to. Cancelling a two-document export left both Skylines running, holding their documents
+  open, with nothing remaining to reap them.
+
+- **A caller's timeout now bounds the wait for Skyline to start.** The startup wait answered only to its
+  own limits, so a caller that passed an explicit bound - the isolation-scheme import passes 5 minutes so
+  it can never hold a run up, and `PRISM_ISOLATION_TIMEOUT_SEC` shortens it further - could still be held
+  for the full base-plus-extended startup before its deadline was consulted at all.
+
+- **The marker report no longer mis-reports which members were found.** It compared each member against
+  the raw identifier columns, so any member the matcher reached by tokenization - a member of an
+  indistinguishable group like `H2AC11 / H2AC18 / H2AJ`, an entry name, an isoform-suffixed accession -
+  was listed as "not quantified" on a run where it had matched. It now asks the matcher itself, counts in
+  members so the two halves of the sentence share a basis (a protein with an empty gene column previously
+  counted toward neither, so a panel that matched everything could report "0 of 14 quantified"), and does
+  not name the same protein twice.
+
+- **A marker list written with display labels normalizes, and its log no longer claims every member was
+  missing.** The members reach the matcher stripped of their labels, but the stage's "not quantified"
+  list compared the *whole* member string against the identifiers in the data - so a labeled member never
+  matched anything and every one of them was reported absent on a run where they had all been found. The
+  same comparison also mis-reported members written as accessions, which are checked off by gene symbol
+  above; both now compare on the match token, and report the label, which is the half you can act on.
+
 - **A failed headless export no longer passes off the previous export as its own output.** The parquet
   result was accepted on its PAR1 marker alone, which says the bytes at that path are parquet - not that
   this run wrote them. When an export failed before Skyline received its arguments, the file left by an
   earlier run was still sitting there, so the log said `Exported ... 1,377,315,301 bytes, parquet` and
-  handed it to the merge. Observed on a 2-plate cohort, which silently analysed a report exported 25 days
-  earlier, from a version of the `.sky` that had since been re-integrated. The transition report, the CSV
-  fallback and the replicate metadata are each now cleared before re-export and must be replaced by the
-  run that claims them; otherwise the export fails instead of reporting stale numbers. Reusing an
-  unchanged document's previous export is unaffected - that path checks the document and tool version
-  first.
+  handed it to the merge. Observed on a 2-plate cohort, which silently analyzed a report exported 25 days
+  earlier, from a version of the `.sky` that had since been re-integrated.
+
+  Skyline now writes each report - the transition report, the CSV fallback and the replicate metadata -
+  to a sidecar file this run owns, which is moved into place only once it is known good. That answers
+  "did this run write this file" directly, instead of inferring it, and has two consequences worth
+  knowing. **A failed re-export no longer destroys a usable cached export**: the first fix deleted the
+  destination up front, so a transient Skyline failure threw away the most expensive step of a re-run and
+  cost a full re-export on the next attempt too. And a correct export is no longer rejected: freshness had
+  been decided by file size and modification time, so re-exporting an unchanged document to a share that
+  refused the delete, with second-granular timestamps, produced a byte-identical file that read as "not
+  replaced" and failed. Reusing an unchanged document's previous export is unaffected - that path checks
+  the document and tool version first.
 
 - **A Skyline that never starts is reported as a startup timeout instead of `Pipe is broken.`**
   Abandoning the wait for Skyline's callback meant connecting a dummy client to PRISM's own pipe to

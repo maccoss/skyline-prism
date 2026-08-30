@@ -145,7 +145,8 @@ same one set of lists; a list created from either place is immediately selectabl
 
 ### Predefined and your own
 
-The editor has two tabs. **Predefined** holds the 60 panels PRISM ships; **My lists** holds yours. The
+The editor has two tabs. **Predefined** holds the 65 panels PRISM ships, under collapsible category
+headings; **My lists** holds yours, as a flat list. The
 split is not cosmetic: a predefined panel is **read-only**, so it means the same thing on every machine,
 which is what makes one citable in a methods section. **Duplicate to my lists** makes an editable copy.
 Ticking a predefined panel stores only whether it is shown and labeled — not a copy of its members — so a
@@ -159,15 +160,18 @@ Shipped panels arrive **unticked**, so nothing is colored until you ask for it. 
 a marker normalization (`marker_normalization.protein_list` — see [parameters.md](parameters.md) for the
 keys and [methods.md](methods.md#marker-protein-normalization) for what the normalization does).
 
-Three kinds are mixed in the predefined set, and the difference matters more than the membership:
+The headings are not cosmetic - they separate panels by **what they are for**, which matters more than
+their membership:
 
-| Kind | Panels | What it is for |
+| Category | Panels | What it is for |
 |---|---|---|
-| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial mass` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion |
-| **Identity** | Endothelial (arterial, venous, capillary, pan, brain/BBB, liver sinusoidal, kidney glomerular), epithelial (pan, kidney tubule, intestine, lung), plasma, immunoglobulin/complement, lipoproteins, platelet microparticles, `EV markers (extended)` | What a cell or tissue type *is*. Good for highlighting; usable as a normalizer only if the biology under study does not change that cell type's abundance |
-| **Readouts** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for, so dividing by it removes the evidence |
-| **Pathways** | Oxidative phosphorylation, glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin cytoskeleton, antigen presentation, acute phase response, chaperones, redox, DNA damage repair, autophagy, unfolded protein response, innate immune signaling, apoptosis, fatty acid oxidation | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
-| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin`, `White matter`, `Grey matter` (identity/composition); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types and dissection composition can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result |
+| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial content`, `White matter`, `Grey matter` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion, dissected tissue |
+| **Plasma and blood** | `Classic plasma proteins`, `Free soluble acidic plasma proteins`, `Immunoglobulin and complement`, `Lipoproteins (LDL/VLDL/HDL)`, `Platelet microparticles`, `EV markers (extended)` | What is in the sample matrix. Good for highlighting; usable as a denominator only where the biology under study does not move them |
+| **Endothelial** | Arterial, venous, capillary, pan-endothelial, brain/BBB, liver sinusoidal, kidney glomerular | Vascular bed identity — which endothelium a signal comes from |
+| **Epithelial** | Pan-epithelial, kidney tubule, intestine, lung | Epithelial identity, kept separate from endothelial: different tissues that happen to alliterate |
+| **Readouts and contamination** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for, so dividing by it removes the evidence |
+| **Pathways and processes** | Oxidative phosphorylation, glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin cytoskeleton, antigen presentation, acute phase response, chaperones, redox, DNA damage repair, autophagy, unfolded protein response, innate immune signaling, apoptosis, fatty acid oxidation, cell cycle, epithelial-mesenchymal transition, hypoxia response, glucose and lipid metabolism, insulin signaling | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
+| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin` (identity); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result. `White matter`/`Grey matter` sit under Normalizers, with the caution below |
 
 **Readouts and pathways are refused by `marker_normalization`** rather than merely discouraged — naming
 one gives an error explaining why. Both fail for the same reason: their abundance is the signal, not the
@@ -179,6 +183,13 @@ which keeps them free of anyone's redistribution terms (KEGG in particular canno
 single panel coloring a tenth of the points. For a pathway that is not here, import a gene list from
 Reactome or MSigDB into a list of your own.
 
+One pathway is read differently from the rest. **`Insulin signaling` is regulated by phosphorylation, not
+by abundance**: its members are present whether or not the cascade is active, so a flat panel is the
+expected result and says nothing. It earns its place on a phospho-enriched run, where the sites are the
+measurement. For abundance work, `Glucose and lipid metabolism` measures what the pathway *does* rather
+than what it is made of. `Epithelial-mesenchymal transition` is also read as a **balance** — its
+epithelial and mesenchymal halves move in opposite directions — rather than as a total.
+
 Two details worth knowing:
 
 - **`Histones (proteomic ruler)`** follows Wisniewski et al., *Mol Cell Proteomics* 2014
@@ -188,8 +199,16 @@ Two details worth knowing:
   absolute copy-number scaling.
 - **`Common contaminants (cRAP)` is listed by accession, not gene symbol** — deliberately. These are
   non-human proteins: `ALB` for bovine serum albumin would match *human* albumin, and `ENO1` would match a
-  yeast enolase spike-in rather than the housekeeper. It is a starting set; import your search's cRAP
-  FASTA to extend it.
+  yeast enolase spike-in rather than the housekeeper. Nor is the UniProt entry name safe: `ALBU_BOVIN`
+  reduces to `ALBU`, and so does human `ALBU_HUMAN`, because species suffixes are stripped so panels work
+  across human and mouse. The panel carried `ENO1_YEAST` and `TRYP_PIG` until that was noticed, which
+  colored human alpha-enolase as a contaminant on every human run; a test now holds every member of the
+  panel to the UniProt accession pattern.
+
+  So that the panel is still readable, a member may be written `<accession> = <name>` —
+  `P00761 = Trypsin (porcine)`. **Everything left of the `=` is matched; everything right of it is only
+  displayed.** The syntax works in your own lists too, and is worth using anywhere you list accessions.
+  It is a starting set; import your search's cRAP FASTA to extend it.
 
 Panels carry mouse symbols wherever the ortholog is named differently (`Hbb-bs`, `Ighg2a`, `Lyz1`).
 Matching is case-insensitive, so a conserved symbol needs no help.

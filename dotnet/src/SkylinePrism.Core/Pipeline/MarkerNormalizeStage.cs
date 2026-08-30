@@ -64,19 +64,38 @@ internal static class MarkerNormalizeStage
             if (matcher.Match(accession?[i], gene?[i], name?[i]) is not null)
                 markerRows.Add(i);
 
-        var found = markerRows
-            .Select(i => gene?[i] ?? accession?[i] ?? "")
-            .Where(g => g.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(g => g, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // Which MEMBERS were found, asked of the matcher rather than by comparing strings. Both cheaper
+        // ways of answering this are wrong, and both were shipped: comparing a member against the raw
+        // identifier columns misses every member the matcher reached through tokenization (a member
+        // "H2AC18" against the group "H2AC11 / H2AC18 / H2AJ", "ALBU" against "ALBU_HUMAN", "P02768"
+        // against "P02768-2"), and comparing it against the gene symbols found misses every member
+        // written as an accession. Asking a one-member matcher uses the identical rules the match itself
+        // used, so the answer cannot drift from it.
         var missing = list.Members
-            .Where(m => !found.Contains(m, StringComparer.OrdinalIgnoreCase))
+            .Where(m =>
+            {
+                var probe = ProteinListSet.MatcherFor(
+                    new ProteinList { Name = list.Name, Visible = true, Members = { m } });
+                return !markerRows.Any(i => probe.Match(accession?[i], gene?[i], name?[i]) is not null);
+            })
+            .Select(ProteinList.DisplayName)
+            // Two members may share a label - the panel deliberately lists some proteins twice - and
+            // naming the same protein twice in one line reads as a bug in the report.
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        report($"  Markers: {found.Count} of {list.Members.Count} quantified from '{list.Name}'"
+        // Counted in MEMBERS, so the two halves of the sentence share a basis. Reporting the distinct
+        // gene symbols found against the member count let the line contradict itself: a protein with an
+        // empty gene column counted toward neither, so a panel that matched every member could report
+        // "0 of 14 quantified" and list nothing as missing.
+        var quantified = list.Members.Count - list.Members
+            .Count(m => missing.Contains(ProteinList.DisplayName(m), StringComparer.OrdinalIgnoreCase));
+
+        report($"  Markers: {quantified} of {list.Members.Count} quantified from '{list.Name}'"
+            + $" ({markerRows.Count} protein rows)"
             + (missing.Count > 0 ? $" (not quantified: {string.Join(", ", missing)})" : "") + ".");
+
         if (markerRows.Count < MarkerNormalization.MinMarkers)
             throw new InvalidOperationException(
                 $"marker_normalization needs at least {MarkerNormalization.MinMarkers} quantified "

@@ -38,6 +38,66 @@ public sealed class ProteinList
     public bool DisplayOnly { get; set; }
 
     /// <summary>
+    /// Which heading this panel sits under in the Predefined tab. Empty for a user's own list, which
+    /// lives in its own tab and is not categorized - at 65 shipped panels a flat list is unreadable,
+    /// while a handful of the user's own is not.
+    /// </summary>
+    public string Category { get; set; } = "";
+
+    /// <summary>Separator between a member's match token and the label shown for it.</summary>
+    public const char LabelSeparator = '=';
+
+    /// <summary>
+    /// The part of a member that is MATCHED, with any display label stripped.
+    /// <para>
+    /// Contaminant panels have to be keyed by accession - a bovine serum albumin entry written as its
+    /// gene symbol, or even as its UniProt entry name, matches HUMAN albumin - and an accession tells a
+    /// reader nothing. So a member may be written <c>P00761 = Trypsin (porcine)</c>: everything left of
+    /// the separator is matched, everything right of it is only ever displayed.
+    /// </para>
+    /// </summary>
+    public static string MatchToken(string member)
+    {
+        var i = member.IndexOf(LabelSeparator);
+        return (i < 0 ? member : member[..i]).Trim();
+    }
+
+    /// <summary>
+    /// What to show for a member: its label when it has one, otherwise the token itself. A separator with
+    /// nothing usable after it falls back to the token rather than displaying a blank row - a member typed
+    /// as <c>P02769 =</c> is an unfinished edit, and showing nothing for it hides which protein it is.
+    /// </summary>
+    public static string DisplayName(string member)
+    {
+        var i = member.IndexOf(LabelSeparator);
+        if (i < 0)
+            return member.Trim();
+
+        var label = member[(i + 1)..].Trim();
+        return label.Length > 0 ? label : MatchToken(member);
+    }
+
+    /// <summary>
+    /// Split one typed or pasted line into members. Commas and semicolons separate members - a row
+    /// pasted from a spreadsheet is the common case - EXCEPT on a line carrying a display label, where
+    /// the label owns the rest of the line. Three shipped contaminants have a comma inside their label
+    /// ("P02769 = Serum albumin (bovine, BSA)"), and splitting those produced a member that matched
+    /// nothing and a permanent "not quantified" entry from a panel that was in fact complete.
+    /// </summary>
+    public static IEnumerable<string> SplitMemberLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0)
+            return Array.Empty<string>();
+
+        return trimmed.Contains(LabelSeparator)
+            ? new[] { trimmed }
+            : trimmed.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0);
+    }
+
+    /// <summary>
     /// Members as the user typed them. Matched against accession, gene name AND protein name, so a list
     /// may be written in whichever form the user has it - "P02768", "ALB" and "sp|P02768|ALBU_HUMAN" all
     /// match the same protein.
@@ -82,6 +142,7 @@ public sealed class ProteinList
         Visible = Visible,
         ShowLabels = ShowLabels,
         DisplayOnly = DisplayOnly,
+        Category = Category,
         Members = new List<string>(Members),
     };
 }
@@ -160,7 +221,11 @@ public sealed class ProteinListSet
             var line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
                 continue;
-            var first = line.Split(',', '\t')[0].Trim().Trim('"');
+            // A labeled line is taken whole; only an unlabeled one is treated as a spreadsheet row
+            // whose first field is the identifier.
+            var first = (line.Contains(ProteinList.LabelSeparator)
+                ? line
+                : line.Split(',', '\t')[0]).Trim().Trim('"');
             if (first.Length == 0)
                 continue;
             // Skip a spreadsheet header row like "Accession" / "Gene" / "Protein".
@@ -341,7 +406,7 @@ public sealed class ProteinListMatcher
         _lists = lists.Select(l => (
             l,
             new HashSet<string>(
-                l.Members.SelectMany(Tokenize).Where(t => t.Length > 0),
+                l.Members.Select(ProteinList.MatchToken).SelectMany(Tokenize).Where(t => t.Length > 0),
                 StringComparer.OrdinalIgnoreCase))).ToList();
     }
 

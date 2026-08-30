@@ -34,6 +34,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "EV markers (core)",
+            Category = "Normalizers",
             ColorHex = "#2ca02c",
             Visible = false,
             // The panel the marker normalization was validated on (PC1 = 70.4% of marker variance on the FLARE
@@ -50,6 +51,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "EV markers (extended)",
+            Category = "Plasma and blood",
             ColorHex = "#1f77b4",
             Visible = false,
             // A broad EV-association panel for HIGHLIGHTING on the dynamic-range plot, not for normalizing - it
@@ -67,6 +69,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Classic plasma proteins",
+            Category = "Plasma and blood",
             ColorHex = "#d62728",
             Visible = false,
             // HBA1 and HBB are deliberately NOT here. Hemoglobin is intracellular; finding it in plasma means the
@@ -82,6 +85,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Free soluble acidic plasma proteins",
+            Category = "Plasma and blood",
             ColorHex = "#2ca02c",
             Visible = false,
             // The broadest plasma panel here, and it contains Platelet microparticles entirely, 14/15 of the
@@ -106,6 +110,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Immunoglobulin and complement",
+            Category = "Plasma and blood",
             ColorHex = "#9467bd",
             Visible = false,
             // Complement is completed with C1QA/B/C, C2, C4A/C4B, C7, C8B, CFB, CFD, CFI and CFP, and the lambda
@@ -130,6 +135,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Lipoproteins (LDL/VLDL/HDL)",
+            Category = "Plasma and blood",
             ColorHex = "#1f77b4",
             Visible = false,
             ShowLabels = true,
@@ -143,6 +149,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Platelet microparticles",
+            Category = "Plasma and blood",
             ColorHex = "#ff7f0e",
             Visible = false,
             // Split from a combined 'Platelet MP / Calciprotein' panel: two unrelated particle types with
@@ -158,6 +165,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Arterial endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#2ca02c",
             Visible = false,
             ShowLabels = true,
@@ -170,6 +178,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Venous endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#ff7f0e",
             Visible = false,
             ShowLabels = true,
@@ -182,6 +191,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Capillary endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#9467bd",
             Visible = false,
             ShowLabels = true,
@@ -194,6 +204,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Pan-endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#8c564b",
             Visible = false,
             // KDR, not VEGFR2: the latter is a protein nickname and matches nothing. PRISM matches accession, gene
@@ -210,6 +221,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Brain/BBB endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#e377c2",
             Visible = false,
             ShowLabels = true,
@@ -222,6 +234,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Liver sinusoidal endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#bcbd22",
             Visible = false,
             ShowLabels = true,
@@ -234,6 +247,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Kidney glomerular endothelial markers",
+            Category = "Endothelial",
             ColorHex = "#17becf",
             Visible = false,
             ShowLabels = true,
@@ -248,6 +262,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Pan-epithelial markers",
+            Category = "Epithelial",
             ColorHex = "#1f77b4",
             Visible = false,
             Members =
@@ -263,6 +278,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Kidney tubule epithelial markers",
+            Category = "Epithelial",
             ColorHex = "#d62728",
             Visible = false,
             ShowLabels = true,
@@ -278,6 +294,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Intestine epithelial markers",
+            Category = "Epithelial",
             ColorHex = "#17becf",
             Visible = false,
             ShowLabels = true,
@@ -298,6 +315,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Lung epithelial markers",
+            Category = "Epithelial",
             ColorHex = "#d62728",
             Visible = false,
             ShowLabels = true,
@@ -311,6 +329,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Hemolysis",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#a8341f",
             Visible = false,
@@ -331,6 +350,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Fibrinogen",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#ff7f0e",
             Visible = false,
@@ -346,6 +366,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Keratin contamination",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
@@ -361,25 +382,50 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Common contaminants (cRAP)",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
             ShowLabels = true,
+            // Written "<accession> = <name>": everything left of the '=' is matched, everything right of
+            // it is only displayed. Accessions are unreadable and names are unsafe, so the panel carries
+            // both rather than choosing.
+            //
             // Listed by ACCESSION, not gene symbol, and that is not a style choice. These are non-human proteins:
             // 'ALB' for bovine serum albumin would match human albumin - the most abundant protein in a plasma
             // sample - and 'TRYP' would match human trypsin-1. Accessions cannot collide that way.
+            //
+            // The UniProt ENTRY name is not a way around that, which is subtler and cost this panel two
+            // members: the matcher strips species suffixes so panels work across human and mouse, so
+            // 'ENO1_YEAST' reduces to the token 'ENO1' and 'TRYP_PIG' to 'TRYP' - the very collisions
+            // named above. Carrying them meant every human run colored abundant alpha-enolase as a
+            // contaminant, labeled it "yeast, spike-in", and - because this panel is declared before
+            // Glycolysis, and the first list to claim a protein wins - took ENO1 away from the panel it
+            // belongs to. The accessions cover both spike-ins. Do not add an entry name back here, in any
+            // species.
+            //
             // A starting set, not an exhaustive one. Import the cRAP FASTA your search actually uses to extend it.
             Members =
             {
-                "P00761", "TRYP_PIG", "P00760", "P02769", "P00698", "P02701", "P22629", "P02662",
-                "P00924", "ENO1_YEAST",
-                "P02663", "P02666", "P02668", "P00921",
+                "P00761 = Trypsin (porcine)",
+                "P00760 = Trypsin (bovine)",
+                "P02769 = Serum albumin (bovine, BSA)",
+                "P00698 = Lysozyme C (chicken)",
+                "P02701 = Avidin (chicken)",
+                "P22629 = Streptavidin (S. avidinii)",
+                "P02662 = alpha-S1-casein (bovine)",
+                "P00924 = Enolase 1 (yeast, spike-in)",
+                "P02663 = alpha-S2-casein (bovine)",
+                "P02666 = beta-casein (bovine)",
+                "P02668 = kappa-casein (bovine)",
+                "P00921 = Carbonic anhydrase 2 (bovine)"
             },
         },
 
         new ProteinList
         {
             Name = "Glomerulus",
+            Category = "Normalizers",
             ColorHex = "#1f77b4",
             Visible = false,
             // Structural markers of glomerular tissue, for normalizing single-glomerulus work by how
@@ -416,6 +462,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Tubular contamination",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#d62728",
             Visible = false,
@@ -445,6 +492,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Histones (proteomic ruler)",
+            Category = "Normalizers",
             ColorHex = "#8c564b",
             Visible = false,
             // Wisniewski, Hein, Cox & Mann, Mol Cell Proteomics 2014 (doi:10.1074/mcp.M113.037309): the summed MS
@@ -498,6 +546,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Ribosomal proteins",
+            Category = "Normalizers",
             ColorHex = "#9467bd",
             Visible = false,
             // Validated as a proteomic ruler for cellular RNA in the same paper: summed ribosomal protein signal was
@@ -522,6 +571,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Mitochondrial content",
+            Category = "Normalizers",
             ColorHex = "#e377c2",
             Visible = false,
             // For work where mitochondrial content is the thing that varies between samples - muscle, metabolic
@@ -538,6 +588,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Housekeeping proteins",
+            Category = "Readouts and contamination",
             DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
@@ -569,6 +620,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Oxidative phosphorylation",
+            Category = "Pathways and processes",
             ColorHex = "#8c564b",
             Visible = false,
             DisplayOnly = true,
@@ -587,6 +639,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Glycolysis",
+            Category = "Pathways and processes",
             ColorHex = "#ff7f0e",
             Visible = false,
             DisplayOnly = true,
@@ -604,6 +657,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "TCA cycle",
+            Category = "Pathways and processes",
             ColorHex = "#2ca02c",
             Visible = false,
             DisplayOnly = true,
@@ -619,6 +673,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Proteasome",
+            Category = "Pathways and processes",
             ColorHex = "#9467bd",
             Visible = false,
             DisplayOnly = true,
@@ -635,6 +690,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Lysosome",
+            Category = "Pathways and processes",
             ColorHex = "#d62728",
             Visible = false,
             DisplayOnly = true,
@@ -651,6 +707,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Spliceosome and hnRNP",
+            Category = "Pathways and processes",
             ColorHex = "#17becf",
             Visible = false,
             DisplayOnly = true,
@@ -667,6 +724,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Extracellular matrix",
+            Category = "Pathways and processes",
             ColorHex = "#bcbd22",
             Visible = false,
             DisplayOnly = true,
@@ -685,6 +743,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Actin cytoskeleton",
+            Category = "Pathways and processes",
             ColorHex = "#e377c2",
             Visible = false,
             DisplayOnly = true,
@@ -702,6 +761,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Antigen presentation (MHC)",
+            Category = "Pathways and processes",
             ColorHex = "#1f77b4",
             Visible = false,
             DisplayOnly = true,
@@ -718,6 +778,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Acute phase response",
+            Category = "Pathways and processes",
             ColorHex = "#a8341f",
             Visible = false,
             DisplayOnly = true,
@@ -735,6 +796,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Chaperones and proteostasis",
+            Category = "Pathways and processes",
             ColorHex = "#7f7f7f",
             Visible = false,
             DisplayOnly = true,
@@ -752,6 +814,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Redox and antioxidant",
+            Category = "Pathways and processes",
             ColorHex = "#2c6b3f",
             Visible = false,
             DisplayOnly = true,
@@ -774,6 +837,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Neuronal markers",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#1f77b4",
             Visible = false,
             ShowLabels = true,
@@ -793,6 +857,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Astrocyte markers",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#2ca02c",
             Visible = false,
             ShowLabels = true,
@@ -809,6 +874,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Microglia markers",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#d62728",
             Visible = false,
             ShowLabels = true,
@@ -825,6 +891,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Oligodendrocyte and myelin",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#9467bd",
             Visible = false,
             ShowLabels = true,
@@ -842,6 +909,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Alzheimer's disease",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#a8341f",
             Visible = false,
             ShowLabels = true,
@@ -864,6 +932,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Parkinson's disease",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#7a5c12",
             Visible = false,
             ShowLabels = true,
@@ -890,6 +959,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "ALS and FTD",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#0f6e78",
             Visible = false,
             ShowLabels = true,
@@ -912,6 +982,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Huntington's disease",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#9467bd",
             Visible = false,
             ShowLabels = true,
@@ -933,6 +1004,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Synaptic proteins",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#e377c2",
             Visible = false,
             ShowLabels = true,
@@ -953,10 +1025,11 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "DNA damage repair",
+            Category = "Pathways and processes",
             ColorHex = "#8c564b",
             Visible = false,
             DisplayOnly = true,
-            // Sensing, signalling and the major repair pathways together: MRN and the ATM/ATR kinases, homologous
+            // Sensing, signaling and the major repair pathways together: MRN and the ATM/ATR kinases, homologous
             // recombination, non-homologous end joining, mismatch repair, nucleotide and base excision.
             // Most of these are low-abundance nuclear proteins, so expect sparse coverage outside a deep
             // whole-cell measurement - and treat their presence in a secretome or EV prep as contamination.
@@ -972,6 +1045,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Autophagy",
+            Category = "Pathways and processes",
             ColorHex = "#17becf",
             Visible = false,
             DisplayOnly = true,
@@ -989,6 +1063,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Unfolded protein response",
+            Category = "Pathways and processes",
             ColorHex = "#7a5c12",
             Visible = false,
             DisplayOnly = true,
@@ -1006,11 +1081,12 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Innate immune signaling",
+            Category = "Pathways and processes",
             ColorHex = "#ff7f0e",
             Visible = false,
             DisplayOnly = true,
             // Pattern recognition through to the inflammasome and its cytokines. In plasma the abundant members
-            // (S100A8/A9, LBP, CD14) dominate and the signalling components are usually absent - a panel that
+            // (S100A8/A9, LBP, CD14) dominate and the signaling components are usually absent - a panel that
             // reads very differently in tissue than in fluid.
             Members =
             {
@@ -1023,6 +1099,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Apoptosis",
+            Category = "Pathways and processes",
             ColorHex = "#5b6b70",
             Visible = false,
             DisplayOnly = true,
@@ -1040,6 +1117,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Fatty acid oxidation",
+            Category = "Pathways and processes",
             ColorHex = "#2c6b3f",
             Visible = false,
             DisplayOnly = true,
@@ -1061,6 +1139,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "White matter",
+            Category = "Normalizers",
             ColorHex = "#5b6b70",
             Visible = false,
             ShowLabels = true,
@@ -1087,6 +1166,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Grey matter",
+            Category = "Normalizers",
             ColorHex = "#0f6e78",
             Visible = false,
             ShowLabels = true,
@@ -1118,6 +1198,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Parkinson's disease (RAB substrates)",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#d9b654",
             Visible = false,
             ShowLabels = true,
@@ -1137,6 +1218,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Parkinson's disease (lysosomal)",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#8c564b",
             Visible = false,
             ShowLabels = true,
@@ -1157,6 +1239,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Brain fluid-like proteins",
+            Category = "Brain and neurodegeneration",
             ColorHex = "#5b6b70",
             Visible = false,
             ShowLabels = true,
@@ -1170,6 +1253,121 @@ internal static class BuiltInProteinPanels
                 "VGF", "CHI3L1", "GPNMB", "SPP1", "CLU", "A2M", "APOD", "SERPINA3", "CST3", "B2M",
                 "YWHAZ", "ALDOA", "ENO2", "NPTX2", "PKM", "YWHAG", "CALB1", "PEBP1", "CNTN1",
                 "NCAM1",
+            },
+        },
+
+        // ---- Metabolic and proliferative programmes --------------------------------------------------
+        // All display-only. Insulin signaling in particular is a phospho story - see its own note.
+
+        new ProteinList
+        {
+            Name = "Cell cycle and proliferation",
+            Category = "Pathways and processes",
+            ColorHex = "#d62728",
+            Visible = false,
+            DisplayOnly = true,
+            // Replication licensing (MCM2-7), the replication machinery, and the mitotic kinases. Abundant in
+            // proliferating tissue and close to absent in post-mitotic tissue, which makes it one of the more
+            // interpretable panels here: a signal in brain or muscle usually means infiltrating or dividing cells,
+            // not a change in the resident population.
+            // MKI67 is the histology standard and among the least MS-friendly members - large, low-abundance and
+            // poorly digested. Read the MCM complex instead.
+            Members =
+            {
+                "MCM2", "MCM3", "MCM4", "MCM5", "MCM6", "MCM7", "PCNA", "RFC1", "RFC4", "TOP2A",
+                "CCNB1", "CDK1", "CDK2", "CCNA2", "AURKA", "AURKB", "PLK1", "BUB3", "MAD2L1",
+                "RRM1", "RRM2", "TK1", "TYMS", "MKI67", "KIF11", "KIF23",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Epithelial-mesenchymal transition",
+            Category = "Pathways and processes",
+            ColorHex = "#ff7f0e",
+            Visible = false,
+            DisplayOnly = true,
+            // The clearest signature in this file: the epithelial half (CDH1, the claudins and keratins) and the
+            // mesenchymal half (VIM, CDH2, FN1, TAGLN, ACTA2, S100A4) move in opposite directions, so the panel is
+            // read as a BALANCE rather than a total.
+            // Overlaps Pan-epithelial and Extracellular matrix on purpose - the same proteins are identity there
+            // and a transition here.
+            // The driving transcription factors (SNAI1, TWIST1, ZEB1) are low-abundance nuclear proteins and are
+            // usually not detected; their absence says nothing.
+            Members =
+            {
+                "CDH1", "CDH2", "VIM", "FN1", "SNAI2", "ZEB1", "TWIST1", "TAGLN", "ACTA2",
+                "S100A4", "SPARC", "MMP2", "MMP14", "TIMP1", "ITGB1", "ITGA5", "THBS1", "COL1A1",
+                "LOXL2", "CAV1", "KRT8", "KRT18", "EPCAM", "CTNNB1", "JUP",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Hypoxia response",
+            Category = "Pathways and processes",
+            ColorHex = "#7a5c12",
+            Visible = false,
+            DisplayOnly = true,
+            // The downstream, detectable half of the hypoxia programme: the glycolytic shift, the pH and matrix
+            // enzymes, and the mitophagy receptors.
+            // HIF1A itself is deliberately included but rarely seen - it is degraded within minutes in normoxia,
+            // so its absence is the expected result rather than evidence against hypoxia. CA9 and NDRG1 are the
+            // more reliable reporters.
+            // Overlaps Glycolysis heavily; the distinction is that a coordinated rise HERE with CA9 and NDRG1 is a
+            // hypoxia reading, whereas glycolysis alone is not.
+            Members =
+            {
+                "HIF1A", "CA9", "NDRG1", "BNIP3", "BNIP3L", "VEGFA", "SLC2A1", "LDHA", "PGK1",
+                "ALDOA", "ENO1", "PDK1", "P4HA1", "P4HA2", "PLOD2", "LOX", "ADM", "EGLN1", "VHL",
+                "HK2", "ANGPTL4", "SERPINE1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Glucose and lipid metabolism",
+            Category = "Pathways and processes",
+            ColorHex = "#2ca02c",
+            Visible = false,
+            DisplayOnly = true,
+            // The metabolic layer of diabetes and metabolic disease - the part bottom-up MS actually measures.
+            // Glycogen handling, gluconeogenesis, the pentose phosphate shunt, de novo lipogenesis and lipid
+            // droplets, plus the plasma readouts (ADIPOQ, LEP, RBP4, the IGFBPs) that travel with them.
+            // Companion to Insulin signaling below: this panel is what the signaling CHANGES, and unlike the
+            // signaling it is abundant enough to see.
+            Members =
+            {
+                "SLC2A1", "SLC2A4", "GYS1", "PYGL", "PYGM", "PPP1R3A", "GBE1", "AGL", "PCK1",
+                "PCK2", "FBP1", "ALDOB", "G6PD", "PGD", "TKT", "TALDO1", "FASN", "ACACA", "ACLY",
+                "SCD", "ELOVL6", "DGAT1", "PLIN2", "PLIN3", "CPT1A", "ADIPOQ", "LEP", "RBP4",
+                "IGFBP1", "IGFBP2", "IGFBP3", "SHBG",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Insulin signaling",
+            Category = "Pathways and processes",
+            ColorHex = "#9467bd",
+            Visible = false,
+            DisplayOnly = true,
+            // The canonical INSR -> IRS -> PI3K -> AKT -> mTOR cascade and its brakes (PTEN, TSC1/2, FOXO1).
+            // 
+            // READ THIS ONE DIFFERENTLY. Insulin signaling is regulated by PHOSPHORYLATION, not by abundance:
+            // these proteins are present whether or not the pathway is active, so a flat panel is the expected
+            // result and says nothing about signaling. Several members (INSR, IRS1, IRS2, MTOR) are also large,
+            // low-abundance and poorly covered in a standard bottom-up run, so gaps here are coverage rather than
+            // biology.
+            // It earns its place on a PHOSPHO-enriched run, where the sites are the measurement - AKT1 S473,
+            // IRS1 S307, RPS6 S235/S236, EIF4EBP1 T37/T46. For abundance work, read Glucose and lipid metabolism
+            // above instead: it measures what this pathway does rather than what it is made of.
+            Members =
+            {
+                "INSR", "IGF1R", "IRS1", "IRS2", "PIK3R1", "PIK3CA", "PDPK1", "AKT1", "AKT2",
+                "GSK3A", "GSK3B", "FOXO1", "FOXO3", "MTOR", "RPTOR", "RICTOR", "TSC1", "TSC2",
+                "RHEB", "RPS6KB1", "RPS6", "EIF4EBP1", "EIF4E", "PTEN", "SHC1", "GRB2", "SOS1",
+                "PPP2CA", "PRKAA1", "PRKAB1",
             },
         },
     };

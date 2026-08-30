@@ -44,12 +44,36 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     private readonly Installation _installation;
     private readonly TimeSpan _startupTimeout;
 
-    public SkylineAppRunner(Installation installation, TimeSpan? startupTimeout = null)
+    /// <summary>
+    /// How long to keep waiting once <see cref="_startupTimeout"/> has passed but the Skyline we launched
+    /// is demonstrably alive. Only a backstop: the normal exit from that wait is Skyline connecting.
+    /// </summary>
+    private readonly TimeSpan _maxStartupTimeout;
+
+    /// <param name="maxStartupTimeout">
+    /// The backstop for the extended wait; never shorter than <paramref name="startupTimeout"/>, since a
+    /// cap below the base deadline could never be reached and would silently do nothing. Injectable so a
+    /// test that deliberately times out cannot sit on the 10-minute default: the extension triggers
+    /// whenever ANY Skyline appears during the wait, which on a developer machine or a shared agent is
+    /// not something a test can rule out.
+    /// </param>
+    public SkylineAppRunner(
+        Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null)
     {
         _installation = installation;
         // A cold ClickOnce start (plus the update check Skyline does on launch) can take a while; the
         // official runner waits 15 s, which is too tight on a first run of the day.
-        _startupTimeout = startupTimeout ?? TimeSpan.FromSeconds(90);
+        //
+        // 90 s was too tight as well, and failed in the way that costs the most: PRISM exports several
+        // documents at once, so a headless start competes with another Skyline already streaming a
+        // multi-GB report to a network share. Measured case - a 2-document cohort where the open
+        // document's own parquet export was in flight - both headless starts blew past 90 s and the run
+        // silently fell back to month-old report files. The base wait is now 3 min, and WaitForConnection
+        // extends it while our Skyline is actually running, so a slow start is waited out and a Skyline
+        // that never appears still fails promptly.
+        _startupTimeout = startupTimeout ?? TimeSpan.FromMinutes(3);
+        var cap = maxStartupTimeout ?? TimeSpan.FromMinutes(10);
+        _maxStartupTimeout = cap < _startupTimeout ? _startupTimeout : cap;
     }
 
     public string Description => $"{_installation.AppName} (headless application)";
@@ -95,8 +119,30 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         return new SkylineAppRunner(installation);
     }
 
+    /// <summary>
+    /// How many <see cref="Run"/> calls are in flight in this process. PRISM exports several documents at
+    /// once, so this is routinely greater than one - and <see cref="KillSpawned"/> then has no way to tell
+    /// the headless Skyline it should kill from one another export is still using, because neither is our
+    /// child and the connection carries no PID.
+    /// </summary>
+    private static int _inFlight;
+
     public void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
         TimeSpan? timeout = null)
+    {
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            RunCore(args, log, cancellationToken, timeout);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
+
+    private void RunCore(string[] args, Action<string> log, CancellationToken cancellationToken,
+        TimeSpan? timeout)
     {
         var suffix = "-" + Guid.NewGuid();
         var inPipeName = "SkylineInputPipe" + suffix;
@@ -118,18 +164,35 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             Arguments = $"/c \"{EscapeForCmd(_installation.ShortcutPath)}\" CMD{suffix}",
         };
 
-        using var serverStream = new NamedPipeServerStream(inPipeName);
+        // PipeOptions.Asynchronous so WaitForConnection can wait with a deadline that actually cancels.
+        // See WaitForConnection for why the synchronous overload cannot be given up on safely.
+        using var serverStream = new NamedPipeServerStream(
+            inPipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         using (var launcher = Process.Start(psi))
         {
             if (launcher is null)
                 throw new InvalidOperationException($"Could not launch {_installation.AppName}.");
         }
 
-        if (!WaitForConnection(serverStream, inPipeName, cancellationToken))
+        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, timeout))
         {
-            throw new InvalidOperationException(
-                $"{_installation.AppName} did not start within {_startupTimeout.TotalSeconds:F0}s "
-                + "(no connection on the command pipe).");
+            case StartupResult.Connected:
+                break;
+
+            case StartupResult.StartedButNeverConnected:
+                // It is up but useless to us - we are about to abandon its pipe, so it would sit there
+                // holding the document open forever.
+                KillSpawned(preexisting, log);
+                throw new InvalidOperationException(
+                    $"{_installation.AppName} started but never connected on the command pipe within "
+                    + $"{Min(_maxStartupTimeout, timeout).TotalMinutes:F1} min.");
+
+            default:
+                throw new InvalidOperationException(
+                    $"{_installation.AppName} did not start within "
+                    + $"{Min(_startupTimeout, timeout).TotalSeconds:F0}s (no connection on the command "
+                    + "pipe). Another export may be saturating the machine - try exporting one document "
+                    + "at a time.");
         }
 
         using (var writer = new StreamWriter(serverStream))
@@ -149,7 +212,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         using var outPipe = new NamedPipeClientStream(outPipeName);
         try
         {
-            outPipe.Connect((int)_startupTimeout.TotalMilliseconds);
+            outPipe.Connect((int)Min(_startupTimeout, timeout).TotalMilliseconds);
         }
         catch (TimeoutException)
         {
@@ -209,7 +272,9 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         }
         catch (OperationCanceledException)
         {
-            KillSpawned(preexisting, log);
+            // The whole run is stopping, so reap even with other exports in flight - they are cancelling
+            // on the same token, and each is doing this for its own Skyline.
+            KillSpawned(preexisting, log, allStopping: true);
             throw;
         }
 
@@ -247,8 +312,25 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// AND it must have no main window - the headless instance has none, an interactive one always
     /// does. A Skyline the user opens by hand mid-run fails the second test.
     /// </summary>
-    private static void KillSpawned(HashSet<int> preexisting, Action<string> log)
+    /// <param name="allStopping">
+    /// True when EVERY in-flight export is being abandoned, not just this one - which is the case on
+    /// cancellation, because the token is the run's and they all observe it together. The concurrency
+    /// guard below must not apply then: there is no export left for an unrecognized Skyline to belong
+    /// to, and declining to reap leaves one holding its document open with nothing to stop it.
+    /// </param>
+    private static void KillSpawned(HashSet<int> preexisting, Action<string> log, bool allStopping = false)
     {
+        // A third guard, for the case the two below cannot cover: with another export in flight, a
+        // headless Skyline that appeared after WE launched may well be ITS Skyline, quietly exporting a
+        // different document. "Not preexisting" is only meaningful when we are the only one launching -
+        // or when nothing is left running, which is what allStopping says.
+        if (!allStopping && Volatile.Read(ref _inFlight) > 1)
+        {
+            log("    Leaving any headless Skyline running: another export is in flight and the one to "
+                + "stop cannot be told from the one still working.");
+            return;
+        }
+
         foreach (var name in AppNames)
         {
             Process[] running;
@@ -301,47 +383,110 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         return i == 0 || (i > 0 && line[i - 1] == '\t');
     }
 
-    private bool WaitForConnection(
-        NamedPipeServerStream serverStream, string inPipeName, CancellationToken cancellationToken)
+    /// <summary>How <see cref="WaitForConnection"/> ended - and, for the two failures, whose fault it is.</summary>
+    private enum StartupResult
     {
-        // WaitForConnection has no cancellable/timeout overload, so run it on a worker and give up on the
-        // deadline. The stray waiter is then released by connecting to our own pipe.
-        var connected = false;
-        var done = new ManualResetEventSlim(false);
-        var waiter = new Thread(() =>
+        /// <summary>Skyline connected; the arguments can be written.</summary>
+        Connected,
+
+        /// <summary>No Skyline appeared at all - a launch that failed, not one that is slow.</summary>
+        NeverStarted,
+
+        /// <summary>Skyline is running but stayed silent past <see cref="_maxStartupTimeout"/>.</summary>
+        StartedButNeverConnected,
+    }
+
+    /// <summary>
+    /// Wait for Skyline to connect back on the command pipe.
+    ///
+    /// <para><b>Why the async overload.</b> The synchronous <c>WaitForConnection()</c> has no timeout and
+    /// no cancellation, so giving up on it means blocking a worker thread and then releasing it by
+    /// connecting a dummy client to our own pipe. The waiter cannot tell that dummy from Skyline: it
+    /// records a connection, the wait reports success, and <see cref="RunCore"/> writes the arguments to a
+    /// client that has already been disposed - failing with <c>IOException: Pipe is broken.</c> That is a
+    /// timeout wearing a disguise, and it was diagnosed as a Skyline fault for exactly that reason. Worse,
+    /// it is a race, so two calls failing for the SAME reason reported it two different ways: "Pipe is
+    /// broken." from the first, the honest "did not start" from the second.</para>
+    ///
+    /// <para><b>Why the deadline extends.</b> A flat wall-clock limit cannot distinguish a Skyline that is
+    /// slow to start from one that is never coming, and gets the answer wrong under exactly the load PRISM
+    /// creates for itself by exporting several documents at once. The Skyline we launched is not our
+    /// child - the cmd.exe that activates the ClickOnce shortcut exits immediately - but it is visible in
+    /// the process list, so its presence answers the question directly: keep waiting while it is running,
+    /// give up when it is not.</para>
+    /// </summary>
+    private StartupResult WaitForConnection(
+        NamedPipeServerStream serverStream, HashSet<int> preexisting, Action<string> log,
+        CancellationToken cancellationToken, TimeSpan? timeout)
+    {
+        // The caller's bound caps BOTH startup deadlines. Without this the extending wait below answers
+        // only to its own limits, so a caller that documented "give up after this long" - the isolation
+        // importer passes 5 min precisely so it can never hold a run up - waited the full base plus
+        // extended startup before its deadline was consulted for the first time.
+        var baseDeadline = Min(_startupTimeout, timeout);
+        var maxDeadline = Min(_maxStartupTimeout, timeout);
+
+        using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var connecting = serverStream.WaitForConnectionAsync(giveUp.Token);
+
+        var start = DateTime.UtcNow;
+        var extended = false;
+        while (true)
         {
+            // Checked BEFORE the wait, and the wait is given no token, so a Stop always leaves here as an
+            // OperationCanceledException. Passing the token to Wait instead makes the exception TYPE a
+            // race: `giveUp` is linked to the caller's token, so a Stop signals the token and cancels the
+            // task at the same instant, and whichever Wait observes first decides. Observing the task
+            // gives AggregateException(TaskCanceledException), which slips past every
+            // `catch (OperationCanceledException)` between here and the caller - so the export is logged
+            // as "Parquet export failed" and the CSV fallback launches Skyline again. Stop that does not
+            // stop is worse than Stop that takes a second.
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                serverStream.WaitForConnection();
-                connected = true;
+                if (connecting.Wait((int)StartupPollInterval.TotalMilliseconds))
+                    return StartupResult.Connected;
             }
-            catch (Exception)
+            catch (AggregateException ex)
             {
-                // Disposed or aborted while waiting; treated as "not connected".
+                giveUp.Cancel();
+                cancellationToken.ThrowIfCancellationRequested(); // cancelled mid-wait
+                throw new InvalidOperationException(
+                    $"{_installation.AppName}: waiting on the command pipe failed "
+                    + $"({ex.GetBaseException().Message}).", ex.GetBaseException());
             }
-            finally
+
+            var waited = DateTime.UtcNow - start;
+            if (waited < baseDeadline)
+                continue;
+
+            // Past the base deadline. Only a Skyline that is actually up earns more time.
+            var running = StartedSkylineIsRunning(preexisting);
+            if (!running || waited >= maxDeadline)
             {
-                done.Set();
+                giveUp.Cancel();
+                return running ? StartupResult.StartedButNeverConnected : StartupResult.NeverStarted;
             }
-        }) { IsBackground = true };
-        waiter.Start();
-
-        var deadline = _startupTimeout;
-        if (done.Wait(deadline, cancellationToken) && connected)
-            return true;
-
-        // Unblock the waiting thread so the pipe can be disposed cleanly.
-        try
-        {
-            using var fake = new NamedPipeClientStream(inPipeName);
-            fake.Connect(10);
+            if (!extended)
+            {
+                log($"    {_installation.AppName} is taking longer than "
+                    + $"{baseDeadline.TotalSeconds:F0}s to start but is running; still waiting "
+                    + $"(up to {maxDeadline.TotalMinutes:F1} min).");
+                extended = true;
+            }
         }
-        catch (Exception)
-        {
-            // Nothing listening any more - fine, that was the point.
-        }
-        return connected;
     }
+
+    /// <summary>The shorter of a fixed startup deadline and the caller's overall bound, if it gave one.</summary>
+    private static TimeSpan Min(TimeSpan fixedDeadline, TimeSpan? callerBound) =>
+        callerBound is null || callerBound.Value > fixedDeadline ? fixedDeadline : callerBound.Value;
+
+    /// <summary>How often the connection wait wakes to re-check the deadline and the process list.</summary>
+    private static readonly TimeSpan StartupPollInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>Whether a Skyline that was not running before we launched is running now.</summary>
+    private static bool StartedSkylineIsRunning(HashSet<int> preexisting) =>
+        SkylineProcessIds().Any(id => !preexisting.Contains(id));
 
     /// <summary>
     /// cmd.exe needs ^ and &amp; escaped even inside quotes (a user name like "V&amp;V" otherwise breaks the
