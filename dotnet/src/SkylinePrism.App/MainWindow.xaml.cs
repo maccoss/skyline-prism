@@ -1591,6 +1591,13 @@ public partial class MainWindow : Window
     /// </summary>
     private static bool IsMarkerPlot(string kind) => kind is "Marker score" or "Marker loadings";
 
+    /// <summary>
+    /// Plots of the marker PANEL rather than the samples. These read marker_normalization.csv alone, so
+    /// the replicate filter and the Group-by column cannot change them - which is why they both bypass
+    /// the filter and grey those controls out.
+    /// </summary>
+    private static bool IsPerMarkerPlot(string kind) => kind is "Marker loadings";
+
     private void RenderQc()
     {
         if (QcViewCombo is null || _qcData.Count == 0)
@@ -1628,7 +1635,7 @@ public partial class MainWindow : Window
         // so grouping and filtering replicates cannot change it. Leaving those live invites the reading
         // that the bars are group-specific, which they are not. Marker score is the opposite - Group-by
         // is the entire question there - so it keeps both.
-        var perMarker = kind == "Marker loadings";
+        var perMarker = IsPerMarkerPlot(kind);
         QcGroupByCombo.IsEnabled = !perMarker;
         QcGroupCombo.IsEnabled = !perMarker;
 
@@ -1666,6 +1673,28 @@ public partial class MainWindow : Window
         }
         // Optional group filter driven by a Replicates-report column; several values may be ticked.
         var column = ComboText(QcGroupByCombo, "Sample Type");
+
+        // Marker loadings is per-MARKER: it reads marker_normalization.csv and never touches the sample
+        // matrix, so it must not be gated on the replicate filter below. Gating it created a dead end -
+        // a filter matching fewer than 2 samples bailed with a message, while the controls that would
+        // clear the filter were disabled for this very plot kind, leaving no way out but to switch
+        // plots, untick, and switch back.
+        if (IsPerMarkerPlot(kind))
+        {
+            try
+            {
+                DrawMarkerLoadings(plt);
+            }
+            catch (Exception ex)
+            {
+                QcPlotChrome.Reset(plt);
+                plt.Title("render failed: " + ex.Message);
+            }
+            PlotRenderer.StyleQcPlot(plt);
+            plt.Axes.AutoScale();
+            QcPlot.Refresh();
+            return;
+        }
         var selected = SelectedGroupValues();
         var cols = Enumerable.Range(0, d.Samples.Count).ToList();
         var groupLabel = "all";
@@ -1701,7 +1730,6 @@ public partial class MainWindow : Window
                 case "Marker score":
                     DrawMarkerScore(plt, cols.Select(i => d.Samples[i]).ToList(), column);
                     break;
-                case "Marker loadings": DrawMarkerLoadings(plt); break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
                 default: _pcaHoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
@@ -1710,6 +1738,9 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _pcaHoverPoints = null;
+            // A draw method that threw part-way may already have installed its tick generators, so a
+            // bare title would sit over another plot's axes - the state this whole change removes.
+            QcPlotChrome.Reset(plt);
             plt.Title("render failed: " + ex.Message);
         }
         // The Plot is reused across view/level/type switches, so fit the axes to the current data.
@@ -1945,12 +1976,6 @@ public partial class MainWindow : Window
     /// judgement cannot be automated - the same separation is what you would expect if the biology
     /// really does change the marked material - which is why this is a plot rather than a warning.</para>
     /// </summary>
-    /// <summary>
-    /// Above this many Group-by values the strip plot stops answering its question. Chosen to comfortably
-    /// fit a study design (arms, timepoints, batches) and to exclude an identifier column.
-    /// </summary>
-    private const int MaxMarkerScoreGroups = 12;
-
     private void DrawMarkerScore(Plot plt, IReadOnlyList<string> samples, string? column)
     {
         if (_markerReport is null || _markerReport.Samples.Count == 0)
@@ -1966,7 +1991,10 @@ public partial class MainWindow : Window
 
         // Group by the same column every other QC plot colors by, so switching Group-by re-asks the
         // question of a different annotation without leaving the plot.
-        var groups = new Dictionary<string, List<(double Score, string Name)>>(StringComparer.Ordinal);
+        // QcGroupFilter.Comparer, not Ordinal: annotation spellings vary in case between source
+        // documents, and splitting "Control" from "control" would invent a group, mis-colour both, and
+        // count twice toward the cap - while the Group filter itself matches them as one.
+        var groups = new Dictionary<string, List<(double Score, string Name)>>(QcGroupFilter.Comparer);
         foreach (var sample in samples)
         {
             if (!byName.TryGetValue(sample, out var score))
@@ -1985,13 +2013,13 @@ public partial class MainWindow : Window
         }
 
         var ordered = groups.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
-        if (ordered.Count > MaxMarkerScoreGroups)
+        if (QcPlotChrome.TooManyMarkerScoreGroups(ordered.Count))
         {
             // Grouping by a per-subject or per-replicate column gives one column per sample and answers
             // nothing: the question is whether the STUDY's groups separate, and 45 groups of two cannot
             // show that. Say which column to try instead of drawing something unreadable.
-            plt.Title($"{column} has {ordered.Count} values - too many to compare. "
-                + "Group by a study factor (condition, timepoint, batch).");
+            plt.Title($"{column} has {ordered.Count} values - too many to compare.\n"
+                + "Group by a study factor: condition, timepoint, batch.");
             return;
         }
         var rng = new Random(11); // fixed seed: the jitter must not move when the plot is redrawn
@@ -2007,20 +2035,25 @@ public partial class MainWindow : Window
             markers.MarkerSize = 12;
             markers.LegendText = $"{label} (n={points.Count})";
         }
-        // The x ticks already name every group, so the legend only earns its space for a few of them.
-        if (ordered.Count <= 6)
+        // The x ticks already name every group, so past a handful the legend costs more than it earns.
+        // The counts go on the ticks instead - a group of 2 and a group of 40 look identical otherwise,
+        // and whether an apparent separation rests on two injections is the first thing to check.
+        var withLegend = QcPlotChrome.ShowMarkerScoreLegend(ordered.Count);
+        if (withLegend)
             plt.ShowLegend();
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
-            ordered.Select((kv, i) => new ScottPlot.Tick(i, kv.Key)).ToArray());
-        plt.Axes.SetLimitsX(-0.6, ordered.Count - 0.4);
+            ordered.Select((kv, i) => new ScottPlot.Tick(
+                i, withLegend ? kv.Key : $"{kv.Key}\n(n={kv.Value.Count})")).ToArray());
         plt.YLabel("Marker score (PC1)");
         // Both axes, always: the shared plot is reset between kinds, so an axis this method leaves
         // unlabeled stays unlabeled rather than inheriting the previous plot's meaning.
         plt.XLabel(string.IsNullOrEmpty(column) ? "All samples" : column);
         // Short enough to survive the plot width. The reasoning lives in the docs; a title clipped
         // mid-sentence teaches nobody anything.
+        // "not the capture" is the half that says which way is BAD. Without it a clean separation
+        // reads as confirmation the panel works, when it means the opposite.
         plt.Title(ordered.Count > 1
-            ? "Groups separating here means the panel tracks the phenotype"
+            ? "Separation here means the panel tracks the phenotype, not the capture"
             : "Set Group-by to the study condition to check this panel");
     }
 

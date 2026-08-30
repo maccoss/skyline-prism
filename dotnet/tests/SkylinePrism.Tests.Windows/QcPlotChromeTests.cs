@@ -72,6 +72,35 @@ public class QcPlotChromeTests
         Assert.False(plt.Legend.IsVisible);
     }
 
+    /// <summary>
+    /// The two marker-score layout rules, pinned at their boundaries. Both are pure functions of a group
+    /// count, and both change what the user sees: one refuses to draw, the other moves the per-group n
+    /// from the legend onto the tick labels.
+    /// </summary>
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(12, false)]   // the cap itself still draws
+    [InlineData(13, true)]    // one past it refuses
+    [InlineData(45, true)]    // grouping by subject, the case that prompted the rule
+    public void TooManyGroupsRefusesOnlyPastTheCap(int groups, bool refused)
+        => Assert.Equal(refused, QcPlotChrome.TooManyMarkerScoreGroups(groups));
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(6, true)]     // the threshold itself keeps the legend
+    [InlineData(7, false)]    // one past it moves the counts to the ticks
+    [InlineData(12, false)]
+    public void TheLegendAppearsOnlyForAFewGroups(int groups, bool legend)
+        => Assert.Equal(legend, QcPlotChrome.ShowMarkerScoreLegend(groups));
+
+    /// <summary>
+    /// The legend threshold must sit below the cap, or the band between them - where the counts move
+    /// onto the tick labels - would not exist and the counts would simply be lost.
+    /// </summary>
+    [Fact]
+    public void TheLegendThresholdIsBelowTheGroupCap()
+        => Assert.True(QcPlotChrome.MaxMarkerScoreLegendGroups < QcPlotChrome.MaxMarkerScoreGroups);
+
     /// <summary>Idempotent, and safe on a plot that was never dirtied - it runs before every render.</summary>
     [Fact]
     public void ResetIsSafeOnAFreshPlot()
