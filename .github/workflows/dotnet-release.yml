@@ -1,8 +1,8 @@
 # Release - triggered by a dotnet-v* tag. (The prefix is historical: the retired Python package
 # used the bare v* namespace. It is kept so existing tags, release URLs and the tag -> notes-file
 # mapping below keep working.) Publishes, as GitHub Release assets:
-#   - SkylinePrism.zip           the Windows Skyline external tool (needs the .NET 8 Desktop Runtime)
-#   - prism-<rid>.{zip,tar.gz}   framework-dependent `prism` CLI, one per platform (needs the .NET 8 Runtime)
+#   - SkylinePrism.zip           the Windows Skyline external tool (needs the .NET 10 Desktop Runtime)
+#   - prism-<rid>.{zip,tar.gz}   framework-dependent `prism` CLI, one per platform (needs the .NET 10 Runtime)
 name: dotnet-release
 
 on:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       # Guard: both version sources must match the git tag (tag dotnet-vX.Y.Z -> X.Y.Z) so the
       # tool manifest AND the assembly/CLI version (Directory.Build.props) stay in lockstep.
@@ -55,7 +55,7 @@ jobs:
           path: dotnet/publish/SkylinePrism.zip
           if-no-files-found: error
 
-  # Framework-dependent `prism` CLI, one small archive per platform (the user installs the .NET 8
+  # Framework-dependent `prism` CLI, one small archive per platform (the user installs the .NET 10
   # runtime). `-r <rid>` still gives each archive a native `prism`/`prism.exe` apphost; nothing is
   # bundled. win-arm64 / linux-arm64 cross-publish fine from the x64 runners. Unix legs run on their
   # native runner so the binary keeps its executable bit.
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Publish prism (${{ matrix.rid }})
         run: >

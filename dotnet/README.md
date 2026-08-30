@@ -1,4 +1,4 @@
-# Skyline-PRISM (C# / .NET 8)
+# Skyline-PRISM (C# / .NET 10)
 
 The PRISM engine: a cross-platform `prism` CLI (Windows / Linux / macOS) and a Windows Skyline
 external tool (WPF + JSON-RPC). Originally a port of the `skyline_prism` Python package, which it
@@ -8,12 +8,12 @@ reproduced numerically and has since replaced — that engine was retired after 
 
 | Project | TFM | Role |
 |---|---|---|
-| `SkylinePrism.Core` | `net8.0` | algorithms, IO, QC (cross-platform) |
-| `SkylinePrism.Cli` (`prism`) | `net8.0` | the CLI (cross-platform) |
-| `SkylinePrism.Skyline` | `net8.0-windows` | Skyline JSON-RPC + report driver (Windows) |
-| `SkylinePrism.App` (`SkylinePrism.exe`) | `net8.0-windows` | WPF external tool (Windows) |
-| `SkylinePrism.Tests` | `net8.0` | unit + cross-language parity tests |
-| `SkylinePrism.Tests.Windows` | `net8.0-windows` | RPC / WPF smoke tests |
+| `SkylinePrism.Core` | `net10.0` | algorithms, IO, QC (cross-platform) |
+| `SkylinePrism.Cli` (`prism`) | `net10.0` | the CLI (cross-platform) |
+| `SkylinePrism.Skyline` | `net10.0-windows` | Skyline JSON-RPC + report driver (Windows) |
+| `SkylinePrism.App` (`SkylinePrism.exe`) | `net10.0-windows` | WPF external tool (Windows) |
+| `SkylinePrism.Tests` | `net10.0` | unit + cross-language parity tests |
+| `SkylinePrism.Tests.Windows` | `net10.0-windows` | RPC / WPF smoke tests |
 
 `SkylinePrism.CrossPlatform.slnf` is the OS-agnostic subset (Core + Cli + Tests) built and
 tested on Linux/macOS; the full `SkylinePrism.sln` adds the Windows-only projects.
@@ -328,8 +328,8 @@ MainWindow (hence ScottPlot/SkiaSharp) loads at startup, so a missing/broken dep
 assembly/XAML load error in `%LOCALAPPDATA%\SkylinePrism\prism-tool.log`. A failed Skyline connection
 from the dummy arg is expected and ignored - only dependency/XAML load failures fail the check.
 
-The tool zip is **framework-dependent** — install the **.NET 8 Desktop Runtime**
-(`winget install Microsoft.DotNet.DesktopRuntime.8`) once, then install the zip via Skyline's
+The tool zip is **framework-dependent** — install the **.NET 10 Desktop Runtime**
+(`winget install Microsoft.DotNet.DesktopRuntime.10`) once, then install the zip via Skyline's
 Tools > Tool Store > Install from file. When reinstalling over a running copy, **close the tool
 first** - Skyline can leave a partial extraction (locked files) that drops `deps.json` and DLLs,
 which then fails to load; reinstalling with the tool closed fixes it.
@@ -343,5 +343,5 @@ which then fails to load; reinstalling with the tool closed fixes it.
   Release with the Skyline tool zip (`SkylinePrism.zip`) plus framework-dependent `prism` CLI
   archives per platform (`prism-win-x64.zip`, `prism-win-arm64.zip`, `prism-linux-x64.tar.gz`,
   `prism-linux-arm64.tar.gz`, `prism-osx-x64.tar.gz`, `prism-osx-arm64.tar.gz`). Both artifacts are
-  framework-dependent — users install the .NET 8 runtime (Desktop Runtime for the Skyline tool).
+  framework-dependent — users install the .NET 10 runtime (Desktop Runtime for the Skyline tool).
 

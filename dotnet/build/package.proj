@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <!--
-    Publish the WPF App framework-dependent (the user installs the .NET 8 Desktop
+    Publish the WPF App framework-dependent (the user installs the .NET 10 Desktop
     Runtime separately, keeping the zip small) and zip the output plus the tool-inf
     manifest into SkylinePrism.zip - a drop-in Skyline external tool. Mirrors the
     PackageToolZip pattern from pwiz's SkylineAiConnector.csproj / skyline-cadenza.

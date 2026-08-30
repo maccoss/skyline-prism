@@ -11,12 +11,18 @@ updates:
         patterns:
           - "*"
 
-  # Python dependencies
-  - package-ecosystem: "pip"
-    directory: "/"
+  # NuGet. Added after a high-severity advisory (GHSA-2m69-gcr7-jv3q) sat unnoticed against a
+  # TRANSITIVE dependency until a newer SDK happened to audit for it - which is the case this exists to
+  # catch. It is also what will surface the patched Microsoft.Data.Sqlite that lets the direct
+  # SQLitePCLRaw.lib.e_sqlite3 pin in SkylinePrism.Core be removed.
+  #
+  # The "pip" entry that used to sit here was dropped: the Python engine was retired and removed after
+  # v26.4.4, so it was watching an ecosystem this repo no longer has.
+  - package-ecosystem: "nuget"
+    directory: "/dotnet"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     groups:
-      python-dependencies:
+      dotnet-dependencies:
         patterns:
           - "*"
