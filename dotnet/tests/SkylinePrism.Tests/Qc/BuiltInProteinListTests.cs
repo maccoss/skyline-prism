@@ -326,9 +326,50 @@ public class BuiltInProteinListTests
     {
         var absent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "none.json");
 
-        var list = ProteinListSet.Resolve(ProteinList.TubularContaminationName, null, absent);
+        var list = ProteinListSet.Resolve(ProteinList.EvMarkersName, null, absent);
 
         Assert.NotNull(list);
-        Assert.Contains("UMOD", list!.Members, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("CD9", list!.Members, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A display-only panel cannot define a normalization, and says why. Readouts and pathways share one
+    /// reason: their abundance IS the signal, so dividing by it removes the thing being looked for - a
+    /// readout hides the problem, a pathway hides the finding. This used to be documentation, which meant
+    /// the failure was silent: the run succeeded and the numbers looked plausible.
+    /// </summary>
+    [Theory]
+    [InlineData("Tubular contamination")]
+    [InlineData("Hemolysis")]
+    [InlineData("Common contaminants (cRAP)")]
+    [InlineData("Glycolysis")]
+    [InlineData("Oxidative phosphorylation")]
+    public void ADisplayOnlyPanelCannotDefineANormalization(string name)
+    {
+        var absent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "none.json");
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ProteinListSet.Resolve(name, null, absent));
+
+        Assert.Contains("display-only", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(name, ex.Message);
+    }
+
+    /// <summary>
+    /// Every pathway is display-only, and the panels meant to normalize are not - if a normalizer were
+    /// ever flagged by accident the feature would fail closed with a confusing message.
+    /// </summary>
+    [Fact]
+    public void NormalizersAreNotFlaggedDisplayOnly()
+    {
+        foreach (var name in new[]
+                 {
+                     ProteinList.EvMarkersName, ProteinList.GlomerulusName,
+                     "Histones (proteomic ruler)", "Ribosomal proteins", "Mitochondrial content",
+                 })
+        {
+            var panel = ProteinList.BuiltIns.Single(l => l.Name == name);
+            Assert.False(panel.DisplayOnly, $"{name} is meant to be usable as a normalizer");
+        }
     }
 }

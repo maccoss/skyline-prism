@@ -311,6 +311,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Hemolysis",
+            DisplayOnly = true,
             ColorHex = "#a8341f",
             Visible = false,
             ShowLabels = true,
@@ -330,6 +331,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Fibrinogen",
+            DisplayOnly = true,
             ColorHex = "#ff7f0e",
             Visible = false,
             ShowLabels = true,
@@ -344,6 +346,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Keratin contamination",
+            DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
             ShowLabels = true,
@@ -358,6 +361,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Common contaminants (cRAP)",
+            DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
             ShowLabels = true,
@@ -412,6 +416,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Tubular contamination",
+            DisplayOnly = true,
             ColorHex = "#d62728",
             Visible = false,
             ShowLabels = true,
@@ -516,7 +521,7 @@ internal static class BuiltInProteinPanels
 
         new ProteinList
         {
-            Name = "Mitochondrial mass",
+            Name = "Mitochondrial content",
             ColorHex = "#e377c2",
             Visible = false,
             // For work where mitochondrial content is the thing that varies between samples - muscle, metabolic
@@ -533,6 +538,7 @@ internal static class BuiltInProteinPanels
         new ProteinList
         {
             Name = "Housekeeping proteins",
+            DisplayOnly = true,
             ColorHex = "#7f7f7f",
             Visible = false,
             ShowLabels = true,
@@ -550,6 +556,213 @@ internal static class BuiltInProteinPanels
                 "ACTB", "GAPDH", "TUBB", "TUBA1B", "PPIA", "YWHAZ", "YWHAE", "VCL", "PGK1",
                 "LDHA", "HSP90AA1", "HSP90AB1", "HSPA8", "B2M", "UBC", "EEF1A1", "EEF2", "CFL1",
                 "PKM",
+            },
+        },
+
+        // ---- Pathways -------------------------------------------------------------------------------
+        // Display sets, not denominators: every one is DisplayOnly, because normalizing to a pathway
+        // removes the biology being studied. Hand-written rather than imported, which keeps them free of
+        // any third party's redistribution terms - KEGG in particular cannot be shipped - and lets each
+        // one be sized for a plot (15-35 members) instead of the several hundred an ontology would give.
+        // For a specific pathway not here, import a gene list into a list of your own.
+
+        new ProteinList
+        {
+            Name = "Oxidative phosphorylation",
+            ColorHex = "#8c564b",
+            Visible = false,
+            DisplayOnly = true,
+            // Complexes I-V of the electron transport chain. The most abundant mitochondrial signal in most
+            // tissues, and the one that moves with mitochondrial content - compare against the Mitochondrial
+            // content panel, which asks how much mitochondrion there is rather than how much OXPHOS machinery.
+            Members =
+            {
+                "NDUFA4", "NDUFA9", "NDUFB10", "NDUFS1", "NDUFS2", "NDUFS3", "NDUFV1", "NDUFV2",
+                "SDHA", "SDHB", "UQCRC1", "UQCRC2", "UQCRFS1", "CYC1", "UQCRB", "CYCS", "COX4I1",
+                "COX5A", "COX5B", "COX6B1", "COX6C", "COX7A2", "ATP5F1A", "ATP5F1B", "ATP5F1C",
+                "ATP5PB", "ATP5PO", "ATP5MC3",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Glycolysis",
+            ColorHex = "#ff7f0e",
+            Visible = false,
+            DisplayOnly = true,
+            // The canonical ten steps plus the common isoenzymes. Nearly always detected and usually abundant, so
+            // it reads clearly on an abundance plot.
+            // ENO1 is present here as the human gene: if the lab spikes yeast enolase, that is a DIFFERENT protein
+            // tracked by accession in Common contaminants (cRAP).
+            Members =
+            {
+                "HK1", "HK2", "GPI", "PFKL", "PFKM", "PFKP", "ALDOA", "ALDOB", "ALDOC", "TPI1",
+                "GAPDH", "PGK1", "PGAM1", "ENO1", "ENO2", "ENO3", "PKM", "LDHA", "LDHB",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "TCA cycle",
+            ColorHex = "#2ca02c",
+            Visible = false,
+            DisplayOnly = true,
+            // Citrate synthase through malate dehydrogenase. CS is shared with Mitochondrial content, where it is
+            // the classical biochemical measure of mitochondrial mass rather than a pathway member.
+            Members =
+            {
+                "CS", "ACO2", "IDH2", "IDH3A", "IDH3B", "OGDH", "DLST", "DLD", "SUCLA2", "SUCLG1",
+                "SDHA", "SDHB", "FH", "MDH2", "PDHA1", "PDHB", "PC",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Proteasome",
+            ColorHex = "#9467bd",
+            Visible = false,
+            DisplayOnly = true,
+            // The 20S core (PSMA/PSMB) and the 19S regulatory particle (PSMC/PSMD). A tight, well-detected complex,
+            // which makes it a good sanity check: its members should move together.
+            Members =
+            {
+                "PSMA1", "PSMA2", "PSMA3", "PSMA4", "PSMA5", "PSMA6", "PSMA7", "PSMB1", "PSMB2",
+                "PSMB3", "PSMB4", "PSMB5", "PSMB6", "PSMB7", "PSMC1", "PSMC2", "PSMC3", "PSMC4",
+                "PSMC5", "PSMC6", "PSMD1", "PSMD2", "PSMD3", "PSMD6", "PSMD7", "PSMD11", "PSMD14",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Lysosome",
+            ColorHex = "#d62728",
+            Visible = false,
+            DisplayOnly = true,
+            // Cathepsins, glycosidases and membrane proteins. Prominent in EV and secretome preparations, where a
+            // high lysosomal signal usually says something about the isolation rather than the biology.
+            Members =
+            {
+                "LAMP1", "LAMP2", "CTSA", "CTSB", "CTSD", "CTSL", "CTSS", "CTSZ", "CTSK", "GBA",
+                "HEXA", "HEXB", "GUSB", "GLA", "GAA", "NPC2", "PSAP", "TPP1", "GRN", "ASAH1",
+                "NAGLU", "MAN2B1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Spliceosome and hnRNP",
+            ColorHex = "#17becf",
+            Visible = false,
+            DisplayOnly = true,
+            // Core snRNP and heterogeneous nuclear ribonucleoproteins - a nuclear signal, so its presence in a
+            // secretome or EV prep is a contamination readout rather than a finding.
+            Members =
+            {
+                "SNRPA", "SNRPB", "SNRPD1", "SNRPD2", "SNRPD3", "SNRPE", "SNRPF", "SF3A1", "SF3B1",
+                "SF3B2", "SF3B3", "SRSF1", "SRSF2", "SRSF3", "SRSF7", "HNRNPA1", "HNRNPA2B1",
+                "HNRNPC", "HNRNPK", "HNRNPM", "HNRNPU", "PRPF8", "EFTUD2", "DDX5",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Extracellular matrix",
+            ColorHex = "#bcbd22",
+            Visible = false,
+            DisplayOnly = true,
+            // Collagens, laminins and the proteoglycans that hold them together. Overlaps the Glomerulus panel by
+            // design - the same proteins are structure there and matrix here, which is the difference between
+            // asking how much glomerulus was captured and asking how much matrix a tissue contains.
+            Members =
+            {
+                "COL1A1", "COL1A2", "COL3A1", "COL4A1", "COL4A2", "COL5A1", "COL6A1", "COL6A2",
+                "COL6A3", "COL12A1", "FN1", "LAMA4", "LAMA5", "LAMB1", "LAMB2", "LAMC1", "NID1",
+                "NID2", "HSPG2", "AGRN", "FBN1", "EMILIN1", "DCN", "LUM", "BGN", "FMOD", "VCAN",
+                "POSTN", "TNC", "SPARC", "THBS1", "LTBP1",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Actin cytoskeleton",
+            ColorHex = "#e377c2",
+            Visible = false,
+            DisplayOnly = true,
+            // Actin, its motors and its regulators. Ubiquitous and abundant, so this is most useful as a reference
+            // band on an abundance plot rather than as a finding in itself.
+            Members =
+            {
+                "ACTB", "ACTG1", "ACTN1", "ACTN4", "MYH9", "MYH10", "MYL6", "MYL12A", "TLN1",
+                "VCL", "ZYX", "PXN", "FLNA", "FLNB", "CFL1", "PFN1", "TPM1", "TPM3", "TPM4",
+                "CAPZA1", "CAPZB", "ARPC1B", "ARPC2", "ARPC3", "ACTR2", "ACTR3", "GSN", "EZR",
+                "MSN", "RDX",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Antigen presentation (MHC)",
+            ColorHex = "#1f77b4",
+            Visible = false,
+            DisplayOnly = true,
+            // Class I and class II with their loading machinery. B2M is also a routine plasma analyte, so on a
+            // plasma plot expect it to sit far above the rest of the panel.
+            Members =
+            {
+                "HLA-A", "HLA-B", "HLA-C", "HLA-E", "B2M", "TAP1", "TAP2", "TAPBP", "CALR", "CANX",
+                "PDIA3", "HLA-DRA", "HLA-DRB1", "HLA-DPA1", "HLA-DPB1", "HLA-DQA1", "HLA-DQB1",
+                "CD74", "HLA-DMA", "HLA-DMB",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Acute phase response",
+            ColorHex = "#a8341f",
+            Visible = false,
+            DisplayOnly = true,
+            // Positive acute-phase reactants, plus the two classic NEGATIVE ones - ALB and TF fall when the others
+            // rise, so a panel that shows them moving in opposite directions is showing the response, not noise.
+            // Overlaps the plasma panels heavily; that overlap is the point.
+            Members =
+            {
+                "CRP", "SAA1", "SAA2", "HP", "HPX", "LBP", "ORM1", "ORM2", "SERPINA1", "SERPINA3",
+                "FGA", "FGB", "FGG", "C3", "C9", "CP", "ITIH3", "ITIH4", "LCN2", "S100A8",
+                "S100A9", "ALB", "TF", "TTR", "RBP4",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Chaperones and proteostasis",
+            ColorHex = "#7f7f7f",
+            Visible = false,
+            DisplayOnly = true,
+            // HSP70/90 families, the CCT/TRiC folding complex and their co-chaperones. HSPA8 and HSP90B1 are also
+            // EV-associated, so the EV panels and this one will light up together in a vesicle prep.
+            Members =
+            {
+                "HSPA1A", "HSPA4", "HSPA5", "HSPA8", "HSPA9", "HSP90AA1", "HSP90AB1", "HSP90B1",
+                "DNAJA1", "DNAJB1", "DNAJC7", "STIP1", "BAG3", "CDC37", "PTGES3", "TCP1", "CCT2",
+                "CCT3", "CCT4", "CCT5", "CCT6A", "CCT7", "CCT8", "PPIA", "PPIB", "PDIA3", "PDIA6",
+                "P4HB",
+            },
+        },
+
+        new ProteinList
+        {
+            Name = "Redox and antioxidant",
+            ColorHex = "#2c6b3f",
+            Visible = false,
+            DisplayOnly = true,
+            // Superoxide dismutases, peroxiredoxins, the glutathione and thioredoxin systems. PRDX2 and CAT are
+            // shared with Hemolysis, where they mean erythrocyte lysis rather than oxidative biology - which is
+            // why one is a readout and this is not.
+            Members =
+            {
+                "SOD1", "SOD2", "SOD3", "CAT", "GPX1", "GPX3", "GPX4", "PRDX1", "PRDX2", "PRDX3",
+                "PRDX4", "PRDX5", "PRDX6", "TXN", "TXN2", "TXNRD1", "GSR", "GSTP1", "GSTO1",
+                "GLRX", "NQO1", "HMOX1", "GCLM",
             },
         },
     };
