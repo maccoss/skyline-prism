@@ -300,6 +300,20 @@ public sealed class HeadlessSkylineExporter
             prismPath, isParquet, metadataResult, Path.GetFullPath(skyPath), label);
         // Stamped only now, with the files written: a stamp recorded earlier would vouch for an export
         // that a cancellation or a SkylineCmd failure left half-written.
+        //
+        // And not stamped AT ALL when the metadata is missing, or the next run of an unchanged document
+        // reuses this one and inherits the gap permanently: TryReuseExport only re-exports when a stamped
+        // metadata file has gone missing, so a stamp saying there was never any metadata reads as
+        // "correctly has none" and is honoured forever. Sample types would then come from replicate names
+        // on every future run - a different reference/QC split, different ComBat, and nothing in the log
+        // but "Reusing the previous export". Losing the transition report's cache costs one re-export;
+        // this costs the numbers.
+        if (metadataResult is null)
+        {
+            _log("Not recording this export for reuse: the replicate metadata is missing, and a cached "
+                 + "export without it would keep inferring sample types from replicate names.");
+            return exported;
+        }
         WriteExportStamp(skyPath, workDir, label, batchAnnotation, exported);
         return exported;
     }

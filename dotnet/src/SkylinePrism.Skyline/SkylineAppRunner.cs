@@ -48,9 +48,17 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// How long to keep waiting once <see cref="_startupTimeout"/> has passed but the Skyline we launched
     /// is demonstrably alive. Only a backstop: the normal exit from that wait is Skyline connecting.
     /// </summary>
-    private static readonly TimeSpan MaxStartupTimeout = TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _maxStartupTimeout;
 
-    public SkylineAppRunner(Installation installation, TimeSpan? startupTimeout = null)
+    /// <param name="maxStartupTimeout">
+    /// The backstop for the extended wait; never shorter than <paramref name="startupTimeout"/>, since a
+    /// cap below the base deadline could never be reached and would silently do nothing. Injectable so a
+    /// test that deliberately times out cannot sit on the 10-minute default: the extension triggers
+    /// whenever ANY Skyline appears during the wait, which on a developer machine or a shared agent is
+    /// not something a test can rule out.
+    /// </param>
+    public SkylineAppRunner(
+        Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null)
     {
         _installation = installation;
         // A cold ClickOnce start (plus the update check Skyline does on launch) can take a while; the
@@ -64,6 +72,8 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         // extends it while our Skyline is actually running, so a slow start is waited out and a Skyline
         // that never appears still fails promptly.
         _startupTimeout = startupTimeout ?? TimeSpan.FromMinutes(3);
+        var cap = maxStartupTimeout ?? TimeSpan.FromMinutes(10);
+        _maxStartupTimeout = cap < _startupTimeout ? _startupTimeout : cap;
     }
 
     public string Description => $"{_installation.AppName} (headless application)";
@@ -175,7 +185,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 KillSpawned(preexisting, log);
                 throw new InvalidOperationException(
                     $"{_installation.AppName} started but never connected on the command pipe within "
-                    + $"{MaxStartupTimeout.TotalMinutes:F0} min.");
+                    + $"{_maxStartupTimeout.TotalMinutes:F0} min.");
 
             default:
                 throw new InvalidOperationException(
@@ -372,7 +382,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         /// <summary>No Skyline appeared at all - a launch that failed, not one that is slow.</summary>
         NeverStarted,
 
-        /// <summary>Skyline is running but stayed silent past <see cref="MaxStartupTimeout"/>.</summary>
+        /// <summary>Skyline is running but stayed silent past <see cref="_maxStartupTimeout"/>.</summary>
         StartedButNeverConnected,
     }
 
@@ -406,15 +416,27 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         var extended = false;
         while (true)
         {
+            // Checked BEFORE the wait, and the wait is given no token, so a Stop always leaves here as an
+            // OperationCanceledException. Passing the token to Wait instead makes the exception TYPE a
+            // race: `giveUp` is linked to the caller's token, so a Stop signals the token and cancels the
+            // task at the same instant, and whichever Wait observes first decides. Observing the task
+            // gives AggregateException(TaskCanceledException), which slips past every
+            // `catch (OperationCanceledException)` between here and the caller - so the export is logged
+            // as "Parquet export failed" and the CSV fallback launches Skyline again. Stop that does not
+            // stop is worse than Stop that takes a second.
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (connecting.Wait((int)StartupPollInterval.TotalMilliseconds, cancellationToken))
+                if (connecting.Wait((int)StartupPollInterval.TotalMilliseconds))
                     return StartupResult.Connected;
             }
-            catch (OperationCanceledException)
+            catch (AggregateException ex)
             {
                 giveUp.Cancel();
-                throw;
+                cancellationToken.ThrowIfCancellationRequested(); // cancelled mid-wait
+                throw new InvalidOperationException(
+                    $"{_installation.AppName}: waiting on the command pipe failed "
+                    + $"({ex.GetBaseException().Message}).", ex.GetBaseException());
             }
 
             var waited = DateTime.UtcNow - start;
@@ -423,7 +445,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
 
             // Past the base deadline. Only a Skyline that is actually up earns more time.
             var running = StartedSkylineIsRunning(preexisting);
-            if (!running || waited >= MaxStartupTimeout)
+            if (!running || waited >= _maxStartupTimeout)
             {
                 giveUp.Cancel();
                 return running ? StartupResult.StartedButNeverConnected : StartupResult.NeverStarted;
@@ -432,7 +454,7 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             {
                 log($"    {_installation.AppName} is taking longer than "
                     + $"{_startupTimeout.TotalSeconds:F0}s to start but is running; still waiting "
-                    + $"(up to {MaxStartupTimeout.TotalMinutes:F0} min).");
+                    + $"(up to {_maxStartupTimeout.TotalMinutes:F0} min).");
                 extended = true;
             }
         }

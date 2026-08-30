@@ -376,6 +376,47 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Null(result.ReplicatesCsv);
     }
 
+    /// <summary>
+    /// An export missing its metadata must not be cached, or one transient failure becomes permanent: the
+    /// reuse check only re-exports when a STAMPED metadata file has gone missing, so a stamp recording no
+    /// metadata at all reads as "correctly has none" and is honoured for every later run of the unchanged
+    /// document - inferring sample types from replicate names forever, which is a different reference/QC
+    /// split and therefore different ComBat, with only "Reusing the previous export" in the log.
+    /// </summary>
+    [Fact]
+    public void Export_DoesNotCacheAnExportWhoseMetadataFailed()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var failMetadata = true;
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".metadata.csv", StringComparison.Ordinal))
+                {
+                    if (failMetadata)
+                        throw new IOException("Pipe is broken.");
+                    WriteCsv(file);
+                    return;
+                }
+                WriteParquet(file);
+            },
+        };
+
+        var first = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        Assert.Null(first.ReplicatesCsv);
+        var callsAfterFirst = runner.Invocations.Count;
+
+        // Same unchanged document, and metadata now works. The run must export again rather than reuse.
+        failMetadata = false;
+        var second = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(runner.Invocations.Count > callsAfterFirst, "the failed export should not be reused");
+        Assert.NotNull(second.ReplicatesCsv);
+    }
+
     [Fact]
     public void Export_NamesFilesAfterTheDocumentLabel_SoTheMergeDerivesTheRightBatch()
     {

@@ -105,13 +105,22 @@ public class SkylineAppRunnerTests
         // A shortcut that does not exist: cmd.exe fails immediately, so nothing ever connects.
         var installation = new SkylineAppRunner.Installation(
             "Skyline", Path.Combine(Path.GetTempPath(), "prism_no_such_" + Guid.NewGuid().ToString("N") + ".appref-ms"));
-        var runner = new SkylineAppRunner(installation, TimeSpan.FromSeconds(1));
+        // The cap matters even though nothing should start: the extended wait triggers on ANY Skyline
+        // appearing during the window - another test, a real export, a developer opening Skyline - and
+        // with the 10-minute default that would hang the run rather than fail it.
+        var runner = new SkylineAppRunner(
+            installation, TimeSpan.FromSeconds(1), maxStartupTimeout: TimeSpan.FromSeconds(3));
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
 
-        Assert.Contains("did not start", ex.Message);
+        // "did not start" is the expected verdict, but an unrelated Skyline appearing mid-wait legitimately
+        // produces "started but never connected". Both are honest reports of the same startup timeout;
+        // what must never come back is the broken pipe, which blamed Skyline for our own give-up.
         Assert.DoesNotContain("Pipe is broken", ex.Message);
+        Assert.True(
+            ex.Message.Contains("did not start") || ex.Message.Contains("never connected"),
+            $"expected a startup-timeout message, got: {ex.Message}");
     }
 
     [Fact]
