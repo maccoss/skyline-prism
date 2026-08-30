@@ -69,17 +69,18 @@ either tool:
 | Platform | Install the .NET 10 runtime |
 |---|---|
 | **Windows** | `winget install Microsoft.DotNet.DesktopRuntime.10` — the **Desktop** Runtime covers both the CLI and the Skyline tool. |
-| **macOS** | `brew install dotnet@10`, or the installer from the link below (Apple Silicon = arm64, Intel = x64). |
-| **Linux** | Your distro package (e.g. `sudo apt install dotnet-runtime-10.0`) or the install script from the link below. |
+| **macOS** | The installer from the link below (Apple Silicon = arm64, Intel = x64). Homebrew's `dotnet` formula tracks the current release; there may be no version-pinned `dotnet@10` formula. |
+| **Linux** | The install script from the link below. A distro package (`dotnet-runtime-10.0`) exists only where the distro or the Microsoft feed carries .NET 10 - the script does not depend on that. |
 
 All platforms and architectures — **x64 and ARM64** — are available at
 <https://dotnet.microsoft.com/download/dotnet/10.0>.
 
+The CLI needs the base **.NET Runtime**; the Skyline tool (WPF) needs the **.NET Desktop Runtime** on
+Windows, which is a superset — so installing the Desktop Runtime covers both.
+
 If you skip this step the tools say so rather than failing quietly: the CLI prints the version it needs
 alongside the versions you have, and the Skyline tool opens a dialog asking you to install .NET. Both
-name the required version, so it is recoverable without reading this page. The CLI needs the base **.NET Runtime**; the
-Skyline tool (WPF) needs the **.NET Desktop Runtime** on Windows, which is a superset — so installing
-the Desktop Runtime covers both.
+name the required version, so it is recoverable without reading this page.
 
 ### CLI
 

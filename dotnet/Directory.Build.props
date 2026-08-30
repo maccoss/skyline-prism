@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup>
-    <!-- Allows cross-compiling Windows-targeted projects (net8.0-windows, WPF)
+    <!-- Allows cross-compiling Windows-targeted projects (net10.0-windows, WPF)
          on non-Windows hosts (Linux / macOS / CI agents). No effect on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
 
@@ -50,7 +50,13 @@
          off, 8.7 GB at 5 and 6.5 GB at 9. The documentation warns 9 can cost throughput - it does not
          here, because PRISM's garbage is a handful of enormous short-lived matrices rather than a high
          rate of small objects, which is the case aggressive conserving handles well. Re-measure before
-         assuming that still holds if the allocation pattern changes. -->
+         assuming that still holds if the allocation pattern changes.
+
+         THOSE FIGURES ARE .NET 8 FIGURES. The move to .NET 10 changed the collector underneath them and
+         they have not been re-taken: the migration was verified on Stage 1 and the Stage 2 reader, and
+         these numbers come from Stage 5b's peak working set, which that check does not exercise. The
+         setting is left at 9 because it was the best of the values tried and nothing suggests it is now
+         harmful - but treat the numbers as historical until someone re-runs the 20-document cohort. -->
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
   </ItemGroup>
 

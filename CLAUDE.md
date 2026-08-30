@@ -283,9 +283,19 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 > [!NOTE]
 > **Why .NET 10, and what a bump costs.** .NET 10 is the current LTS (support to Nov 2028); .NET 8's LTS
-> ended Nov 2026, which is what prompted the move. The version is pinned in five places that must agree -
-> `global.json` at the repo root AND under `dotnet/`, every `<TargetFramework>`, and `dotnet-version:` in
-> both workflows - so a partial bump builds locally and fails in CI, or vice versa.
+> ends 10 November 2026, which is what prompted the move.
+>
+> The version lives in **three kinds of place**, and the third is the one that gets missed:
+> 1. `global.json` at the repo root - the single SDK pin. It governs the whole tree, and both workflows
+>    read it via `global-json-file:` rather than repeating a version, so CI cannot drift from it.
+> 2. Every `<TargetFramework>`.
+> 3. `dotnet/src/SkylinePrism.App/tool-inf/info.properties` - the Skyline tool manifest, which states the
+>    required runtime **inside the shipped zip**. It is the closest thing to documentation at the point
+>    of failure, and the .NET 10 migration shipped it still saying 8 until review caught it.
+>
+> Prose in `README.md`, `dotnet/README.md`, the workflow headers and the `<!-- Plain net8.0 ... -->`
+> comments above the target lines all need it too - a mechanical rename leaves comments contradicting the
+> line beneath them.
 >
 > The artifacts are **framework-dependent by design**, so a major bump means every user installs a new
 > runtime before the tool will start. That is a coordinated upgrade for a lab, not a silent one; do not

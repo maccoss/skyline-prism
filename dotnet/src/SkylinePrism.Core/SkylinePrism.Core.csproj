@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Plain net8.0: no WPF, no named pipes -> runs on Windows, Linux, macOS.
+    <!-- Plain net10.0: no WPF, no named pipes -> runs on Windows, Linux, macOS.
          This is the shared algorithm / IO / QC layer for the cross-platform CLI. -->
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>SkylinePrism.Core</RootNamespace>
