@@ -35,11 +35,21 @@ public interface ISkylineCommandRunner
     /// </summary>
     /// <param name="timeout">
     /// Give up after this long with the command still running, killing the Skyline it started.
-    /// <c>null</c> means wait indefinitely, which is right for the report export - it is the point of
+    /// <c>null</c> means no TOTAL bound, which is right for the report export - it is the point of
     /// the run, it can legitimately take an hour on a large document, and abandoning it accomplishes
     /// nothing. Pass a bound for work that is merely an enrichment, where waiting forever turns an
     /// optional extra into a hang.
     /// </param>
+    /// <remarks>
+    /// <b>Every implementation must bound SILENCE, whatever <paramref name="timeout"/> says.</b> The
+    /// protocol has no exit code and reports only through its output stream, so a stall is
+    /// indistinguishable from slow work until something gives up - and <c>null</c> above must therefore
+    /// mean "no total bound", never "wait forever". This was learned the expensive way: the bound was
+    /// added to <see cref="SkylineAppRunner"/> alone, which left the
+    /// <see cref="SkylineCmdRunner"/> fallback still able to hang a run indefinitely.
+    /// <see cref="SkylineIdleWatchdog"/> is the shared implementation; use it rather than writing a
+    /// third one.
+    /// </remarks>
     void Run(string[] args, Action<string> log, CancellationToken cancellationToken,
         TimeSpan? timeout = null);
 }

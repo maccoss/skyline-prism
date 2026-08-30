@@ -337,7 +337,69 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Equal(staleBytes, File.ReadAllBytes(stale));
 
         // ...and the failed attempt leaves nothing behind for the next run to trip over.
-        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
+        Assert.Empty(Directory.GetFiles(work, HeadlessSkylineExporter.SidecarPrefix + "*"));
+    }
+
+    /// <summary>
+    /// A sidecar from a run that was KILLED - the one case the cleanup paths above cannot cover, because
+    /// none of them got to run. Nothing else would ever remove it: it is named after a GUID no later run
+    /// knows, and it is a full report, so a stopped export of a real cohort strands gigabytes. Worse, it
+    /// is named after its destination, so ".prism-partial-....metadata.csv" matches the "*.metadata.csv"
+    /// glob the GUI uses to find every document's replicate report - a partial file would be read as a
+    /// document's metadata under a bogus label.
+    /// </summary>
+    [Fact]
+    public void Export_SweepsSidecarsLeftByAKilledRun()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        Directory.CreateDirectory(work);
+
+        // What a killed run leaves: named for this label, never promoted, never deleted.
+        var orphanReport = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "deadbeef.PlateA.parquet");
+        var orphanMetadata = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "deadbeef.PlateA.metadata.csv");
+        WriteParquet(orphanReport);
+        WriteCsv(orphanMetadata);
+        // Another document's orphan must survive - it may belong to an export running right now.
+        var otherDocument = Path.Combine(work, HeadlessSkylineExporter.SidecarPrefix + "cafebabe.PlateB.parquet");
+        WriteParquet(otherDocument);
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".csv", StringComparison.Ordinal)) WriteCsv(file);
+                else WriteParquet(file);
+            },
+        };
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.False(File.Exists(orphanReport), "a killed run's report sidecar should be swept");
+        Assert.False(File.Exists(orphanMetadata), "a killed run's metadata sidecar should be swept");
+        Assert.True(File.Exists(otherDocument), "another document's sidecar is not ours to delete");
+    }
+
+    /// <summary>
+    /// The sidecar naming is what makes the sweep and the GUI's glob exclusion possible, so pin it:
+    /// a sidecar must be recognizable as one from its name alone.
+    /// </summary>
+    [Fact]
+    public void IsSidecar_RecognizesAnUnfinishedExportButNotAFinishedOne()
+    {
+        var side = @"C:\x\" + HeadlessSkylineExporter.SidecarPrefix;
+        Assert.True(HeadlessSkylineExporter.IsSidecar(side + "deadbeef.PlateA.metadata.csv"));
+        Assert.True(HeadlessSkylineExporter.IsSidecar(side + "deadbeef.PlateA.parquet"));
+        Assert.False(HeadlessSkylineExporter.IsSidecar(@"C:\x\PlateA.metadata.csv"));
+        Assert.False(HeadlessSkylineExporter.IsSidecar(@"C:\x\PlateA.parquet"));
+
+        // NO LEADING DOT. An SMB server maps the Unix dot-file convention onto the DOS hidden attribute,
+        // and the promoted export inherits it: measured on a real share, a 1.4 GB parquet and its
+        // metadata arrived at their final names as "Hidden, Archive" while the files PRISM writes
+        // directly were plain "Archive". The pipeline still finds them; the user opening the folder does
+        // not, and concludes the export failed.
+        Assert.False(HeadlessSkylineExporter.SidecarPrefix.StartsWith('.'));
     }
 
     /// <summary>
@@ -380,7 +442,7 @@ public class HeadlessExporterWithFakeRunnerTests
         // The previous export survived the failed attempt intact.
         Assert.True(File.Exists(first.InputPath));
         Assert.Equal(cached, File.ReadAllBytes(first.InputPath));
-        Assert.Empty(Directory.GetFiles(work, ".prism-partial-*"));
+        Assert.Empty(Directory.GetFiles(work, HeadlessSkylineExporter.SidecarPrefix + "*"));
     }
 
     /// <summary>

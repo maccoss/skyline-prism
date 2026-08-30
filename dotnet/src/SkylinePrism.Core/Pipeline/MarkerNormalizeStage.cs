@@ -71,26 +71,32 @@ internal static class MarkerNormalizeStage
         // against "P02768-2"), and comparing it against the gene symbols found misses every member
         // written as an accession. Asking a one-member matcher uses the identical rules the match itself
         // used, so the answer cannot drift from it.
-        var missing = list.Members
+        var unmatched = list.Members
             .Where(m =>
             {
                 var probe = ProteinListSet.MatcherFor(
                     new ProteinList { Name = list.Name, Visible = true, Members = { m } });
                 return !markerRows.Any(i => probe.Match(accession?[i], gene?[i], name?[i]) is not null);
             })
-            .Select(ProteinList.DisplayName)
-            // Two members may share a label - the panel deliberately lists some proteins twice - and
-            // naming the same protein twice in one line reads as a bug in the report.
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         // Counted in MEMBERS, so the two halves of the sentence share a basis. Reporting the distinct
         // gene symbols found against the member count let the line contradict itself: a protein with an
         // empty gene column counted toward neither, so a panel that matched every member could report
         // "0 of 14 quantified" and list nothing as missing.
-        var quantified = list.Members.Count - list.Members
-            .Count(m => missing.Contains(ProteinList.DisplayName(m), StringComparer.OrdinalIgnoreCase));
+        //
+        // Counted from the MEMBERS that did not match, not by looking their labels back up in the
+        // deduplicated list below: two members may deliberately share a label, and a found member sharing
+        // one with a missing member would then be counted missing too.
+        var quantified = list.Members.Count - unmatched.Count;
+
+        var missing = unmatched
+            .Select(ProteinList.DisplayName)
+            // Two members may share a label - the panel deliberately lists some proteins twice - and
+            // naming the same protein twice in one line reads as a bug in the report.
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         report($"  Markers: {quantified} of {list.Members.Count} quantified from '{list.Name}'"
             + $" ({markerRows.Count} protein rows)"

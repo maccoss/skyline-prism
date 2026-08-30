@@ -50,6 +50,9 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// </summary>
     private readonly TimeSpan _maxStartupTimeout;
 
+    /// <summary>How long Skyline may print nothing before the command is abandoned.</summary>
+    private readonly TimeSpan _idleTimeout;
+
     /// <param name="maxStartupTimeout">
     /// The backstop for the extended wait; never shorter than <paramref name="startupTimeout"/>, since a
     /// cap below the base deadline could never be reached and would silently do nothing. Injectable so a
@@ -57,10 +60,17 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// whenever ANY Skyline appears during the wait, which on a developer machine or a shared agent is
     /// not something a test can rule out.
     /// </param>
+    /// <param name="idleTimeout">
+    /// How long Skyline may say NOTHING before the command is abandoned; defaults to
+    /// <see cref="SkylineIdleWatchdog.DefaultLimit"/>. See that class for why the bound is on silence
+    /// rather than total duration. Injectable so a test need not wait twenty minutes for nothing.
+    /// </param>
     public SkylineAppRunner(
-        Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null)
+        Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null,
+        TimeSpan? idleTimeout = null)
     {
         _installation = installation;
+        _idleTimeout = idleTimeout ?? SkylineIdleWatchdog.DefaultLimit;
         // A cold ClickOnce start (plus the update check Skyline does on launch) can take a while; the
         // official runner waits 15 s, which is too tight on a first run of the day.
         //
@@ -174,7 +184,14 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 throw new InvalidOperationException($"Could not launch {_installation.AppName}.");
         }
 
-        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, timeout))
+        // ONE absolute deadline for the whole call, not a fresh copy of `timeout` per phase. Each phase
+        // gets what is LEFT of it: startup, the output-pipe connect and the read loop are sequential
+        // steps of one call, so giving each the full bound made a caller's stated limit a per-step limit.
+        // SkylineIsolationImporter passes 5 min "precisely so it can never hold a run up" - and a Skyline
+        // slow at every step could take three times that before anything gave up.
+        var callDeadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
+
+        switch (WaitForConnection(serverStream, preexisting, log, cancellationToken, Remaining(callDeadline)))
         {
             case StartupResult.Connected:
                 break;
@@ -185,12 +202,12 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 KillSpawned(preexisting, log);
                 throw new InvalidOperationException(
                     $"{_installation.AppName} started but never connected on the command pipe within "
-                    + $"{Min(_maxStartupTimeout, timeout).TotalMinutes:F1} min.");
+                    + $"{Min(_maxStartupTimeout, Remaining(callDeadline)).TotalMinutes:F1} min.");
 
             default:
                 throw new InvalidOperationException(
                     $"{_installation.AppName} did not start within "
-                    + $"{Min(_startupTimeout, timeout).TotalSeconds:F0}s (no connection on the command "
+                    + $"{Min(_startupTimeout, Remaining(callDeadline)).TotalSeconds:F0}s (no connection on the command "
                     + "pipe). Another export may be saturating the machine - try exporting one document "
                     + "at a time.");
         }
@@ -208,11 +225,28 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         // Skyline streams its progress here and closes the pipe when the batch finishes. The launching
         // cmd.exe has already exited, so THIS is how we know the work is done - and the only place errors
         // surface, since there is no exit code to read.
-        var errors = new StringBuilder();
+        StringBuilder errors;
         using var outPipe = new NamedPipeClientStream(outPipeName);
+
+        // Distinguish "Skyline is unresponsive" from "the caller's budget ran out on the way here".
+        // Without this, an exhausted budget makes Remaining() zero, Connect(0) fails instantly, and the
+        // blame lands on Skyline for never opening a pipe it was given no time to open - the same
+        // misdiagnosis as the "Pipe is broken." message this class was fixed for.
+        // A MINIMUM workable budget, not equality with zero. Remaining() only clamps to zero once the
+        // deadline has already passed, so testing `== TimeSpan.Zero` let a remainder of a few
+        // milliseconds through - Connect(3) then fails instantly and blames Skyline anyway, which is the
+        // same misdiagnosis narrowed to a race with the clock rather than removed.
+        var outPipeBudget = Remaining(callDeadline);
+        if (outPipeBudget is not null && outPipeBudget.Value < MinimumOutPipeBudget)
+        {
+            KillSpawned(preexisting, log);
+            throw new TimeoutException(
+                $"{_installation.AppName} connected, but the {timeout!.Value.TotalMinutes:F0} min allowed "
+                + "for this command was already spent getting it started, so it was stopped.");
+        }
         try
         {
-            outPipe.Connect((int)Min(_startupTimeout, timeout).TotalMilliseconds);
+            outPipe.Connect((int)Min(_startupTimeout, outPipeBudget).TotalMilliseconds);
         }
         catch (TimeoutException)
         {
@@ -245,30 +279,18 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         }) { IsBackground = true, Name = "SkylineAppRunner output" };
         readerThread.Start();
 
-        var deadline = timeout.HasValue ? DateTime.UtcNow + timeout.Value : (DateTime?)null;
         try
         {
-            while (true)
-            {
-                // Wake regularly even when Skyline is silent, so cancellation and the deadline are
-                // both observed while nothing is being printed - which is exactly the stuck case.
-                if (lines.TryTake(out var line, (int)PollInterval.TotalMilliseconds, cancellationToken))
-                {
-                    log("    " + line);
-                    if (IsErrorLine(line))
-                        errors.AppendLine(line.Trim());
-                    continue;
-                }
-                if (lines.IsCompleted)
-                    break;
-                if (deadline is not null && DateTime.UtcNow > deadline)
-                {
-                    KillSpawned(preexisting, log);
-                    throw new TimeoutException(
-                        $"{_installation.AppName} did not finish within "
-                        + $"{timeout!.Value.TotalMinutes:F0} min and was stopped.");
-                }
-            }
+            errors = ConsumeOutput(
+                lines, log, _installation.AppName, _idleTimeout, callDeadline, cancellationToken,
+                totalBound: timeout);
+        }
+        catch (TimeoutException)
+        {
+            // Either bound expired. Whatever Skyline is doing, it is not doing it for us any more, and
+            // leaving it running holds the document open with nothing left to stop it.
+            KillSpawned(preexisting, log);
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -480,6 +502,76 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// <summary>The shorter of a fixed startup deadline and the caller's overall bound, if it gave one.</summary>
     private static TimeSpan Min(TimeSpan fixedDeadline, TimeSpan? callerBound) =>
         callerBound is null || callerBound.Value > fixedDeadline ? fixedDeadline : callerBound.Value;
+
+    /// <summary>
+    /// What is left of the caller's overall bound, or null when it gave none. Never negative: an
+    /// exhausted budget is zero, which every consumer here reads as "give up now" rather than as a
+    /// negative timeout they would have to special-case.
+    /// </summary>
+    private static TimeSpan? Remaining(DateTime? deadline)
+    {
+        if (deadline is null)
+            return null;
+        var left = deadline.Value - DateTime.UtcNow;
+        return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+    }
+
+    /// <summary>
+    /// Drain Skyline's output until it closes the pipe, collecting the <c>Error:</c> lines that are the
+    /// protocol's only failure signal, and giving up if it goes silent or overruns the caller's bound.
+    ///
+    /// <para>Separated from <see cref="RunCore"/> so the two deadlines can be tested against a fake
+    /// clock. They are the whole point of this method and neither is reachable from a test that has to
+    /// start a real Skyline and wait twenty minutes for it to say nothing.</para>
+    /// </summary>
+    /// <param name="utcNow">Injected clock; defaults to the real one.</param>
+    /// <param name="totalBound">
+    /// The caller's overall bound, carried alongside <paramref name="deadline"/> only so the message can
+    /// name it. Reporting "did not finish within the time allowed" without the number leaves a reader
+    /// unable to tell a 5-minute bound from a 60-minute one, or which caller set it.
+    /// </param>
+    internal static StringBuilder ConsumeOutput(
+        BlockingCollection<string> lines, Action<string> log, string appName, TimeSpan idleTimeout,
+        DateTime? deadline, CancellationToken cancellationToken, Func<DateTime>? utcNow = null,
+        TimeSpan? totalBound = null)
+    {
+        var now = utcNow ?? (() => DateTime.UtcNow);
+        var idleWatch = new SkylineIdleWatchdog(appName, idleTimeout, now);
+        var errors = new StringBuilder();
+
+        while (true)
+        {
+            // Wake regularly even when Skyline is silent, so cancellation and both deadlines are
+            // observed while nothing is being printed - which is exactly the stuck case.
+            if (lines.TryTake(out var line, (int)PollInterval.TotalMilliseconds, cancellationToken))
+            {
+                log("    " + line);
+                idleWatch.SawOutput();
+                if (IsErrorLine(line))
+                    errors.AppendLine(line.Trim());
+                continue;
+            }
+            if (lines.IsCompleted)
+                return errors;
+
+            if (deadline is not null && now() > deadline)
+                throw new TimeoutException(
+                    $"{appName} did not finish within "
+                    + (totalBound is null ? "the time allowed" : $"{totalBound.Value.TotalMinutes:F0} min")
+                    + " and was stopped.");
+
+            if (idleWatch.CheckStalled(log) is { } stalled)
+                throw stalled;
+        }
+    }
+
+    /// <summary>
+    /// Less budget than this left for the output pipe means the caller's bound is spent, not that Skyline
+    /// is unresponsive. Skyline opens the pipe within milliseconds of connecting on the command pipe, so
+    /// a second is generous for the real case and still catches an exhausted budget before it can be
+    /// mistaken for one.
+    /// </summary>
+    private static readonly TimeSpan MinimumOutPipeBudget = TimeSpan.FromSeconds(1);
 
     /// <summary>How often the connection wait wakes to re-check the deadline and the process list.</summary>
     private static readonly TimeSpan StartupPollInterval = TimeSpan.FromSeconds(1);
