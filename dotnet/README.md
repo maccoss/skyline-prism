@@ -329,7 +329,7 @@ assembly/XAML load error in `%LOCALAPPDATA%\SkylinePrism\prism-tool.log`. A fail
 from the dummy arg is expected and ignored - only dependency/XAML load failures fail the check.
 
 The tool zip is **framework-dependent** — install the **.NET 10 Desktop Runtime**
-(`winget install Microsoft.DotNet.DesktopRuntime.8`) once, then install the zip via Skyline's
+(`winget install Microsoft.DotNet.DesktopRuntime.10`) once, then install the zip via Skyline's
 Tools > Tool Store > Install from file. When reinstalling over a running copy, **close the tool
 first** - Skyline can leave a partial extraction (locked files) that drops `deps.json` and DLLs,
 which then fails to load; reinstalling with the tool closed fixes it.

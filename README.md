@@ -68,12 +68,16 @@ either tool:
 
 | Platform | Install the .NET 10 runtime |
 |---|---|
-| **Windows** | `winget install Microsoft.DotNet.DesktopRuntime.8` — the **Desktop** Runtime covers both the CLI and the Skyline tool. |
-| **macOS** | `brew install dotnet@8`, or the installer from the link below (Apple Silicon = arm64, Intel = x64). |
-| **Linux** | Your distro package (e.g. `sudo apt install dotnet-runtime-8.0`) or the install script from the link below. |
+| **Windows** | `winget install Microsoft.DotNet.DesktopRuntime.10` — the **Desktop** Runtime covers both the CLI and the Skyline tool. |
+| **macOS** | `brew install dotnet@10`, or the installer from the link below (Apple Silicon = arm64, Intel = x64). |
+| **Linux** | Your distro package (e.g. `sudo apt install dotnet-runtime-10.0`) or the install script from the link below. |
 
 All platforms and architectures — **x64 and ARM64** — are available at
-<https://dotnet.microsoft.com/download/dotnet/8.0>. The CLI needs the base **.NET Runtime**; the
+<https://dotnet.microsoft.com/download/dotnet/10.0>.
+
+If you skip this step the tools say so rather than failing quietly: the CLI prints the version it needs
+alongside the versions you have, and the Skyline tool opens a dialog asking you to install .NET. Both
+name the required version, so it is recoverable without reading this page. The CLI needs the base **.NET Runtime**; the
 Skyline tool (WPF) needs the **.NET Desktop Runtime** on Windows, which is a superset — so installing
 the Desktop Runtime covers both.
 
@@ -119,7 +123,7 @@ dotnet build SkylinePrism.CrossPlatform.slnf -c Release
 ### Skyline external tool (Windows)
 
 Install the **.NET 10 Desktop Runtime** (see the prerequisite above —
-`winget install Microsoft.DotNet.DesktopRuntime.8`), then download `SkylinePrism.zip` from
+`winget install Microsoft.DotNet.DesktopRuntime.10`), then download `SkylinePrism.zip` from
 [Releases](https://github.com/maccoss/skyline-prism/releases) (or build it — see below) and install
 it in Skyline via **Tools → Tool Store → Install from file**. The tool appears under the Tools menu
 and connects to the running document.
