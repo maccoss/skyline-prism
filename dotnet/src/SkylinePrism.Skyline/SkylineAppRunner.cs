@@ -232,8 +232,12 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         // Without this, an exhausted budget makes Remaining() zero, Connect(0) fails instantly, and the
         // blame lands on Skyline for never opening a pipe it was given no time to open - the same
         // misdiagnosis as the "Pipe is broken." message this class was fixed for.
+        // A MINIMUM workable budget, not equality with zero. Remaining() only clamps to zero once the
+        // deadline has already passed, so testing `== TimeSpan.Zero` let a remainder of a few
+        // milliseconds through - Connect(3) then fails instantly and blames Skyline anyway, which is the
+        // same misdiagnosis narrowed to a race with the clock rather than removed.
         var outPipeBudget = Remaining(callDeadline);
-        if (outPipeBudget == TimeSpan.Zero)
+        if (outPipeBudget is not null && outPipeBudget.Value < MinimumOutPipeBudget)
         {
             KillSpawned(preexisting, log);
             throw new TimeoutException(
@@ -556,9 +560,18 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                     + (totalBound is null ? "the time allowed" : $"{totalBound.Value.TotalMinutes:F0} min")
                     + " and was stopped.");
 
-            idleWatch.ThrowIfStalled(log);
+            if (idleWatch.CheckStalled(log) is { } stalled)
+                throw stalled;
         }
     }
+
+    /// <summary>
+    /// Less budget than this left for the output pipe means the caller's bound is spent, not that Skyline
+    /// is unresponsive. Skyline opens the pipe within milliseconds of connecting on the command pipe, so
+    /// a second is generous for the real case and still catches an exhausted budget before it can be
+    /// mistaken for one.
+    /// </summary>
+    private static readonly TimeSpan MinimumOutPipeBudget = TimeSpan.FromSeconds(1);
 
     /// <summary>How often the connection wait wakes to re-check the deadline and the process list.</summary>
     private static readonly TimeSpan StartupPollInterval = TimeSpan.FromSeconds(1);

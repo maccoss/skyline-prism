@@ -1225,7 +1225,7 @@ public partial class MainWindow : Window
         // let them act: an open Skyline holding a big document is usually the difference.
         if (byMemory == 0)
         {
-            var freeGb = FreePhysicalGb();
+            var freeGb = MachineMemory.FreePhysicalGb();
             Log($"WARNING: '{largest}' is {largestGb:N1} GB, so one export alone is expected to need "
                 + $"about {perExportGb:N0} GB - more than the {totalGb * MemoryFractionForExports:N0} GB budgeted from this "
                 + $"machine's {totalGb:N0} GB."
@@ -1314,50 +1314,6 @@ public partial class MainWindow : Window
     /// </summary>
     internal const double SkyToMemoryFactor = 2.0;
 
-    /// <summary>
-    /// Physical RAM free RIGHT NOW, or null when it cannot be read. Advisory only.
-    ///
-    /// <para>Read from the OS, NOT from <c>GC.GetGCMemoryInfo()</c>. That struct's
-    /// <c>MemoryLoadBytes</c> is a snapshot taken at the last garbage collection, and this runs early in
-    /// a GUI session where a significant GC may not have happened yet - so it can report a nearly full
-    /// machine as nearly empty. This figure is the one actionable number in a warning about whether
-    /// closing Skyline would help, so a stale one is worse than none at all.</para>
-    /// </summary>
-    private static double? FreePhysicalGb()
-    {
-        try
-        {
-            // GlobalMemoryStatusEx via the same counter Task Manager shows.
-            var status = new MemoryStatusEx();
-            return GlobalMemoryStatusEx(status)
-                ? status.ullAvailPhys / (1024.0 * 1024 * 1024)
-                : null;
-        }
-        catch (Exception)
-        {
-            // Advisory only - the warning is still worth printing without the free-memory clause.
-            return null;
-        }
-    }
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
-        CharSet = System.Runtime.InteropServices.CharSet.Auto)]
-    private sealed class MemoryStatusEx
-    {
-        public uint dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(MemoryStatusEx));
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx([System.Runtime.InteropServices.In, System.Runtime.InteropServices.Out] MemoryStatusEx lpBuffer);
 
     private void SetInputStatus(PrismInput input, string status)
     {

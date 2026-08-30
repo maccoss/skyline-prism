@@ -29,7 +29,7 @@ namespace SkylinePrism.Skyline;
 /// concurrency - so the signal would be unavailable exactly when it is needed, or would read another
 /// export's work as our own.</para>
 /// </summary>
-internal sealed class SkylineIdleWatchdog
+public sealed class SkylineIdleWatchdog
 {
     /// <summary>
     /// Far above any healthy gap between output lines, far below either observed stall.
@@ -47,7 +47,14 @@ internal sealed class SkylineIdleWatchdog
     /// </summary>
     private long _lastOutputTicks;
 
-    private bool _warned;
+    /// <summary>
+    /// Volatile for the same reason <see cref="_lastOutputTicks"/> is interlocked: cleared from the
+    /// process's output callback and read from the polling loop, which are different threads. A torn read
+    /// only costs a warning line, but the warning is the one signal that makes a developing stall visible
+    /// before the command is abandoned - and leaving the flag plain beside a field made atomic two lines
+    /// above reads as an oversight rather than a decision.
+    /// </summary>
+    private volatile bool _warned;
 
     public SkylineIdleWatchdog(string appName, TimeSpan? limit = null, Func<DateTime>? now = null)
     {
@@ -65,23 +72,30 @@ internal sealed class SkylineIdleWatchdog
     }
 
     /// <summary>
-    /// Throws <see cref="TimeoutException"/> once Skyline has been silent for the limit, and logs a
-    /// single warning at the half-way mark so a stall is visible while it develops rather than only when
-    /// the command is abandoned.
+    /// The exception to throw when Skyline has been silent for the limit, or null while it is still
+    /// within it. Also logs a single warning at the half-way mark, so a stall is visible while it
+    /// develops rather than only when the command is abandoned.
+    ///
+    /// <para>RETURNS the exception rather than throwing it, because each caller has its own cleanup to do
+    /// first - <see cref="SkylineCmdRunner"/> kills the process it owns, <see cref="SkylineAppRunner"/>
+    /// reaps a Skyline that is not its child. Returning keeps both call sites in the same
+    /// check-then-kill-then-throw shape as the cancellation and total-deadline bounds beside them,
+    /// instead of one of them needing a try/catch around a single call.</para>
     /// </summary>
-    public void ThrowIfStalled(Action<string> log)
+    public TimeoutException? CheckStalled(Action<string> log)
     {
         var idle = _now() - new DateTime(Interlocked.Read(ref _lastOutputTicks), DateTimeKind.Utc);
         if (idle >= _limit)
-            throw new TimeoutException(
+            return new TimeoutException(
                 $"{_appName} stopped reporting progress {idle.TotalMinutes:F0} min ago and was stopped. "
                 + "A Skyline that runs out of memory stalls exactly like this and does not recover - "
                 + "export fewer documents at a time, or close other Skyline windows, and try again.");
 
         if (_warned || idle < _limit / 2)
-            return;
+            return null;
         log($"    (no output from {_appName} for {idle.TotalMinutes:F0} min; "
             + $"giving up at {_limit.TotalMinutes:F0})");
         _warned = true;
+        return null;
     }
 }

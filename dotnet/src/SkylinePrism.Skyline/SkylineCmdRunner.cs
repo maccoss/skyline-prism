@@ -18,12 +18,19 @@ namespace SkylinePrism.Skyline;
 public sealed class SkylineCmdRunner : ISkylineCommandRunner
 {
     private readonly string _exePath;
+    private readonly TimeSpan _idleTimeout;
 
-    public SkylineCmdRunner(string exePath)
+    /// <param name="idleTimeout">
+    /// How long SkylineCmd may print nothing before it is stopped; defaults to
+    /// <see cref="SkylineIdleWatchdog.DefaultLimit"/>. Injectable so a test need not wait twenty minutes
+    /// for a child process to say nothing.
+    /// </param>
+    public SkylineCmdRunner(string exePath, TimeSpan? idleTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(exePath))
             throw new ArgumentException("SkylineCmd path is required.", nameof(exePath));
         _exePath = exePath;
+        _idleTimeout = idleTimeout ?? SkylineIdleWatchdog.DefaultLimit;
     }
 
     public string Description => $"SkylineCmd ({_exePath})";
@@ -77,26 +84,32 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
         // had no bound at all - `timeout` defaults to null for report export, deliberately, because an
         // export legitimately takes an hour - so a SkylineCmd that stalled blocked the run forever, which
         // is exactly the failure the app runner's bound was added to prevent. See SkylineIdleWatchdog.
-        var idleWatch = new SkylineIdleWatchdog("SkylineCmd");
+        //
+        // Created here but STARTED below, after Process.Start: the clock must measure SkylineCmd's
+        // silence, not the time we spend launching it. Charging startup to the silence budget conflates
+        // two different waits in a class that has no separate startup deadline, and would begin killing
+        // exports during a legitimately slow document open if the bound were ever tightened.
+        SkylineIdleWatchdog? idleWatch = null;
 
         process.OutputDataReceived += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
-            idleWatch.SawOutput();
+            idleWatch?.SawOutput();
             log("    " + e.Data);
         };
         process.ErrorDataReceived += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
-            idleWatch.SawOutput();
+            idleWatch?.SawOutput();
             log("    " + e.Data);
             stderr.AppendLine(e.Data);
         };
 
         if (!process.Start())
             throw new InvalidOperationException($"Could not start {_exePath}.");
+        idleWatch = new SkylineIdleWatchdog("SkylineCmd", _idleTimeout);
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -116,14 +129,10 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
                     $"SkylineCmd did not finish within {timeout!.Value.TotalMinutes:F0} min "
                     + "and was stopped.");
             }
-            try
-            {
-                idleWatch.ThrowIfStalled(log);
-            }
-            catch (TimeoutException)
+            if (idleWatch.CheckStalled(log) is { } stalled)
             {
                 TryKill(process, log);
-                throw;
+                throw stalled;
             }
         }
         process.WaitForExit();

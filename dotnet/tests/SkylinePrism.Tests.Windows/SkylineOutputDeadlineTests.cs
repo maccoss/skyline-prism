@@ -28,7 +28,11 @@ public class SkylineOutputDeadlineTests
         public void Advance(TimeSpan by) => UtcNow += by;
     }
 
-    private static readonly TimeSpan Idle = TimeSpan.FromMinutes(20);
+    /// <summary>
+    /// The shipped default, not a copy of it: restating "20 minutes" here would leave these tests
+    /// exercising the old value - still green - the moment the default was retuned.
+    /// </summary>
+    private static readonly TimeSpan Idle = SkylineIdleWatchdog.DefaultLimit;
 
     [Fact]
     public void SilenceBeyondTheIdleBoundStopsTheExport()

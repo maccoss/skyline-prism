@@ -28,11 +28,12 @@ public class SkylineIdleWatchdogTests
         var log = new List<string>();
 
         clock.Advance(TimeSpan.FromMinutes(19));
-        watch.ThrowIfStalled(log.Add);   // still inside the bound
+        Assert.Null(watch.CheckStalled(log.Add));   // still inside the bound
 
         clock.Advance(TimeSpan.FromMinutes(2));
-        var ex = Assert.Throws<TimeoutException>(() => watch.ThrowIfStalled(log.Add));
+        var ex = watch.CheckStalled(log.Add);
 
+        Assert.NotNull(ex);
         Assert.Contains("stopped reporting progress", ex.Message);
         // The message must name the cause, because the user's next action depends on it.
         Assert.Contains("runs out of memory", ex.Message);
@@ -55,12 +56,12 @@ public class SkylineIdleWatchdogTests
         for (var i = 0; i < 12; i++)
         {
             clock.Advance(TimeSpan.FromMinutes(15));
-            watch.ThrowIfStalled(log.Add);
+            Assert.Null(watch.CheckStalled(log.Add));
             watch.SawOutput();
         }
 
         clock.Advance(TimeSpan.FromMinutes(19));
-        watch.ThrowIfStalled(log.Add); // no throw: the last line was 19 minutes ago
+        Assert.Null(watch.CheckStalled(log.Add)); // still fine: the last line was 19 minutes ago
     }
 
     [Fact]
@@ -71,16 +72,16 @@ public class SkylineIdleWatchdogTests
         var log = new List<string>();
 
         clock.Advance(TimeSpan.FromMinutes(11));
-        watch.ThrowIfStalled(log.Add);
-        watch.ThrowIfStalled(log.Add);
-        watch.ThrowIfStalled(log.Add);
+        watch.CheckStalled(log.Add);
+        watch.CheckStalled(log.Add);
+        watch.CheckStalled(log.Add);
         Assert.Single(log);
         Assert.Contains("no output from Skyline-daily", log[0]);
 
         // Skyline speaks again, so the next quiet spell warns afresh rather than staying silent.
         watch.SawOutput();
         clock.Advance(TimeSpan.FromMinutes(11));
-        watch.ThrowIfStalled(log.Add);
+        watch.CheckStalled(log.Add);
         Assert.Equal(2, log.Count);
     }
 
