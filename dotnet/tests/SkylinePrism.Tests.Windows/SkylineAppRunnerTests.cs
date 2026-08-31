@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -136,5 +137,99 @@ public class SkylineAppRunnerTests
         // has the Parquet.Net assembly bindings that SkylineCmd.exe.config lacks.
         Assert.True(runner.SupportsParquet);
         Assert.Contains("Skyline", runner.Description);
+    }
+
+    /// <summary>
+    /// A shortcut that cmd.exe cannot run, so nothing ever connects. The liveness check is what the test
+    /// varies; everything else is held still.
+    /// </summary>
+    private static SkylineAppRunner.Installation MissingShortcut() =>
+        new("Skyline", Path.Combine(
+            Path.GetTempPath(), "prism_no_such_" + Guid.NewGuid().ToString("N") + ".appref-ms"));
+
+    /// <summary>
+    /// The failure this exists for: Skyline crashes about a second after launch, and PRISM must notice
+    /// then - not when its startup window expires.
+    ///
+    /// <para>Every failed headless launch in the field log had a Skyline crash recorded in the Windows
+    /// Application event log in the SAME SECOND as the launch (an UnauthorizedAccessException in
+    /// ClickOnce's IsolationInterop.CreateActContext, before any Skyline code runs). PRISM's first
+    /// liveness check used to be after the base deadline, so a one-second crash bought three minutes of
+    /// waiting, and the retry budget - counted in attempts, not seconds - was spent on timeouts until the
+    /// export fell back to CSV. The base deadline here is a full minute and the test finishes in a few
+    /// seconds: that gap IS the fix.</para>
+    /// </summary>
+    [Fact]
+    public void Run_NoticesSkylineCrashingOnStartup_WithoutWaitingOutTheWindow()
+    {
+        var calls = 0;
+        // Up for the first two polls, then gone - a process that started and died, which is what a
+        // startup crash looks like from the outside.
+        var runner = new SkylineAppRunner(
+            MissingShortcut(),
+            startupTimeout: TimeSpan.FromSeconds(60),
+            maxStartupTimeout: TimeSpan.FromSeconds(90),
+            startedSkylineIsRunning: _ => ++calls <= 2);
+
+        var sw = Stopwatch.StartNew();
+        var ex = Assert.Throws<TimeoutException>(
+            () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
+        sw.Stop();
+
+        // The message is the proof of WHICH path ran: waiting out the window produces "did not start
+        // within", and only the crash path says the process exited.
+        Assert.Contains("started and then exited", ex.Message);
+        Assert.DoesNotContain("did not start within", ex.Message);
+        // And it names the actual fault, so the next person does not go looking at the machine's load
+        // the way the old message told them to.
+        Assert.Contains("CreateActContext", ex.Message);
+        // Generous by 4x even against the ~7x slowdown a loaded parallel suite has produced here
+        // before; the point is only that it did not sit out the 60 s base deadline.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(40),
+            $"expected the crash to be noticed in seconds, took {sw.Elapsed.TotalSeconds:F0}s");
+    }
+
+    /// <summary>
+    /// One missed enumeration must NOT be read as a crash. SkylineProcessIds swallows transient failures,
+    /// so a single miss is expected noise - and treating it as death would abandon a Skyline that is
+    /// legitimately minutes into starting a large document.
+    /// </summary>
+    [Fact]
+    public void Run_DoesNotCallSkylineDead_OnOneTransientEnumerationMiss()
+    {
+        var calls = 0;
+        var runner = new SkylineAppRunner(
+            MissingShortcut(),
+            startupTimeout: TimeSpan.FromSeconds(1),
+            maxStartupTimeout: TimeSpan.FromSeconds(6),
+            // Alive, alive, one miss, then alive for good: never connects, so this must end as the
+            // "running but silent" timeout rather than as a crash.
+            startedSkylineIsRunning: _ => ++calls != 3);
+
+        var ex = Assert.Throws<TimeoutException>(
+            () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
+
+        Assert.Contains("never connected", ex.Message);
+        Assert.DoesNotContain("started and then exited", ex.Message);
+    }
+
+    /// <summary>
+    /// The pre-existing verdict still has to work: a launch where no Skyline EVER appears is a different
+    /// fault from one that appeared and died, and keeps its own message.
+    /// </summary>
+    [Fact]
+    public void Run_StillReportsNeverStarted_WhenNoProcessAppearsAtAll()
+    {
+        var runner = new SkylineAppRunner(
+            MissingShortcut(),
+            startupTimeout: TimeSpan.FromSeconds(1),
+            maxStartupTimeout: TimeSpan.FromSeconds(3),
+            startedSkylineIsRunning: _ => false);
+
+        var ex = Assert.Throws<TimeoutException>(
+            () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
+
+        Assert.Contains("did not start within", ex.Message);
+        Assert.DoesNotContain("started and then exited", ex.Message);
     }
 }

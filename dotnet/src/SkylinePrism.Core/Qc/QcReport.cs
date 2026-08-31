@@ -285,7 +285,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         sb.Append($"<p style=\"color:#666\">Output directory: <code>{HtmlEncode(outputDir)}</code></p>");
         sb.Append("</div>");
 
-        AppendValidation(sb, validation);
+        AppendValidation(sb, validation, nRef, nQc, nSamples);
 
         sb.Append("<h2>Summary Metrics (Median CV %)</h2>");
         // Readers reasonably expect these to track the intensity-distribution reduction below, and they do
@@ -446,12 +446,31 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         }
     }
 
-    private static void AppendValidation(StringBuilder sb, ValidationStatus? v)
+    /// <summary>
+    /// The verdict, or - when there are not enough controls to reach one - WHY, with the counts.
+    ///
+    /// <para>The counts are the point. This used to say only "not enough of both were found", which reads
+    /// as a statement about the study design, so a cohort that HAD 16 reference and 16 QC samples and lost
+    /// them produced a report indistinguishable from one that never had any. That happened: a headless
+    /// metadata export crashed, PRISM fell back to inferring sample types from replicate names, the
+    /// inference matched nothing, and the run completed and reported "0 reference, 0 qc, 192
+    /// experimental". "0 of 192" is an alarm; "not enough of both" is not.</para>
+    /// </summary>
+    private static void AppendValidation(
+        StringBuilder sb, ValidationStatus? v, int nRef, int nQc, int nSamples)
     {
         if (v is null)
         {
             sb.Append("<div class=\"box\" style=\"color:#666\">Validation verdict needs &gt;=2 reference "
-                + "and &gt;=2 QC samples (dual-control design); not enough of both were found.</div>");
+                + $"and &gt;=2 QC samples (dual-control design); this run has <strong>{nRef}</strong> "
+                + $"reference and <strong>{nQc}</strong> QC of {nSamples} samples.");
+            // Only when BOTH are zero, because that is the signature of sample types never arriving
+            // rather than of a cohort with few controls.
+            if (nRef == 0 && nQc == 0)
+                sb.Append(" No controls were identified at all. If this cohort does have them, their "
+                    + "sample types did not reach PRISM - check the replicate metadata, because a failed "
+                    + "metadata export leaves every sample typed as experimental.");
+            sb.Append("</div>");
             return;
         }
 

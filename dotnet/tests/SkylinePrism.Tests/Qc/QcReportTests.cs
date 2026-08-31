@@ -185,4 +185,78 @@ public class QcReportTests
                 Directory.Delete(tempOut, recursive: true);
         }
     }
+
+    /// <summary>
+    /// A run whose sample types never arrived must SAY SO WITH THE COUNTS, not merely decline to reach a
+    /// verdict.
+    ///
+    /// <para>This is what a failed headless metadata export does to a cohort. Measured, in the field log:
+    /// the metadata export for one of two plates crashed on launch, PRISM fell back to inferring sample
+    /// types from replicate names, the inference matched nothing, and the run completed reporting
+    /// "0 reference, 0 qc, 192 experimental" - against the 16/16/160 the same cohort produces when the
+    /// export succeeds. So 32 control samples silently became experimental, and the QC report's
+    /// dual-control verdict had nothing to validate.</para>
+    ///
+    /// <para>The report said only that it needed "&gt;=2 reference and &gt;=2 QC samples ... not enough of
+    /// both were found", which reads as a fact about the study design - indistinguishable from a cohort
+    /// that never had controls. It must instead give the counts, so 0-of-N reads as the alarm it is, and
+    /// name the metadata as the thing to check.</para>
+    /// </summary>
+    [Fact]
+    public void AReportWithNoControlsNamesTheCountsAndPointsAtTheMetadata()
+    {
+        var mergeDir = Fixtures.Path2("mini", "merge");
+        var inputs = new[]
+        {
+            Path.Combine(mergeDir, "mini_plate1.csv"),
+            Path.Combine(mergeDir, "mini_plate2.csv"),
+        };
+        var config = PrismConfig.Load(Path.Combine(Fixtures.Path2("mini", "e2e-medpolish"), "config.yaml"));
+        config.QcReport.Enabled = false;
+
+        var dir = Path.Combine(Path.GetTempPath(), "prism_qcnoctl_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            PrismPipeline.Run(inputs, dir, config);
+
+            var metadata = Path.Combine(dir, "sample_metadata.csv");
+            var lines = File.ReadAllLines(metadata);
+            var header = CsvLine.Split(lines[0]);
+            var typeIdx = CsvLine.IndexOf(header, "sample_type");
+            Assert.True(typeIdx >= 0, "sample_metadata.csv has no sample_type column");
+
+            // Exactly what losing the metadata does: every sample typed experimental. Asserting the
+            // fixture HAD controls first, so this cannot pass by testing a cohort that never had any.
+            var hadControls = lines.Skip(1)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l => CsvLine.Split(l)[typeIdx])
+                .Any(t => t is "reference" or "qc");
+            Assert.True(hadControls, "fixture has no controls, so this test would prove nothing");
+
+            for (var i = 1; i < lines.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i]))
+                    continue;
+                var f = CsvLine.Split(lines[i]);
+                f[typeIdx] = "experimental";
+                lines[i] = string.Join(",", f);
+            }
+            File.WriteAllLines(metadata, lines);
+
+            var html = File.ReadAllText(QcReport.Generate(dir, config, savePlots: false));
+
+            // The counts, which is the whole point - a reader must be able to see 0 of N.
+            Assert.Contains("<strong>0</strong> reference", html);
+            Assert.Contains("<strong>0</strong> QC", html);
+            // And where to look. Only emitted when BOTH are zero, which is the signature of types never
+            // arriving rather than of a cohort with few controls.
+            Assert.Contains("No controls were identified at all", html);
+            Assert.Contains("check the replicate metadata", html);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
 }
