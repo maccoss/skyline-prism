@@ -115,4 +115,70 @@ public class ExportMemoryBudgetTests
         Assert.Equal("", largest);
         Assert.Equal(MainWindow.GbPerConcurrentExport, budget);
     }
+
+    /// <summary>
+    /// The case the logged failure was actually in: a Skyline already holding one of these documents.
+    ///
+    /// <para>PRISM normally runs as a Skyline external tool, so this is the NORMAL case, not an edge one.
+    /// The 10.6 GB plate in the logged run costs about 2x its .sky resident, so ~21 GB of the 64 was
+    /// already spoken for before any export started - and budgeting against installed RAM counted that
+    /// memory as available twice.</para>
+    /// </summary>
+    [Fact]
+    public void FreeMemoryTightensTheBudget_WhenSkylineAlreadyHoldsADocument()
+    {
+        const double perExport = 6.0;   // a 3 GB document at the measured 2x
+
+        // Installed alone: 60% of 64 GB is 38.4, so six would "fit".
+        Assert.Equal(6, MainWindow.ExportsThatFit(64, perExport));
+
+        // With 23 GB actually free - one big document already open - only two do. The old budget would
+        // have started six Skylines into 23 GB of headroom, and a starved Skyline never recovers.
+        Assert.Equal(2, MainWindow.ExportsThatFit(64, 23, perExport));
+    }
+
+    /// <summary>An idle machine must be completely unaffected - free is only ever a tightening bound.</summary>
+    [Fact]
+    public void AnIdleMachineIsUnchanged()
+    {
+        Assert.Equal(
+            MainWindow.ExportsThatFit(64, 6.0),
+            MainWindow.ExportsThatFit(64, 60, 6.0));
+
+        // And it never LOOSENS the installed bound, even if free somehow read higher than installed.
+        Assert.Equal(
+            MainWindow.ExportsThatFit(64, 6.0),
+            MainWindow.ExportsThatFit(64, 999, 6.0));
+    }
+
+    /// <summary>
+    /// A failed memory query must leave the decision exactly where it was rather than collapsing it to
+    /// sequential: MachineMemory returns null on a machine whose kernel32 entry point is missing, and an
+    /// advisory reading must not be able to slow every run down.
+    /// </summary>
+    [Fact]
+    public void AMissingFreeReadingFallsBackToInstalled()
+    {
+        Assert.Equal(
+            MainWindow.ExportsThatFit(64, 6.0),
+            MainWindow.ExportsThatFit(64, null, 6.0));
+    }
+
+    /// <summary>
+    /// The zero-fits warning is now reachable through free memory, which is the point. A 64 GB machine
+    /// with 4 GB left computed "one export fits" from its installed RAM and went ahead silently; that is
+    /// the exact condition - 4.5 GB free - under which a Skyline was starved and did not recover. Now the
+    /// user is told, and told what would fix it.
+    /// </summary>
+    [Fact]
+    public void ZeroFitsIsReachableThroughFreeMemory()
+    {
+        var perExport = MainWindow.PerExportGbForBytes((long)(10.6 * Gb));   // the logged plate
+
+        // Installed RAM alone says one export fits, so nothing was ever reported.
+        Assert.Equal(1, MainWindow.ExportsThatFit(64, perExport));
+
+        // 4 GB free says none does.
+        Assert.Equal(0, MainWindow.ExportsThatFit(64, 4, perExport));
+    }
 }
