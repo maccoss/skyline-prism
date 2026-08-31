@@ -49,7 +49,12 @@ jobs:
 
   # Coverage gate for the Core + CLI layer. Runs on Linux only (coverage is platform-independent)
   # and fails the build if line OR branch coverage falls below the floor - a regression guard, not a
-  # tight target. Current: ~87% line, ~74% branch; ratchet the floor up as coverage improves.
+  # tight target. Measured 2026-08-31 on coverlet 10.0.1: 92.19% line, 79.14% branch. Ratchet the floor
+  # up as coverage improves.
+  #
+  # Note when comparing against an older number: coverlet 10 finds ~2 points MORE uncovered branches
+  # than 6.0.2 did on the identical commit (81.11% -> 79.14%, line and method unchanged), so a small
+  # branch drop across that upgrade is the tool getting stricter, not the tests getting worse.
   coverage:
     name: Coverage gate (Core + CLI)
     runs-on: ubuntu-latest
