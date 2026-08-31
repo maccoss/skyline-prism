@@ -200,12 +200,15 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
                 // It is up but useless to us - we are about to abandon its pipe, so it would sit there
                 // holding the document open forever.
                 KillSpawned(preexisting, log);
-                throw new InvalidOperationException(
+                throw new TimeoutException(
                     $"{_installation.AppName} started but never connected on the command pipe within "
                     + $"{Min(_maxStartupTimeout, Remaining(callDeadline)).TotalMinutes:F1} min.");
 
             default:
-                throw new InvalidOperationException(
+                // TimeoutException, not InvalidOperationException: this is PRISM giving up, not Skyline
+                // failing. HeadlessSkylineExporter retries a timeout and falls back to CSV only for a
+                // genuine Skyline refusal - such as SkylineCmd's missing Parquet.Net binding.
+                throw new TimeoutException(
                     $"{_installation.AppName} did not start within "
                     + $"{Min(_startupTimeout, Remaining(callDeadline)).TotalSeconds:F0}s (no connection on the command "
                     + "pipe). Another export may be saturating the machine - try exporting one document "

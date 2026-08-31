@@ -296,10 +296,11 @@ public sealed class HeadlessSkylineExporter
                     TryDelete(metadataSidecar);
                     throw;
                 }
-                catch (Exception ex) when (attempt < ParquetAttempts)
+                catch (TimeoutException ex) when (attempt < ParquetAttempts)
                 {
+                    // Only PRISM's own give-ups are retried; a Skyline refusal would just repeat.
                     TryDelete(metadataSidecar);
-                    _log($"Replicate metadata export failed ({ex.Message}); retrying "
+                    _log($"Replicate metadata export timed out ({ex.Message}); retrying "
                          + $"({attempt + 1} of {ParquetAttempts}).");
                 }
             }
@@ -360,11 +361,12 @@ public sealed class HeadlessSkylineExporter
     /// as <c>ParquetNet.dll</c> and needs a <c>codeBase</c>, since a NATIVE <c>parquet.dll</c> occupies the
     /// default probe path) and it dies with "Could not load file or assembly 'Parquet'".</para>
     ///
-    /// <para>So parquet is attempted whenever the runner claims support, and the result is still verified
-    /// rather than trusted - it must be parquet by its PAR1 magic AND be a file this run actually wrote
-    /// (<see cref="ClearPreviousExport"/>). If anything goes wrong we silently produce CSV, which the
-    /// pipeline handles identically; if THAT fails too, the export fails loudly rather than quietly
-    /// reporting whatever was left at the path.</para>
+    /// <para><b>CSV is a BACKUP, not a recovery path.</b> It exists for hosts that cannot write parquet -
+    /// SkylineCmd, or an older Skyline that runs cleanly and leaves something that is not parquet. It is
+    /// NOT the answer to a parquet-capable host failing transiently: on an 11 GB document that trade is a
+    /// 1.28 GB file for a 21.39 GB one, and ~21 minutes for ~87. So when the runner claims parquet
+    /// support and every attempt THREW, the export fails and says so, rather than quietly producing
+    /// something 17x larger that the rest of the run then has to carry.</para>
     /// </summary>
     private (string Path, bool IsParquet) ExportTransitionReport(
         string skyPath, string workDir, string label, string? prismSkyr, CancellationToken cancellationToken)
@@ -400,7 +402,17 @@ public sealed class HeadlessSkylineExporter
                     TryDelete(sidecar);
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not TimeoutException)
+                {
+                    // Skyline itself refused - most importantly SkylineCmd's "Could not load file or
+                    // assembly 'Parquet'", which is the very reason the CSV fallback exists. Retrying
+                    // repeats it, so fall back at once.
+                    TryDelete(sidecar);
+                    _log($"Parquet export refused by {_runner.Description} ({ex.Message}); "
+                         + "falling back to CSV.");
+                    break;
+                }
+                catch (TimeoutException ex)
                 {
                     TryDelete(sidecar);
                     if (attempt < ParquetAttempts)
@@ -409,9 +421,14 @@ public sealed class HeadlessSkylineExporter
                              + $"({attempt + 1} of {ParquetAttempts}).");
                         continue;
                     }
-                    _log($"Parquet export failed {ParquetAttempts} times ({ex.Message}); "
-                         + "falling back to CSV.");
-                    break;
+                    // Every attempt threw on a host that CAN write parquet. CSV would "work" and is
+                    // exactly the wrong answer - see the type remarks. Fail, and say what to try.
+                    throw new InvalidOperationException(
+                        $"Could not export the PRISM report for {Path.GetFileName(skyPath)} as parquet "
+                        + $"after {ParquetAttempts} attempts via {_runner.Description}. Last failure: "
+                        + $"{ex.Message} Not falling back to CSV: this host can write parquet, and the CSV "
+                        + "for a document this size is roughly 17x larger and several times slower to "
+                        + "produce. Re-run, or export this document one at a time.", ex);
                 }
 
                 if (HasContent(sidecar) && ParquetMagic.IsValid(sidecar) && TryPromote(sidecar, parquet))

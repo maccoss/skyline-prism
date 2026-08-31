@@ -244,8 +244,13 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Contains("--report-format=csv", runner.Invocations[1]);
     }
 
+    /// <summary>
+    /// A REFUSAL by Skyline falls back to CSV at once, with no retry - here the real SkylineCmd failure,
+    /// whose config lacks the Parquet.Net binding. Retrying only repeats it. Contrast
+    /// Export_RetriesParquet_WhenAnAttemptThrows, where a TIMEOUT is PRISM giving up and IS retried.
+    /// </summary>
     [Fact]
-    public void Export_FallsBackToCsv_WhenTheParquetAttemptThrows()
+    public void Export_FallsBackToCsv_WhenSkylineRefusesToWriteParquet()
     {
         var dir = TempDir();
         var sky = WriteSky(dir);
@@ -570,6 +575,31 @@ public class HeadlessExporterWithFakeRunnerTests
 
         Assert.True(result.InputIsParquet, "a transient failure must not downgrade the run to CSV");
         Assert.Equal(2, parquetAttempts);
+        Assert.False(File.Exists(Path.Combine(work, "PlateA.csv")), "no CSV should have been written");
+    }
+
+    /// <summary>
+    /// CSV is a BACKUP, not a recovery path. When the host CAN write parquet and every attempt threw, the
+    /// export fails rather than quietly producing something 17x larger: on the real 11 GB document that
+    /// trade was 1.28 GB for 21.39 GB, and ~21 minutes for ~87. The run carrying a CSV it never needed is
+    /// worse than the run stopping and being retried.
+    /// </summary>
+    [Fact]
+    public void Export_FailsRatherThanWriteCsv_WhenAParquetCapableHostKeepsThrowing()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, _) => throw new TimeoutException("Skyline-daily did not start within 180s"),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
+
+        Assert.Contains("as parquet after", ex.Message);
+        Assert.Contains("Not falling back to CSV", ex.Message);
         Assert.False(File.Exists(Path.Combine(work, "PlateA.csv")), "no CSV should have been written");
     }
 
