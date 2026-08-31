@@ -53,6 +53,9 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// <summary>How long Skyline may print nothing before the command is abandoned.</summary>
     private readonly TimeSpan _idleTimeout;
 
+    /// <summary>See the constructor parameter of the same name.</summary>
+    private readonly Func<HashSet<int>, bool> _startedSkylineIsRunning;
+
     /// <param name="maxStartupTimeout">
     /// The backstop for the extended wait; never shorter than <paramref name="startupTimeout"/>, since a
     /// cap below the base deadline could never be reached and would silently do nothing. Injectable so a
@@ -65,11 +68,18 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
     /// <see cref="SkylineIdleWatchdog.DefaultLimit"/>. See that class for why the bound is on silence
     /// rather than total duration. Injectable so a test need not wait twenty minutes for nothing.
     /// </param>
+    /// <param name="startedSkylineIsRunning">
+    /// Whether a Skyline that was not in the given set is running now. Injectable ONLY so a test can
+    /// drive the startup outcomes without a real Skyline: the crash this distinguishes happens about a
+    /// second after launch, so a test that had to reproduce it for real would have to install a broken
+    /// ClickOnce deployment.
+    /// </param>
     public SkylineAppRunner(
         Installation installation, TimeSpan? startupTimeout = null, TimeSpan? maxStartupTimeout = null,
-        TimeSpan? idleTimeout = null)
+        TimeSpan? idleTimeout = null, Func<HashSet<int>, bool>? startedSkylineIsRunning = null)
     {
         _installation = installation;
+        _startedSkylineIsRunning = startedSkylineIsRunning ?? StartedSkylineIsRunning;
         _idleTimeout = idleTimeout ?? SkylineIdleWatchdog.DefaultLimit;
         // A cold ClickOnce start (plus the update check Skyline does on launch) can take a while; the
         // official runner waits 15 s, which is too tight on a first run of the day.
@@ -195,6 +205,20 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
         {
             case StartupResult.Connected:
                 break;
+
+            case StartupResult.StartedThenExited:
+                // A TimeoutException because that is what HeadlessSkylineExporter retries, and a crash
+                // on startup is precisely the failure worth retrying - the alternative branch there
+                // falls back to CSV, which is the wrong answer for a host that can write parquet. The
+                // NAME is a slight stretch for a crash; the message is not, and the message is what a
+                // user reads.
+                throw new TimeoutException(
+                    $"{_installation.AppName} started and then exited without connecting on the command "
+                    + "pipe, so PRISM never handed it any arguments - it crashed during startup. This is "
+                    + "usually a ClickOnce fault in Skyline itself (an UnauthorizedAccessException in "
+                    + "IsolationInterop.CreateActContext, raised before Skyline's own code runs); the "
+                    + "Windows Application event log records it. It is intermittent, and a retry has so "
+                    + "far always succeeded.");
 
             case StartupResult.StartedButNeverConnected:
                 // It is up but useless to us - we are about to abandon its pipe, so it would sit there
@@ -419,6 +443,15 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
 
         /// <summary>Skyline is running but stayed silent past <see cref="_maxStartupTimeout"/>.</summary>
         StartedButNeverConnected,
+
+        /// <summary>
+        /// Skyline appeared and then exited without ever connecting - it crashed before PRISM could hand
+        /// it any arguments. Distinguished from <see cref="NeverStarted"/> because the two are only
+        /// distinguishable WHILE the process is briefly alive, and they need opposite advice: a launch
+        /// that never happened may be a saturated machine, whereas this is Skyline dying on startup and a
+        /// retry is the right response.
+        /// </summary>
+        StartedThenExited,
     }
 
     /// <summary>
@@ -456,6 +489,8 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
 
         var start = DateTime.UtcNow;
         var extended = false;
+        var sawProcess = false;
+        var missedAfterSeen = 0;
         while (true)
         {
             // Checked BEFORE the wait, and the wait is given no token, so a Stop always leaves here as an
@@ -482,15 +517,61 @@ public sealed class SkylineAppRunner : ISkylineCommandRunner
             }
 
             var waited = DateTime.UtcNow - start;
+            var running = _startedSkylineIsRunning(preexisting);
+
+            // Liveness is checked EVERY poll, not only once the base deadline has passed.
+            //
+            // Skyline can die about a SECOND after launch, and in the field it does: all five failed
+            // headless launches in the tool log had a Skyline crash recorded in the Windows Application
+            // event log in the SAME SECOND as the launch - an UnauthorizedAccessException inside
+            // ClickOnce's IsolationInterop.CreateActContext, thrown while the CLR builds the activation
+            // context and therefore before any Skyline code runs at all. Intermittent, not reproducible
+            // on demand, and nothing PRISM can prevent from the outside.
+            //
+            // What PRISM could prevent is the cost of not looking. The old loop's first liveness check
+            // was after the base deadline, so a crash one second in bought three minutes of waiting and
+            // was then reported as "did not start within 180s ... Another export may be saturating the
+            // machine - try exporting one document at a time" - advice that cannot help, in a run that
+            // was already exporting one document at a time. Worse, the retries are budgeted in attempts,
+            // so a crash consumed the whole parquet budget in timeouts and the export fell back to CSV,
+            // which for these documents is ~17x larger and the thing PRISM is meant to avoid. Noticing
+            // in ~2 s instead turns the same failure into a retry - which is what has historically
+            // succeeded, every time, on the very next attempt.
+            if (running)
+            {
+                sawProcess = true;
+                missedAfterSeen = 0;
+            }
+            else
+            {
+                missedAfterSeen++;
+            }
+
+            // TWO consecutive misses before a Skyline we watched appear is called dead. A single one can
+            // be a transient enumeration failure - SkylineProcessIds deliberately swallows those - and
+            // calling a live Skyline dead would abandon a healthy export minutes into its startup.
+            if (sawProcess && missedAfterSeen >= 2)
+            {
+                giveUp.Cancel();
+                return StartupResult.StartedThenExited;
+            }
+
             if (waited < baseDeadline)
                 continue;
 
-            // Past the base deadline. Only a Skyline that is actually up earns more time.
-            var running = StartedSkylineIsRunning(preexisting);
-            if (!running || waited >= maxDeadline)
+            // Past the base deadline. A launch where nothing ever appeared is a different fault from one
+            // that appeared and died, and the two need opposite advice, so they are not merged.
+            if (!sawProcess)
             {
                 giveUp.Cancel();
-                return running ? StartupResult.StartedButNeverConnected : StartupResult.NeverStarted;
+                return StartupResult.NeverStarted;
+            }
+
+            // Only a Skyline that is actually up earns more time.
+            if (waited >= maxDeadline)
+            {
+                giveUp.Cancel();
+                return running ? StartupResult.StartedButNeverConnected : StartupResult.StartedThenExited;
             }
             if (!extended)
             {
