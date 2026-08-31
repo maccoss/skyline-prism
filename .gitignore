@@ -70,3 +70,8 @@ dotnet/build/staging/
 # Benchmark harness build output (dotnet/bench is intentionally outside the solution)
 dotnet/bench/**/bin/
 dotnet/bench/**/obj/
+
+# coverlet writes its report into each test project directory, so running the coverage gate the way
+# dotnet-ci.yml does (no /p:CoverletOutput, so the default path) leaves this behind. It is build output
+# that looks like a source file, one `git add -A` away from being committed.
+coverage.cobertura.xml

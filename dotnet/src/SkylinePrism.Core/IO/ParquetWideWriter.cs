@@ -53,15 +53,15 @@ public static class ParquetWideWriter
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         await using var fs = await OpenWriteWithRetryAsync(path);
-        using var writer = await ParquetWriter.CreateAsync(schema, fs);
-        writer.CompressionMethod = CompressionMethod.Snappy;
+        await using var writer =
+            await ParquetWriter.CreateAsync(schema, fs, ParquetColumnIo.Options());
 
         using var rg = writer.CreateRowGroup();
         var fieldIndex = 0;
         foreach (var mc in metaColumns)
-            await rg.WriteColumnAsync(new DataColumn((DataField)fields[fieldIndex++], mc.Values));
+            await ParquetColumnIo.WriteColumnAsync(rg, (DataField)fields[fieldIndex++], mc.Values);
         for (var s = 0; s < sampleNames.Count; s++)
-            await rg.WriteColumnAsync(new DataColumn((DataField)fields[fieldIndex++], sampleColumns[s]));
+            await ParquetColumnIo.WriteColumnAsync(rg, (DataField)fields[fieldIndex++], sampleColumns[s]);
 
         _ = rowCount; // row count is implied by the column lengths
     }
