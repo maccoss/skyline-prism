@@ -58,19 +58,26 @@ public class SkylineCmdRunnerIdleTests
     }
 
     /// <summary>
-    /// A child that goes silent is stopped - and KILLED, not merely abandoned, because a Skyline left
+    /// A child that says NOTHING is stopped - and KILLED, not merely abandoned, because a Skyline left
     /// running holds its document open with nothing left to stop it. The kill is proved by a marker the
     /// child writes only if it survives to the end of its sleep.
+    ///
+    /// <para>The child is deliberately SILENT rather than speaking once first. An earlier version had it
+    /// echo a line and asserted that line was logged, to show the handlers ran - and that assertion raced
+    /// the bound in the unsafe direction: the kill is safer the slower the machine gets, but "did the
+    /// first line arrive before the clock ran out" is LESS likely to hold. It failed CI twice, once at a
+    /// 1 s bound and again at 4 s, which is a window being widened rather than a race being removed. The
+    /// SawOutput path is proved by AChildThatKeepsTalkingIsNotStopped instead, which is mutation-verified;
+    /// no test here needs to prove both halves.</para>
     /// </summary>
     [Fact]
     public void ASilentChildIsStoppedAndKilled()
     {
         var marker = Path.Combine(Path.GetTempPath(), "prism_marker_" + Guid.NewGuid().ToString("N"));
 
-        // Speaks once (so the handlers are exercised), sleeps 8 s, then writes the marker. The bound is
-        // 4 s, so the kill must land with 4 s to spare - and a slow machine only widens that gap.
-        var (script, _) = WriteScript(
-            $"echo starting& {SleepSeconds(8)}& echo done > \"{marker}\"");
+        // Silent for 8 s, then writes the marker. The bound is 4 s, measured from Process.Start, so the
+        // kill must land with 4 s to spare - and a slower machine only pushes the marker further out.
+        var (script, _) = WriteScript($"{SleepSeconds(8)}& echo done > \"{marker}\"");
         var log = new List<string>();
 
         var runner = new SkylineCmdRunner(script, idleTimeout: TimeSpan.FromSeconds(4));
@@ -80,8 +87,6 @@ public class SkylineCmdRunnerIdleTests
         Assert.Contains("stopped reporting progress", ex.Message);
         // The message must name the cause, because the user's next action depends on it.
         Assert.Contains("runs out of memory", ex.Message);
-        // The first line had a full 4 s to arrive, so this also pins that the handlers ran at all.
-        Assert.Contains(log, l => l.Contains("starting"));
 
         // Well past when the child would have written its marker had it survived.
         Thread.Sleep(TimeSpan.FromSeconds(6));
