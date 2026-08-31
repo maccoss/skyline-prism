@@ -14,17 +14,22 @@ namespace SkylinePrism.Tests.Windows;
 /// SawOutput in the stdout handler, SawOutput in the stderr handler, and the CheckStalled call in the
 /// poll loop. Drop any one and the failure is silent in OPPOSITE directions - a missing SawOutput
 /// abandons healthy multi-hour exports, a missing CheckStalled restores the unbounded hang that cost
-/// 7 h 35 min on the run that prompted all of this. Testing the watchdog in isolation catches neither.</para>
+/// 7 h 35 min on the run that prompted all of this. Testing the watchdog in isolation catches neither -
+/// and it was a rewrite of these that exposed the handlers resetting nothing at all.</para>
 ///
-/// <para><b>Both timings are chosen so the flaky direction is the SAFE one.</b> A first attempt at these
-/// got both wrong: a 1 s bound raced the async output plumbing and failed on CI before the child's first
-/// line arrived, and the talking child used <c>ping -n 1</c>, which returns instantly - so it finished in
-/// milliseconds, never approached the bound, and would have passed with SawOutput deleted. A slower
-/// machine now makes each test MORE likely to pass, never less.</para>
+/// <para><b>Only ONE of these tests may depend on wall-clock timing, and it is the kill.</b> That one is
+/// safe in the flaky direction: a slower machine pushes the child's marker further out, so the kill has
+/// more room, not less. The reset assertion is NOT safe that way - it needs the child talking faster than
+/// the bound while running longer than it, which leaves no margin on a loaded machine. Four attempts at
+/// tuning sleeps proved that, the last passing alone and failing inside the parallel suite, so it is
+/// asked by counting resets instead and has no timing dependence at all.</para>
 /// </summary>
 public class SkylineCmdRunnerIdleTests
 {
-    /// <summary>`ping -n N` waits about N-1 seconds; `-n 1` returns immediately.</summary>
+    /// <summary>
+    /// `ping -n N` waits about N-1 seconds; `-n 1` returns immediately, which is what made an earlier
+    /// version of the talking test pass without ever approaching the bound.
+    /// </summary>
     private static string SleepSeconds(int seconds) => $"ping -n {seconds + 1} 127.0.0.1 >nul";
 
 
@@ -69,9 +74,9 @@ public class SkylineCmdRunnerIdleTests
     /// echo a line and asserted that line was logged, to show the handlers ran - and that assertion raced
     /// the bound in the unsafe direction: the kill is safer the slower the machine gets, but "did the
     /// first line arrive before the clock ran out" is LESS likely to hold. It failed CI twice, once at a
-    /// 1 s bound and again at 4 s, which is a window being widened rather than a race being removed. The
-    /// SawOutput path is proved by AChildThatKeepsTalkingIsNotStopped instead, which is mutation-verified;
-    /// no test here needs to prove both halves.</para>
+    /// 1 s bound and again at 4 s, which is a window being widened rather than a race being removed.
+    /// <see cref="TheOutputHandlersResetTheWatchdog"/> proves that half with no clock at all; no test
+    /// here needs to prove both.</para>
     /// </summary>
     [Fact]
     public void ASilentChildIsStoppedAndKilled()
