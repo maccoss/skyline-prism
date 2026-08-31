@@ -49,8 +49,13 @@ jobs:
 
   # Coverage gate for the Core + CLI layer. Runs on Linux only (coverage is platform-independent)
   # and fails the build if line OR branch coverage falls below the floor - a regression guard, not a
-  # tight target. Measured 2026-08-31 on coverlet 10.0.1: 92.19% line, 79.14% branch. Ratchet the floor
-  # up as coverage improves.
+  # tight target. Measured 2026-08-31 on coverlet 10.0.1: 92.19% line, 79.14% branch (re-measured
+  # locally the same day, same figures).
+  #
+  # The floor is BRANCH-limited: at 75 there are 4.1 points of headroom on branch and 17.2 on line, so
+  # branch is what a regression will trip first. Ratchet it up as coverage improves, but leave real
+  # slack - a floor that sits a fraction under the current number turns any honest refactor into a red
+  # build, and a gate people route around is worse than a loose one.
   #
   # Note when comparing against an older number: coverlet 10 finds ~2 points MORE uncovered branches
   # than 6.0.2 did on the identical commit (81.11% -> 79.14%, line and method unchanged), so a small
@@ -76,7 +81,7 @@ jobs:
           /p:CollectCoverage=true
           /p:CoverletOutputFormat=cobertura
           /p:ThresholdType=line%2cbranch
-          /p:Threshold=70
+          /p:Threshold=75
           /p:ThresholdStat=total
 
   # The Windows Skyline external tool (WPF + named-pipe RPC) builds only on Windows;

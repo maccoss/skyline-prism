@@ -10,7 +10,7 @@
   <ItemGroup>
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
     <PackageReference Include="Parquet.Net" Version="6.1.0" />
-    <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.3" />
+    <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <PackageReference Include="ScottPlot" Version="5.1.59" />
