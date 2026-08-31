@@ -244,8 +244,13 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Contains("--report-format=csv", runner.Invocations[1]);
     }
 
+    /// <summary>
+    /// A REFUSAL by Skyline falls back to CSV at once, with no retry - here the real SkylineCmd failure,
+    /// whose config lacks the Parquet.Net binding. Retrying only repeats it. Contrast
+    /// Export_RetriesParquet_WhenAnAttemptThrows, where a TIMEOUT is PRISM giving up and IS retried.
+    /// </summary>
     [Fact]
-    public void Export_FallsBackToCsv_WhenTheParquetAttemptThrows()
+    public void Export_FallsBackToCsv_WhenSkylineRefusesToWriteParquet()
     {
         var dir = TempDir();
         var sky = WriteSky(dir);
@@ -534,6 +539,132 @@ public class HeadlessExporterWithFakeRunnerTests
 
         Assert.True(runner.Invocations.Count > callsAfterFirst, "the failed export should not be reused");
         Assert.NotNull(second.ReplicatesCsv);
+    }
+
+    /// <summary>
+    /// A THROWN failure is transient - Skyline slow to start, stalled, killed - so the parquet export is
+    /// retried rather than abandoned. Falling back on the first throw is what turned a startup timeout on
+    /// an 11 GB document into a 21.39 GB CSV that took ~87 minutes, when the very next launch (the CSV
+    /// attempt itself) succeeded and would have produced a 1.28 GB parquet in ~21.
+    /// </summary>
+    [Fact]
+    public void Export_RetriesParquet_WhenAnAttemptThrows()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var parquetAttempts = 0;
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".parquet", StringComparison.Ordinal))
+                {
+                    // Fails the way a startup timeout does, then succeeds - the observed pattern.
+                    if (++parquetAttempts == 1)
+                        throw new TimeoutException("Skyline-daily did not start within 180s");
+                    WriteParquet(file);
+                    return;
+                }
+                WriteCsv(file);
+            },
+        };
+
+        var result = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.True(result.InputIsParquet, "a transient failure must not downgrade the run to CSV");
+        Assert.Equal(2, parquetAttempts);
+        Assert.False(File.Exists(Path.Combine(work, "PlateA.csv")), "no CSV should have been written");
+    }
+
+    /// <summary>
+    /// CSV is a BACKUP, not a recovery path. When the host CAN write parquet and every attempt threw, the
+    /// export fails rather than quietly producing something 17x larger: on the real 11 GB document that
+    /// trade was 1.28 GB for 21.39 GB, and ~21 minutes for ~87. The run carrying a CSV it never needed is
+    /// worse than the run stopping and being retried.
+    /// </summary>
+    [Fact]
+    public void Export_FailsRatherThanWriteCsv_WhenAParquetCapableHostKeepsThrowing()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, _) => throw new TimeoutException("Skyline-daily did not start within 180s"),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA"));
+
+        Assert.Contains("as parquet after", ex.Message);
+        Assert.Contains("Not falling back to CSV", ex.Message);
+        Assert.False(File.Exists(Path.Combine(work, "PlateA.csv")), "no CSV should have been written");
+    }
+
+    /// <summary>
+    /// The OTHER failure, which must NOT be retried: the run completes cleanly but the file is not
+    /// parquet. That is SkylineCmd, whose config lacks the Parquet.Net bindings - the reason the CSV
+    /// fallback exists at all - and no number of retries changes it.
+    /// </summary>
+    [Fact]
+    public void Export_FallsBackImmediately_WhenTheRunSucceedsButIsNotParquet()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var parquetAttempts = 0;
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".parquet", StringComparison.Ordinal))
+                    parquetAttempts++;
+                WriteCsv(file);   // never parquet, however often it is asked
+            },
+        };
+
+        var result = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.False(result.InputIsParquet);
+        Assert.Equal(1, parquetAttempts);   // no retry: retrying cannot help this failure
+    }
+
+    /// <summary>
+    /// The metadata export is retried for a sharper reason than the transition report: metadata pairs 1:1
+    /// with the inputs, so one document failing here downgrades the WHOLE run to name-based sample typing -
+    /// which on replicates named "001-A_F4_064" resolves to 0 reference, 0 QC and no control-CV table in
+    /// the QC report.
+    /// </summary>
+    [Fact]
+    public void Export_RetriesTheMetadataExport_WhenAnAttemptThrows()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var metadataAttempts = 0;
+
+        var runner = new FakeRunner(supportsParquet: true)
+        {
+            OnRun = (_, file) =>
+            {
+                if (file.EndsWith(".metadata.csv", StringComparison.Ordinal))
+                {
+                    if (++metadataAttempts == 1)
+                        throw new TimeoutException("Skyline-daily did not start within 180s");
+                    WriteCsv(file);
+                    return;
+                }
+                WriteParquet(file);
+            },
+        };
+
+        var result = new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+
+        Assert.Equal(2, metadataAttempts);
+        Assert.NotNull(result.ReplicatesCsv);
     }
 
     [Fact]

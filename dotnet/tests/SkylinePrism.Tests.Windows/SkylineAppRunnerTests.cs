@@ -111,7 +111,9 @@ public class SkylineAppRunnerTests
         var runner = new SkylineAppRunner(
             installation, TimeSpan.FromSeconds(1), maxStartupTimeout: TimeSpan.FromSeconds(3));
 
-        var ex = Assert.Throws<InvalidOperationException>(
+        // TimeoutException, not InvalidOperationException: PRISM giving up is a different thing from
+        // Skyline refusing, and HeadlessSkylineExporter now retries the first and not the second.
+        var ex = Assert.Throws<TimeoutException>(
             () => runner.Run(new[] { "--in=x.sky" }, _ => { }, CancellationToken.None));
 
         // "did not start" is the expected verdict, but an unrelated Skyline appearing mid-wait legitimately

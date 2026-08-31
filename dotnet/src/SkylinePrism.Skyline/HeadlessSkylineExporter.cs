@@ -275,17 +275,34 @@ public sealed class HeadlessSkylineExporter
         {
             var replicatesSkyr = Path.Combine(workDir, label + ".PRISM-Replicates.skyr");
             ReplicatesReportBuilder.WriteSkyr(replicatesSkyr, annotations);
-            var metadataSidecar = SidecarFor(metadataCsv);
-            try
+            // Retried like the transition report, and for a sharper reason: metadata pairs 1:1 with the
+            // inputs, so ONE document failing here downgrades the WHOLE run to name-based sample typing.
+            // On a cohort whose replicates are named "001-A_F4_064" that finds nothing at all - a real run
+            // came out 192 experimental, 0 QC, 0 reference, with ComBat still enabled and no controls left
+            // to evaluate it against.
+            string? metadataSidecar = null;
+            for (var attempt = 1; ; attempt++)
             {
-                _runner.Run(
-                    BuildArgs(skyPath, replicatesSkyr, ReplicatesReportBuilder.ViewName, metadataSidecar),
-                    _log, cancellationToken);
-            }
-            catch
-            {
-                TryDelete(metadataSidecar);
-                throw;
+                metadataSidecar = SidecarFor(metadataCsv);
+                try
+                {
+                    _runner.Run(
+                        BuildArgs(skyPath, replicatesSkyr, ReplicatesReportBuilder.ViewName, metadataSidecar),
+                        _log, cancellationToken);
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    TryDelete(metadataSidecar);
+                    throw;
+                }
+                catch (TimeoutException ex) when (attempt < ParquetAttempts)
+                {
+                    // Only PRISM's own give-ups are retried; a Skyline refusal would just repeat.
+                    TryDelete(metadataSidecar);
+                    _log($"Replicate metadata export timed out ({ex.Message}); retrying "
+                         + $"({attempt + 1} of {ParquetAttempts}).");
+                }
             }
             if (HasContent(metadataSidecar) && TryPromote(metadataSidecar, metadataCsv))
             {
@@ -344,11 +361,12 @@ public sealed class HeadlessSkylineExporter
     /// as <c>ParquetNet.dll</c> and needs a <c>codeBase</c>, since a NATIVE <c>parquet.dll</c> occupies the
     /// default probe path) and it dies with "Could not load file or assembly 'Parquet'".</para>
     ///
-    /// <para>So parquet is attempted whenever the runner claims support, and the result is still verified
-    /// rather than trusted - it must be parquet by its PAR1 magic AND be a file this run actually wrote
-    /// (<see cref="ClearPreviousExport"/>). If anything goes wrong we silently produce CSV, which the
-    /// pipeline handles identically; if THAT fails too, the export fails loudly rather than quietly
-    /// reporting whatever was left at the path.</para>
+    /// <para><b>CSV is a BACKUP, not a recovery path.</b> It exists for hosts that cannot write parquet -
+    /// SkylineCmd, or an older Skyline that runs cleanly and leaves something that is not parquet. It is
+    /// NOT the answer to a parquet-capable host failing transiently: on an 11 GB document that trade is a
+    /// 1.28 GB file for a 21.39 GB one, and ~21 minutes for ~87. So when the runner claims parquet
+    /// support and every attempt THREW, the export fails and says so, rather than quietly producing
+    /// something 17x larger that the rest of the run then has to carry.</para>
     /// </summary>
     private (string Path, bool IsParquet) ExportTransitionReport(
         string skyPath, string workDir, string label, string? prismSkyr, CancellationToken cancellationToken)
@@ -359,39 +377,82 @@ public sealed class HeadlessSkylineExporter
         var parquet = Path.Combine(workDir, label + ".parquet");
         if (_runner.SupportsParquet)
         {
-            // Skyline writes to a sidecar this run owns, never to the destination. See SidecarFor.
-            var sidecar = SidecarFor(parquet);
-            try
+            // A THROW and a BAD FILE are different failures and must not share a response.
+            //
+            // The CSV fallback exists for one reason: SkylineCmd cannot write parquet at all, so it runs
+            // cleanly and leaves something that is not parquet. No retry helps that - fall back.
+            //
+            // An EXCEPTION is a transient runtime failure of this attempt: Skyline was slow to start, or
+            // stalled, or was killed. Retrying costs one more attempt. Falling back costs far more than
+            // that, and did: a startup timeout on an 11 GB document turned a 1.28 GB parquet that takes
+            // ~21 minutes into a 21.39 GB CSV that took ~87, and the retry that would have avoided it
+            // succeeded on the very next launch - it was the CSV attempt.
+            for (var attempt = 1; ; attempt++)
             {
-                // No --report-format: the extension selects parquet.
-                _runner.Run(BuildArgs(skyPath, prismSkyr, "PRISM", sidecar, format: null), _log, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                TryDelete(sidecar);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log($"Parquet export failed ({ex.Message}); falling back to CSV.");
-            }
-
-            if (HasContent(sidecar) && ParquetMagic.IsValid(sidecar) && TryPromote(sidecar, parquet))
-            {
-                _log($"Exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
-                // A CSV from a previous run that fell back is superseded by this parquet; the two are
-                // alternatives for the same input, and a large cohort's CSV is ~20x the parquet.
-                var superseded = Path.Combine(workDir, label + ".csv");
-                if (File.Exists(superseded))
+                // Skyline writes to a sidecar this run owns, never to the destination. See SidecarFor.
+                var sidecar = SidecarFor(parquet);
+                try
                 {
-                    var bytes = new FileInfo(superseded).Length;
-                    TryDelete(superseded);
-                    if (!File.Exists(superseded))
-                        _log($"Removed the superseded CSV export {superseded} ({bytes:N0} bytes).");
+                    // No --report-format: the extension selects parquet.
+                    _runner.Run(
+                        BuildArgs(skyPath, prismSkyr, "PRISM", sidecar, format: null), _log, cancellationToken);
                 }
-                return (parquet, true);
+                catch (OperationCanceledException)
+                {
+                    TryDelete(sidecar);
+                    throw;
+                }
+                catch (Exception ex) when (ex is not TimeoutException)
+                {
+                    // Skyline itself refused - most importantly SkylineCmd's "Could not load file or
+                    // assembly 'Parquet'", which is the very reason the CSV fallback exists. Retrying
+                    // repeats it, so fall back at once.
+                    TryDelete(sidecar);
+                    _log($"Parquet export refused by {_runner.Description} ({ex.Message}); "
+                         + "falling back to CSV.");
+                    break;
+                }
+                catch (TimeoutException ex)
+                {
+                    TryDelete(sidecar);
+                    if (attempt < ParquetAttempts)
+                    {
+                        _log($"Parquet export failed ({ex.Message}); retrying "
+                             + $"({attempt + 1} of {ParquetAttempts}).");
+                        continue;
+                    }
+                    // Every attempt threw on a host that CAN write parquet. CSV would "work" and is
+                    // exactly the wrong answer - see the type remarks. Fail, and say what to try.
+                    throw new InvalidOperationException(
+                        $"Could not export the PRISM report for {Path.GetFileName(skyPath)} as parquet "
+                        + $"after {ParquetAttempts} attempts via {_runner.Description}. Last failure: "
+                        + $"{ex.Message} Not falling back to CSV: this host can write parquet, and the CSV "
+                        + "for a document this size is roughly 17x larger and several times slower to "
+                        + "produce. Re-run, or export this document one at a time.", ex);
+                }
+
+                if (HasContent(sidecar) && ParquetMagic.IsValid(sidecar) && TryPromote(sidecar, parquet))
+                {
+                    _log($"Exported {parquet} ({new FileInfo(parquet).Length:N0} bytes, parquet).");
+                    // A CSV from a previous run that fell back is superseded by this parquet; the two are
+                    // alternatives for the same input, and a large cohort's CSV is ~20x the parquet.
+                    var superseded = Path.Combine(workDir, label + ".csv");
+                    if (File.Exists(superseded))
+                    {
+                        var bytes = new FileInfo(superseded).Length;
+                        TryDelete(superseded);
+                        if (!File.Exists(superseded))
+                            _log($"Removed the superseded CSV export {superseded} ({bytes:N0} bytes).");
+                    }
+                    return (parquet, true);
+                }
+
+                // Ran cleanly and produced something that is not parquet - this host cannot write it,
+                // which is exactly what the CSV fallback is for. Retrying would only repeat it.
+                TryDelete(sidecar);
+                _log($"{_runner.Description} completed but produced no valid parquet; falling back to CSV.");
+                break;
             }
-            TryDelete(sidecar); // a failed run can leave a stub behind; the destination is untouched
         }
 
         var csv = Path.Combine(workDir, label + ".csv");
@@ -461,6 +522,13 @@ public sealed class HeadlessSkylineExporter
     /// took exactly that wrong turn during review.
     /// </remarks>
     public const string SidecarPrefix = "prism-partial-";
+
+    /// <summary>
+    /// How many times a report export is attempted before giving up on it. A thrown failure is transient -
+    /// Skyline slow to start, stalled, or killed - and the next launch usually works: on the run that
+    /// prompted this, the retry that would have succeeded WAS the CSV attempt, made moments later.
+    /// </summary>
+    private const int ParquetAttempts = 3;
 
     /// <summary>Whether <paramref name="path"/> is an in-progress export rather than a finished one.</summary>
     public static bool IsSidecar(string path) =>
