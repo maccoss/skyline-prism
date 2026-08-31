@@ -1217,7 +1217,17 @@ public partial class MainWindow : Window
         // The budget is a FUNCTION OF THE LARGEST DOCUMENT, not a constant. See PerExportGb.
         var perExportGb = PerExportGb(inputs, out var largest, out var largestGb);
 
-        var byMemory = ExportsThatFit(totalGb, perExportGb);
+        // What is FREE matters as much as what is installed, and this used to ignore it. PRISM normally
+        // runs as a Skyline external tool, so the common case is a Skyline ALREADY holding one of these
+        // documents - about 2x its .sky, so ~21 GB for the 10.6 GB plate in the logged run. Budgeting
+        // against installed RAM counts that memory as available twice.
+        //
+        // The old code knew this - the warning below says "an open Skyline holding a big document is
+        // usually the difference" - but only said it on the way to failing. Now it is part of the
+        // decision.
+        var machine = MachineMemory.Read();
+        var availableGb = machine?.AvailableGb;
+        var byMemory = ExportsThatFit(totalGb, availableGb, perExportGb);
 
         // byMemory == 0 means not even ONE export is expected to fit. Clamping silently to 1 - which is
         // what this did - tells the user nothing and then fails deep inside Skyline, which reports memory
@@ -1225,7 +1235,7 @@ public partial class MainWindow : Window
         // let them act: an open Skyline holding a big document is usually the difference.
         if (byMemory == 0)
         {
-            var freeGb = MachineMemory.FreePhysicalGb();
+            var freeGb = availableGb;
             Log($"WARNING: '{largest}' is {largestGb:N1} GB, so one export alone is expected to need "
                 + $"about {perExportGb:N0} GB - more than the {totalGb * MemoryFractionForExports:N0} GB budgeted from this "
                 + $"machine's {totalGb:N0} GB."
@@ -1236,12 +1246,16 @@ public partial class MainWindow : Window
         }
 
         var degree = Math.Max(1, Math.Min(Math.Min(byMemory, MaxConcurrentExports), exporting));
+        // Naming the free figure makes the choice auditable: "one at a time on a 64 GB machine" reads as
+        // a bug until you know 23 GB of it was already spoken for.
+        var freeNote = availableGb is not null ? $", {availableGb:N0} GB free" : "";
         if (degree > 1)
-            Log($"Exporting up to {degree} documents at a time ({totalGb:N0} GB RAM, budgeting "
+            Log($"Exporting up to {degree} documents at a time ({totalGb:N0} GB RAM{freeNote}, budgeting "
                 + $"{perExportGb:N1} GB per export for '{largest}' at {largestGb:N1} GB).");
         else
             Log($"Exporting one document at a time: '{largest}' is {largestGb:N1} GB, so each export is "
-                + $"budgeted {perExportGb:N1} GB and {totalGb:N0} GB RAM is not enough to overlap safely.");
+                + $"budgeted {perExportGb:N1} GB and {totalGb:N0} GB RAM{freeNote} is not enough to "
+                + "overlap safely.");
         return degree;
     }
 
@@ -1300,6 +1314,27 @@ public partial class MainWindow : Window
     /// </summary>
     internal static int ExportsThatFit(double totalGb, double perExportGb) =>
         perExportGb <= 0 ? 0 : (int)Math.Floor(totalGb * MemoryFractionForExports / perExportGb);
+
+    /// <summary>
+    /// How many exports fit, bounded by BOTH the installed RAM and what is free right now - the smaller
+    /// of the two, since either can be the binding constraint.
+    ///
+    /// <para>Free matters because PRISM normally runs as a Skyline external tool, so the usual case is a
+    /// Skyline ALREADY holding one of the documents about to be exported - roughly 2x its .sky, so ~21 GB
+    /// for the 10.6 GB plate in the logged run. Budgeting against installed RAM alone counts that memory
+    /// as available twice, and the penalty for getting it wrong is not slowness: a starved Skyline stops
+    /// making progress and does NOT recover when memory is freed.</para>
+    ///
+    /// <para>The same 60% fraction applies to the free figure. On Windows the available count includes the
+    /// standby list, so a warm page cache does not make the machine look artificially full.</para>
+    ///
+    /// <para><paramref name="availableGb"/> is null when the query failed; the installed bound then stands
+    /// alone, which is what this did before free memory was consulted at all.</para>
+    /// </summary>
+    internal static int ExportsThatFit(double totalGb, double? availableGb, double perExportGb) =>
+        Math.Min(
+            ExportsThatFit(totalGb, perExportGb),
+            ExportsThatFit(availableGb ?? totalGb, perExportGb));
 
     /// <summary>
     /// Share of RAM exports may use. The merge that follows sizes itself against RAM too, but it runs
