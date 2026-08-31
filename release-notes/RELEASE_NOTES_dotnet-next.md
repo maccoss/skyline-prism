@@ -23,6 +23,15 @@ as the GitHub Release description and fails if it is missing.
   succeeded on the next attempt. A single missed process enumeration is not treated as a crash, so a
   Skyline legitimately minutes into opening a large document is still waited out.
 
+- **A QC report with no control samples now gives the counts.** It said only that the verdict needs
+  ">=2 reference and >=2 QC samples ... not enough of both were found", which reads as a fact about the
+  study design - so a cohort that HAD 16 reference and 16 QC samples and lost them produced a report
+  indistinguishable from one that never had any. That is what a failed replicate-metadata export does:
+  PRISM falls back to inferring sample types from replicate names, and where the names carry no type the
+  inference matches nothing, so 32 controls silently became experimental and the dual-control verdict had
+  nothing to validate. The report now states "0 reference and 0 QC of 192 samples", and when both are
+  zero it names the replicate metadata as the thing to check.
+
 ## Performance
 
 ## Breaking Changes
