@@ -181,4 +181,43 @@ public class ExportMemoryBudgetTests
         // 4 GB free says none does.
         Assert.Equal(0, MainWindow.ExportsThatFit(64, 4, perExport));
     }
+
+    /// <summary>
+    /// Falling short of the budget is not the same as not fitting the machine, and only the second is
+    /// worth a warning.
+    ///
+    /// <para>This is a regression test for a false alarm seen in a live run. Because free memory is always
+    /// &lt;= installed, the free bound always decides the budget - so on a 64 GB machine with 33 GB free,
+    /// 60% of free is 19.8 GB, one export needing 21.2 GB "did not fit the budget", and the user was told
+    /// to close Skyline windows for an export that fitted in free memory with 12 GB to spare. Advice that
+    /// is unnecessary gets ignored when it is not.</para>
+    /// </summary>
+    [Fact]
+    public void ShortOfTheBudgetIsNotTheSameAsNotFittingTheMachine()
+    {
+        var perExport = MainWindow.PerExportGbForBytes((long)(10.6 * Gb));   // the logged plate, ~21.2 GB
+
+        // The live case: nothing fits the budget, so exports must not overlap...
+        Assert.Equal(0, MainWindow.ExportsThatFit(64, 33, perExport));
+        // ...but one export does fit the machine, so this must NOT be reported as a failure risk.
+        Assert.True(MainWindow.OneExportFitsInFreeMemory(33, perExport));
+
+        // The starvation case that motivated all of this - 4.5 GB free - genuinely does not fit.
+        Assert.False(MainWindow.OneExportFitsInFreeMemory(4.5, perExport));
+
+        // Exactly at the reserve boundary: 21.2 GB needs 21.2 + 4 free.
+        Assert.True(MainWindow.OneExportFitsInFreeMemory(perExport + MainWindow.SystemReserveGb, perExport));
+        Assert.False(MainWindow.OneExportFitsInFreeMemory(perExport + MainWindow.SystemReserveGb - 0.1, perExport));
+    }
+
+    /// <summary>
+    /// An unreadable free-memory figure must not be able to raise an alarm - MachineMemory returns null
+    /// where kernel32's entry point is missing, and an advisory number that could not be read has no
+    /// business telling the user their machine is too full.
+    /// </summary>
+    [Fact]
+    public void AMissingFreeReadingNeverRaisesTheAlarm()
+    {
+        Assert.True(MainWindow.OneExportFitsInFreeMemory(null, 1000.0));
+    }
 }
