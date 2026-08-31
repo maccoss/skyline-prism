@@ -35,6 +35,13 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
 
     public string Description => $"SkylineCmd ({_exePath})";
 
+    /// <summary>
+    /// The watchdog built by the most recent <see cref="Run"/>. Exposed for tests, which use its
+    /// <see cref="SkylineIdleWatchdog.SawOutputCount"/> to check the output handlers are wired to it -
+    /// a question that is otherwise only answerable by racing a real deadline.
+    /// </summary>
+    internal SkylineIdleWatchdog? LastWatchdog { get; private set; }
+
     /// <summary>False - see the class remarks; the caller must not ask this runner for parquet.</summary>
     public bool SupportsParquet => false;
 
@@ -85,31 +92,33 @@ public sealed class SkylineCmdRunner : ISkylineCommandRunner
         // export legitimately takes an hour - so a SkylineCmd that stalled blocked the run forever, which
         // is exactly the failure the app runner's bound was added to prevent. See SkylineIdleWatchdog.
         //
-        // Created here but STARTED below, after Process.Start: the clock must measure SkylineCmd's
-        // silence, not the time we spend launching it. Charging startup to the silence budget conflates
-        // two different waits in a class that has no separate startup deadline, and would begin killing
-        // exports during a legitimately slow document open if the bound were ever tightened.
-        SkylineIdleWatchdog? idleWatch = null;
+        // Built HERE, before the handlers, and its clock restarted after Process.Start below. The
+        // first cut deferred construction instead and left the handlers holding a nullable captured
+        // local - which they read from a threadpool callback with no barrier, saw as null, and so logged
+        // output while resetting the clock zero times. Non-null capture removes the race; RestartClock
+        // keeps the original intent, that launching the process is not charged to the silence budget.
+        var idleWatch = new SkylineIdleWatchdog("SkylineCmd", _idleTimeout);
+        LastWatchdog = idleWatch;
 
         process.OutputDataReceived += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
-            idleWatch?.SawOutput();
+            idleWatch.SawOutput();
             log("    " + e.Data);
         };
         process.ErrorDataReceived += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
-            idleWatch?.SawOutput();
+            idleWatch.SawOutput();
             log("    " + e.Data);
             stderr.AppendLine(e.Data);
         };
 
         if (!process.Start())
             throw new InvalidOperationException($"Could not start {_exePath}.");
-        idleWatch = new SkylineIdleWatchdog("SkylineCmd", _idleTimeout);
+        idleWatch.RestartClock();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 

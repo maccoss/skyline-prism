@@ -64,10 +64,29 @@ public sealed class SkylineIdleWatchdog
         _lastOutputTicks = _now().Ticks;
     }
 
+    /// <summary>
+    /// How many times the clock has been restarted. Exists so a test can ask "were the output handlers
+    /// wired to this watchdog" WITHOUT racing a wall-clock deadline: asserting that instead took four
+    /// attempts at tuning sleep durations, and still failed inside a parallel suite, because the property
+    /// needed the child's inter-line gap far under the bound AND its total run over it - which leaves no
+    /// margin on a loaded machine.
+    /// </summary>
+    public int SawOutputCount { get; private set; }
+
+    /// <summary>
+    /// Restart the clock without counting as output. Used once the child process actually exists, so the
+    /// time spent launching it is not charged to the silence budget - the watchdog itself is built BEFORE
+    /// the output handlers are wired, because a nullable captured local read from a threadpool callback is
+    /// a visibility race: the handlers logged three lines and reset the clock zero times, since they saw
+    /// the pre-assignment null.
+    /// </summary>
+    public void RestartClock() => Interlocked.Exchange(ref _lastOutputTicks, _now().Ticks);
+
     /// <summary>Skyline said something, so it is alive; the clock restarts.</summary>
     public void SawOutput()
     {
         Interlocked.Exchange(ref _lastOutputTicks, _now().Ticks);
+        SawOutputCount++;
         _warned = false;
     }
 

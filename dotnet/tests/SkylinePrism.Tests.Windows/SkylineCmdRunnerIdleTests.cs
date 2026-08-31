@@ -27,6 +27,7 @@ public class SkylineCmdRunnerIdleTests
     /// <summary>`ping -n N` waits about N-1 seconds; `-n 1` returns immediately.</summary>
     private static string SleepSeconds(int seconds) => $"ping -n {seconds + 1} 127.0.0.1 >nul";
 
+
     private static (string Script, string Dir) WriteScript(string body)
     {
         var dir = Path.Combine(Path.GetTempPath(), "prism_cmdrunner_" + Guid.NewGuid().ToString("N"));
@@ -37,24 +38,26 @@ public class SkylineCmdRunnerIdleTests
     }
 
     /// <summary>
-    /// A child that keeps talking must be left alone, however long it runs. This is the direction that
-    /// matters most - a broken SawOutput would abandon a perfectly healthy multi-hour export - so the
-    /// child deliberately runs FOUR TIMES the idle bound while speaking every second.
+    /// The output handlers must reset the watchdog, or a healthy multi-hour export is abandoned after
+    /// twenty minutes of real work. Asked by COUNTING resets rather than by racing a deadline: a child
+    /// that must talk faster than the bound while running longer than it leaves no margin on a loaded
+    /// machine, which four attempts at tuning sleeps demonstrated - the last one passing alone and
+    /// failing inside the parallel suite. This version has no timing dependence at all.
     /// </summary>
     [Fact]
-    public void AChildThatKeepsTalkingIsNotStopped()
+    public void TheOutputHandlersResetTheWatchdog()
     {
-        // ~6 s of work, a line every second, against a 4 s bound: without SawOutput resetting the clock
-        // this trips at 4 s and the test fails, which is exactly the regression being guarded.
-        var (script, _) = WriteScript(
-            $"for /L %%i in (1,1,6) do (echo progress %%i& {SleepSeconds(1)})");
+        // Prints and exits immediately; the bound is never approached, so nothing here can race.
+        var (script, _) = WriteScript("echo progress 1& echo progress 2& echo progress 3");
         var log = new List<string>();
 
-        new SkylineCmdRunner(script, idleTimeout: TimeSpan.FromSeconds(4))
-            .Run(Array.Empty<string>(), log.Add, CancellationToken.None);
+        var runner = new SkylineCmdRunner(script, idleTimeout: TimeSpan.FromMinutes(10));
+        runner.Run(Array.Empty<string>(), log.Add, CancellationToken.None);
 
-        Assert.Contains(log, l => l.Contains("progress 6"));
-        Assert.DoesNotContain(log, l => l.Contains("no output from"));
+        Assert.Contains(log, l => l.Contains("progress 3"));
+        Assert.NotNull(runner.LastWatchdog);
+        Assert.True(runner.LastWatchdog!.SawOutputCount >= 3,
+            $"expected the handlers to reset the watchdog per line, saw {runner.LastWatchdog.SawOutputCount}");
     }
 
     /// <summary>
