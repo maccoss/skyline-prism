@@ -52,7 +52,7 @@ internal sealed class ParquetColumnReader : IDisposable
         var fs = File.OpenRead(path);
         try
         {
-            var reader = ParquetReader.CreateAsync(fs).GetAwaiter().GetResult();
+            var reader = ParquetReader.CreateAsync(fs, ParquetColumnIo.Options()).GetAwaiter().GetResult();
             return new ParquetColumnReader(fs, reader);
         }
         catch
@@ -99,7 +99,7 @@ internal sealed class ParquetColumnReader : IDisposable
         for (var rg = 0; rg < _reader.RowGroupCount; rg++)
         {
             using var rgReader = _reader.OpenRowGroupReader(rg);
-            var data = rgReader.ReadColumnAsync(field).GetAwaiter().GetResult().Data;
+            var data = ParquetColumnIo.ReadColumnAsync(rgReader, field).GetAwaiter().GetResult();
             CopyAsDoubles(data, result, offset);
             offset += data.Length;
         }
@@ -115,7 +115,7 @@ internal sealed class ParquetColumnReader : IDisposable
         for (var rg = 0; rg < _reader.RowGroupCount; rg++)
         {
             using var rgReader = _reader.OpenRowGroupReader(rg);
-            var data = rgReader.ReadColumnAsync(field).GetAwaiter().GetResult().Data;
+            var data = ParquetColumnIo.ReadColumnAsync(rgReader, field).GetAwaiter().GetResult();
             for (var i = 0; i < data.Length; i++)
                 result[offset + i] = data.GetValue(i) as string ?? string.Empty;
             offset += data.Length;
@@ -128,7 +128,8 @@ internal sealed class ParquetColumnReader : IDisposable
 
     public void Dispose()
     {
-        _reader.Dispose();
+        // Sync facade over an IAsyncDisposable reader - see StreamingWideWriter.Dispose.
+        _reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _fs.Dispose();
     }
 
@@ -190,7 +191,7 @@ internal sealed class ParquetColumnReader : IDisposable
 
         /// <summary>This row group's slice of a column, in its stored type (string[], long[], ...).</summary>
         public Array ReadRaw(string name)
-            => _reader.ReadColumnAsync(_owner.Field(name)).GetAwaiter().GetResult().Data;
+            => ParquetColumnIo.ReadColumnAsync(_reader, _owner.Field(name)).GetAwaiter().GetResult();
 
         public void Dispose() => _reader.Dispose();
     }
