@@ -5,7 +5,15 @@
          ScottPlot views (Layer 11). AssemblyName must match the Command in the
          tool-inf manifest (SkylinePrism.exe). -->
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Platform version 10.0.19041 (Windows 10 2004), NOT the default 7.0. ScottPlot.WPF brings
+         SkiaSharp.Views.WPF, which ships lib/net462, lib/net6.0-windows10.0.19041 and
+         lib/net8.0-windows10.0.19041 - so a project on net10.0-windows7.0 cannot match the modern
+         assets and NuGet silently falls back to net462, taking NU1701 and running WPF controls
+         through the .NET Framework compatibility shim. This is the smallest bar that resolves them;
+         Windows 11 was authorised but is not required, and asking for more than is needed only
+         narrows who can run the tool. Raising it further is a user-facing decision, so state the
+         minimum in tool-inf/info.properties whenever it moves. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>SkylinePrism</AssemblyName>
     <RootNamespace>SkylinePrism.App</RootNamespace>
@@ -26,7 +34,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ScottPlot.WPF" Version="5.0.55" />
+    <PackageReference Include="ScottPlot.WPF" Version="5.1.59" />
   </ItemGroup>
 
   <ItemGroup>
