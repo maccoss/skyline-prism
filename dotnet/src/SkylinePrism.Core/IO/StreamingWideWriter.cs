@@ -41,8 +41,10 @@ public sealed class StreamingWideWriter : IDisposable
         var schema = new ParquetSchema(fields);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var fs = OpenWriteWithRetry(path);
-        var writer = ParquetWriter.CreateAsync(schema, fs).GetAwaiter().GetResult();
-        writer.CompressionMethod = CompressionMethod.Snappy;
+        // Compression moved from a writer property to the options in Parquet.Net 6.
+        var writer = ParquetWriter
+            .CreateAsync(schema, fs, ParquetColumnIo.Options())
+            .GetAwaiter().GetResult();
         return new StreamingWideWriter(fs, writer, fields);
     }
 
@@ -57,14 +59,19 @@ public sealed class StreamingWideWriter : IDisposable
         using var rg = _writer.CreateRowGroup();
         var idx = 0;
         foreach (var arr in metaColumnData)
-            rg.WriteColumnAsync(new DataColumn((DataField)_fields[idx++], arr)).GetAwaiter().GetResult();
+            ParquetColumnIo.WriteColumnAsync((ParquetRowGroupWriter)rg, (DataField)_fields[idx++], arr)
+                .GetAwaiter().GetResult();
         foreach (var col in sampleColumnData)
-            rg.WriteColumnAsync(new DataColumn((DataField)_fields[idx++], col)).GetAwaiter().GetResult();
+            ParquetColumnIo.WriteColumnAsync((ParquetRowGroupWriter)rg, (DataField)_fields[idx++], col)
+                .GetAwaiter().GetResult();
     }
 
     public void Dispose()
     {
-        _writer.Dispose();
+        // ParquetWriter is IAsyncDisposable only in Parquet.Net 6; this class presents a sync facade to
+        // callers that are themselves sync, so the disposal is blocked on here rather than pushed onto
+        // them. The writer's own row-group writer is still sync-disposable.
+        _writer.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _fs.Dispose();
     }
 

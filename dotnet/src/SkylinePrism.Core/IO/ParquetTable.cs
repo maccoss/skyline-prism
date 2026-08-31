@@ -57,14 +57,22 @@ public sealed class ParquetTable
     public static IReadOnlyList<string> ReadColumnNames(string path)
     {
         using var fs = File.OpenRead(path);
-        using var reader = ParquetReader.CreateAsync(fs).GetAwaiter().GetResult();
-        return reader.Schema.DataFields.Select(f => f.Name).ToList();
+        // ParquetReader is IAsyncDisposable only in Parquet.Net 6, and this accessor is sync.
+        var reader = ParquetReader.CreateAsync(fs, ParquetColumnIo.Options()).GetAwaiter().GetResult();
+        try
+        {
+            return reader.Schema.DataFields.Select(f => f.Name).ToList();
+        }
+        finally
+        {
+            reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
     }
 
     public static async Task<ParquetTable> LoadAsync(string path)
     {
         await using var fs = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(fs);
+        await using var reader = await ParquetReader.CreateAsync(fs, ParquetColumnIo.Options());
         var dataFields = reader.Schema.DataFields;
 
         // Accumulate each field's data across all row groups.
@@ -74,8 +82,7 @@ public sealed class ParquetTable
             using var rgReader = reader.OpenRowGroupReader(rg);
             foreach (var field in dataFields)
             {
-                var col = await rgReader.ReadColumnAsync(field);
-                accum[field.Name].Add(col.Data);
+                accum[field.Name].Add(await ParquetColumnIo.ReadColumnAsync(rgReader, field));
             }
         }
 
