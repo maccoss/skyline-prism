@@ -17,6 +17,22 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!--
+    PINNED, AND BEHIND THE SHIPPING CODE ON PURPOSE - but read this before trusting a new number.
+
+    This project is not in any solution or filter, so `dotnet build` and CI never touch it, and it kept
+    these versions when Core moved to DuckDB.NET 1.5.5 and Parquet.Net 6.1.0. That is fine for what the
+    recorded arms in ../../STAGE2_THROUGHPUT.md are: a historical comparison of two candidate Stage 2
+    readers that were measured and REJECTED. Re-pinning them would not make that record truer.
+
+    It is NOT fine for a fresh measurement. Arm A is the reader Stage 2 actually uses, so benchmarking a
+    Stage 2 change here compares your change against a DIFFERENT DuckDB than the one that will run it -
+    and DuckDB is precisely where behaviour has moved under PRISM before (see the DuckDB.NET caution in
+    CLAUDE.md). So: bump BOTH lines to match SkylinePrism.Core before quoting a new figure, and re-check
+    the cross-arm rows/peptides/values equality afterwards, because arms B and C call
+    ParquetRowGroupReader.ReadColumnAsync(...).Data - removed in Parquet.Net 6 - and porting them is the
+    one place a ported arm could silently start accumulating less work than it used to.
+  -->
   <ItemGroup>
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.3" />
     <PackageReference Include="Parquet.Net" Version="5.6.1" />
