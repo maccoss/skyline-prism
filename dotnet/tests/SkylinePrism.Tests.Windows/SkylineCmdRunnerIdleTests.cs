@@ -14,18 +14,24 @@ namespace SkylinePrism.Tests.Windows;
 /// SawOutput in the stdout handler, SawOutput in the stderr handler, and the CheckStalled call in the
 /// poll loop. Drop any one and the failure is silent in OPPOSITE directions - a missing SawOutput
 /// abandons healthy multi-hour exports, a missing CheckStalled restores the unbounded hang that cost
-/// 7 h 35 min on the run that prompted all of this. Testing the watchdog in isolation catches neither.</para>
+/// 7 h 35 min on the run that prompted all of this. Testing the watchdog in isolation catches neither -
+/// and it was a rewrite of these that exposed the handlers resetting nothing at all.</para>
 ///
-/// <para><b>Both timings are chosen so the flaky direction is the SAFE one.</b> A first attempt at these
-/// got both wrong: a 1 s bound raced the async output plumbing and failed on CI before the child's first
-/// line arrived, and the talking child used <c>ping -n 1</c>, which returns instantly - so it finished in
-/// milliseconds, never approached the bound, and would have passed with SawOutput deleted. A slower
-/// machine now makes each test MORE likely to pass, never less.</para>
+/// <para><b>Only ONE of these tests may depend on wall-clock timing, and it is the kill.</b> That one is
+/// safe in the flaky direction: a slower machine pushes the child's marker further out, so the kill has
+/// more room, not less. The reset assertion is NOT safe that way - it needs the child talking faster than
+/// the bound while running longer than it, which leaves no margin on a loaded machine. Four attempts at
+/// tuning sleeps proved that, the last passing alone and failing inside the parallel suite, so it is
+/// asked by counting resets instead and has no timing dependence at all.</para>
 /// </summary>
 public class SkylineCmdRunnerIdleTests
 {
-    /// <summary>`ping -n N` waits about N-1 seconds; `-n 1` returns immediately.</summary>
+    /// <summary>
+    /// `ping -n N` waits about N-1 seconds; `-n 1` returns immediately, which is what made an earlier
+    /// version of the talking test pass without ever approaching the bound.
+    /// </summary>
     private static string SleepSeconds(int seconds) => $"ping -n {seconds + 1} 127.0.0.1 >nul";
+
 
     private static (string Script, string Dir) WriteScript(string body)
     {
@@ -37,24 +43,26 @@ public class SkylineCmdRunnerIdleTests
     }
 
     /// <summary>
-    /// A child that keeps talking must be left alone, however long it runs. This is the direction that
-    /// matters most - a broken SawOutput would abandon a perfectly healthy multi-hour export - so the
-    /// child deliberately runs FOUR TIMES the idle bound while speaking every second.
+    /// The output handlers must reset the watchdog, or a healthy multi-hour export is abandoned after
+    /// twenty minutes of real work. Asked by COUNTING resets rather than by racing a deadline: a child
+    /// that must talk faster than the bound while running longer than it leaves no margin on a loaded
+    /// machine, which four attempts at tuning sleeps demonstrated - the last one passing alone and
+    /// failing inside the parallel suite. This version has no timing dependence at all.
     /// </summary>
     [Fact]
-    public void AChildThatKeepsTalkingIsNotStopped()
+    public void TheOutputHandlersResetTheWatchdog()
     {
-        // ~6 s of work, a line every second, against a 4 s bound: without SawOutput resetting the clock
-        // this trips at 4 s and the test fails, which is exactly the regression being guarded.
-        var (script, _) = WriteScript(
-            $"for /L %%i in (1,1,6) do (echo progress %%i& {SleepSeconds(1)})");
+        // Prints and exits immediately; the bound is never approached, so nothing here can race.
+        var (script, _) = WriteScript("echo progress 1& echo progress 2& echo progress 3");
         var log = new List<string>();
 
-        new SkylineCmdRunner(script, idleTimeout: TimeSpan.FromSeconds(4))
-            .Run(Array.Empty<string>(), log.Add, CancellationToken.None);
+        var runner = new SkylineCmdRunner(script, idleTimeout: TimeSpan.FromMinutes(10));
+        runner.Run(Array.Empty<string>(), log.Add, CancellationToken.None);
 
-        Assert.Contains(log, l => l.Contains("progress 6"));
-        Assert.DoesNotContain(log, l => l.Contains("no output from"));
+        Assert.Contains(log, l => l.Contains("progress 3"));
+        Assert.NotNull(runner.LastWatchdog);
+        Assert.True(runner.LastWatchdog!.SawOutputCount >= 3,
+            $"expected the handlers to reset the watchdog per line, saw {runner.LastWatchdog.SawOutputCount}");
     }
 
     /// <summary>
@@ -66,9 +74,9 @@ public class SkylineCmdRunnerIdleTests
     /// echo a line and asserted that line was logged, to show the handlers ran - and that assertion raced
     /// the bound in the unsafe direction: the kill is safer the slower the machine gets, but "did the
     /// first line arrive before the clock ran out" is LESS likely to hold. It failed CI twice, once at a
-    /// 1 s bound and again at 4 s, which is a window being widened rather than a race being removed. The
-    /// SawOutput path is proved by AChildThatKeepsTalkingIsNotStopped instead, which is mutation-verified;
-    /// no test here needs to prove both halves.</para>
+    /// 1 s bound and again at 4 s, which is a window being widened rather than a race being removed.
+    /// <see cref="TheOutputHandlersResetTheWatchdog"/> proves that half with no clock at all; no test
+    /// here needs to prove both.</para>
     /// </summary>
     [Fact]
     public void ASilentChildIsStoppedAndKilled()
