@@ -82,6 +82,57 @@ The dataset: 6 peptides across 3 proteins, 2 batches, 13 reference (`-Pool_`) + 
 - Intermediate parquet (`peptides_rollup`, `peptides_log2_internal`, `proteins_raw`) are
   LOG2; final `corrected_peptides`/`corrected_proteins` are LINEAR.
 
+## `cohort/` - the real-cohort regression gate
+
+1,129,728 rows of a real two-plate cohort, entered at the **merge boundary**: the input is the merged
+parquet table, not Skyline exports. That is what lets one fixture drive every downstream method, and it
+keeps the fixture to 14 MB instead of the 2.7 GB of raw exports it came from.
+
+| | |
+|---|---|
+| peptides / proteins | 327 peptides, 52 selected proteins (123 distinct protein assignments once shared peptides are followed) |
+| samples / batches | 192 samples, 2 batches, 16 reference / 16 QC / 160 experimental |
+| shared peptides | 47 peptides belong to two selected proteins, so parsimony has real work |
+| protein sizes | proteins with 1 to 30+ peptides, so protein rollup is not uniform |
+
+Drives `CohortRegressionTests`, one case per directory (`config.yaml` + `quantities.sha256`), digested
+exactly like `mini/*/quantities.sha256`.
+
+### Why it starts at the merge
+
+Stage 1 is deterministic and covered elsewhere (`MergeParityTests`, `ExportFormatParityTests`), it is the
+slowest stage, and it needs inputs that cannot be committed. Everything downstream needs is carried in
+the merged table: `ShapeCorrelation` for top-N by correlation, `ProductMz` for library-assisted rollup,
+`Batch` for ComBat, `AcquiredTime` for batch estimation.
+
+The test seeds `merged_data/` plus a matching `merged_data.cache.json` into the output directory, so
+Stage 1 is skipped. This works because `SourceFingerprint.Compute` hashes each input's path, length and
+last-write time - **not its contents** - so empty placeholder files reproduce the fingerprint. The test
+asserts the run really did see 192 samples and both batches, because a Stage 1 that re-ran over empty
+placeholders would otherwise digest nothing and look like a pass.
+
+### The fixture is anonymized
+
+Replicates are `S001..S189`, batches `Batch1`/`Batch2`, filenames derived from the replicate, and
+acquisition timestamps shifted to a fixed 2020 epoch - **gaps preserved**, because batch estimation reads
+them, but absolute times are not this repository's to publish. Peptide sequences and UniProt accessions
+are kept as they are. Regenerating from a new cohort means redoing that mapping; do not commit raw
+sample identifiers.
+
+### Two structural properties are deliberate
+
+- **189 replicate names produce 192 sample IDs**, because three QC injections carry the same name in both
+  batches. That is the collision CLAUDE.md warns about, and keeping it means the fixture exercises the
+  document-qualified metadata lookup.
+- **The two metadata files use different header names** - `ReplicateName` from the RPC export path,
+  `Replicate` from the headless one - which is what a mixed cohort really presents.
+
+### What it does not cover
+
+`transition_rollup.method: library_assist` still has no case here, because it needs a `.blib` spectral
+library the fixture does not carry. `ProcessPeptideLibrary` remains at 0% coverage; covering it needs a
+small committed library, not another config.
+
 ## `mini/*/quantities.sha256` - the bit-exact regression gate
 
 One line per output column - `file<TAB>column<TAB>sha256` - hashing the **exact IEEE-754 bits** of
