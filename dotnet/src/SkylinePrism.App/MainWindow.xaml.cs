@@ -1235,13 +1235,26 @@ public partial class MainWindow : Window
         // let them act: an open Skyline holding a big document is usually the difference.
         if (byMemory == 0)
         {
-            var freeGb = availableGb;
+            // Falling short of the BUDGET is not the same as not fitting the MACHINE, and only the second
+            // is worth alarming about. The budget is deliberately conservative - 60%, and since free
+            // memory is always <= installed it is the free bound that decides - so coming up short of it
+            // usually just means "do not overlap". Alarming anyway cried wolf in a real run: 33 GB free,
+            // one export needing 21 GB, and the user was told to close Skyline windows for an export that
+            // fitted with 12 GB to spare. A warning whose advice is unnecessary gets ignored when it is not.
+            if (OneExportFitsInFreeMemory(availableGb, perExportGb))
+            {
+                Log($"Exporting one document at a time: '{largest}' is {largestGb:N1} GB, so each export "
+                    + $"is budgeted {perExportGb:N1} GB - more than the budget allows to overlap"
+                    + (availableGb is not null ? $", though it fits the {availableGb:N0} GB free" : "")
+                    + ".");
+                return 1;
+            }
+
             Log($"WARNING: '{largest}' is {largestGb:N1} GB, so one export alone is expected to need "
-                + $"about {perExportGb:N0} GB - more than the {totalGb * MemoryFractionForExports:N0} GB budgeted from this "
-                + $"machine's {totalGb:N0} GB."
-                + (freeGb is not null ? $" About {freeGb:N0} GB is free right now." : "")
-                + " Exporting one at a time; close other Skyline windows first, because a Skyline that "
-                + "runs out of memory stops making progress and does not recover when memory is freed.");
+                + $"about {perExportGb:N0} GB, which does not fit the "
+                + $"{availableGb:N0} GB free on this {totalGb:N0} GB machine. Exporting one at a time, but "
+                + "close other Skyline windows first, because a Skyline that runs out of memory stops "
+                + "making progress and does not recover when memory is freed.");
             return 1;
         }
 
@@ -1335,6 +1348,28 @@ public partial class MainWindow : Window
         Math.Min(
             ExportsThatFit(totalGb, perExportGb),
             ExportsThatFit(availableGb ?? totalGb, perExportGb));
+
+    /// <summary>
+    /// Whether ONE export is expected to fit the memory that is actually free, keeping
+    /// <see cref="SystemReserveGb"/> back. Deliberately a different question from the budget in
+    /// <see cref="ExportsThatFit(double, double?, double)"/>: the budget decides how many exports may
+    /// OVERLAP and is conservative on purpose, whereas this decides whether the run is likely to fail at
+    /// all, which is the only thing worth warning about. Conflating the two produced a warning telling a
+    /// user to close Skyline windows for an export that fitted in free memory with 12 GB to spare.
+    ///
+    /// <para>True when there is no reading, because an advisory number that could not be read must not be
+    /// able to raise an alarm.</para>
+    /// </summary>
+    internal static bool OneExportFitsInFreeMemory(double? availableGb, double perExportGb) =>
+        availableGb is null || perExportGb <= availableGb.Value - SystemReserveGb;
+
+    /// <summary>
+    /// Held back from free memory before deciding that an export cannot fit at all: the OS, this tool,
+    /// and Skyline's own fixed baseline (measured at ~1.26 GB on a small document) all need room. A floor
+    /// chosen to be comfortably enough rather than a measurement - the figure it guards is itself an
+    /// estimate, so precision here would be false.
+    /// </summary>
+    internal const double SystemReserveGb = 4.0;
 
     /// <summary>
     /// Share of RAM exports may use. The merge that follows sizes itself against RAM too, but it runs
