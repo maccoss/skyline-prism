@@ -362,6 +362,60 @@ public class BuiltInProteinListTests
     }
 
     /// <summary>
+    /// ...but the same panel is perfectly legitimate to break MS2 signal down BY. "How much of the
+    /// labelled signal is contamination" is the question, not a mistake - so ResolveForDisplay accepts
+    /// exactly the panels Resolve refuses. Same names as the test above, asserting the opposite verdict.
+    /// </summary>
+    [Theory]
+    [InlineData("Tubular contamination")]
+    [InlineData("Hemolysis")]
+    [InlineData("Common contaminants (cRAP)")]
+    [InlineData("Glycolysis")]
+    [InlineData("Oxidative phosphorylation")]
+    public void ADisplayOnlyPanelIsFineToDisplay(string name)
+    {
+        var absent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "none.json");
+
+        var lists = ProteinListSet.ResolveForDisplay(new[] { name }, null, absent);
+
+        Assert.Single(lists);
+        Assert.Equal(name, lists[0].Name);
+        Assert.True(lists[0].DisplayOnly, $"{name} is expected to be a display-only panel");
+    }
+
+    /// <summary>
+    /// Selection order is the caller's and is meaningful - matching stops at the first list claiming a
+    /// peptide - so it must survive resolution rather than being sorted or de-duplicated.
+    /// </summary>
+    [Fact]
+    public void ResolveForDisplayKeepsTheCallersOrder()
+    {
+        var absent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "none.json");
+        var names = new[] { "Hemolysis", "Common contaminants (cRAP)" };
+
+        var lists = ProteinListSet.ResolveForDisplay(names, null, absent);
+
+        Assert.Equal(names, lists.Select(l => l.Name));
+        Assert.Equal(names.Reverse(),
+            ProteinListSet.ResolveForDisplay(names.Reverse(), null, absent).Select(l => l.Name));
+    }
+
+    /// <summary>An unknown name is the only failure, and it says what is available.</summary>
+    [Fact]
+    public void ResolveForDisplayRejectsOnlyAnUnknownName()
+    {
+        var absent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "none.json");
+
+        Assert.Empty(ProteinListSet.ResolveForDisplay(null, null, absent));
+        Assert.Empty(ProteinListSet.ResolveForDisplay(Array.Empty<string>(), null, absent));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ProteinListSet.ResolveForDisplay(new[] { "No Such Panel" }, null, absent));
+        Assert.Contains("No Such Panel", ex.Message);
+        Assert.Contains("Available:", ex.Message);
+    }
+
+    /// <summary>
     /// Every pathway is display-only, and the panels meant to normalize are not - if a normalizer were
     /// ever flagged by accident the feature would fail closed with a confusing message.
     /// </summary>
