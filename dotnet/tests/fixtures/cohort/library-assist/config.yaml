@@ -1,0 +1,44 @@
+# Cohort regression fixture: library-assisted transition rollup.
+# library_path is written RELATIVE here and made absolute by the test, because the fixture's location
+# depends on where the test assembly was built.
+# Sample types come from the committed metadata CSVs. n_workers: 1 for determinism.
+parsimony:
+  fasta_path: null
+  shared_peptide_handling: "all_groups"
+
+processing:
+  n_workers: 1
+
+transition_rollup:
+  method: "library_assist"
+  min_transitions: 1
+  library_assist:
+    library_path: "cohort.blib"
+    min_matched_fragments: 3
+    mz_tolerance: 0.02
+    fitting_method: "median_polish"
+
+global_normalization:
+  method: "median"
+
+batch_correction:
+  enabled: true
+  method: "combat"
+  reference_anchored: false
+  reference_type: "reference"
+  peptide_level: true
+  protein_level: true
+
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+protein_normalization:
+  method: "median"
+
+output:
+  format: "parquet"
+  include_residuals: true
+
+qc_report:
+  enabled: false

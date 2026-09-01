@@ -1,0 +1,43 @@
+# Cohort regression fixture: quantile normalization
+# Sample types come from the committed metadata CSVs, not from name patterns, so this also exercises
+# the metadata path (and the two files deliberately use different header conventions).
+# n_workers: 1 for determinism.
+parsimony:
+  fasta_path: null
+  shared_peptide_handling: "all_groups"
+
+processing:
+  n_workers: 1
+
+transition_rollup:
+  method: "sum"
+  min_transitions: 1
+
+
+global_normalization:
+  method: "quantile"
+
+
+batch_correction:
+  enabled: true
+  method: "combat"
+  reference_anchored: false
+  reference_type: "reference"
+  peptide_level: true
+  protein_level: true
+
+
+protein_rollup:
+  method: "median_polish"
+  min_peptides: 2
+
+
+protein_normalization:
+  method: "median"
+
+output:
+  format: "parquet"
+  include_residuals: true
+
+qc_report:
+  enabled: false
