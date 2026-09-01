@@ -440,6 +440,47 @@ public sealed class ProteinListMatcher
             Key: accession ?? gene ?? proteinName ?? "", Label: "", Accession: accession, Gene: gene,
             ProteinName: proteinName, MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0));
 
+    /// <summary>
+    /// Whether any list claims a PEPTIDE, given the <c>;</c>-separated group columns that
+    /// <c>corrected_peptides.parquet</c> carries (<c>leading_protein</c>, <c>leading_gene_name</c>,
+    /// <c>leading_name</c>).
+    ///
+    /// <para>A shared peptide names every group it belongs to, and being in ONE of them is enough:
+    /// the signal genuinely came from a protein that is in the list. Deliberately NOT
+    /// <c>DynamicRange.FirstGroup</c>, which takes only the first group and would drop a peptide whose
+    /// list membership is via its second - the two rules disagree today, and this is the one that
+    /// matches where the signal came from.</para>
+    ///
+    /// <para>Scans accessions, then genes, then names, returning the first list to claim any of them.
+    /// Which list wins a peptide claimed by several is deterministic but not meaningful - callers that
+    /// care about totals should treat the lists as overlapping sets, not a partition.</para>
+    /// </summary>
+    public ProteinList? MatchPeptide(string? leadingProteins, string? genes, string? proteinNames)
+    {
+        foreach (var accession in SplitGroups(leadingProteins))
+            if (Match(accession, null, null) is { } byAccession)
+                return byAccession;
+        foreach (var gene in SplitGroups(genes))
+            if (Match(null, gene, null) is { } byGene)
+                return byGene;
+        foreach (var name in SplitGroups(proteinNames))
+            if (Match(null, null, name) is { } byName)
+                return byName;
+        return null;
+    }
+
+    /// <summary>
+    /// The members of a <c>;</c>-separated group column. Separator taken from
+    /// <see cref="Pipeline.PrismPipeline.PeptideGroupSeparator"/>, which is what writes these columns.
+    /// </summary>
+    public static IEnumerable<string> SplitGroups(string? column) =>
+        string.IsNullOrEmpty(column)
+            ? Array.Empty<string>()
+            : column.Split(Pipeline.PrismPipeline.PeptideGroupSeparator,
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0);
+
     /// <summary>The first visible list claiming this entry, or null.</summary>
     public ProteinList? Match(AbundanceEntry entry)
     {

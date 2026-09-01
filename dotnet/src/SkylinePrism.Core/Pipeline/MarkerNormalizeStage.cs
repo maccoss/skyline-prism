@@ -189,19 +189,17 @@ internal static class MarkerNormalizeStage
         for (var i = 0; i < peptide.RowCount; i++)
         {
             // A shared peptide lists every group it belongs to; being in one marker group is enough.
-            var hit = Split(accession, i).Any(a => matcher.Match(a, null, null) is not null)
-                || Split(gene, i).Any(g => matcher.Match(null, g, null) is not null)
-                || Split(name, i).Any(n => matcher.Match(null, null, n) is not null);
-            if (hit)
+            // The rule itself lives on the matcher now, because signal accounting needs the same one
+            // and two copies of it would be free to drift.
+            if (matcher.MatchPeptide(Cell(accession, i), Cell(gene, i), Cell(name, i)) is not null)
                 rows.Add(i);
         }
         return rows;
     }
 
-    private static IEnumerable<string> Split(string[]? column, int row) =>
-        column is null || row >= column.Length || string.IsNullOrEmpty(column[row])
-            ? Array.Empty<string>()
-            : column[row].Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim());
+    /// <summary>One row of a metadata column, or null past its end.</summary>
+    private static string? Cell(string[]? column, int row) =>
+        column is null || row >= column.Length ? null : column[row];
 
     /// <summary>
     /// The protein-level score, put in another file's sample order. Both matrices come from the same
