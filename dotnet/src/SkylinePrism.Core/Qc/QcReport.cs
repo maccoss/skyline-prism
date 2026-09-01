@@ -46,7 +46,7 @@ public static class QcReport
         var peptideCol = DetectPeptideColumn(Path.Combine(outputDir, "peptides_rollup.parquet"));
         var pepMeta = new[] { peptideCol, PepMetaN, PepMetaRt };
 
-        // "After" is each arm's ACTUAL output - corrected_peptides / corrected_proteins (LINEAR, so
+        // "Corrected" is each arm's ACTUAL output - corrected_peptides / corrected_proteins (LINEAR, so
         // log2 here) - not the internal file. peptides_log2_internal is post-normalization and
         // PRE-ComBat: since dotnet-v26.15.0 the protein arm branches from it, so reading it as the
         // peptide "after" left every peptide CV, every peptide plot and the validation verdict
@@ -138,24 +138,24 @@ public static class QcReport
             + $"{afterMedRange:0.00} log2 ({medReduction:0.0}% reduction between samples)",
             new List<PlotImage>
             {
-                Img("Before normalization", $"{level}_intensity_before",
-                    () => PlotRenderer.IntensityDistribution(raw.Values, typeLabels, "Before Normalization")),
-                Img("After normalization", $"{level}_intensity_after",
-                    () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, "After Normalization")),
+                Img("Raw", $"{level}_intensity_before",
+                    () => PlotRenderer.IntensityDistribution(raw.Values, typeLabels, "Raw")),
+                Img("Corrected", $"{level}_intensity_after",
+                    () => PlotRenderer.IntensityDistribution(corrected.Values, typeLabels, "Corrected")),
             }));
 
-        sections.Add(new PlotSection($"{cap} PCA: Before vs After", new List<PlotImage>
+        sections.Add(new PlotSection($"{cap} PCA: Raw vs Corrected", new List<PlotImage>
         {
-            Img("Before (raw rollup)", $"{level}_pca_before",
+            Img("Raw", $"{level}_pca_before",
                 () => PlotRenderer.PcaScatter(
-                    Pca.Fit2DOfFeaturesBySamples(raw.Values), typeLabels, "Before")),
-            Img("After (normalized + corrected)", $"{level}_pca_after",
+                    Pca.Fit2DOfFeaturesBySamples(raw.Values), typeLabels, "Raw")),
+            Img("Corrected", $"{level}_pca_after",
                 () => PlotRenderer.PcaScatter(
-                    Pca.Fit2DOfFeaturesBySamples(corrected.Values), typeLabels, "After")),
+                    Pca.Fit2DOfFeaturesBySamples(corrected.Values), typeLabels, "Corrected")),
         }));
 
         if (refIdx.Count >= 2)
-            sections.Add(new PlotSection($"{cap} CV Distribution (Reference): Before vs After", new List<PlotImage>
+            sections.Add(new PlotSection($"{cap} CV Distribution (Reference): Raw vs Corrected", new List<PlotImage>
             {
                 Img("", $"{level}_cv_reference", () => PlotRenderer.CvComparison(
                     CvMetrics.PerFeatureCvs(raw.Values, refIdx),
@@ -164,7 +164,7 @@ public static class QcReport
             }));
 
         if (qcIdx.Count >= 2)
-            sections.Add(new PlotSection($"{cap} CV Distribution (QC): Before vs After", new List<PlotImage>
+            sections.Add(new PlotSection($"{cap} CV Distribution (QC): Raw vs Corrected", new List<PlotImage>
             {
                 Img("", $"{level}_cv_qc", () => PlotRenderer.CvComparison(
                     CvMetrics.PerFeatureCvs(raw.Values, qcIdx),
@@ -176,23 +176,23 @@ public static class QcReport
         var controlIdx = refIdx.Concat(qcIdx).Distinct().OrderBy(x => x).ToList();
         var controlTypes = controlIdx.Select(i => typeLabels[i]).ToList();
         if (controlIdx.Count >= 2)
-            sections.Add(new PlotSection($"{cap} Control-Sample Correlation: Before vs After", new List<PlotImage>
+            sections.Add(new PlotSection($"{cap} Control-Sample Correlation: Raw vs Corrected", new List<PlotImage>
             {
-                Img("Before (raw rollup)", $"{level}_control_corr_before",
-                    () => PlotRenderer.CorrelationHeatmap(raw.Values, controlIdx, $"{cap} Control Sample Correlation (Before Correction)", controlTypes)),
-                Img("After (normalized + corrected)", $"{level}_control_corr_after",
-                    () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, $"{cap} Control Sample Correlation (After Correction)", controlTypes)),
+                Img("Raw", $"{level}_control_corr_before",
+                    () => PlotRenderer.CorrelationHeatmap(raw.Values, controlIdx, $"{cap} Control Sample Correlation (Raw)", controlTypes)),
+                Img("Corrected", $"{level}_control_corr_after",
+                    () => PlotRenderer.CorrelationHeatmap(corrected.Values, controlIdx, $"{cap} Control Sample Correlation (Corrected)", controlTypes)),
             }));
 
         // RT-dependent diagnostics (peptide level only - proteins have no RT).
         if (rtLowessRan && raw.MeanRt is not null && corrected.MeanRt is not null)
         {
-            sections.Add(new PlotSection($"{cap} RT-Lowess Curves: Before vs After", new List<PlotImage>
+            sections.Add(new PlotSection($"{cap} RT-Lowess Curves: Raw vs Corrected", new List<PlotImage>
             {
-                Img("Before (raw rollup)", $"{level}_rt_lowess_before",
-                    () => PlotRenderer.RtLowessCurves(raw.Values, raw.MeanRt, typeLabels, "Before")),
-                Img("After (normalized + corrected)", $"{level}_rt_lowess_after",
-                    () => PlotRenderer.RtLowessCurves(corrected.Values, corrected.MeanRt, typeLabels, "After")),
+                Img("Raw", $"{level}_rt_lowess_before",
+                    () => PlotRenderer.RtLowessCurves(raw.Values, raw.MeanRt, typeLabels, "Raw")),
+                Img("Corrected", $"{level}_rt_lowess_after",
+                    () => PlotRenderer.RtLowessCurves(corrected.Values, corrected.MeanRt, typeLabels, "Corrected")),
             }));
 
             if (refIdx.Count >= 2)
@@ -208,12 +208,12 @@ public static class QcReport
                         raw.Values, corrected.Values, raw.MeanRt, qcIdx, "RT-binned CV (QC)", "#ff7f0e")),
                 }));
 
-            sections.Add(new PlotSection($"{cap} Abundance by RT Bin: Before vs After", new List<PlotImage>
+            sections.Add(new PlotSection($"{cap} Abundance by RT Bin: Raw vs Corrected", new List<PlotImage>
             {
-                Img("Before (raw rollup)", $"{level}_rt_bin_box_before",
-                    () => PlotRenderer.RtBinBoxplot(raw.Values, raw.MeanRt, "Before", "#1f77b4")),
-                Img("After (normalized + corrected)", $"{level}_rt_bin_box_after",
-                    () => PlotRenderer.RtBinBoxplot(corrected.Values, corrected.MeanRt, "After", "#1f77b4")),
+                Img("Raw", $"{level}_rt_bin_box_before",
+                    () => PlotRenderer.RtBinBoxplot(raw.Values, raw.MeanRt, "Raw", "#1f77b4")),
+                Img("Corrected", $"{level}_rt_bin_box_after",
+                    () => PlotRenderer.RtBinBoxplot(corrected.Values, corrected.MeanRt, "Corrected", "#1f77b4")),
             }));
         }
 
@@ -484,7 +484,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             + "different amounts is not a failure - they are different materials injected at different "
             + "amounts, so one can have more excess variance to remove than the other.</p>");
 
-        sb.Append("<table><tr><th>Control CV</th><th>Before</th><th>After</th><th>Improvement</th></tr>");
+        sb.Append("<table><tr><th>Control CV</th><th>Raw</th><th>Corrected</th><th>Improvement</th></tr>");
         void Row(string label, double before, double after, double impFrac)
         {
             var cls = impFrac >= 0 ? "improvement-positive" : "improvement-negative";
@@ -524,7 +524,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
     private static string CvTable(string title, CvMetrics.BeforeAfter? refBa, CvMetrics.BeforeAfter? qcBa)
     {
         var sb = new StringBuilder();
-        sb.Append($"<h3>{title}</h3><table><tr><th>Sample Type</th><th>Before</th><th>After</th><th>Improvement</th></tr>");
+        sb.Append($"<h3>{title}</h3><table><tr><th>Sample Type</th><th>Raw</th><th>Corrected</th><th>Improvement</th></tr>");
         void Row(string label, CvMetrics.BeforeAfter? ba)
         {
             if (ba is null)
