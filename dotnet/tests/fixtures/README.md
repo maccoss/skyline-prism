@@ -127,11 +127,32 @@ sample identifiers.
 - **The two metadata files use different header names** - `ReplicateName` from the RPC export path,
   `Replicate` from the headless one - which is what a mixed cohort really presents.
 
-### What it does not cover
+### `cohort.blib` - the spectral library, subset the same way
 
-`transition_rollup.method: library_assist` still has no case here, because it needs a `.blib` spectral
-library the fixture does not carry. `ProcessPeptideLibrary` remains at 0% coverage; covering it needs a
-small committed library, not another config.
+2.5 MB, subset from the cohort's own 572 MB BiblioSpec library to the 385 reference spectra that match
+the 327 fixture peptides, with `RefSpectraPeaks`, `Modifications` and `RetentionTimes` cut to those
+spectra and the file `VACUUM`ed. It drives the `library-assist` case.
+
+Anonymized like the parquet: `SpectrumSourceFiles.fileName` carried the same `.raw` replicate
+identifiers and is rewritten to `S###.raw`, and `LibInfo.libLSID` named the study so it is replaced with
+a neutral one. `LibInfo.numSpecs` is corrected to the subset count, so the library is internally
+consistent rather than claiming 88,242 spectra it no longer has.
+
+`library_path` is written RELATIVE in that case's config, because the fixture's absolute location
+depends on where the test assembly was built; the test makes it absolute.
+
+### Verifying a case actually did something
+
+Two checks worth repeating whenever a case is added, because both failure modes leave a digest that
+still looks valid:
+
+- **Compare against the case that differs only in the axis under test.** `library-assist` versus
+  `norm-median` differ solely in the transition rollup, and 1344 of 1379 columns differ - so the method
+  really ran. Comparing against the production default instead would have proved nothing, since that
+  case also changes the normalizer.
+- **Read the `#` header line.** Every digest records `peptides=`/`proteins=`/`samples=`/`batches=`, so a
+  method that silently dropped most peptides shows up in the diff. All eleven cases report 327 peptides
+  and 51 proteins.
 
 ## `mini/*/quantities.sha256` - the bit-exact regression gate
 

@@ -78,6 +78,7 @@ public class CohortRegressionTests
         new object[] { "norm-median" },
         new object[] { "norm-quantile" },
         new object[] { "no-combat" },
+        new object[] { "library-assist" },
     };
 
     [ReferencePlatformTheory]
@@ -87,6 +88,16 @@ public class CohortRegressionTests
         var cohort = Fixtures.Path2("cohort");
         var caseDir = Path.Combine(cohort, caseName);
         var config = PrismConfig.Load(Path.Combine(caseDir, "config.yaml"));
+
+        // The spectral library ships beside the fixture, and the config names it relatively because the
+        // fixture's absolute location depends on where the test assembly was built. LibraryPath is used
+        // verbatim by the rollup, so it has to be made absolute here.
+        if (!string.IsNullOrWhiteSpace(config.TransitionRollup.LibraryPath)
+            && !Path.IsPathRooted(config.TransitionRollup.LibraryPath))
+        {
+            config.TransitionRollup.LibraryPath =
+                Path.Combine(cohort, config.TransitionRollup.LibraryPath);
+        }
 
         var tempOut = Path.Combine(Path.GetTempPath(), "prism_cohort_" + Guid.NewGuid().ToString("N"));
         try
@@ -117,7 +128,16 @@ public class CohortRegressionTests
             var digestPath = Path.Combine(caseDir, "quantities.sha256");
             if (Environment.GetEnvironmentVariable(UpdateVar) == "1")
             {
-                File.WriteAllLines(SourceDigestPath(caseName), actual);
+                // Record what the case produced. The reader skips '#' lines, so this is only a comment -
+                // but it puts the shape of each case in the committed file and therefore in the diff,
+                // which is how a reviewer sees that (say) library_assist still matched most peptides
+                // rather than silently dropping them and leaving a digest that still looks valid.
+                var header = new[]
+                {
+                    $"# case={caseName} peptides={result.NPeptides} proteins={result.NProteins} "
+                    + $"samples={result.NSamples} batches={result.Batches.Count}",
+                };
+                File.WriteAllLines(SourceDigestPath(caseName), header.Concat(actual));
                 return;
             }
 

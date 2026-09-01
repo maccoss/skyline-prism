@@ -1,3 +1,4 @@
+# case=consensus peptides=327 proteins=51 samples=192 batches=2
 peptides_rollup.parquet	PeptideModifiedSequenceUnimodIds	4c3e433e345c860fa3068eb050e83fad0cc0f91de4d6ea757faef4c671fba158
 peptides_rollup.parquet	S001__@__Batch1	4754c93f198433588ce0f33fe8080d2693e909851c15e38450fadd1d1fd567bd
 peptides_rollup.parquet	S002__@__Batch1	bdf294517e38242b705f7bf7ae1468239c4ff3db7fe6891c62d27c19287728af
