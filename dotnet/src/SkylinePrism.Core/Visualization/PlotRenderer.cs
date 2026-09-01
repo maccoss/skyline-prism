@@ -533,11 +533,17 @@ public static class PlotRenderer
             line.Color = color;
             line.LineWidth = 4;
             line.LinePattern = LinePattern.Dashed;
-            line.LegendText = $"{label} median {med:0.0}%";
+            // "median CV", not "median". The old text read "Before median 34.4%", which a reader
+            // seeing it under an rt_lowess run reasonably took to mean median NORMALIZATION rather than
+            // the median of the CV distribution - the one number this plot exists to show.
+            line.LegendText = $"{label}: median CV {med:0.0}%";
         }
 
-        AddHist(beforeCvs, Color.FromHex("#7f7f7f"), "Before");
-        AddHist(afterCvs, Color.FromHex(afterColorHex), "After");
+        // Raw / Corrected, matching the file names the report is built from (peptides_rollup vs
+        // corrected_peptides) and the language used everywhere else. "Before/After" invited the
+        // question "before and after WHAT", which has a different answer per pipeline configuration.
+        AddHist(beforeCvs, Color.FromHex("#7f7f7f"), "Raw");
+        AddHist(afterCvs, Color.FromHex(afterColorHex), "Corrected");
         plt.ShowLegend(Alignment.UpperRight);
         plt.Title(title);
         plt.XLabel("CV (%)");
@@ -546,6 +552,78 @@ public static class PlotRenderer
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
+
+    /// <summary>
+    /// The corner with the fewest points in it, so a legend can be placed clear of the data.
+    ///
+    /// <para>ScottPlot draws the legend inside the axes and does not move it out of the way, so on a
+    /// PCA of a real cohort it lands on top of samples - which is worse here than mere clutter, because
+    /// the points it hides are individual replicates someone is trying to identify.</para>
+    ///
+    /// <para>Approximate by construction: the legend's true size depends on how many series it lists and
+    /// how long their names are, and <paramref name="fraction"/> of each axis is a stand-in for that. It
+    /// only has to be good enough to prefer an empty corner over a full one; it cannot guarantee zero
+    /// overlap, and a plot whose data reaches every corner has no good answer.</para>
+    ///
+    /// <para>Ties keep the earliest corner in <c>Corners</c> order, so a degenerate or empty plot lands
+    /// at upper right - where every other legend in this report sits.</para>
+    /// </summary>
+    internal static Alignment ChooseLegendCorner(
+        IReadOnlyList<double> xs, IReadOnlyList<double> ys, double fraction = 0.34)
+    {
+        if (xs.Count != ys.Count || xs.Count == 0)
+            return Alignment.UpperRight;
+
+        double minX = double.MaxValue, maxX = double.MinValue;
+        double minY = double.MaxValue, maxY = double.MinValue;
+        var n = 0;
+        for (var i = 0; i < xs.Count; i++)
+        {
+            if (!double.IsFinite(xs[i]) || !double.IsFinite(ys[i]))
+                continue;
+            minX = Math.Min(minX, xs[i]); maxX = Math.Max(maxX, xs[i]);
+            minY = Math.Min(minY, ys[i]); maxY = Math.Max(maxY, ys[i]);
+            n++;
+        }
+        // A single point, or every point on one line, gives a corner box of zero area - every corner
+        // then counts the same and the answer would be arbitrary.
+        if (n == 0 || maxX <= minX || maxY <= minY)
+            return Alignment.UpperRight;
+
+        var w = (maxX - minX) * fraction;
+        var h = (maxY - minY) * fraction;
+
+        var best = Alignment.UpperRight;
+        var fewest = int.MaxValue;
+        foreach (var (corner, right, upper) in Corners)
+        {
+            var count = 0;
+            for (var i = 0; i < xs.Count; i++)
+            {
+                if (!double.IsFinite(xs[i]) || !double.IsFinite(ys[i]))
+                    continue;
+                var inX = right ? xs[i] >= maxX - w : xs[i] <= minX + w;
+                var inY = upper ? ys[i] >= maxY - h : ys[i] <= minY + h;
+                if (inX && inY)
+                    count++;
+            }
+            if (count < fewest)
+            {
+                fewest = count;
+                best = corner;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>Corner, and whether it is on the right / at the top. Order is the tie-break.</summary>
+    private static readonly (Alignment Corner, bool Right, bool Upper)[] Corners =
+    {
+        (Alignment.UpperRight, true, true),
+        (Alignment.UpperLeft, false, true),
+        (Alignment.LowerRight, true, false),
+        (Alignment.LowerLeft, false, false),
+    };
 
     /// <summary>2-D PCA scatter colored by sample type.</summary>
     public static byte[] PcaScatter(double[,] scores2d, IReadOnlyList<string> sampleTypes, string title)
@@ -568,7 +646,11 @@ public static class PlotRenderer
             markers.MarkerSize = 15; // sized to match the figure-scale axis text
             markers.LegendText = type;
         }
-        plt.ShowLegend();
+
+        // Keep the legend off the samples - see ChooseLegendCorner.
+        var allX = byType.Values.SelectMany(v => v.X).ToList();
+        var allY = byType.Values.SelectMany(v => v.Y).ToList();
+        plt.ShowLegend(ChooseLegendCorner(allX, allY));
         plt.Title(title);
         plt.XLabel("PC1");
         plt.YLabel("PC2");
