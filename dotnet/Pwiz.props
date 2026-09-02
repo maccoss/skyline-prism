@@ -1,0 +1,34 @@
+<Project>
+
+  <!--
+    Where pwiz-sharp is, and whether this build has it.
+
+    pwiz-sharp is the .NET port of the ProteoWizard core (ProteoWizard/pwiz PR #4619, still an
+    open draft). It has no package feed and is far too large to vendor, so the reference is
+    OPTIONAL and points at an external checkout. When the checkout is absent SkylinePrism.Pwiz
+    still compiles - the reader is dropped and nothing registers itself - so a plain
+    `dotnet build` with no pwiz anywhere keeps working and every other part of PRISM is
+    unaffected. That is the shape MARS uses, and the shape pwiz's own vendor projects use for
+    their SDKs (NO_VENDOR_SUPPORT).
+
+    Point it somewhere else with:
+
+        dotnet build -p:PwizSharpDir=<path-to>/pwiz/pwiz-sharp
+
+    Vendor SDKs are licence-gated. Without -p:IAgreeToVendorLicenses=true the archives are not
+    extracted and the readers compile to something that recognizes a .raw but refuses to read
+    it, which PRISM reports as an unreadable file rather than as missing signal.
+  -->
+  <PropertyGroup>
+    <!-- Default to a sibling organisation checkout: three levels up from dotnet/ is the
+         directory holding the org folders, so skyline-prism/ and ProteoWizard/ sit side by side. -->
+    <PwizSharpDir Condition="'$(PwizSharpDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\ProteoWizard\pwiz\pwiz-sharp</PwizSharpDir>
+    <PwizMsDataProject>$(PwizSharpDir)\pwiz\src\MsData\MsData.csproj</PwizMsDataProject>
+    <PwizThermoProject>$(PwizSharpDir)\pwiz\src\Vendor\Thermo\Thermo.csproj</PwizThermoProject>
+    <PwizBrukerProject>$(PwizSharpDir)\pwiz\src\Vendor\Bruker\Bruker.csproj</PwizBrukerProject>
+
+    <PwizAvailable Condition="Exists('$(PwizMsDataProject)')">true</PwizAvailable>
+    <PwizAvailable Condition="'$(PwizAvailable)' == ''">false</PwizAvailable>
+  </PropertyGroup>
+
+</Project>

@@ -19,6 +19,21 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SkylinePrism.Core\SkylinePrism.Core.csproj" />
     <ProjectReference Include="..\..\src\SkylinePrism.Cli\SkylinePrism.Cli.csproj" />
+    <!--
+      The pwiz bridge, OPT-IN: `dotnet build -p:PrismWithPwiz=true`.
+
+      Off by default because referencing it drags the whole pwiz-sharp tree into the build, and with
+      it 58 of that tree's own warnings - which would end the warning-free build this repo keeps, for
+      code that is not ours to fix. The default build and the default `dotnet test` are therefore
+      exactly what they were, and CI (which has no pwiz checkout) is unaffected.
+    -->
+    <ProjectReference Include="..\..\src\SkylinePrism.Pwiz\SkylinePrism.Pwiz.csproj"
+                      Condition="'$(PrismWithPwiz)' == 'true'" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PrismWithPwiz)' != 'true'">
+    <!-- Names types that only exist in a pwiz build, so it cannot be compiled without one. -->
+    <Compile Remove="RawData\PwizMs2SignalReaderTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -284,6 +284,71 @@ public class Ms2SignalRealCohortTests
             + "the peptides Skyline exports several times are the abundant, widely-shared ones.");
     }
 
+    /// <summary>
+    /// Can Skyline's own <c>TicArea</c> serve as the acquired-MS2 denominator? This is the cheap answer
+    /// everyone reaches for first, so it is worth a measurement rather than an assertion: if the signal
+    /// PRISM assigns already exceeds TicArea, TicArea cannot be a total that contains it.
+    /// </summary>
+    [Fact]
+    public void TicAreaIsNotAnMs2Denominator()
+    {
+        var dir = Environment.GetEnvironmentVariable(DirVar);
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            _out.WriteLine($"skipped: set {DirVar} to a completed PRISM output directory.");
+            return;
+        }
+
+        var dataset = SkylinePrism.Core.IO.MergedDataset.Open(Path.Combine(dir, "merged_data"));
+        var names = SkylinePrism.Core.IO.ParquetTable
+            .ReadColumnNames(dataset.RepresentativeFile()).ToList();
+        if (!names.Contains("TicArea"))
+        {
+            _out.WriteLine("this export has no TicArea column.");
+            return;
+        }
+
+        var cols = Ms2SignalRegions.Resolve(names)!;
+        var sample = FirstSample(dir);
+        var scheme = OnlyScheme(dir);
+        var tolerance = ProductMassTolerance.ParseSetting("10 ppm")!;
+
+        using var conn = new DuckDB.NET.Data.DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        SkylinePrism.Core.IO.DuckDbTuning.Apply(
+            conn, SkylinePrism.Core.IO.DuckDbMerge.AutoMemoryBudgetMb(),
+            SkylinePrism.Core.IO.DuckDbMerge.ResolveTempDirectory(dataset.Root));
+
+        using var cmd = SkylinePrism.Core.IO.DuckDbTuning.StreamingCommand(conn, $@"
+            SELECT MAX(TRY_CAST(""TicArea"" AS DOUBLE)),
+                   CAST(COUNT(DISTINCT ""TicArea"") AS BIGINT)
+            FROM {SkylinePrism.Core.IO.MergedParquetReader.Scan(dataset.ScanTarget)}
+            WHERE ""{cols.Sample}"" = '{sample.Replace("'", "''")}'");
+
+        double tic;
+        long distinct;
+        using (var r = cmd.ExecuteReader())
+        {
+            Assert.True(r.Read());
+            tic = Convert.ToDouble(r.GetValue(0));
+            distinct = Convert.ToInt64(r.GetValue(1).ToString());
+        }
+
+        // The assigned union for that same replicate, from the same raw areas.
+        var classified = Ms2SignalPeptides.Classify(dir, Array.Empty<ProteinList>());
+        var loaded = Ms2SignalRegions.Load(dataset, cols, sample, scheme, classified.Classes);
+        var union = Ms2SignalUnion.Compute(loaded.Regions, tolerance, 0);
+
+        _out.WriteLine($"replicate      : {sample}");
+        _out.WriteLine($"TicArea        : {tic:E3}  ({distinct} distinct value(s) - it is per replicate)");
+        _out.WriteLine($"assigned (MS2) : {union.AssignedArea:E3}");
+        _out.WriteLine($"ratio          : {union.AssignedArea / tic:0.00}x TicArea");
+        _out.WriteLine(
+            union.AssignedArea > tic
+                ? "The signal PRISM assigns EXCEEDS TicArea, so TicArea is not a total containing it."
+                : "Assigned is below TicArea, but that alone does not make TicArea an MS2 total.");
+    }
+
     private static string FirstSample(string dir)
     {
         var path = Path.Combine(dir, "sample_metadata.csv");

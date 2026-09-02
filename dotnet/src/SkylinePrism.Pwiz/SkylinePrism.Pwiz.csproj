@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PRISM's bridge to pwiz-sharp: reads the acquired MS2 total ion current out of instrument
+    data files, which is the denominator the MS2 signal accounting cannot get from any Skyline
+    export.
+
+    OPTIONAL by design - see ..\Pwiz.props. With no pwiz checkout this project still builds and
+    simply registers no reader, so the accounting reports the acquired total as unknown and
+    every other part of the QC report is unaffected.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>SkylinePrism.Pwiz</RootNamespace>
+    <AssemblyName>SkylinePrism.Pwiz</AssemblyName>
+    <Description>Reads acquired MS2 signal from instrument data files, through pwiz-sharp.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- pwiz-sharp is a large third-party tree with its own documentation conventions; its
+         CS1591s are not ours to fix and would drown the warning-free build we do keep. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <Import Project="..\..\Pwiz.props" />
+
+  <PropertyGroup Condition="'$(PwizAvailable)' != 'true'">
+    <DefineConstants>$(DefineConstants);PRISM_NO_PWIZ</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PwizAvailable)' != 'true'">
+    <Compile Remove="PwizMs2SignalReader.cs" />
+    <Compile Remove="VendorReaders.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PwizAvailable)' == 'true'">
+    <ProjectReference Include="$(PwizMsDataProject)" />
+    <ProjectReference Include="$(PwizThermoProject)" Condition="Exists('$(PwizThermoProject)')" />
+    <ProjectReference Include="$(PwizBrukerProject)" Condition="Exists('$(PwizBrukerProject)')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SkylinePrism.Tests" />
+  </ItemGroup>
+
+  <Target Name="ReportPwizAvailability" BeforeTargets="Build">
+    <Message Condition="'$(PwizAvailable)' == 'true'" Importance="normal"
+             Text="SkylinePrism.Pwiz: building against pwiz-sharp at $(PwizSharpDir)" />
+    <Message Condition="'$(PwizAvailable)' != 'true'" Importance="normal"
+             Text="SkylinePrism.Pwiz: no pwiz-sharp at $(PwizSharpDir); acquired MS2 signal will read as unknown. Set -p:PwizSharpDir to enable it." />
+  </Target>
+
+</Project>
