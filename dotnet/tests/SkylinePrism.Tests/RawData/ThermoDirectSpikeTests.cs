@@ -407,4 +407,123 @@ public class ThermoDirectSpikeTests
         _out.WriteLine("");
         _out.WriteLine("Concurrent vendor-SDK reads of distinct files are numerically identical.");
     }
+    /// <summary>
+    /// Ions, not intensity. Thermo intensity is ions per second, so the ion count for a scan is
+    /// intensity * injectionTime(ms) / 1000. Injection time is a per-scan trailer-extra value with no
+    /// bulk API, so this measures two things before any of it is built: whether reading it for every
+    /// scan is affordable, and whether it even varies - a DIA method with a fixed maximum injection
+    /// time makes it a constant, and a constant costs nothing at all.
+    /// </summary>
+    [Fact]
+    public void WhatDoesItCostToCountIons()
+    {
+        var path = Environment.GetEnvironmentVariable(FileVar);
+        if (string.IsNullOrWhiteSpace(path) || !PwizReaderRegistration.IsAvailable)
+        {
+            _out.WriteLine($"skipped: needs {FileVar} and a pwiz build.");
+            return;
+        }
+
+        var raw = RawFileReaderAdapter.FileFactory(path);
+        try
+        {
+            raw.SelectInstrument(Device.MS, 1);
+
+            // Which trailer field holds it. The trailing colon is Thermo's own labelling.
+            var headers = raw.GetTrailerExtraHeaderInformation();
+            var index = -1;
+            for (var i = 0; i < headers.Length; i++)
+            {
+                if ((headers[i].Label ?? "").StartsWith("Ion Injection Time", StringComparison.Ordinal))
+                {
+                    index = i;
+                    break;
+                }
+            }
+            _out.WriteLine($"trailer fields: {headers.Length}, "
+                + $"injection time at index {index}"
+                + (index < 0 ? " (NOT PRESENT - ions cannot be counted from this file)" : ""));
+            if (index < 0)
+                return;
+
+            // The MS2 scans, and their TIC, from the one bulk call the fast path already makes.
+            var settings = new ChromatogramTraceSettings(TraceType.TIC) { Filter = "ms2" };
+            var data = raw.GetChromatogramDataEx(
+                new ThermoFisher.CommonCore.Data.Interfaces.IChromatogramSettingsEx[] { settings },
+                -1, -1, new MassOptions());
+            var times = data!.PositionsArray![0];
+            var intensities = data.IntensitiesArray![0];
+            _out.WriteLine($"MS2 scans: {times.Length:N0}");
+            _out.WriteLine("");
+
+            // 1. Is it constant? Sample across the run rather than the first few scans, because an
+            //    injection time that ramps with the gradient would look constant at the start.
+            var sampled = new List<double>();
+            var step = Math.Max(1, times.Length / 500);
+            var sampleClock = Stopwatch.StartNew();
+            for (var i = 0; i < times.Length; i += step)
+            {
+                var scan = raw.ScanNumberFromRetentionTime(times[i]);
+                if (raw.GetTrailerExtraValue(scan, index) is { } v)
+                    sampled.Add(Convert.ToDouble(v));
+            }
+            sampleClock.Stop();
+
+            var distinct = sampled.Select(v => Math.Round(v, 3)).Distinct().ToList();
+            _out.WriteLine($"sampled {sampled.Count:N0} scans in {sampleClock.Elapsed.TotalSeconds:0.00} s");
+            _out.WriteLine($"  distinct injection times : {distinct.Count}");
+            _out.WriteLine($"  min / median / max (ms)  : "
+                + $"{sampled.Min():0.###} / {Median(sampled):0.###} / {sampled.Max():0.###}");
+            var spread = sampled.Max() > 0 ? (sampled.Max() - sampled.Min()) / sampled.Max() : 0;
+            _out.WriteLine($"  spread                   : {spread:P2}");
+            _out.WriteLine("");
+
+            // 2. What does reading EVERY scan cost, and what is the exact ion total?
+            var allClock = Stopwatch.StartNew();
+            double ionsExact = 0, intensitySum = 0;
+            var missing = 0;
+            for (var i = 0; i < times.Length; i++)
+            {
+                intensitySum += intensities[i];
+                var scan = raw.ScanNumberFromRetentionTime(times[i]);
+                var v = raw.GetTrailerExtraValue(scan, index);
+                if (v is null)
+                {
+                    missing++;
+                    continue;
+                }
+                ionsExact += intensities[i] * Convert.ToDouble(v) / 1000.0;
+            }
+            allClock.Stop();
+
+            var ionsFromMedian = intensitySum * Median(sampled) / 1000.0;
+            _out.WriteLine($"every scan read in {allClock.Elapsed.TotalSeconds:0.00} s "
+                + $"({missing:N0} scans had no value)");
+            _out.WriteLine($"  summed intensity (ions/s): {intensitySum:E4}");
+            _out.WriteLine($"  ions, exact per scan     : {ionsExact:E4}");
+            _out.WriteLine($"  ions, median injection   : {ionsFromMedian:E4}");
+            _out.WriteLine($"  the approximation is off by {Math.Abs(ionsFromMedian - ionsExact) / ionsExact:P3}");
+            _out.WriteLine("");
+            _out.WriteLine(spread < 0.01
+                ? "VERDICT: injection time is effectively fixed, so ions = summed intensity x that "
+                  + "constant / 1000. Sampling a few hundred scans is enough and costs a fraction of "
+                  + "a second."
+                : "VERDICT: injection time VARIES across the run, so ions need it per scan. The cost "
+                  + "of reading every scan is the number above - compare it against the ~0.5 s the "
+                  + "rest of the read takes before deciding.");
+        }
+        finally
+        {
+            raw.Dispose();
+        }
+    }
+
+    private static double Median(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0)
+            return double.NaN;
+        var sorted = values.OrderBy(v => v).ToArray();
+        var mid = sorted.Length / 2;
+        return sorted.Length % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
 }
