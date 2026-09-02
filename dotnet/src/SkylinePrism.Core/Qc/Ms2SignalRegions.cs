@@ -7,6 +7,27 @@ using SkylinePrism.Core.IO;
 namespace SkylinePrism.Core.Qc;
 
 /// <summary>
+/// What the MS2 signal accounting totals.
+/// </summary>
+public enum Ms2SignalMeasure
+{
+    /// <summary>
+    /// Integrated peak areas, gross (<c>Area + Background</c>), against an acquired total ion
+    /// current. Works on any export, but the two sides are not the same quantity: a peak area is an
+    /// intensity-time integral and a summed TIC is an intensity, so the ratio needs the acquisition's
+    /// cycle duration applied before it means anything.
+    /// </summary>
+    Signal,
+
+    /// <summary>
+    /// Skyline's own ion counts - intensity times injection time, per spectrum, summed across the
+    /// peak. Both sides become counts of ions, neither is background subtracted, and no unit or
+    /// background correction is needed. Requires an export carrying the LC Peak ion-count columns.
+    /// </summary>
+    Ions,
+}
+
+/// <summary>
 /// Reads one replicate's integrated fragment peaks out of <c>merged_data/</c> and places each in MS2
 /// signal space, ready for <see cref="Ms2SignalUnion"/>.
 ///
@@ -28,10 +49,17 @@ public static class Ms2SignalRegions
     /// </summary>
     /// <param name="Background">Skyline's <c>Background</c> column, or null when the export predates
     /// it. See <see cref="GrossSignalSql"/> for why the accounting wants it.</param>
+    /// <param name="TransitionIons">Skyline's <c>LC Peak Transition Ion Count</c> - the per-transition
+    /// ion count, summed over the spectra inside the peak boundaries. Null when the export predates
+    /// Skyline's ion counting, which is what makes <see cref="Ms2SignalMeasure.Ions"/> unavailable.</param>
     public sealed record Columns(
         string Sample, string Peptide, string Transition, string Abundance,
         string PrecursorMz, string ProductMz, string StartTime, string EndTime,
-        string? Background = null);
+        string? Background = null, string? TransitionIons = null)
+    {
+        /// <summary>Whether this export can support <see cref="Ms2SignalMeasure.Ions"/>.</summary>
+        public bool HasIonCounts => TransitionIons is not null;
+    }
 
     /// <summary>
     /// The signal expression the accounting sums: <c>Area + Background</c> where the export carries
@@ -49,11 +77,18 @@ public static class Ms2SignalRegions
     /// baseline into every abundance. The gross figure exists solely to be comparable with a gross
     /// denominator.</para>
     /// </summary>
-    internal static string GrossSignalSql(Columns cols) =>
-        cols.Background is null
+    internal static string GrossSignalSql(Columns cols, Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
+    {
+        // Ions are already gross and already a count, so there is nothing to add or convert - which
+        // is the whole reason to prefer them.
+        if (measure == Ms2SignalMeasure.Ions && cols.TransitionIons is not null)
+            return $@"TRY_CAST(""{cols.TransitionIons}"" AS DOUBLE)";
+
+        return cols.Background is null
             ? $@"TRY_CAST(""{cols.Abundance}"" AS DOUBLE)"
             : $@"COALESCE(TRY_CAST(""{cols.Abundance}"" AS DOUBLE), 0)
                  + COALESCE(TRY_CAST(""{cols.Background}"" AS DOUBLE), 0)";
+    }
 
     /// <summary>
     /// Resolve against a merged table's actual column names, or null when it lacks one. A report
@@ -75,11 +110,18 @@ public static class Ms2SignalRegions
         // and the caller says so rather than quietly reporting a lower fraction.
         var background = SkylineColumns.FindColumn(available, "Background");
 
+        // Skyline's per-transition ion count. FindColumn matches ignoring case, spaces and
+        // underscores, so the exported "LC Peak Transition Ion Count" is found however the merge
+        // spelled it. The Apex variant is deliberately NOT accepted: it is one spectrum, not a total.
+        var transitionIons = SkylineColumns.FindColumn(
+            available, "LC Peak Transition Ion Count", "LC Peak Analyte Ion Count Fragment");
+
         return sample is null || peptide is null || transition is null || area is null
             || precursorMz is null || productMz is null || start is null || end is null
             ? null
             : new Columns(
-                sample, peptide, transition, area, precursorMz, productMz, start, end, background);
+                sample, peptide, transition, area, precursorMz, productMz, start, end, background,
+                transitionIons);
     }
 
     /// <summary>How a peptide was classified by the run, supplied by the caller as pure identity.</summary>
@@ -102,7 +144,8 @@ public static class Ms2SignalRegions
     /// <param name="scheme">Isolation windows; fragments outside every window are counted, not used.</param>
     public static Loaded Load(
         MergedDataset dataset, Columns cols, string sample, IsolationScheme scheme,
-        IReadOnlyDictionary<string, PeptideClass> classes, int memoryBudgetMb = 0)
+        IReadOnlyDictionary<string, PeptideClass> classes, int memoryBudgetMb = 0,
+        Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
@@ -120,7 +163,7 @@ public static class Ms2SignalRegions
                 TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS fmz,
                 TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
                 TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
-                {GrossSignalSql(cols)} AS area
+                {GrossSignalSql(cols, measure)} AS area
             FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
             WHERE ""{cols.Sample}"" = '{Esc(sample)}'
               AND NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}");
@@ -154,7 +197,8 @@ public static class Ms2SignalRegions
     public static void LoadBySample(
         MergedDataset dataset, Columns cols, IsolationScheme scheme,
         IReadOnlyDictionary<string, PeptideClass> classes,
-        Action<string, Loaded> onSample, int memoryBudgetMb = 0)
+        Action<string, Loaded> onSample, int memoryBudgetMb = 0,
+        Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
@@ -171,7 +215,7 @@ public static class Ms2SignalRegions
                 TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS fmz,
                 TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
                 TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
-                {GrossSignalSql(cols)} AS area
+                {GrossSignalSql(cols, measure)} AS area
             FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
             WHERE NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}
             ORDER BY samp");

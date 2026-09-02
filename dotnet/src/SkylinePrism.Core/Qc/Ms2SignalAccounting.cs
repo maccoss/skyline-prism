@@ -76,6 +76,8 @@ public static class Ms2SignalAccounting
     /// <see cref="ProductMassTolerance.Describe"/> puts it - so a plot can name it.</param>
     /// <param name="ListsMatchable">False when the peptide output carries no protein-group columns, in
     /// which case every list bar is zero for want of data rather than for want of members.</param>
+    /// <param name="Measure">Which quantity was totalled. Carried because it is not recoverable from
+    /// the numbers, and the two are not interchangeable - a plot has to say which it is showing.</param>
     public sealed record Result(
         IReadOnlyList<Row> Rows,
         IReadOnlyList<string> ListNames,
@@ -84,7 +86,8 @@ public static class Ms2SignalAccounting
         int AssignedPeptides,
         string Tolerance,
         string IsolationScheme,
-        bool ListsMatchable)
+        bool ListsMatchable,
+        Ms2SignalMeasure Measure = Ms2SignalMeasure.Signal)
     {
         public bool IsEmpty => Rows.Count == 0;
     }
@@ -101,7 +104,8 @@ public static class Ms2SignalAccounting
     public static Result? Compute(
         string outputDir, IsolationScheme scheme, ProductMassTolerance tolerance,
         IReadOnlyList<ProteinList> lists, IReadOnlyDictionary<string, string>? sampleTypes = null,
-        Action<string>? log = null, int memoryBudgetMb = 0)
+        Action<string>? log = null, int memoryBudgetMb = 0,
+        Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
         var mergedRoot = Path.Combine(outputDir, "merged_data");
         if (!MergedDataset.Exists(mergedRoot))
@@ -131,7 +135,27 @@ public static class Ms2SignalAccounting
                 + "no protein list could be matched. Only the assigned total is meaningful.");
         }
 
+        // Ions asked for but absent is worth saying plainly rather than silently answering a
+        // different question with the same-looking number.
+        if (measure == Ms2SignalMeasure.Ions && !cols.HasIonCounts)
+        {
+            log?.Invoke(
+                "  MS2 signal accounting: measure 'ions' was requested but this export has no "
+                + "LC Peak ion-count column, so peak areas are being summed instead. Re-export with "
+                + "the ion-count columns, which need a Skyline that computes them and a document "
+                + "whose spectrum metadata carries injection times.");
+            measure = Ms2SignalMeasure.Signal;
+        }
+        else if (measure == Ms2SignalMeasure.Ions)
+        {
+            log?.Invoke(
+                "  MS2 signal accounting: summing Skyline ion counts (intensity x injection time per "
+                + "spectrum). Neither side is background subtracted and both are counts, so no unit "
+                + "or background correction applies.");
+        }
+
         // Which signal was summed changes what the fraction MEANS, so it is stated every run.
+        if (measure == Ms2SignalMeasure.Signal)
         log?.Invoke(cols.Background is null
             ? "  MS2 signal accounting: this export has no Background column, so the assigned signal "
               + "is background-SUBTRACTED while an acquired total ion current is not. The assigned "
@@ -166,7 +190,8 @@ public static class Ms2SignalAccounting
                     union.DuplicateArea,
                     union.SharedArea));
             },
-            memoryBudgetMb);
+            memoryBudgetMb,
+            measure);
 
         if (rows.Count == 0)
         {
@@ -177,7 +202,8 @@ public static class Ms2SignalAccounting
         var result = new Result(
             rows, classified.ListNames, lists.Select(l => l.ColorHex).ToList(),
             classified.PerListPeptides, classified.AssignedPeptides,
-            tolerance.Describe(), scheme.Name, classified.HasGroupColumns || lists.Count == 0);
+            tolerance.Describe(), scheme.Name, classified.HasGroupColumns || lists.Count == 0,
+            measure);
 
         var removed = Median(rows.Select(r => r.DoubleCountedFraction));
         log?.Invoke(

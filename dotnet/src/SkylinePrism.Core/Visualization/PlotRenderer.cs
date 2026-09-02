@@ -1371,6 +1371,15 @@ public static class PlotRenderer
             plt.ShowLegend(Alignment.UpperRight);
 
         plt.XLabel($"Replicate ({rows.Count:N0}, in sample-id order)");
+        // Ions are a count, so the axis must not keep calling them "integrated signal".
+        if (result.Measure == Qc.Ms2SignalMeasure.Ions)
+        {
+            plt.YLabel($"MS2 ions{unit}");
+            StyleQcPlot(plt, fontScale);
+            SetPlotTitle(plt, title, fontScale);
+            plt.Axes.SetLimits(-0.8, rows.Count - 0.2, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
+            return;
+        }
         // Deliberately literal: integrated signal for the document's targets, NOT acquired MS2. Kept
         // short because a long axis label is clipped at this canvas height - the "shared signal counted
         // once" qualifier lives in the title and the report caption, where there is room for it.

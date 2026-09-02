@@ -136,8 +136,11 @@ public static class QcReport
             var lists = ProteinListSet.ResolveForDisplay(
                 settings.ProteinLists, settings.ProteinListFiles);
 
+            var measure = string.Equals(settings.Measure, "ions", StringComparison.OrdinalIgnoreCase)
+                ? Ms2SignalMeasure.Ions
+                : Ms2SignalMeasure.Signal;
             result = Ms2SignalAccounting.Compute(
-                outputDir, scheme, tolerance, lists, sampleTypes, log);
+                outputDir, scheme, tolerance, lists, sampleTypes, log, measure: measure);
             if (result is not null)
                 Ms2SignalAccounting.Write(outputDir, result);
         }
@@ -145,15 +148,23 @@ public static class QcReport
         if (result is null || result.IsEmpty)
             return sections;
 
-        var caption =
-            $"Integrated MS2 signal per replicate, shared signal counted once "
-            + $"(extraction {result.Tolerance}, isolation scheme \"{result.IsolationScheme}\", "
-            + $"{result.AssignedPeptides:N0} peptides).";
+        var caption = result.Measure == Ms2SignalMeasure.Ions
+            ? $"MS2 IONS per replicate - intensity x injection time, summed per spectrum across each "
+              + $"peak - shared signal counted once (extraction {result.Tolerance}, isolation scheme "
+              + $"\"{result.IsolationScheme}\", {result.AssignedPeptides:N0} peptides). Not background "
+              + "subtracted."
+            : $"Integrated MS2 signal per replicate, shared signal counted once "
+              + $"(extraction {result.Tolerance}, isolation scheme \"{result.IsolationScheme}\", "
+              + $"{result.AssignedPeptides:N0} peptides).";
 
         var images = new List<PlotImage>();
         try
         {
-            var png = PlotRenderer.Ms2AccountingPng(result, "MS2 Signal Assigned to Peptides (shared signal counted once)");
+            var png = PlotRenderer.Ms2AccountingPng(
+                result,
+                result.Measure == Ms2SignalMeasure.Ions
+                    ? "MS2 Ions Assigned to Peptides (shared signal counted once)"
+                    : "MS2 Signal Assigned to Peptides (shared signal counted once)");
             if (savePlots && png.Length > 0)
             {
                 Directory.CreateDirectory(plotsDir);
