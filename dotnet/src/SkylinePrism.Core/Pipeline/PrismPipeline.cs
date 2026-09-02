@@ -697,7 +697,9 @@ public sealed class PrismPipeline
         if (config.QcReport.Enabled)
         {
             report("Stage 5b: Generating QC report (qc_report.html)...");
-            QcReport.Generate(outputDir, config, savePlots: config.QcReport.SavePlots);
+            // The log sink matters here: MS2 signal accounting runs inside the report and is the one
+            // part of it that can take minutes, so its progress and its skip reasons belong in the run log.
+            QcReport.Generate(outputDir, config, savePlots: config.QcReport.SavePlots, log: report);
         }
 
         EndStage();

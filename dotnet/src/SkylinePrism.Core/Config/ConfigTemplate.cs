@@ -148,9 +148,21 @@ output:
   format: "parquet"
   include_residuals: true   # write median-polish residuals (peptides_rollup_residuals + proteins_raw_residuals)
 
-# QC report (self-contained HTML + before/after plots).
+# QC report (self-contained HTML + raw/corrected plots).
 qc_report:
   enabled: true
+
+  # MS2 signal accounting: per replicate, how much integrated MS2 signal the run assigns to a peptide,
+  # and how much of that belongs to peptides in the listed protein panels. Shared signal is counted
+  # ONCE - co-isolated peptides whose fragments fall in the same extraction window are the same
+  # detector counts. Off by default: it costs one extra pass over the merged table (comparable to
+  # Stage 2), and the result is cached so `prism qc -d` replots without recomputing.
+  ms2_signal:
+    enabled: false
+    extraction_tolerance: "10 ppm"     # +/- tolerance Skyline extracted product ions over ("0.4 m/z" also works)
+    # isolation_scheme: "Astral 3 Th, 400-900 m/z"       # from isolation_schemes.xml; blank = the only one there
+    # protein_lists: ["Hemolysis", "Coagulation"]        # saved or shipped list names, one bar each
+    # protein_list_files: ["/path/to/panel.txt"]         # member files - the reproducible form
 
 """;
 

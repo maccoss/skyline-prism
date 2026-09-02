@@ -96,44 +96,129 @@ public static class Ms2SignalRegions
               AND NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}");
 
         using var reader = cmd.ExecuteReader();
-        var regions = new List<Ms2SignalUnion.Region>();
-        // Peptide identity as a small int, so the union can tell a duplicate row of ONE peptide (Skyline
-        // exports a shared peptide once per protein assignment) from genuine sharing between two.
-        var peptideIds = new Dictionary<string, int>(StringComparer.Ordinal);
-        var outside = 0;
-        var unknown = 0;
+        // Peptide identity becomes a small int inside the accumulator, so the union can tell a duplicate
+        // row of ONE peptide (Skyline exports a shared peptide once per protein assignment) from genuine
+        // sharing between two.
+        var block = new Accumulator();
+        while (reader.Read())
+            block.Add(reader, ordinalOffset: 0, scheme, classes);
+
+        return block.Take();
+    }
+
+    /// <summary>
+    /// Load every replicate in one pass, handing each sample's regions to <paramref name="onSample"/>
+    /// as its block completes.
+    ///
+    /// <para><b>Why one pass and not one per replicate.</b> <c>merged_data/</c> is hive-partitioned on
+    /// the PEPTIDE column, so a filter on the sample prunes nothing - a per-replicate query reads the
+    /// whole cohort. On a 192-replicate cohort that is 192 full scans of ~47 GB. This runs one scan and
+    /// pays for an ORDER BY instead, which DuckDB spills to <c>temp_directory</c>, so peak memory is one
+    /// replicate's regions (~22 MB) rather than the cohort's.</para>
+    ///
+    /// <para>The ordering is what makes the streaming safe: a sample's rows arrive contiguously, so the
+    /// accumulator can be flushed and reused. Without it every sample would have to be held at once -
+    /// ~89M regions on that cohort.</para>
+    /// </summary>
+    /// <param name="onSample">Called once per sample, in ascending sample-id order.</param>
+    public static void LoadBySample(
+        MergedDataset dataset, Columns cols, IsolationScheme scheme,
+        IReadOnlyDictionary<string, PeptideClass> classes,
+        Action<string, Loaded> onSample, int memoryBudgetMb = 0)
+    {
+        using var conn = new DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        DuckDbTuning.Apply(
+            conn,
+            memoryBudgetMb > 0 ? memoryBudgetMb : DuckDbMerge.AutoMemoryBudgetMb(),
+            DuckDbMerge.ResolveTempDirectory(dataset.Root));
+
+        using var cmd = DuckDbTuning.StreamingCommand(conn, $@"
+            SELECT
+                ""{cols.Sample}"" AS samp,
+                ""{cols.Peptide}"" AS pep,
+                TRY_CAST(""{cols.PrecursorMz}"" AS DOUBLE) AS pmz,
+                TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS fmz,
+                TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
+                TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
+                TRY_CAST(""{cols.Abundance}"" AS DOUBLE) AS area
+            FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
+            WHERE NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}
+            ORDER BY samp");
+
+        using var reader = cmd.ExecuteReader();
+        var block = new Accumulator();
+        string? current = null;
 
         while (reader.Read())
         {
-            var pep = reader.IsDBNull(0) ? "" : reader.GetString(0);
-            var pmz = Num(reader, 1);
-            var fmz = Num(reader, 2);
-            var rt0 = Num(reader, 3);
-            var rt1 = Num(reader, 4);
-            var area = Num(reader, 5);
+            var sample = reader.IsDBNull(0) ? "" : reader.GetString(0);
+            if (current is not null && !string.Equals(sample, current, StringComparison.Ordinal))
+            {
+                onSample(current, block.Take());
+                block.Reset();
+            }
+            current = sample;
+            block.Add(reader, ordinalOffset: 1, scheme, classes);
+        }
+
+        if (current is not null)
+            onSample(current, block.Take());
+    }
+
+    /// <summary>
+    /// One sample's rows being turned into regions. Shared by both entry points so the single-replicate
+    /// and whole-cohort paths cannot classify a row differently.
+    /// </summary>
+    private sealed class Accumulator
+    {
+        private readonly Dictionary<string, int> _peptideIds = new(StringComparer.Ordinal);
+        private List<Ms2SignalUnion.Region> _regions = new();
+        private int _outside;
+        private int _unknown;
+
+        public void Add(
+            DuckDBDataReader reader, int ordinalOffset, IsolationScheme scheme,
+            IReadOnlyDictionary<string, PeptideClass> classes)
+        {
+            var pep = reader.IsDBNull(ordinalOffset) ? "" : reader.GetString(ordinalOffset);
+            var pmz = Num(reader, ordinalOffset + 1);
+            var fmz = Num(reader, ordinalOffset + 2);
+            var rt0 = Num(reader, ordinalOffset + 3);
+            var rt1 = Num(reader, ordinalOffset + 4);
+            var area = Num(reader, ordinalOffset + 5);
 
             // A precursor that no window covers at that time is not MS2 signal this scheme explains.
             var window = WindowIndexFor(scheme, pmz, rt0, rt1);
             if (window < 0)
             {
-                outside++;
-                continue;
+                _outside++;
+                return;
             }
 
             if (!classes.TryGetValue(pep, out var cls))
             {
                 cls = default;      // neither assigned nor listed
-                unknown++;
+                _unknown++;
             }
 
-            if (!peptideIds.TryGetValue(pep, out var peptideId))
-                peptideIds[pep] = peptideId = peptideIds.Count;
+            if (!_peptideIds.TryGetValue(pep, out var peptideId))
+                _peptideIds[pep] = peptideId = _peptideIds.Count;
 
-            regions.Add(new Ms2SignalUnion.Region(
+            _regions.Add(new Ms2SignalUnion.Region(
                 window, fmz, rt0, rt1, area, cls.Assigned, cls.ListMask, peptideId));
         }
 
-        return new Loaded(regions, outside, unknown);
+        /// <summary>The block so far, handing off the list rather than copying it.</summary>
+        public Loaded Take() => new(_regions, _outside, _unknown);
+
+        public void Reset()
+        {
+            _regions = new List<Ms2SignalUnion.Region>();
+            _peptideIds.Clear();
+            _outside = 0;
+            _unknown = 0;
+        }
     }
 
     /// <summary>

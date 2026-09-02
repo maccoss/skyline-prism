@@ -234,6 +234,21 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 |-----|---------|-------------|
 | `enabled` | `true` | Generate `qc_report.html` |
 | `save_plots` | `true` | Also write PNGs to `qc_plots/` |
+| `ms2_signal.enabled` | `false` | Compute MS2 signal accounting: per replicate, how much integrated MS2 signal the run assigns to a peptide. Off by default because it costs one extra streaming pass over the merged table plus an ORDER BY the sample id, comparable to Stage 2. Results are cached as `ms2_signal_accounting.parquet`, so `prism qc -d` replots without recomputing |
+| `ms2_signal.extraction_tolerance` | `"10 ppm"` | The +/- m/z range Skyline extracted each product ion over, which decides when two co-isolated peptides' fragments are the same detector counts. Write it as `"10 ppm"` or `"0.4 m/z"`. The value in force is printed in the log and named on the plot; the Skyline external tool overrides it from the document's own `transition_full_scan` settings |
+| `ms2_signal.isolation_scheme` | *(auto)* | Which scheme from `isolation_schemes.xml` to account against, by name. Blank picks it when the file defines exactly one; with several, the accounting is skipped until one is named. Never guessed - fragments in different isolation windows never share signal |
+| `ms2_signal.protein_lists` | *(none)* | Saved or shipped protein-list names to account for, one line each on the plot. Lists nest inside the assigned total and may overlap each other |
+| `ms2_signal.protein_list_files` | *(none)* | Member files, for lists not saved on this machine - the reproducible form |
+
+**What the accounting measures.** Summing transition areas over-counts: a DIA isolation window
+co-isolates tens of peptides, and two fragments whose extraction windows overlap are the same detector
+counts credited twice. Every total is therefore a **union** over regions of MS2 signal space -
+(isolation window, extraction window, integration bounds) - counted once. The naive sum is kept
+alongside so the report can say how much double counting was removed.
+
+**What it does not measure.** The *acquired* MS2 total needs the instrument data files and cannot come
+from any Skyline export - `TicArea` is one value per replicate and is MS1 by construction. The plot's
+bars are the signal Skyline integrated for the document's targets, and are labelled as such.
 
 ---
 

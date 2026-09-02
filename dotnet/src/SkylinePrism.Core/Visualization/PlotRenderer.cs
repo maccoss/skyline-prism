@@ -1280,4 +1280,150 @@ public static class PlotRenderer
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
+
+    /// <summary>
+    /// MS2 signal accounting, one replicate per bar: how much integrated MS2 signal the run assigns to
+    /// a peptide, and how much of that belongs to peptides in each selected protein list.
+    /// </summary>
+    /// <remarks>
+    /// <b>Nested, so overlaid rather than stacked or side-by-side.</b> A list's signal is a SUBSET of
+    /// the assigned signal, and two lists may claim the same region, so the totals do not partition
+    /// anything. Stacking would add overlapping quantities into a meaningless height; grouping side by
+    /// side would read as "these are alternatives". Drawing each list in front of the assigned bar at a
+    /// narrower width says "contained within", which is what the numbers mean.
+    /// <para><b>The tallest bar is not acquired MS2 signal</b> - it is what Skyline integrated for this
+    /// document's targets. The acquired total needs the instrument files. The axis label says so
+    /// literally, because reading it as the acquired total turns unknown coverage into apparently
+    /// complete coverage.</para>
+    /// <para>Sample names are not drawn as tick labels: a real cohort is ~192 replicates and the labels
+    /// would be an unreadable smear. The bars stay in the accounting's own (sorted) order and are
+    /// colored by sample type, which is what makes a run of bad replicates visible.</para>
+    /// </remarks>
+    public static void DrawMs2Accounting(
+        Plot plt, Qc.Ms2SignalAccounting.Result result, string? title = null, double fontScale = 1.0)
+    {
+        if (result.Rows.Count == 0)
+        {
+            plt.Title(title ?? "No MS2 signal accounting to show");
+            StyleQcPlot(plt, fontScale);
+            return;
+        }
+
+        var rows = result.Rows;
+        var tallest = rows.Max(r => Finite(r.AssignedArea));
+
+        // Peak areas run to 10 digits, and ten-digit tick labels take a third of the canvas. Scale the
+        // values and say the factor in the axis label instead.
+        var (scale, unit) = SignalScale(tallest);
+
+        var assigned = new List<Bar>(rows.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            assigned.Add(new Bar
+            {
+                Position = i,
+                Value = Finite(rows[i].AssignedArea) / scale,
+                FillColor = GroupColor(rows[i].SampleType, i),
+                LineWidth = 0,
+                Size = 0.85,
+            });
+        }
+        plt.Add.Bars(assigned);
+
+        // One legend entry per sample type present. The bars carry none of their own, because a cohort
+        // of 192 would produce 192 entries.
+        foreach (var type in rows.Select(r => r.SampleType).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var marker = plt.Add.Marker(double.NaN, double.NaN);
+            marker.MarkerStyle.Shape = MarkerShape.FilledSquare;
+            marker.MarkerStyle.Size = 14;
+            marker.MarkerStyle.FillColor = GroupColor(type, 0);
+            marker.MarkerStyle.LineWidth = 0;
+            marker.LegendText = type;
+        }
+
+        // Lists as profile LINES over the bars, not as narrower bars inside them. Narrower bars was the
+        // obvious design and it fails at cohort scale: 192 bars across a figure leaves ~4 px each, so
+        // two nested widths differ by well under a pixel and the inner list is simply invisible. A line
+        // is legible at any density, and sitting inside the bar still reads as "this much of it".
+        var xs = Enumerable.Range(0, rows.Count).Select(i => (double)i).ToArray();
+        for (var l = 0; l < result.ListNames.Count; l++)
+        {
+            var index = l;
+            var ys = rows
+                .Select(r => (index < r.ListArea.Count ? Finite(r.ListArea[index]) : 0) / scale)
+                .ToArray();
+
+            var line = plt.Add.Scatter(xs, ys);
+            line.Color = ListColor(result, index);
+            line.LineWidth = 3;
+            line.MarkerSize = rows.Count > 60 ? 0 : 6;
+            line.LegendText =
+                $"{result.ListNames[index]} ({result.PerListPeptides.ElementAtOrDefault(index):N0} peptides)";
+        }
+
+        if (result.ListNames.Count > 0)
+            plt.ShowLegend(ChooseLegendCorner(
+                xs.Concat(xs).ToArray(),
+                rows.Select(r => Finite(r.AssignedArea) / scale).Concat(
+                    rows.Select(r => Finite(r.AssignedArea) / scale)).ToArray()));
+        else
+            plt.ShowLegend(Alignment.UpperRight);
+
+        plt.XLabel($"Replicate ({rows.Count:N0}, in sample-id order)");
+        // Deliberately literal: integrated signal for the document's targets, NOT acquired MS2. Kept
+        // short because a long axis label is clipped at this canvas height - the "shared signal counted
+        // once" qualifier lives in the title and the report caption, where there is room for it.
+        plt.YLabel($"Integrated MS2 signal{unit}");
+        StyleQcPlot(plt, fontScale);
+        SetPlotTitle(plt, title, fontScale);
+
+        plt.Axes.SetLimits(-0.8, rows.Count - 0.2, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
+    }
+
+    /// <summary>
+    /// A divisor and the matching axis-label suffix, so tick labels stay short. Steps by 1000 rather
+    /// than by any round number, because those are the ones with names people read off an axis.
+    /// </summary>
+    private static (double Scale, string Unit) SignalScale(double largest) => largest switch
+    {
+        >= 1e12 => (1e12, " (x10^12)"),
+        >= 1e9 => (1e9, " (x10^9)"),
+        >= 1e6 => (1e6, " (x10^6)"),
+        >= 1e3 => (1e3, " (x10^3)"),
+        _ => (1.0, ""),
+    };
+
+    /// <summary>
+    /// A protein list's own color when the accounting carried one, else a cycled color. The color comes
+    /// from the list itself rather than a lookup by name, so a user-defined list keeps its color and
+    /// reads the same here as in the dynamic-range plot.
+    /// </summary>
+    private static Color ListColor(Qc.Ms2SignalAccounting.Result result, int index)
+    {
+        var hex = result.ListColors.ElementAtOrDefault(index);
+        if (string.IsNullOrWhiteSpace(hex))
+            return SampleColor(index + 3);
+        try
+        {
+            return Color.FromHex(hex);
+        }
+        catch (Exception)
+        {
+            // A hand-edited list file can carry anything; a bad color is not a reason to lose the plot.
+            return SampleColor(index + 3);
+        }
+    }
+
+    private static double Finite(double value) => double.IsFinite(value) && value > 0 ? value : 0;
+
+    /// <summary>PNG of <see cref="DrawMs2Accounting"/>, for the QC report.</summary>
+    public static byte[] Ms2AccountingPng(
+        Qc.Ms2SignalAccounting.Result result, string? title = null,
+        int width = Width, int height = Height, double fontScale = 1.0)
+    {
+        var plt = new Plot();
+        DrawMs2Accounting(plt, result, title, fontScale);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
+    }
 }

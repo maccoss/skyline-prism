@@ -6,6 +6,43 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **MS2 signal accounting in the QC report: how much of the integrated MS2 signal an analysis actually
+  labels.** A new section plots, per replicate, the MS2 signal the run assigns to a peptide, with a
+  profile line per selected protein list showing how much of that belongs to each panel. Enable it with
+  `qc_report.ms2_signal.enabled: true`, and name panels with `qc_report.ms2_signal.protein_lists` /
+  `protein_list_files`.
+
+  The quantity is a **union, not a sum**. Adding up transition areas double-counts: a DIA isolation
+  window co-isolates tens of peptides, and two fragments whose extraction windows overlap are the same
+  detector counts credited twice - which can push "assigned" past what the instrument acquired. Each
+  distinct region of MS2 signal space - (isolation window, extraction window, integration bounds) -
+  counts once. On a real cohort replicate that removes 17.7% of the naive sum: 23,245 rows where
+  Skyline exported one shared peptide per protein assignment, and 5,623 genuine shares between
+  co-isolated peptides, which are reported separately because they mean different things.
+
+  Totals **nest rather than partition**: a region claimed by a list peptide counts for that list and
+  for the assigned total, and two lists may both claim it - the question is what portion of the signal
+  a panel accounts for, not which panel owns a peptide.
+
+  All values are **raw**: linear Skyline peak areas from `merged_data/`, untouched by normalization,
+  ComBat or marker adjustment. The pipeline outputs supply peptide identity only, never magnitude.
+
+  Off by default because it costs one extra streaming pass over the merged table. Results are cached as
+  `ms2_signal_accounting.parquet` (and `ms2_signal_lists.parquet`), so `prism qc -d` replots without
+  recomputing and keeps working on a directory whose `merged_data/` was cleaned up.
+
+  The largest bar is **not** acquired MS2 signal - that needs the instrument files, and no Skyline
+  export can supply it (`TicArea` is one value per replicate and MS1 by construction). It is the signal
+  Skyline integrated for the document's targets, and it is labelled that way, because reading it as the
+  acquired total would turn unknown coverage into apparently complete coverage.
+
+- **The extraction window Skyline used is read from the document.** `SkyDocumentInfo` now reports the
+  `transition_full_scan` product-ion settings and evaluates them to the m/z range Skyline actually
+  extracted over, transcribed from Skyline's own `GetDenominator` / `GetFilterWindow` and applied the
+  way it applies them. The stated `product_res` is the **+/- tolerance**: `centroided res="10"` extracts
+  +/-10 ppm, `qit res="0.7"` extracts +/-0.7 m/z. Documents that do not say enough - an Orbitrap setting
+  with no calibration m/z - report the tolerance as unknown rather than a plausible default.
+
 ## Bug Fixes
 
 - **The QC report says "Raw" and "Corrected" instead of "Before" and "After", and the CV plots no

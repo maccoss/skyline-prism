@@ -79,11 +79,7 @@ public static class ConfigWriter
             ["method"] = config.ProteinNormalization.Method,
         });
         Add("marker_normalization", MarkerNormalization(config.MarkerNormalization));
-        Add("qc_report", new Dictionary<string, object?>
-        {
-            ["enabled"] = config.QcReport.Enabled,
-            ["save_plots"] = config.QcReport.SavePlots,
-        });
+        Add("qc_report", QcReport(config.QcReport));
         Add("output", Output(config.Output, def.Output));
         Add("processing", Processing(config.Processing, def.Processing));
         Add("batch_estimation", BatchEstimation(config.BatchEstimation, def.BatchEstimation));
@@ -260,6 +256,36 @@ public static class ConfigWriter
         AddIfSet(s, "protein_list", m.ProteinList);
         AddIfSet(s, "protein_list_file", m.ProteinListFile);
         s["method"] = m.Method;
+        return s;
+    }
+
+    private static Dictionary<string, object?> QcReport(PrismConfig.QcReportSection qc)
+    {
+        // enabled/save_plots are written unconditionally, as they were before the ms2_signal
+        // subsection existed - the QC report's own Processing Parameters table renders from this.
+        var s = new Dictionary<string, object?>
+        {
+            ["enabled"] = qc.Enabled,
+            ["save_plots"] = qc.SavePlots,
+        };
+
+        var ms2 = new Dictionary<string, object?>();
+        if (qc.Ms2Signal.Enabled)
+        {
+            // The tolerance is written whenever the accounting ran, default or not: it changes the
+            // numbers, so a config that reproduces the run has to carry the value that was in force.
+            ms2["enabled"] = true;
+            ms2["extraction_tolerance"] = qc.Ms2Signal.ExtractionTolerance;
+        }
+        if (!string.IsNullOrWhiteSpace(qc.Ms2Signal.IsolationScheme))
+            ms2["isolation_scheme"] = qc.Ms2Signal.IsolationScheme;
+        if (qc.Ms2Signal.ProteinLists.Count > 0)
+            ms2["protein_lists"] = new List<string>(qc.Ms2Signal.ProteinLists);
+        if (qc.Ms2Signal.ProteinListFiles.Count > 0)
+            ms2["protein_list_files"] = new List<string>(qc.Ms2Signal.ProteinListFiles);
+        if (ms2.Count > 0)
+            s["ms2_signal"] = ms2;
+
         return s;
     }
 

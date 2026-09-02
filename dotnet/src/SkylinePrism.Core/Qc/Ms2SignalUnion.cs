@@ -58,12 +58,13 @@ public static class Ms2SignalUnion
     /// accounting exists to handle, and the one worth reporting as such.</param>
     /// <remarks>
     /// The two counts split differently on a slice than on a whole run, so read the committed fixture's
-    /// figure with care. On the fixture (327 peptides, median 2 precursors per isolation window) the
-    /// union removes 86% of the sum and ALL of it is duplicate rows — 1,750 of 1,750, with zero
-    /// co-isolation, because a slice that thin barely co-isolates. On the full cohort one replicate has
-    /// 462,843 fragment peaks and the union removes 17.7%, split 23,245 duplicate rows to 5,623 genuine
-    /// shares. So the fixture can prove the bookkeeping correction works but cannot exercise the
-    /// co-isolation one; that is what <c>PRISM_MS2_COHORT</c> in the tests is for.
+    /// figures with care. On the fixture (327 peptides, median 2 precursors per isolation window) the
+    /// union removes a median 49% of the sum across its 192 replicates - 86% on the first one - and ALL
+    /// of it is duplicate rows, with zero co-isolation, because a slice that thin barely co-isolates.
+    /// On a full cohort one replicate has 462,843 fragment peaks and the union removes 17.7%, split
+    /// 23,245 duplicate rows to 5,623 genuine shares. So the fixture can prove the bookkeeping
+    /// correction works but cannot exercise the co-isolation one; that is what <c>PRISM_MS2_COHORT</c>
+    /// in the tests is for.
     /// </remarks>
     public sealed record Result(
         double AssignedArea, IReadOnlyList<double> ListArea, double SummedArea,

@@ -166,6 +166,11 @@ public sealed class PrismConfig
         var gn = Leaves("method");
         gn["rt_lowess"] = Leaves("frac", "n_grid_points");
 
+        var qc = Leaves("enabled", "save_plots");
+        qc["ms2_signal"] = Leaves(
+            "enabled", "extraction_tolerance", "isolation_scheme", "protein_lists",
+            "protein_list_files");
+
         var pr = Leaves("method", "min_peptides");
         pr["topn"] = Leaves("n", "selection");
         pr["ibaq"] = Leaves("fasta_path", "enzyme", "missed_cleavages", "min_peptide_length", "max_peptide_length");
@@ -187,7 +192,7 @@ public sealed class PrismConfig
             ["parsimony"] = Leaves(
                 "enabled", "fasta_path", "shared_peptide_handling", "enzyme", "enzyme_specificity"),
             ["output"] = Leaves("format", "include_residuals"),
-            ["qc_report"] = Leaves("enabled", "save_plots"),
+            ["qc_report"] = qc,
             ["sample_outlier_detection"] = Leaves("enabled", "action", "method", "iqr_multiplier", "fold_threshold"),
             ["metadata"] = Leaves("batch_column", "sample_type_column"),
             ["processing"] = Leaves("n_workers", "peptide_batch_size", "merge_memory_mb"),
@@ -449,6 +454,55 @@ public sealed class PrismConfig
         public bool SavePlots { get; set; } = true;
         // Note: plots are always base64-embedded (self-contained HTML). Linking to external PNGs
         // (Python's embed_plots: false) is a deliberate non-port - see PORTING_STATUS.md.
+
+        public Ms2SignalSection Ms2Signal { get; set; } = new();
+    }
+
+    /// <summary>
+    /// MS2 signal accounting: how much of the signal Skyline integrated the run assigns to a peptide,
+    /// and how much of that belongs to peptides in selected protein lists.
+    /// </summary>
+    public sealed class Ms2SignalSection
+    {
+        /// <summary>
+        /// Off by default because it is not cheap: one streaming pass over the whole merged table plus
+        /// an ORDER BY the sample id, comparable to Stage 2. On a small cohort that is seconds; on a
+        /// 192-replicate one it is minutes, and it would otherwise be paid on every run by everyone who
+        /// never looks at the plot. Once computed it is cached, so <c>prism qc -d</c> replots for free.
+        /// </summary>
+        public bool Enabled { get; set; }
+
+        /// <summary>
+        /// The m/z range Skyline extracted each product ion over, as a +/- tolerance: <c>"10 ppm"</c> or
+        /// <c>"0.4 m/z"</c>. It decides when two co-isolated peptides' fragments are the same detector
+        /// counts.
+        ///
+        /// <para>The default matches what modern Orbitrap/Astral DIA methods use, and it is a STATED
+        /// assumption rather than a hidden one: the value in force is printed in the log and named on
+        /// the plot. The Skyline external tool overrides it from the document's own
+        /// <c>transition_full_scan</c> settings, which is always better than any default.</para>
+        /// </summary>
+        public string ExtractionTolerance { get; set; } = "10 ppm";
+
+        /// <summary>
+        /// Which scheme from <c>isolation_schemes.xml</c> to use, by name. Blank picks it automatically
+        /// when the file defines exactly one; with several, naming one is the only unambiguous answer
+        /// and the accounting is skipped until it is named.
+        /// </summary>
+        public string? IsolationScheme { get; set; }
+
+        /// <summary>
+        /// Saved or shipped protein-list names to account for, one bar each. Every list nests inside the
+        /// assigned total and lists may overlap each other - the question is what portion of the signal
+        /// a panel accounts for, not which panel owns a peptide.
+        /// </summary>
+        public List<string> ProteinLists { get; set; } = new();
+
+        /// <summary>
+        /// Member files, for lists that are not saved on this machine. This is the reproducible form:
+        /// a name depends on what is saved locally, a file travels with the config.
+        /// </summary>
+        public List<string> ProteinListFiles { get; set; } = new();
     }
 
     public sealed class MetadataSection

@@ -128,6 +128,50 @@ public sealed record ProductMassTolerance(
     }
 
     /// <summary>
+    /// Parse the human-readable form a config file uses - <c>"10 ppm"</c> or <c>"0.4 m/z"</c> - rather
+    /// than Skyline's analyzer/resolution attribute pair, which means nothing outside a .sky.
+    ///
+    /// <para>Both spell a +/- tolerance, matching what the document's <c>product_res</c> means: "10 ppm"
+    /// extracts +/-10 ppm and "0.4 m/z" extracts +/-0.4 m/z. Returns null for anything else, so a
+    /// mistyped setting is reported rather than silently treated as a default.</para>
+    /// </summary>
+    public static ProductMassTolerance? ParseSetting(string? setting)
+    {
+        if (string.IsNullOrWhiteSpace(setting))
+            return null;
+
+        var text = setting.Trim().ToLowerInvariant();
+        // Accept the spellings people actually write: "m/z", "mz", "th", "da", "dalton".
+        var isPpm = text.EndsWith("ppm", StringComparison.Ordinal);
+        var isMz = text.EndsWith("m/z", StringComparison.Ordinal)
+            || text.EndsWith("mz", StringComparison.Ordinal)
+            || text.EndsWith("th", StringComparison.Ordinal)
+            || text.EndsWith("da", StringComparison.Ordinal)
+            || text.EndsWith("dalton", StringComparison.Ordinal);
+        if (!isPpm && !isMz)
+            return null;
+
+        // The leading number, taken explicitly rather than by trimming letters off the end - the unit
+        // spellings share letters with nothing in a number, but a character-set trim is a rule nobody
+        // can check by reading it.
+        var end = 0;
+        while (end < text.Length && (char.IsDigit(text[end]) || text[end] is '.' or '+' or '-' or 'e'))
+            end++;
+
+        var number = text[..end];
+        if (!double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || value <= 0)
+        {
+            return null;
+        }
+
+        // "centroided" is Skyline's ppm analyzer; "qit" is its fixed-width one. Going through the same
+        // analyzer names keeps one implementation of the window arithmetic.
+        var tolerance = new ProductMassTolerance(isPpm ? "centroided" : "qit", value);
+        return tolerance.IsUsable ? tolerance : null;
+    }
+
+    /// <summary>
     /// How the tolerance reads in a log line or a plot caption. Stated as the +/- tolerance where that
     /// is a single number, because that is what the document's own setting means.
     /// </summary>

@@ -165,7 +165,8 @@ public static class Program
             : new PrismConfig();
         if (opts.GetSingleOrNull("--no-save-plots") is not null)
             config.QcReport.SavePlots = false;
-        var path = QcReport.Generate(dir, config, savePlots: config.QcReport.SavePlots);
+        var path = QcReport.Generate(
+            dir, config, savePlots: config.QcReport.SavePlots, log: Console.WriteLine);
         Console.WriteLine($"QC report written to: {path}");
         return 0;
     }
