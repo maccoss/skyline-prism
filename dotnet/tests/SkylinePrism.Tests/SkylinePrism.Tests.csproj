@@ -32,8 +32,9 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(PrismWithPwiz)' != 'true'">
-    <!-- Names types that only exist in a pwiz build, so it cannot be compiled without one. -->
+    <!-- Name types that only exist in a pwiz build, so they cannot be compiled without one. -->
     <Compile Remove="RawData\PwizMs2SignalReaderTests.cs" />
+    <Compile Remove="Qc\Ms2AcquiredFractionTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
