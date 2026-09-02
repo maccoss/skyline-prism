@@ -14,23 +14,21 @@
     <column name="ProductCharge" />
     <column name="ProductMz" />
     <column name="Results!*.Value.Area" />
-    <column name="Results!*.Value.Background" />
-    <column name="Results!*.Value.Height" />
     <!--
-      Skyline's ion counting (Supplementary Table 3 of the Astral Zoom evaluation,
-      doi:10.1021/acs.jproteome.5c00593). "LC Peak" spans the whole peak; the "Apex" variants are a
-      single spectrum and are NOT what a signal total wants. None of these are background subtracted -
-      Skyline builds them from raw chromatogram intensities and integrates the TIC with
-      IntegrateWithoutBackground - which is exactly right for comparing against an acquired total.
+      Background, so the MS2 signal accounting can total GROSS signal: Skyline's Area is
+      background-subtracted (its own ChromPeakTest asserts that integrating without background gives
+      Area + BackgroundArea) while an acquired total ion current is not, and dividing a net numerator
+      by a gross denominator understates the assigned fraction. Cheap - it is already on ChromInfo.
 
-      Per transition, the analyte ion count; per precursor, the total ions in the same spectra, which
-      is the local denominator. MS1 variants carry the whole thing over to an MS1-level accounting.
+      DO NOT add Skyline's ion-count columns here. They are the right measure - see
+      qc_report.ms2_signal.measure - but they are ruinously expensive to compute over a whole
+      document. Measured on the 6.5 GB FLARE document (46M transition rows, 93 replicates), a
+      three-column report exported in 9.5 minutes; the same report plus five LC Peak ion-count
+      columns was 13% done after 63 minutes, writing at 4.5 MB/min against the baseline's 122 -
+      27x slower per byte, projecting to 9-13 HOURS, single-threaded and holding 15 GB resident.
+      Every PRISM run would pay that, for a QC section that is off by default.
     -->
-    <column name="Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount" />
-    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsFragment.LcPeakTotalIonCount" />
-    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsFragment.LcPeakTotalIonCurrentArea" />
-    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsMS1.LcPeakAnalyteIonCount" />
-    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsMS1.LcPeakTotalIonCount" />
+    <column name="Results!*.Value.Background" />
     <column name="Results!*.Value.RetentionTime" />
     <column name="Results!*.Value.StartTime" />
     <column name="Results!*.Value.EndTime" />

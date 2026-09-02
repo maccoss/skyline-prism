@@ -235,7 +235,7 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 | `enabled` | `true` | Generate `qc_report.html` |
 | `save_plots` | `true` | Also write PNGs to `qc_plots/` |
 | `ms2_signal.enabled` | `false` | Compute MS2 signal accounting: per replicate, how much integrated MS2 signal the run assigns to a peptide. Off by default because it costs one extra streaming pass over the merged table plus an ORDER BY the sample id, comparable to Stage 2. Results are cached as `ms2_signal_accounting.parquet`, so `prism qc -d` replots without recomputing |
-| `ms2_signal.measure` | `"signal"` | `signal` or `ions`. **signal** sums integrated peak areas against the acquired total ion current - available from any export, but the two sides are not the same quantity and Skyline's `Area` is background-subtracted where a TIC is not, so both gaps need correcting and neither is visible in the answer. **ions** sums Skyline's own ion counts (intensity x injection time per spectrum, across the peak): both sides are counts of ions, neither is background subtracted, and no unit or background correction is needed at all. Ions need an export carrying the LC Peak ion-count columns |
+| `ms2_signal.measure` | `"signal"` | `signal` or `ions`. **`ions` needs columns PRISM does not export by default, because they are ruinously expensive - see the measurement below.** **signal** sums integrated peak areas against the acquired total ion current - available from any export, but the two sides are not the same quantity and Skyline's `Area` is background-subtracted where a TIC is not, so both gaps need correcting and neither is visible in the answer. **ions** sums Skyline's own ion counts (intensity x injection time per spectrum, across the peak): both sides are counts of ions, neither is background subtracted, and no unit or background correction is needed at all. Ions need an export carrying the LC Peak ion-count columns |
 | `ms2_signal.extraction_tolerance` | `"10 ppm"` | The +/- m/z range Skyline extracted each product ion over, which decides when two co-isolated peptides' fragments are the same detector counts. Write it as `"10 ppm"` or `"0.4 m/z"`. The value in force is printed in the log and named on the plot; the Skyline external tool overrides it from the document's own `transition_full_scan` settings |
 | `ms2_signal.isolation_scheme` | *(auto)* | Which scheme from `isolation_schemes.xml` to account against, by name. Blank picks it when the file defines exactly one; with several, the accounting is skipped until one is named. Never guessed - fragments in different isolation windows never share signal |
 | `ms2_signal.protein_lists` | *(none)* | Saved or shipped protein-list names to account for, one line each on the plot. Lists nest inside the assigned total and may overlap each other |
@@ -258,7 +258,18 @@ are both gross. Quantification is unaffected and keeps the net area - adding bac
 detector baseline into every abundance. An export without the `Background` column still works, on net
 area, and the log says so, because the fraction is then an under-estimate.
 
-**Why ions are the better measure.** Skyline's ion counting (Supplementary Table 3 of
+**Ions are not exported by default, and the reason is cost.** Measured on the 6.5 GB FLARE document
+(46M transition rows, 93 replicates) with SkylineCmd: a three-column report exported in **9.5 minutes**,
+while the same report plus five `LC Peak` ion-count columns was 13% done after **63 minutes**, writing
+at 4.5 MB/min against the baseline's 122 - **27x slower per byte** - projecting to **9-13 hours**,
+single-threaded and holding 15 GB resident. Every PRISM run would pay that for a QC section that is off
+by default, so `Skyline-PRISM.skyr` carries `Background` and not the ion columns. To use `measure: ions`
+today, add the `LC Peak Transition Ion Count` column to the export yourself and expect the export to
+take hours on a document that size. It is worth testing whether the per-transition column alone is
+cheaper than all five together - the four precursor-level ones may be what costs, and `measure: ions`
+only needs the per-transition one.
+
+**Why ions are nonetheless the better measure.** Skyline's ion counting (Supplementary Table 3 of
 doi:10.1021/acs.jproteome.5c00593) gives `LC Peak Analyte Ion Count` - the sum over the spectra inside
 the peak boundaries of transition intensity times injection time - and `LC Peak Total Ion Count`, the
 same sum over the total ion current. Both sides are then ions, so the unit mismatch and the background
