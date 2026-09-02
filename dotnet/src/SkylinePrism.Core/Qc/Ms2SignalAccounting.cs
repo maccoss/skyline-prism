@@ -131,6 +131,13 @@ public static class Ms2SignalAccounting
                 + "no protein list could be matched. Only the assigned total is meaningful.");
         }
 
+        // Which signal was summed changes what the fraction MEANS, so it is stated every run.
+        log?.Invoke(cols.Background is null
+            ? "  MS2 signal accounting: this export has no Background column, so the assigned signal "
+              + "is background-SUBTRACTED while an acquired total ion current is not. The assigned "
+              + "fraction is therefore an under-estimate. Re-export to include Background."
+            : "  MS2 signal accounting: summing Area + Background, so the assigned signal is gross "
+              + "and comparable with an acquired total ion current.");
         log?.Invoke(
             $"  MS2 signal accounting: {scheme.Windows.Count} isolation windows, "
             + $"extraction {tolerance.Describe()}, {classified.AssignedPeptides:N0} assigned peptides"

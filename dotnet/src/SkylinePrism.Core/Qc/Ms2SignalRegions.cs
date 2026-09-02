@@ -26,9 +26,34 @@ public static class Ms2SignalRegions
     /// <see cref="SkylineColumns"/> because that type does not bind <c>StartTime</c>/<c>EndTime</c>,
     /// which only the density view had needed until now.
     /// </summary>
+    /// <param name="Background">Skyline's <c>Background</c> column, or null when the export predates
+    /// it. See <see cref="GrossSignalSql"/> for why the accounting wants it.</param>
     public sealed record Columns(
         string Sample, string Peptide, string Transition, string Abundance,
-        string PrecursorMz, string ProductMz, string StartTime, string EndTime);
+        string PrecursorMz, string ProductMz, string StartTime, string EndTime,
+        string? Background = null);
+
+    /// <summary>
+    /// The signal expression the accounting sums: <c>Area + Background</c> where the export carries
+    /// the background, and <c>Area</c> alone where it does not.
+    ///
+    /// <para><b>Why gross and not net.</b> Skyline's <c>Area</c> is BACKGROUND-SUBTRACTED - its own
+    /// test asserts that integrating without background yields <c>Area + BackgroundArea</c> - while
+    /// the acquired total ion current this is compared against includes background, because a TIC is
+    /// every ion the detector counted. Dividing a net numerator by a gross denominator understates
+    /// the assigned fraction by however much background the peaks sit on, which is not a small or
+    /// predictable amount in DIA.</para>
+    ///
+    /// <para><b>Only for this accounting.</b> Quantification keeps the net area, which is the right
+    /// quantity for comparing a peptide between samples - adding background back would put detector
+    /// baseline into every abundance. The gross figure exists solely to be comparable with a gross
+    /// denominator.</para>
+    /// </summary>
+    internal static string GrossSignalSql(Columns cols) =>
+        cols.Background is null
+            ? $@"TRY_CAST(""{cols.Abundance}"" AS DOUBLE)"
+            : $@"COALESCE(TRY_CAST(""{cols.Abundance}"" AS DOUBLE), 0)
+                 + COALESCE(TRY_CAST(""{cols.Background}"" AS DOUBLE), 0)";
 
     /// <summary>
     /// Resolve against a merged table's actual column names, or null when it lacks one. A report
@@ -46,10 +71,15 @@ public static class Ms2SignalRegions
         var start = SkylineColumns.FindColumn(available, "Start Time");
         var end = SkylineColumns.FindColumn(available, "End Time");
 
+        // Optional: an export made before the Background column was added still works, on net area,
+        // and the caller says so rather than quietly reporting a lower fraction.
+        var background = SkylineColumns.FindColumn(available, "Background");
+
         return sample is null || peptide is null || transition is null || area is null
             || precursorMz is null || productMz is null || start is null || end is null
             ? null
-            : new Columns(sample, peptide, transition, area, precursorMz, productMz, start, end);
+            : new Columns(
+                sample, peptide, transition, area, precursorMz, productMz, start, end, background);
     }
 
     /// <summary>How a peptide was classified by the run, supplied by the caller as pure identity.</summary>
@@ -90,7 +120,7 @@ public static class Ms2SignalRegions
                 TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS fmz,
                 TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
                 TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
-                TRY_CAST(""{cols.Abundance}"" AS DOUBLE) AS area
+                {GrossSignalSql(cols)} AS area
             FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
             WHERE ""{cols.Sample}"" = '{Esc(sample)}'
               AND NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}");
@@ -141,7 +171,7 @@ public static class Ms2SignalRegions
                 TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS fmz,
                 TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
                 TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
-                TRY_CAST(""{cols.Abundance}"" AS DOUBLE) AS area
+                {GrossSignalSql(cols)} AS area
             FROM {MergedParquetReader.Scan(dataset.ScanTarget)}
             WHERE NOT {MergedParquetReader.IsPrecursorSql(cols.Transition)}
             ORDER BY samp");

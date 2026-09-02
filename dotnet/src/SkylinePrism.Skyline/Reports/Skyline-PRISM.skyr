@@ -14,6 +14,8 @@
     <column name="ProductCharge" />
     <column name="ProductMz" />
     <column name="Results!*.Value.Area" />
+    <column name="Results!*.Value.Background" />
+    <column name="Results!*.Value.Height" />
     <column name="Results!*.Value.RetentionTime" />
     <column name="Results!*.Value.StartTime" />
     <column name="Results!*.Value.EndTime" />

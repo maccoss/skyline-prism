@@ -250,6 +250,21 @@ alongside so the report can say how much double counting was removed.
 from any Skyline export - `TicArea` is one value per replicate and is MS1 by construction. The plot's
 bars are the signal Skyline integrated for the document's targets, and are labelled as such.
 
+**Gross signal, not net.** Skyline's `Area` is background-SUBTRACTED (its own test asserts that
+integrating without background gives `Area + BackgroundArea`), whereas an acquired total ion current
+includes background. The accounting therefore sums `Area + Background`, so numerator and denominator
+are both gross. Quantification is unaffected and keeps the net area - adding background back would put
+detector baseline into every abundance. An export without the `Background` column still works, on net
+area, and the log says so, because the fraction is then an under-estimate.
+
+**Two things it under-counts, and by roughly how much.** The assigned signal is the signal in the
+transitions the *document* carries, not everything a detected peptide produced: on a real cohort the
+document held six fragments per precursor, covering a median 77.6% of each peptide's library spectrum
+and 1.31x area-weighted. And a transition's `Area` is an integral in intensity-seconds while a summed
+per-scan TIC is intensity with no time factor, so the acquired side must be multiplied by the cycle
+duration before the ratio means anything - about 1.45 s on that cohort. The two corrections push
+opposite ways.
+
 ---
 
 ## Built-in defaults vs. the generated template
