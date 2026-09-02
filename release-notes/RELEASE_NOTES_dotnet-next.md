@@ -51,6 +51,20 @@ as the GitHub Release description and fails if it is missing.
   963 MS1 and 120,327 MS2 spectra, MS2 TIC 3.07e11, 125 windows spanning 400.4-900.7 m/z at 4.0 Th,
   in 239 s.
 
+  Measured on a real 93-replicate plasma cohort (FLARE-Extended, 3.3 GB per file), the analysis
+  assigns **9.8-9.9%** of the acquired MS2 ion current to its 45,680 peptides:
+
+  | replicate | acquired MS2 TIC | assigned | fraction |
+  |---|---|---|---|
+  | FLARE-001-1-B1-013 | 3.768e11 | 3.729e10 | 9.90% |
+  | FLARE-001-2-B4-016 | 4.499e11 | 4.470e10 | 9.94% |
+  | FLARE-002-1-G4-076 | 3.850e11 | 3.761e10 | 9.77% |
+
+  The spread is 0.17 percentage points across replicates whose acquired total varies by 19%, so the
+  fraction is a property of the method rather than of the injection. It also shows the union correction
+  matters once there is a denominator: a naive sum over transition areas would have claimed 12.2-12.9%,
+  overstating coverage by about a quarter.
+
   Thermo formats for now, plus the open ones (mzML, mzXML, mz5). A format nothing can open reports the
   acquired total as unknown, which leaves every other number in the report unaffected. The bundling is
   temporary: Skyline is being ported to C# and will install pwiz itself, at which point the tool should
