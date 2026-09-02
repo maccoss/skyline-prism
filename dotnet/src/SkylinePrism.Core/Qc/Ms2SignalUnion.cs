@@ -43,6 +43,19 @@ public static class Ms2SignalUnion
         int WindowIndex, double ProductMz, double RtStart, double RtStop, double Area,
         bool Assigned, uint ListMask, int PeptideId = 0);
 
+    /// <summary>
+    /// One region of MS2 signal space after merging - what the union actually counted once.
+    ///
+    /// <para>Published so a caller can distribute the union over retention time (the RT profile in
+    /// <see cref="Ms2SignalProfile"/>) without a second implementation of the merging rule. The
+    /// alternative was re-deriving the groups outside, which is exactly how two copies of a rule
+    /// start to drift.</para>
+    /// </summary>
+    /// <param name="Area">The magnitude credited to this region: <c>max(Area)</c> over its members.</param>
+    /// <param name="Members">Transitions merged into it; 1 means nothing was shared.</param>
+    public readonly record struct MergedRegion(
+        double RtStart, double RtStop, double Area, bool Assigned, uint ListMask, int Members);
+
     /// <param name="AssignedArea">Union measure over regions whose peptide reached the peptide matrix.</param>
     /// <param name="ListArea">Union measure per list, aligned with the caller's list order.</param>
     /// <param name="SummedArea">The naive sum over the same regions — kept so the plot and the log can
@@ -117,8 +130,12 @@ public static class Ms2SignalUnion
     /// magnitude — see the type remarks on why the totals nest rather than partition.</para>
     /// </summary>
     /// <param name="listCount">Number of selected lists; bits above this are ignored.</param>
+    /// <param name="onMerged">Called once per merged region, in no particular order. An observer
+    /// rather than a refactor into an enumerable: a callback cannot change what the algorithm does,
+    /// so every test that pins these totals still pins them.</param>
     public static Result Compute(
-        IReadOnlyList<Region> regions, ProductMassTolerance tolerance, int listCount)
+        IReadOnlyList<Region> regions, ProductMassTolerance tolerance, int listCount,
+        Action<MergedRegion>? onMerged = null)
     {
         if (listCount is < 0 or > MaxLists)
             throw new ArgumentOutOfRangeException(nameof(listCount), listCount,
@@ -160,7 +177,7 @@ public static class Ms2SignalUnion
             return s != 0 ? s : a.RtStop.CompareTo(b.RtStop);
         });
 
-        var acc = new Accumulator { ListArea = listArea };
+        var acc = new Accumulator { ListArea = listArea, OnMerged = onMerged };
 
         var i = 0;
         while (i < usable.Count)
@@ -202,6 +219,8 @@ public static class Ms2SignalUnion
 
         var groupPeptides = new HashSet<int>();
         var openStop = double.NegativeInfinity;
+        // The cluster is sorted by RT start, so the first member of a group opens it.
+        var groupOpenStart = double.NaN;
         var groupArea = 0.0;
         var groupSum = 0.0;
         var groupAssigned = false;
@@ -214,6 +233,8 @@ public static class Ms2SignalUnion
                 return;
             acc.MergedGroups++;
             acc.LargestGroup = Math.Max(acc.LargestGroup, groupSize);
+            acc.OnMerged?.Invoke(new MergedRegion(
+                groupOpenStart, openStop, groupArea, groupAssigned, groupMask, groupSize));
             if (groupAssigned)
             {
                 acc.Assigned += groupArea;
@@ -231,6 +252,7 @@ public static class Ms2SignalUnion
             }
             groupArea = 0;
             groupSum = 0;
+            groupOpenStart = double.NaN;
             groupAssigned = false;
             groupMask = 0;
             groupSize = 0;
@@ -254,6 +276,8 @@ public static class Ms2SignalUnion
                     acc.SharedAcrossPeptides++;
             }
             groupPeptides.Add(r.PeptideId);
+            if (!double.IsFinite(groupOpenStart))
+                groupOpenStart = r.RtStart;
             groupArea = Math.Max(groupArea, r.Area);
             groupSum += r.Area;
             groupAssigned |= r.Assigned;
@@ -278,5 +302,6 @@ public static class Ms2SignalUnion
         public int SharedAcrossPeptides;
         public double DuplicateArea;
         public double SharedArea;
+        public Action<MergedRegion>? OnMerged;
     }
 }

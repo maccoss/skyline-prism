@@ -1417,6 +1417,109 @@ public static class PlotRenderer
 
     private static double Finite(double value) => double.IsFinite(value) && value > 0 ? value : 0;
 
+    /// <summary>
+    /// MS2 signal against retention time for one replicate: what the instrument acquired, how much
+    /// the run assigns to a peptide, and how much each selected protein list accounts for.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Filled acquired, lines over it.</b> The acquired trace is the envelope everything else
+    /// sits inside, so it is drawn as a filled area and the rest as lines on top - the shape a reader
+    /// already knows how to read as "of that, this much". Stacking would be wrong for the same reason
+    /// as in <see cref="DrawMs2Accounting"/>: the totals nest rather than partition, and two lists may
+    /// claim the same signal.</para>
+    /// <para><b>When no instrument file was read there is no acquired trace</b>, and the plot says so
+    /// in its axis label rather than drawing a floor of zeros - which would read as "the instrument
+    /// acquired nothing here" instead of "we do not know".</para>
+    /// </remarks>
+    public static void DrawMs2RtProfile(
+        Plot plt, Qc.Ms2SignalProfile profile, string? title = null, double fontScale = 1.0)
+    {
+        if (profile.IsEmpty)
+        {
+            plt.Title(title ?? "No MS2 signal to profile");
+            StyleQcPlot(plt, fontScale);
+            return;
+        }
+
+        // Bin centres, so a step is drawn where the signal was rather than half a bin early.
+        var x = profile.BinStartMin.Select(b => b + profile.BinWidthMin / 2).ToArray();
+        var tallest = Math.Max(
+            profile.HasAcquired ? profile.Acquired.Max() : 0,
+            profile.Assigned.Count > 0 ? profile.Assigned.Max() : 0);
+        var (scale, unit) = SignalScale(tallest);
+
+        if (profile.HasAcquired)
+        {
+            var acquired = profile.Acquired.Select(v => v / scale).ToArray();
+            var band = plt.Add.FillY(x, new double[x.Length], acquired);
+            band.FillColor = Color.FromHex("#c8ccd4").WithAlpha((byte)140);
+            band.LineWidth = 0;
+            band.MarkerSize = 0;
+            band.LegendText = "acquired MS2 (instrument)";
+        }
+
+        var assigned = plt.Add.Scatter(x, profile.Assigned.Select(v => v / scale).ToArray());
+        assigned.Color = Color.FromHex(TypeColors["experimental"]);
+        assigned.LineWidth = 3;
+        assigned.MarkerSize = 0;
+        assigned.LegendText = "assigned to a peptide";
+
+        var assignedTotal = profile.Assigned.Sum();
+        for (var l = 0; l < profile.ListNames.Count; l++)
+        {
+            var trace = profile.PerList[l];
+            var line = plt.Add.Scatter(x, trace.Select(v => v / scale).ToArray());
+            line.Color = ListColorFrom(profile.ListColors, l);
+            line.LineWidth = 3;
+            line.MarkerSize = 0;
+            // The share goes in the LEGEND, because a small panel draws a line that sits on the
+            // axis and tells the reader nothing. A panel accounting for 0.6% of the assigned signal
+            // is a real and useful answer; an invisible line with a bare name is not.
+            var share = assignedTotal > 0 ? trace.Sum() / assignedTotal : double.NaN;
+            line.LegendText = double.IsFinite(share)
+                ? $"{profile.ListNames[l]} ({share:P1} of assigned)"
+                : profile.ListNames[l];
+        }
+
+        plt.ShowLegend(Alignment.UpperRight);
+        plt.XLabel("Retention time (min)");
+        plt.YLabel(profile.HasAcquired
+            ? $"MS2 signal{unit} per {profile.BinWidthMin:0.##} min"
+            : $"Integrated MS2 signal{unit} per {profile.BinWidthMin:0.##} min (acquired: unknown)");
+        StyleQcPlot(plt, fontScale);
+        SetPlotTitle(plt, title, fontScale);
+
+        plt.Axes.SetLimits(
+            x[0] - profile.BinWidthMin, x[^1] + profile.BinWidthMin,
+            0, tallest > 0 ? tallest / scale * 1.15 : 1);
+    }
+
+    /// <summary>A list's own colour by index, falling back to the cycle when it has none.</summary>
+    private static Color ListColorFrom(IReadOnlyList<string> colors, int index)
+    {
+        var hex = colors.ElementAtOrDefault(index);
+        if (string.IsNullOrWhiteSpace(hex))
+            return SampleColor(index + 3);
+        try
+        {
+            return Color.FromHex(hex);
+        }
+        catch (Exception)
+        {
+            return SampleColor(index + 3);
+        }
+    }
+
+    /// <summary>PNG of <see cref="DrawMs2RtProfile"/>, for the QC report.</summary>
+    public static byte[] Ms2RtProfilePng(
+        Qc.Ms2SignalProfile profile, string? title = null,
+        int width = Width, int height = Height, double fontScale = 1.0)
+    {
+        var plt = new Plot();
+        DrawMs2RtProfile(plt, profile, title, fontScale);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
+    }
+
     /// <summary>PNG of <see cref="DrawMs2Accounting"/>, for the QC report.</summary>
     public static byte[] Ms2AccountingPng(
         Qc.Ms2SignalAccounting.Result result, string? title = null,

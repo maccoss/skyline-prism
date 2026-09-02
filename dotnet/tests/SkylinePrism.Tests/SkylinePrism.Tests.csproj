@@ -51,6 +51,7 @@
     <Compile Remove="Qc\Ms2AcquiredFractionTests.cs" />
     <Compile Remove="RawData\Ms2ReadThroughputTests.cs" />
     <Compile Remove="RawData\ThermoDirectSpikeTests.cs" />
+    <Compile Remove="Qc\Ms2SignalProfileRealTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
