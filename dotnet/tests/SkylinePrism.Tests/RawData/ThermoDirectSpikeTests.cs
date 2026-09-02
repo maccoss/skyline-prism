@@ -355,4 +355,56 @@ public class ThermoDirectSpikeTests
         _out.WriteLine($"best: {best.Lanes} lanes at {best.PerFile:0.00} s/file "
             + $"-> {best.PerFile * 93:0} s for the cohort, {baseline / best.PerFile:0.00}x over serial");
     }
+    /// <summary>
+    /// Concurrent reads of the vendor SDK must give the SAME numbers as serial ones. This is not a
+    /// formality: CLAUDE.md records DuckDB corrupting memory under concurrent readers - an
+    /// AccessViolation rather than an exception you can catch - and a vendor SDK with native state
+    /// is exactly the sort of place that repeats. Different files, one handle each, so it should be
+    /// safe; "should be" is what this converts into evidence.
+    /// </summary>
+    [Fact]
+    public void ParallelReadingGivesTheSameNumbersAsSerial()
+    {
+        var rawDir = Environment.GetEnvironmentVariable("PRISM_MS2_RAW_DIR");
+        if (string.IsNullOrWhiteSpace(rawDir) || !PwizReaderRegistration.IsAvailable)
+        {
+            _out.WriteLine("skipped: needs PRISM_MS2_RAW_DIR and a pwiz build.");
+            return;
+        }
+        PwizReaderRegistration.Register();
+
+        var files = System.IO.Directory.GetFiles(rawDir, "*.raw")
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .Take(int.TryParse(Environment.GetEnvironmentVariable("PRISM_MS2_ARM_FILES"), out var n)
+                ? n : 6)
+            .ToList();
+        Assert.True(files.Count > 1);
+
+        var serial = new Dictionary<string, Ms2SignalRecord>(StringComparer.Ordinal);
+        foreach (var f in files)
+            serial[f] = Ms2SignalReaders.Read(f);
+
+        var parallel = new System.Collections.Concurrent.ConcurrentDictionary<string, Ms2SignalRecord>(
+            StringComparer.Ordinal);
+        Ms2SignalReaders.ReadMany(files, r => parallel[r.DataPath] = r, lanes: files.Count);
+
+        Assert.Equal(serial.Count, parallel.Count);
+        foreach (var (path, one) in serial)
+        {
+            Assert.True(parallel.TryGetValue(path, out var many), $"{path} missing from the parallel read");
+            _out.WriteLine($"{System.IO.Path.GetFileName(path)}: "
+                + $"{one.TotalMs2Signal:R} vs {many!.TotalMs2Signal:R}  "
+                + $"({one.Ms2Count:N0} vs {many.Ms2Count:N0} MS2)");
+
+            // Bit-exact: both routes sum the same array in the same order, so anything else here
+            // means concurrency perturbed the read rather than merely reordered a reduction.
+            Assert.Equal(one.Status, many.Status);
+            Assert.Equal(one.Ms2Count, many.Ms2Count);
+            Assert.Equal(one.Ms1Count, many.Ms1Count);
+            Assert.Equal(one.Cycles.Count, many.Cycles.Count);
+            Assert.Equal(one.TotalMs2Signal, many.TotalMs2Signal);
+        }
+        _out.WriteLine("");
+        _out.WriteLine("Concurrent vendor-SDK reads of distinct files are numerically identical.");
+    }
 }

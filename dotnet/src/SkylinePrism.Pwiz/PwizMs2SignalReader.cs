@@ -47,15 +47,16 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
     /// </summary>
     private const int MaxSchemeWindows = 2_000;
 
-    private int _summedFallbacks;
-    private int _ticSpectra;
 
     /// <summary>
     /// Whether to collect isolation windows. They are a property of the ACQUISITION METHOD, so every
-    /// replicate of a cohort has the same set - collecting them 93 times over is waste. The caller
-    /// reads one file with this on and the rest with it off.
+    /// replicate of a cohort has the same set, and collecting them once per file is waste.
+    ///
+    /// <para>Init-only, not settable: a shared reader must not be reconfigurable underneath a read
+    /// that is already running on another thread. A caller wanting both behaviours constructs two
+    /// readers, which cost nothing.</para>
     /// </summary>
-    public bool CollectWindows { get; set; } = true;
+    public bool CollectWindows { get; init; } = true;
 
     /// <summary>
     /// Registers the vendor readers before any instance exists, so constructing one is enough and no
@@ -65,19 +66,27 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
 
     /// <inheritdoc />
     /// <remarks>
-    /// The "+summed" suffix carries the PROPORTION, not just the fact. A handful of spectra without
-    /// the cvParam is a different thing from a file that has none - the first is noise, the second
-    /// means the totals are summed centroided peaks rather than the instrument's own pre-centroiding
-    /// value, and the two are not interchangeable.
+    /// A CONSTANT, deliberately. This used to fold in how many spectra had fallen back to summed
+    /// intensities, which meant the reader carried mutable per-file state - fine while one file was
+    /// read at a time, a data race the moment a cohort is read in parallel. That detail is per read,
+    /// so it lives on <see cref="Ms2SignalRecord.Reader"/> instead, which is per read too.
     /// </remarks>
-    public string Describe()
+    public string Describe() => "pwiz-sharp";
+
+    /// <summary>
+    /// How a read describes itself, given what it found. The "+summed" suffix carries the
+    /// PROPORTION, not just the fact: a handful of spectra without the total-ion-current cvParam is
+    /// noise, whereas a file with none means the totals are summed centroided peaks rather than the
+    /// instrument's own pre-centroiding value, and those are not interchangeable.
+    /// </summary>
+    private static string DescribeRead(int ticSpectra, int summedFallbacks)
     {
-        if (_summedFallbacks == 0)
+        if (summedFallbacks == 0)
             return "pwiz-sharp";
-        var total = _ticSpectra + _summedFallbacks;
-        return total == _summedFallbacks
+        var total = ticSpectra + summedFallbacks;
+        return total == summedFallbacks
             ? "pwiz-sharp +summed"
-            : $"pwiz-sharp +summed({(double)_summedFallbacks / total:P1})";
+            : $"pwiz-sharp +summed({(double)summedFallbacks / total:P1})";
     }
 
     /// <inheritdoc />
@@ -345,6 +354,7 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         var tooManyWindows = false;
 
         int ms1 = 0, ms2 = 0;
+        int ticSpectra = 0, summedFallbacks = 0;
         double totalMs2 = 0;
         double rtFirst = double.NaN, rtLast = double.NaN;
 
@@ -441,11 +451,11 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
                 // The slow path: this decodes the peak arrays, which is why a file with no reported
                 // TIC takes substantially longer than one that has it.
                 tic = SummedIntensity(spectra, i);
-                _summedFallbacks++;
+                summedFallbacks++;
             }
             else
             {
-                _ticSpectra++;
+                ticSpectra++;
             }
 
             totalMs2 += tic;
@@ -462,11 +472,12 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
 
         log?.Invoke(
             $"  {Path.GetFileName(dataPath)}: {ms2:N0} MS2 and {ms1:N0} MS1 spectra, "
-            + $"MS2 TIC {totalMs2:E3}, {cycles.Count:N0} cycles ({model}), reader {Describe()}.");
-        if (_summedFallbacks > 0)
+            + $"MS2 TIC {totalMs2:E3}, {cycles.Count:N0} cycles ({model}), "
+            + $"reader {DescribeRead(ticSpectra, summedFallbacks)}.");
+        if (summedFallbacks > 0)
         {
             log?.Invoke(
-                $"    {_summedFallbacks:N0} of {_ticSpectra + _summedFallbacks:N0} MS2 spectra had no "
+                $"    {summedFallbacks:N0} of {ticSpectra + summedFallbacks:N0} MS2 spectra had no "
                 + "total-ion-current cvParam, so their totals are summed peak intensities. That is a "
                 + "post-centroiding sum, not the instrument's own total.");
         }
@@ -481,9 +492,10 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         return new Ms2SignalRecord(
             dataPath,
             ms2 > 0 ? Ms2ReadStatus.Ok : Ms2ReadStatus.Failed,
-            Describe(),
-            // The source names where MOST of the signal came from; Describe() carries the proportion.
-            _summedFallbacks > _ticSpectra ? Ms2SignalSource.SummedPeaks : Ms2SignalSource.ReportedTic,
+            DescribeRead(ticSpectra, summedFallbacks),
+            // The source names where MOST of the signal came from; the reader string carries the
+            // proportion.
+            summedFallbacks > ticSpectra ? Ms2SignalSource.SummedPeaks : Ms2SignalSource.ReportedTic,
             ms1, ms2, totalMs2, rtFirst, rtLast, model, cycles,
             windows.Values.OrderBy(w => w.Start).ToList(),
             ms2 > 0 ? null : "The file has no MS2 spectra.");

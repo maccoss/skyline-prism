@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SkylinePrism.Core.RawData;
 
@@ -195,6 +197,56 @@ public static class Ms2SignalReaders
                 dataPath, Ms2ReadStatus.NoReader, "none",
                 "This build has no instrument-file reader, so acquired MS2 signal is unknown.")
             : reader.Read(dataPath, log, ct);
+    }
+
+    /// <summary>
+    /// Default concurrent reads for <see cref="ReadMany"/>.
+    ///
+    /// <para>Measured, not chosen: on a real cohort over an SMB share the per-file time goes 1.07 s
+    /// at one lane, 0.94 at two, 0.84 at eight and 0.82 at sixteen - so it plateaus around 1.3x by
+    /// eight and the storage, not the CPU, is the limit. Eight sits at the knee; sixteen buys 2% more
+    /// for twice the concurrency against someone else's file server.</para>
+    /// </summary>
+    public const int DefaultLanes = 8;
+
+    /// <summary>
+    /// Read many data files with bounded concurrency, calling <paramref name="onRead"/> as each
+    /// finishes. Results arrive in completion order, not input order.
+    ///
+    /// <para>Concurrency is worth having but modestly: ~1.3x on the cohort measured, because these
+    /// reads are dominated by opening the file over the network rather than by compute. Do not read
+    /// a larger speedup into a larger lane count.</para>
+    ///
+    /// <para><paramref name="onRead"/> is invoked from worker threads and may run concurrently, so
+    /// it must be thread-safe. The readers themselves must be too - which is why
+    /// <see cref="IMs2SignalReader"/> implementations keep no per-read state on the instance.</para>
+    /// </summary>
+    /// <param name="lanes">Concurrent reads; clamped to at least 1. Defaults to
+    /// <see cref="DefaultLanes"/>.</param>
+    public static void ReadMany(
+        IEnumerable<string> dataPaths, Action<Ms2SignalRecord> onRead,
+        int lanes = DefaultLanes, Action<string>? log = null, CancellationToken ct = default)
+    {
+        if (dataPaths is null)
+            throw new ArgumentNullException(nameof(dataPaths));
+        if (onRead is null)
+            throw new ArgumentNullException(nameof(onRead));
+
+        var paths = dataPaths.ToList();
+        if (paths.Count == 0)
+            return;
+
+        var effective = Math.Max(1, Math.Min(lanes, paths.Count));
+        log?.Invoke($"  Reading {paths.Count:N0} data file(s), {effective} at a time.");
+
+        // A plain Parallel.ForEach: the work is one independent read per file, and the bound is what
+        // matters rather than the scheduling. Cancellation is passed through so a long cohort read
+        // can be stopped; each reader is contracted never to throw, so one bad file cannot abort the
+        // rest, and OperationCanceledException is the only thing expected out of here.
+        Parallel.ForEach(
+            paths,
+            new ParallelOptions { MaxDegreeOfParallelism = effective, CancellationToken = ct },
+            path => onRead(Read(path, log, ct)));
     }
 
     /// <summary>Drops every registration. For tests, which must not leak readers into each other.</summary>
