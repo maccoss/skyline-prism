@@ -36,6 +36,26 @@ as the GitHub Release description and fails if it is missing.
   Skyline integrated for the document's targets, and it is labelled that way, because reading it as the
   acquired total would turn unknown coverage into apparently complete coverage.
 
+- **The Skyline tool can now measure ACQUIRED MS2 signal, by reading the instrument files.** This is
+  the denominator the MS2 signal accounting needs and no Skyline export carries: `TicArea` is MS1 by
+  construction (its TIC filter sets `Ms1ProductFilters` and leaves `Ms2ProductFilters` empty), so it
+  cannot stand in - on a real cohort the assigned MS2 signal came to 0.51x `TicArea`, a number that
+  looks like a coverage fraction and is not one.
+
+  `SkylinePrism.zip` now bundles the reader, built from
+  [pwiz-sharp](https://github.com/ProteoWizard/pwiz/pull/4619), and it adds about 4 MB. Spectra are
+  read at metadata detail level so the peak arrays are never decoded - the total ion current is a
+  header field - and the instrument's own reported value is used rather than a sum of intensities, so
+  a vendor file and its converted mzML agree. Isolation windows are captured on the same pass, which
+  removes a Skyline round-trip: a DIA document normally stores none. Measured on a 4.9 GB Astral run:
+  963 MS1 and 120,327 MS2 spectra, MS2 TIC 3.07e11, 125 windows spanning 400.4-900.7 m/z at 4.0 Th,
+  in 239 s.
+
+  Thermo formats for now, plus the open ones (mzML, mzXML, mz5). A format nothing can open reports the
+  acquired total as unknown, which leaves every other number in the report unaffected. The bundling is
+  temporary: Skyline is being ported to C# and will install pwiz itself, at which point the tool should
+  use Skyline's own copies.
+
 - **The extraction window Skyline used is read from the document.** `SkyDocumentInfo` now reports the
   `transition_full_scan` product-ion settings and evaluates them to the m/z range Skyline actually
   extracted over, transcribed from Skyline's own `GetDenominator` / `GetFilterWindow` and applied the

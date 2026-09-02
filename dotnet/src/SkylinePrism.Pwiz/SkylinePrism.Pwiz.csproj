@@ -35,8 +35,25 @@
 
   <ItemGroup Condition="'$(PwizAvailable)' == 'true'">
     <ProjectReference Include="$(PwizMsDataProject)" />
+
+    <!--
+      Thermo only, for now. Not a limitation of the reader - it dispatches on format and will open
+      whatever pwiz can - but of what is worth carrying and redistributing.
+
+      Bruker costs far more than the others. Its native staging reaches across four more directories
+      of the pwiz tree (pwiz_aux, libraries, pwiz_tools/Shared/Lib for the VC90 CRT that its EDAL COM
+      interop needs), and it adds ~20 MB to the zip in baf2sql_c.dll and timsdata.dll alone. Thermo's
+      archive is 0.3 MB.
+
+      A Bruker .d therefore reports "no registered reader recognized the file", which the accounting
+      already handles: acquired MS2 signal reads as unknown and every other number is unaffected. Add
+      $(PwizBrukerProject) back when someone needs it - and note that Skyline shipping pwiz itself
+      makes the whole question go away, because its installation carries every vendor reader.
+
+      Waters comes along regardless: Thermo.csproj references Analysis, which references the Waters
+      reader. Nothing in the Thermo path touches it, so it looks vestigial upstream.
+    -->
     <ProjectReference Include="$(PwizThermoProject)" Condition="Exists('$(PwizThermoProject)')" />
-    <ProjectReference Include="$(PwizBrukerProject)" Condition="Exists('$(PwizBrukerProject)')" />
   </ItemGroup>
 
   <ItemGroup>

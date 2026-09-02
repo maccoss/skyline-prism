@@ -106,8 +106,15 @@ jobs:
       - name: Build (Release)
         run: dotnet build SkylinePrism.sln --configuration Release
 
-      - name: Package SkylinePrism.zip
-        run: dotnet msbuild build/package.proj /p:Configuration=Release
+      # Packaged WITHOUT the instrument-file reader on purpose. This job proves the zip builds,
+      # extracts and launches; it is not published. Cloning pwiz-sharp here would add ~270 MB and a
+      # vendor-SDK extraction to every push, for a check the release job already makes - it does the
+      # real checkout and build/package.proj refuses to package without one.
+      #
+      # The consequence is stated rather than hidden: the CI artifact below cannot read a raw file
+      # and reports acquired MS2 signal as unknown. Do not hand it to a user as a release build.
+      - name: Package SkylinePrism.zip (no raw reader)
+        run: dotnet msbuild build/package.proj /p:Configuration=Release /p:AllowNoPwiz=true
 
       # Extracts the zip and runs the exe: the only check that exercises what a user actually installs.
       # The unit tests cannot see a startup crash - MainWindow needs a real dispatcher - and a
@@ -120,6 +127,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: SkylinePrism-zip
+          name: SkylinePrism-zip-no-raw-reader
           path: dotnet/publish/SkylinePrism.zip
           if-no-files-found: error

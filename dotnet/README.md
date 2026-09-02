@@ -12,6 +12,7 @@ reproduced numerically and has since replaced — that engine was retired after 
 | `SkylinePrism.Cli` (`prism`) | `net10.0` | the CLI (cross-platform) |
 | `SkylinePrism.Skyline` | `net10.0-windows` | Skyline JSON-RPC + report driver (Windows) |
 | `SkylinePrism.App` (`SkylinePrism.exe`) | `net10.0-windows` | WPF external tool (Windows) |
+| `SkylinePrism.Pwiz` | `net10.0` | reads acquired MS2 signal from instrument files, through pwiz-sharp (optional) |
 | `SkylinePrism.Tests` | `net10.0` | unit + cross-language parity tests |
 | `SkylinePrism.Tests.Windows` | `net10.0-windows` | RPC / WPF smoke tests |
 
@@ -327,6 +328,44 @@ pwsh dotnet/build/verify-tool.ps1                                   # smoke-laun
 MainWindow (hence ScottPlot/SkiaSharp) loads at startup, so a missing/broken dependency shows up as an
 assembly/XAML load error in `%LOCALAPPDATA%\SkylinePrism\prism-tool.log`. A failed Skyline connection
 from the dummy arg is expected and ignored - only dependency/XAML load failures fail the check.
+
+### The bundled instrument-file reader
+
+The tool zip carries an instrument-file reader so it can measure **acquired** MS2 signal - the
+denominator for the QC report's MS2 signal accounting, which no Skyline export provides (`TicArea` is
+MS1 by construction). It is built from
+[pwiz-sharp](https://github.com/ProteoWizard/pwiz/pull/4619), which has no package feed, so the
+reference is optional and external:
+
+```bash
+# pwiz-sharp cloned beside this repo (../../ProteoWizard/pwiz/pwiz-sharp) is found automatically
+dotnet build -p:PrismWithPwiz=true -p:IAgreeToVendorLicenses=true
+dotnet build -p:PrismWithPwiz=true -p:PwizSharpDir=/path/to/pwiz/pwiz-sharp   # or point at it
+```
+
+Two switches, and both are needed:
+
+| switch | effect |
+|---|---|
+| `PrismWithPwiz=true` | reference it at all. Off by default so the standard build stays warning-free - pwiz-sharp brings 58 of its own warnings - and so a developer without a checkout can still build |
+| `IAgreeToVendorLicenses=true` | extract the vendor SDKs. Without it the readers compile to stubs that recognize a `.raw` and then refuse to open it |
+
+`build/package.proj` sets both and **refuses to package without a checkout** (override with
+`/p:AllowNoPwiz=true`) - a zip that looks complete while quietly unable to open a raw file is worse
+than a build that stops. `dotnet-ci.yml` packages with `AllowNoPwiz=true` on purpose, so its artifact
+is named `SkylinePrism-zip-no-raw-reader`; `dotnet-release.yml` does the real checkout, pinned to a
+commit.
+
+**Thermo only, for now.** Bruker's native staging reaches across four more directories of the pwiz
+tree and adds ~20 MB to the zip; a Bruker `.d` reports "no registered reader recognized the file",
+which the accounting handles as an unknown acquired total with every other number unaffected. Adding
+`$(PwizBrukerProject)` back in `SkylinePrism.Pwiz.csproj` is all it takes.
+
+**This bundling is temporary.** Skyline is being ported to C# and will install pwiz itself. PRISM is a
+Skyline external tool, so once that ships the tool should resolve these assemblies from Skyline's own
+installation instead of carrying copies - which also retires the vendor-SDK redistribution and the
+~4 MB the reader adds to the zip. Keep the dependency reachable through `SkylinePrism.Pwiz` alone so
+that swap stays a one-reference change.
 
 The tool zip is **framework-dependent** — install the **.NET 10 Desktop Runtime**
 (`winget install Microsoft.DotNet.DesktopRuntime.10`) once, then install the zip via Skyline's

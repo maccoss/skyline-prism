@@ -1,5 +1,4 @@
 using Pwiz.Data.MsData.Readers;
-using Pwiz.Vendor.Bruker;
 using Pwiz.Vendor.Thermo;
 
 namespace SkylinePrism.Pwiz;
@@ -38,7 +37,8 @@ internal static class VendorReaders
         if (ReaderList.AdditionalReaders.Count > 0)
             return;
 
+        // Thermo only - see the ProjectReference comment in SkylinePrism.Pwiz.csproj for why, and
+        // what it costs. The open formats (mzML, mzXML, mz5) come from ReaderList.Default already.
         ReaderList.AdditionalReaders.Add(new Reader_Thermo());
-        ReaderList.AdditionalReaders.Add(new Reader_Bruker());
     }
 }
