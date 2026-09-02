@@ -275,6 +275,9 @@ public static class ConfigWriter
             // The tolerance is written whenever the accounting ran, default or not: it changes the
             // numbers, so a config that reproduces the run has to carry the value that was in force.
             ms2["enabled"] = true;
+            // Always written for an active section: which measure produced the numbers is not
+            // recoverable from them, and the two are not interchangeable.
+            ms2["measure"] = qc.Ms2Signal.Measure;
             ms2["extraction_tolerance"] = qc.Ms2Signal.ExtractionTolerance;
         }
         if (!string.IsNullOrWhiteSpace(qc.Ms2Signal.IsolationScheme))

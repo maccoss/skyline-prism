@@ -86,6 +86,15 @@ public sealed class PrismConfig
                 + "(only median_polish). It existed only in the retired Python engine - see "
                 + "dotnet/PORTING_STATUS.md.");
 
+        var measure = QcReport.Ms2Signal.Measure?.ToLowerInvariant();
+        if (measure is not null and not ("signal" or "ions"))
+        {
+            throw new NotSupportedException(
+                $"qc_report.ms2_signal.measure '{QcReport.Ms2Signal.Measure}' is not recognized. "
+                + "Use 'signal' (integrated peak areas against acquired ion current) or 'ions' "
+                + "(Skyline's ion counts, intensity x injection time).");
+        }
+
         var mnm = MarkerNormalization.Method?.ToLowerInvariant();
         if (MarkerNormalization.Enabled && mnm is not null && mnm is not ("pc1" or "mean"))
             throw new NotSupportedException(
@@ -168,7 +177,7 @@ public sealed class PrismConfig
 
         var qc = Leaves("enabled", "save_plots");
         qc["ms2_signal"] = Leaves(
-            "enabled", "extraction_tolerance", "isolation_scheme", "protein_lists",
+            "enabled", "measure", "extraction_tolerance", "isolation_scheme", "protein_lists",
             "protein_list_files");
 
         var pr = Leaves("method", "min_peptides");
@@ -388,6 +397,7 @@ public sealed class PrismConfig
         /// <summary>Off unless asked for: it changes every reported abundance.</summary>
         public bool Enabled { get; set; }
 
+
         /// <summary>
         /// Name of the protein list defining the markers - one of the user's saved lists or a shipped
         /// one ("EV markers"). Ignored when <see cref="ProteinListFile"/> is set.
@@ -471,6 +481,27 @@ public sealed class PrismConfig
         /// never looks at the plot. Once computed it is cached, so <c>prism qc -d</c> replots for free.
         /// </summary>
         public bool Enabled { get; set; }
+
+        /// <summary>
+        /// What to total: <c>signal</c> or <c>ions</c>.
+        ///
+        /// <para><b>signal</b> sums integrated peak areas against the acquired total ion current.
+        /// Available from any export, but the two sides are not the same quantity - a peak area is an
+        /// intensity-time integral while a summed TIC is an intensity - and Skyline's Area is
+        /// background-subtracted where a TIC is not. Both gaps have to be corrected for and neither is
+        /// visible in the answer.</para>
+        ///
+        /// <para><b>ions</b> sums Skyline's own ion counts: intensity times injection time, per
+        /// spectrum, across the peak. Both sides are then counts of ions, neither is background
+        /// subtracted, and no unit or background correction is needed at all. It requires an export
+        /// carrying the LC Peak ion-count columns, which needs a Skyline new enough to compute them
+        /// and a document whose spectrum metadata includes injection times.</para>
+        ///
+        /// <para>Ions are the better measure where available, and are the point of the option: on
+        /// AGC-controlled data injection time varies by two orders of magnitude within a run and
+        /// anti-correlates with intensity, so ions cannot be recovered from an area after the fact.</para>
+        /// </summary>
+        public string Measure { get; set; } = "signal";
 
         /// <summary>
         /// The m/z range Skyline extracted each product ion over, as a +/- tolerance: <c>"10 ppm"</c> or

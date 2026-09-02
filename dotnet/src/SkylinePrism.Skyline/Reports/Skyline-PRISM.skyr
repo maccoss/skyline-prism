@@ -16,6 +16,21 @@
     <column name="Results!*.Value.Area" />
     <column name="Results!*.Value.Background" />
     <column name="Results!*.Value.Height" />
+    <!--
+      Skyline's ion counting (Supplementary Table 3 of the Astral Zoom evaluation,
+      doi:10.1021/acs.jproteome.5c00593). "LC Peak" spans the whole peak; the "Apex" variants are a
+      single spectrum and are NOT what a signal total wants. None of these are background subtracted -
+      Skyline builds them from raw chromatogram intensities and integrates the TIC with
+      IntegrateWithoutBackground - which is exactly right for comparing against an acquired total.
+
+      Per transition, the analyte ion count; per precursor, the total ions in the same spectra, which
+      is the local denominator. MS1 variants carry the whole thing over to an MS1-level accounting.
+    -->
+    <column name="Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount" />
+    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsFragment.LcPeakTotalIonCount" />
+    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsFragment.LcPeakTotalIonCurrentArea" />
+    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsMS1.LcPeakAnalyteIonCount" />
+    <column name="Results!*.Value.PrecursorResult.LcPeakIonMetricsMS1.LcPeakTotalIonCount" />
     <column name="Results!*.Value.RetentionTime" />
     <column name="Results!*.Value.StartTime" />
     <column name="Results!*.Value.EndTime" />

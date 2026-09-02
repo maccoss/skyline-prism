@@ -149,6 +149,7 @@ public static class StageDependencies
             ["qc_report.enabled"] = "the QC report is never cached",
             ["qc_report.save_plots"] = "the QC report is never cached",
             ["qc_report.ms2_signal.enabled"] = "the QC report is never cached",
+            ["qc_report.ms2_signal.measure"] = "the QC report is never cached",
             ["qc_report.ms2_signal.extraction_tolerance"] = "the QC report is never cached",
             ["qc_report.ms2_signal.isolation_scheme"] = "the QC report is never cached",
             ["qc_report.ms2_signal.protein_lists"] = "the QC report is never cached",
