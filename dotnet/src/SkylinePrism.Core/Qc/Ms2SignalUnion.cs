@@ -57,19 +57,47 @@ public static class Ms2SignalUnion
     /// already in the group. This is fragment sharing between co-isolated peptides — the effect the
     /// accounting exists to handle, and the one worth reporting as such.</param>
     /// <remarks>
-    /// The two counts split differently on a slice than on a whole run, so read the committed fixture's
-    /// figures with care. On the fixture (327 peptides, median 2 precursors per isolation window) the
-    /// union removes a median 49% of the sum across its 192 replicates - 86% on the first one - and ALL
-    /// of it is duplicate rows, with zero co-isolation, because a slice that thin barely co-isolates.
-    /// On a full cohort one replicate has 462,843 fragment peaks and the union removes 17.7%, split
-    /// 23,245 duplicate rows to 5,623 genuine shares. So the fixture can prove the bookkeeping
-    /// correction works but cannot exercise the co-isolation one; that is what <c>PRISM_MS2_COHORT</c>
-    /// in the tests is for.
+    /// Measured on a real 93-replicate plasma cohort (46M rows, 45,680 peptides): the union removes a
+    /// median 21.3% of the naive sum, and the two kinds account for it very unevenly.
+    ///
+    /// <list type="bullet">
+    ///   <item>Duplicate rows: 4.8% of peaks but <b>20.2%</b> of the sum. They are 13.2x more intense
+    ///     than a unique row, because the peptides Skyline exports once per protein assignment are the
+    ///     shared peptides of abundant homologous families - immunoglobulins and apolipoproteins in
+    ///     plasma - which are the largest peaks in the run.</item>
+    ///   <item>Co-isolation: 0.85% of peaks and <b>0.58%</b> of the sum. Real, and small, because
+    ///     co-isolated peptides sharing a fragment mass usually differ greatly in intensity, so taking
+    ///     the max removes little.</item>
+    /// </list>
+    ///
+    /// <para>The correction is therefore insensitive to the extraction tolerance: 5 ppm to 50 ppm, a
+    /// tenfold change, moves the total from 21.26% to 21.38%. It only scales the co-isolation term.</para>
+    ///
+    /// <para><b>Counting once agrees with the rollup.</b> <see cref="Rollup.TransitionRollup"/> fills
+    /// each (transition, sample) cell with the FIRST value and ignores later ones, so a shared peptide's
+    /// repeated rows already count once in the quantities. Summing rows would have measured a universe
+    /// the pipeline does not use.</para>
+    ///
+    /// <para>The committed fixture cannot show any of this: at 327 peptides it has a median 2 precursors
+    /// per isolation window where a real run has tens, so it reports zero co-isolation and a median 49%
+    /// removed, all of it the duplicate kind. It proves the bookkeeping correction and nothing else -
+    /// <c>PRISM_MS2_OUTPUT_DIR</c> in the tests points the same code at a real run.</para>
+    /// </remarks>
+    /// <param name="DuplicateArea">Area removed from groups whose members are all ONE peptide.</param>
+    /// <param name="SharedArea">Area removed from groups spanning MORE than one peptide.</param>
+    /// <remarks>
+    /// The two areas partition what the union removed: <c>DuplicateArea + SharedArea ==
+    /// SummedArea - AssignedArea</c> exactly, which <c>Ms2SignalUnionTests</c> asserts. They are
+    /// reported because the ROW counts alone mislead - on a real plasma cohort 5.6% of rows merge away
+    /// but 21.3% of the area does, and knowing which kind of merge that area came from is the
+    /// difference between "shared peptides of abundant proteins were exported several times" and
+    /// "co-isolated peptides are being over-merged".
     /// </remarks>
     public sealed record Result(
         double AssignedArea, IReadOnlyList<double> ListArea, double SummedArea,
         int Regions, int MergedGroups, int LargestGroup, int Skipped,
-        int DuplicateRows, int SharedAcrossPeptides);
+        int DuplicateRows, int SharedAcrossPeptides,
+        double DuplicateArea, double SharedArea);
 
     /// <summary>
     /// Collapse <paramref name="regions"/> to their union measure.
@@ -98,7 +126,7 @@ public static class Ms2SignalUnion
 
         var listArea = new double[listCount];
         if (regions.Count == 0)
-            return new Result(0, listArea, 0, 0, 0, 0, 0, 0, 0);
+            return new Result(0, listArea, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         // Non-finite geometry cannot be placed in signal space. Counted, never silently dropped:
         // Skyline writes #N/A for an unintegrated peak, and a run full of them should be visible.
@@ -118,7 +146,7 @@ public static class Ms2SignalUnion
                 summed += r.Area;
         }
         if (usable.Count == 0)
-            return new Result(0, listArea, 0, 0, 0, 0, skipped, 0, 0);
+            return new Result(0, listArea, 0, 0, 0, 0, skipped, 0, 0, 0, 0);
 
         // Sorted so grouping is a sweep, and so the result does not depend on the order rows came back
         // from DuckDB - which is arbitrary, since preserve_insertion_order is off.
@@ -157,7 +185,7 @@ public static class Ms2SignalUnion
 
         return new Result(
             acc.Assigned, listArea, summed, usable.Count, acc.MergedGroups, acc.LargestGroup, skipped,
-            acc.DuplicateRows, acc.SharedAcrossPeptides);
+            acc.DuplicateRows, acc.SharedAcrossPeptides, acc.DuplicateArea, acc.SharedArea);
     }
 
     /// <summary>
@@ -175,6 +203,7 @@ public static class Ms2SignalUnion
         var groupPeptides = new HashSet<int>();
         var openStop = double.NegativeInfinity;
         var groupArea = 0.0;
+        var groupSum = 0.0;
         var groupAssigned = false;
         uint groupMask = 0;
         var groupSize = 0;
@@ -191,8 +220,17 @@ public static class Ms2SignalUnion
                 for (var l = 0; l < listCount; l++)
                     if ((groupMask & (1u << l)) != 0)
                         acc.ListArea[l] += groupArea;
+
+                // What the union removed here, attributed to the kind of collision that caused it.
+                // Only assigned groups, so these stay comparable with SummedArea - AssignedArea.
+                var removed = groupSum - groupArea;
+                if (groupPeptides.Count > 1)
+                    acc.SharedArea += removed;
+                else
+                    acc.DuplicateArea += removed;
             }
             groupArea = 0;
+            groupSum = 0;
             groupAssigned = false;
             groupMask = 0;
             groupSize = 0;
@@ -217,6 +255,7 @@ public static class Ms2SignalUnion
             }
             groupPeptides.Add(r.PeptideId);
             groupArea = Math.Max(groupArea, r.Area);
+            groupSum += r.Area;
             groupAssigned |= r.Assigned;
             groupMask |= r.ListMask;
             openStop = groupSize == 0 ? r.RtStop : Math.Max(openStop, r.RtStop);
@@ -237,5 +276,7 @@ public static class Ms2SignalUnion
         public int LargestGroup;
         public int DuplicateRows;
         public int SharedAcrossPeptides;
+        public double DuplicateArea;
+        public double SharedArea;
     }
 }

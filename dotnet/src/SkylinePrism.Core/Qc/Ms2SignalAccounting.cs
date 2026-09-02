@@ -39,6 +39,11 @@ public static class Ms2SignalAccounting
     /// peptide matrix. LINEAR.</param>
     /// <param name="SummedArea">The naive sum over the same transitions, for the double-counting
     /// figure. Never plotted as assigned signal.</param>
+    /// <param name="DuplicateArea">Of the area the union removed, how much came from one peptide
+    /// exported several times; <paramref name="SharedArea"/> is the rest, from genuinely co-isolated
+    /// peptides. They sum to <c>SummedArea - AssignedArea</c>. Both are reported because the ROW counts
+    /// mislead: on a real plasma cohort 5.6% of rows merge away but 21% of the area does, and almost
+    /// all of that area is the duplicate kind.</param>
     /// <param name="ListArea">Union measure per selected list, aligned with
     /// <see cref="Result.ListNames"/>. Each nests inside <see cref="AssignedArea"/> and lists may
     /// overlap each other.</param>
@@ -55,7 +60,9 @@ public static class Ms2SignalAccounting
         int SharedAcrossPeptides,
         int OutsideScheme,
         int UnknownPeptides,
-        int Skipped)
+        int Skipped,
+        double DuplicateArea,
+        double SharedArea)
     {
         /// <summary>How much of the naive sum was double counting, as a fraction. NaN with no signal.</summary>
         public double DoubleCountedFraction =>
@@ -148,7 +155,9 @@ public static class Ms2SignalAccounting
                     union.SharedAcrossPeptides,
                     loaded.OutsideScheme,
                     loaded.UnknownPeptides,
-                    union.Skipped));
+                    union.Skipped,
+                    union.DuplicateArea,
+                    union.SharedArea));
             },
             memoryBudgetMb);
 
@@ -190,6 +199,9 @@ public static class Ms2SignalAccounting
             ParquetWideWriter.Longs(
                 "unknown_peptides", result.Rows.Select(r => (long)r.UnknownPeptides).ToArray()),
             ParquetWideWriter.Longs("skipped", result.Rows.Select(r => (long)r.Skipped).ToArray()),
+            ParquetWideWriter.Doubles(
+                "duplicate_area", result.Rows.Select(r => r.DuplicateArea).ToArray()),
+            ParquetWideWriter.Doubles("shared_area", result.Rows.Select(r => r.SharedArea).ToArray()),
             // Repeated per row rather than kept in a sidecar: parquet dictionary-encodes them to nothing,
             // and it makes the file self-describing to anything that opens it.
             ParquetWideWriter.Strings("tolerance", Repeat(result.Tolerance, n)),
@@ -275,6 +287,8 @@ public static class Ms2SignalAccounting
         var outsideScheme = Counts(reader, "outside_scheme");
         var unknownPeptides = Counts(reader, "unknown_peptides");
         var skipped = Counts(reader, "skipped");
+        var duplicateArea = Counts(reader, "duplicate_area");
+        var sharedArea = Counts(reader, "shared_area");
         var assignedPeptides = Counts(reader, "assigned_peptides");
 
         var rows = new List<Row>(reader.RowCount);
@@ -294,7 +308,9 @@ public static class Ms2SignalAccounting
                 At(sharedAcross, i),
                 At(outsideScheme, i),
                 At(unknownPeptides, i),
-                At(skipped, i)));
+                At(skipped, i),
+                Area(duplicateArea, i),
+                Area(sharedArea, i)));
         }
 
         return new Result(
@@ -365,6 +381,10 @@ public static class Ms2SignalAccounting
     /// <summary>A whole-number column, or null when this file predates it.</summary>
     private static double[]? Counts(ParquetColumnReader reader, string column) =>
         reader.HasColumn(column) ? reader.ReadDoubles(column) : null;
+
+    /// <summary>An area column, or 0 for a file written before it existed.</summary>
+    private static double Area(double[]? column, int row) =>
+        column is not null && row < column.Length && double.IsFinite(column[row]) ? column[row] : 0;
 
     private static int At(double[]? column, int row) =>
         column is not null && row < column.Length && double.IsFinite(column[row])

@@ -243,6 +243,40 @@ public class Ms2SignalUnionTests
         Assert.True(wide.AssignedArea < normal.AssignedArea);
     }
 
+    /// <summary>
+    /// The two area figures PARTITION what the union removed, exactly. Without this they are two
+    /// plausible-looking numbers with no stated relationship to the totals beside them - and the whole
+    /// reason they exist is that the ROW counts mislead about where the removed area came from.
+    /// </summary>
+    [Fact]
+    public void RemovedAreaIsSplitBetweenTheTwoKindsOfCollisionAndNothingElse()
+    {
+        var regions = new List<Region>
+        {
+            // One peptide exported three times (a shared peptide, once per protein assignment).
+            new(0, 500.000, 10.0, 10.4, 100, true, 0, PeptideId: 1),
+            new(0, 500.000, 10.0, 10.4, 100, true, 0, PeptideId: 1),
+            new(0, 500.000, 10.0, 10.4, 100, true, 0, PeptideId: 1),
+            // Two different peptides sharing a fragment mass, co-eluting.
+            new(0, 600.000, 20.0, 20.4, 80, true, 0, PeptideId: 2),
+            new(0, 600.003, 20.1, 20.5, 30, true, 0, PeptideId: 3),
+            // A region that shares with nothing, so it contributes to neither.
+            new(0, 700.000, 30.0, 30.4, 55, true, 0, PeptideId: 4),
+        };
+
+        var r = Ms2SignalUnion.Compute(regions, Ppm10, 0);
+
+        Assert.Equal(465, r.SummedArea, 9);        // 300 + 110 + 55
+        Assert.Equal(235, r.AssignedArea, 9);      // 100 + 80 + 55
+        Assert.Equal(200, r.DuplicateArea, 9);     // two of the three identical copies
+        Assert.Equal(30, r.SharedArea, 9);         // the quieter of the co-isolated pair
+        Assert.Equal(2, r.DuplicateRows);
+        Assert.Equal(1, r.SharedAcrossPeptides);
+
+        // The invariant: nothing removed is unaccounted for, and nothing is counted in both.
+        Assert.Equal(r.SummedArea - r.AssignedArea, r.DuplicateArea + r.SharedArea, 9);
+    }
+
     /// <summary>The union can never exceed the sum; that inequality is the whole correction.</summary>
     [Fact]
     public void UnionNeverExceedsTheNaiveSum()
