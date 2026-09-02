@@ -35,6 +35,7 @@
     <!-- Name types that only exist in a pwiz build, so they cannot be compiled without one. -->
     <Compile Remove="RawData\PwizMs2SignalReaderTests.cs" />
     <Compile Remove="Qc\Ms2AcquiredFractionTests.cs" />
+    <Compile Remove="RawData\Ms2ReadThroughputTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
