@@ -316,4 +316,110 @@ public class SkyDocumentInfoTests
         var info = SkyDocumentInfo.Read(WriteSky(FullDocument));
         Assert.Equal("doc", info.Name);
     }
+
+    /// <summary>
+    /// MS2 signal accounting decides whether two transitions read the same detector counts by whether
+    /// the ranges Skyline extracted them over overlap, so the document's product-ion settings have to
+    /// come across exactly. The Levitt documents say centroided / 10 ppm, which extracts +/-10 ppm.
+    /// </summary>
+    [Fact]
+    public void Read_ReportsTheProductExtractionTolerance()
+    {
+        var info = SkyDocumentInfo.Read(WriteSky("""
+<?xml version="1.0" encoding="utf-8"?>
+<srm_settings format_version="25.1">
+  <settings_summary name="Default">
+    <transition_settings>
+      <transition_full_scan acquisition_method="DIA" product_mass_analyzer="centroided" product_res="10">
+        <isolation_scheme name="Results only" />
+      </transition_full_scan>
+    </transition_settings>
+  </settings_summary>
+</srm_settings>
+"""));
+
+        Assert.Equal("centroided", info.ProductMassAnalyzer);
+        Assert.Equal("10", info.ProductResolution);
+
+        var window = info.ProductTolerance!.WindowAt(1000);
+        Assert.Equal(999.99, window.Start, 9);
+        Assert.Equal(1000.01, window.End, 9);
+    }
+
+    /// <summary>
+    /// A resolving-power analyzer needs its calibration m/z, and Skyline always writes one. Without it
+    /// the tolerance is unknowable - and must read as unknown rather than as a plausible default, since
+    /// a guessed window would change how much fragment sharing is found with nothing on the plot to
+    /// show for it. The raw analyzer name survives either way, so the reason can be reported.
+    /// </summary>
+    [Fact]
+    public void Read_ProductToleranceIsNullWhenTheDocumentDoesNotSayEnough()
+    {
+        var noResMz = SkyDocumentInfo.Read(WriteSky("""
+<?xml version="1.0" encoding="utf-8"?>
+<srm_settings format_version="25.1">
+  <settings_summary name="Default">
+    <transition_settings>
+      <transition_full_scan acquisition_method="DIA" product_mass_analyzer="orbitrap" product_res="30000" />
+    </transition_settings>
+  </settings_summary>
+</srm_settings>
+"""));
+
+        Assert.Null(noResMz.ProductTolerance);
+        Assert.Equal("orbitrap", noResMz.ProductMassAnalyzer);   // enough to say WHY it is null
+
+        // An SRM document has no full-scan section at all.
+        var srm = SkyDocumentInfo.Read(WriteSky(FullDocument));
+        Assert.Null(srm.ProductTolerance);
+        Assert.Null(srm.ProductMassAnalyzer);
+    }
+
+    /// <summary>
+    /// Reading acquired MS2 signal means opening the raw file belonging to a NAMED replicate, which the
+    /// flat document-wide list cannot answer. Both views are kept, and the flat one keeps its order.
+    /// </summary>
+    [Fact]
+    public void Read_PairsSampleFilesWithTheirReplicate()
+    {
+        var info = SkyDocumentInfo.Read(WriteSky(FullDocument));
+
+        Assert.Equal(new[] { @"C:\data\Ref_01.raw" }, info.Replicates[0].SampleFiles);
+        Assert.Equal(new[] { @"C:\data\Study_07.raw" }, info.Replicates[1].SampleFiles);
+        Assert.Empty(info.Replicates[2].SampleFiles);          // self-closing <replicate />
+
+        // The document-wide list is unchanged: still every path, in document order.
+        Assert.Equal(new[] { @"C:\data\Ref_01.raw", @"C:\data\Study_07.raw" }, info.SampleFilePaths);
+    }
+
+    /// <summary>A replicate injected more than once carries several sample files, all of them its own.</summary>
+    [Fact]
+    public void Read_KeepsEverySampleFileOfAMultiInjectionReplicate()
+    {
+        var info = SkyDocumentInfo.Read(WriteSky("""
+<?xml version="1.0" encoding="utf-8"?>
+<srm_settings format_version="25.1">
+  <settings_summary name="Default">
+    <measured_results>
+      <replicate name="Pooled" sample_type="quality_control">
+        <sample_file id="f0" file_path="C:\d\Pooled_inj1.raw" />
+        <sample_file id="f1" file_path="C:\d\Pooled_inj2.raw" />
+        <annotation name="Plate">P1</annotation>
+      </replicate>
+      <replicate name="Solo" sample_type="unknown">
+        <sample_file id="f2" file_path="C:\d\Solo.raw" />
+      </replicate>
+    </measured_results>
+  </settings_summary>
+</srm_settings>
+"""));
+
+        Assert.Equal(
+            new[] { @"C:\d\Pooled_inj1.raw", @"C:\d\Pooled_inj2.raw" },
+            info.Replicates[0].SampleFiles);
+        Assert.Equal(new[] { @"C:\d\Solo.raw" }, info.Replicates[1].SampleFiles);
+
+        // The trailing annotation must not leak the next replicate's file into this one.
+        Assert.Equal("P1", info.Replicates[0].Annotations["Plate"]);
+    }
 }

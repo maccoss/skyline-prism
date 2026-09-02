@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Xml;
+using SkylinePrism.Core.Qc;
 
 namespace SkylinePrism.Skyline;
 
@@ -37,8 +38,16 @@ namespace SkylinePrism.Skyline;
 public sealed class SkyDocumentInfo
 {
     /// <summary>One replicate as recorded in &lt;measured_results&gt;.</summary>
+    /// <param name="SampleFiles">The <c>file_path</c> of every <c>&lt;sample_file&gt;</c> under this
+    /// replicate - normally one, several for a multi-injection replicate. Kept per replicate as well as
+    /// in the document-wide <see cref="SkyDocumentInfo.SampleFilePaths"/>, because measuring acquired
+    /// MS2 signal means opening the raw file belonging to a NAMED replicate, which a flat list cannot
+    /// say. Still in Skyline's own spelling (<c>file.wiff|sample|1</c>, and paths that have since
+    /// moved), so pass them through
+    /// <see cref="SkylineIsolationImporter.ResolveDataFile"/> before opening one.</param>
     public sealed record SkyReplicate(
-        string Name, string SampleType, IReadOnlyDictionary<string, string> Annotations);
+        string Name, string SampleType, IReadOnlyDictionary<string, string> Annotations,
+        IReadOnlyList<string> SampleFiles);
 
     public string DocumentPath { get; private init; } = "";
     public string? FormatVersion { get; private init; }
@@ -61,6 +70,35 @@ public sealed class SkyDocumentInfo
 
     /// <summary>The document enzyme mapped to a PRISM <c>parsimony.enzyme</c> name, or null if unmappable.</summary>
     public string? PrismEnzyme => SkylineDigestion.PrismEnzymeFromXml(EnzymeXml);
+
+    /// <summary>
+    /// Product-ion extraction settings, verbatim from <c>&lt;transition_full_scan&gt;</c>:
+    /// <c>product_mass_analyzer</c> (centroided, qit, tof, orbitrap, ft_icr), <c>product_res</c>,
+    /// <c>product_res_mz</c> and <c>selective_extraction</c>. Kept raw as well as parsed, so a document
+    /// that yields no <see cref="ProductTolerance"/> can still say why.
+    /// </summary>
+    public string? ProductMassAnalyzer { get; private init; }
+
+    /// <inheritdoc cref="ProductMassAnalyzer"/>
+    public string? ProductResolution { get; private init; }
+
+    /// <inheritdoc cref="ProductMassAnalyzer"/>
+    public string? ProductResolutionMz { get; private init; }
+
+    /// <inheritdoc cref="ProductMassAnalyzer"/>
+    public string? SelectiveExtraction { get; private init; }
+
+    /// <summary>
+    /// The m/z range Skyline extracted each product ion over, or null when the document does not say
+    /// enough to know (no full-scan settings, or a resolving-power analyzer with no calibration m/z).
+    ///
+    /// <para>MS2 signal accounting needs it to decide when two transitions read the same detector
+    /// counts. Null is not fatal there: it means the accounting cannot be computed for this document,
+    /// which is a thing to report rather than to guess a default for - a guessed tolerance would change
+    /// how much fragment sharing is found with nothing on the plot to show it.</para>
+    /// </summary>
+    public ProductMassTolerance? ProductTolerance => ProductMassTolerance.Parse(
+        ProductMassAnalyzer, ProductResolution, ProductResolutionMz, SelectiveExtraction);
 
     private string? _isolationSchemeXml;
     private bool _isolationSchemeRead;
@@ -152,6 +190,8 @@ public sealed class SkyDocumentInfo
 
         string? formatVersion = null, softwareVersion = null, documentGuid = null, enzymeXml = null;
         string? acquisitionMethod = null;
+        string? productMassAnalyzer = null, productRes = null, productResMz = null;
+        string? selectiveExtraction = null;
         var annotationNames = new List<string>();
         var replicates = new List<SkyReplicate>();
         var sampleFilePaths = new List<string>();
@@ -191,6 +231,10 @@ public sealed class SkyDocumentInfo
                     // Attribute-only read, so it is safe in this advance-every-iteration loop (unlike the
                     // <isolation_scheme> child element - see ReadIsolationSchemeXml).
                     acquisitionMethod ??= reader.GetAttribute("acquisition_method");
+                    productMassAnalyzer ??= reader.GetAttribute("product_mass_analyzer");
+                    productRes ??= reader.GetAttribute("product_res");
+                    productResMz ??= reader.GetAttribute("product_res_mz");
+                    selectiveExtraction ??= reader.GetAttribute("selective_extraction");
                     break;
 
                 case "enzyme":
@@ -236,6 +280,10 @@ public sealed class SkyDocumentInfo
             DocumentGuid = documentGuid,
             EnzymeXml = enzymeXml,
             AcquisitionMethod = acquisitionMethod,
+            ProductMassAnalyzer = productMassAnalyzer,
+            ProductResolution = productRes,
+            ProductResolutionMz = productResMz,
+            SelectiveExtraction = selectiveExtraction,
             ReplicateAnnotationNames = annotationNames,
             Replicates = replicates,
             SampleFilePaths = sampleFilePaths,
@@ -288,9 +336,10 @@ public sealed class SkyDocumentInfo
         var name = reader.GetAttribute("name") ?? "";
         var sampleType = reader.GetAttribute("sample_type") ?? "";
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
+        var mine = new List<string>();
 
         if (reader.IsEmptyElement)
-            return new SkyReplicate(name, sampleType, annotations);
+            return new SkyReplicate(name, sampleType, annotations, mine);
 
         var depth = reader.Depth;
         reader.Read(); // step into the element
@@ -306,7 +355,10 @@ public sealed class SkyDocumentInfo
             {
                 var filePath = reader.GetAttribute("file_path");
                 if (!string.IsNullOrWhiteSpace(filePath))
+                {
+                    mine.Add(filePath!);
                     sampleFilePaths.Add(filePath!);
+                }
                 // Fall through to the plain Read() below: <sample_file> children (instrument info) are
                 // not needed, and letting the loop walk them keeps the reader's position predictable.
             }
@@ -334,6 +386,6 @@ public sealed class SkyDocumentInfo
 
             reader.Read();
         }
-        return new SkyReplicate(name, sampleType, annotations);
+        return new SkyReplicate(name, sampleType, annotations, mine);
     }
 }
