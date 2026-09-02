@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using SkylinePrism.Core.RawData;
@@ -194,5 +195,164 @@ public class ThermoDirectSpikeTests
         {
             raw.Dispose();
         }
+    }
+    /// <summary>
+    /// Parallelism, re-tested properly. The earlier arms shared their files and ran parallel FIRST,
+    /// which I chose so caching would favour the sequential arm - reasoning that a parallel win
+    /// would then be trustworthy. That reasoning was wrong in one important way: this read touches
+    /// only a few MB per file (index plus chromatogram), not the 3.3 GB, and a few MB per file for
+    /// eight files sits comfortably in the page cache. So the sequential arm was very likely reading
+    /// from RAM what the parallel arm had just fetched over SMB - a large systematic bias against
+    /// parallelism, not a conservative one.
+    ///
+    /// <para>Fixed two ways. First it measures the caching directly, by reading one set twice. Then
+    /// it compares arms on DISJOINT file sets so neither inherits the other's cache, and runs the
+    /// orderings both ways round so any residual order effect cancels rather than accumulating.</para>
+    /// </summary>
+    [Fact]
+    public void DoesTheDirectRouteParalleliseOnDisjointFiles()
+    {
+        var rawDir = Environment.GetEnvironmentVariable("PRISM_MS2_RAW_DIR");
+        if (string.IsNullOrWhiteSpace(rawDir))
+        {
+            _out.WriteLine("skipped: set PRISM_MS2_RAW_DIR.");
+            return;
+        }
+
+        var perArm = int.TryParse(Environment.GetEnvironmentVariable("PRISM_MS2_ARM_FILES"), out var a)
+            ? a : 10;
+        var lanes = int.TryParse(Environment.GetEnvironmentVariable("PRISM_MS2_LANES"), out var l)
+            ? l : 8;
+
+        var all = System.IO.Directory.GetFiles(rawDir, "*.raw")
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Assert.True(all.Count >= perArm * 4,
+            $"need {perArm * 4} files for four disjoint arms, found {all.Count}");
+
+        _out.WriteLine($"{perArm} files per arm, {lanes} lanes, "
+            + $"{Environment.ProcessorCount} logical cores");
+        _out.WriteLine("");
+
+        // 1. How much does the page cache actually give? Same set, twice, sequentially.
+        var setC = all.Skip(perArm * 4).Take(perArm).ToList();
+        if (setC.Count == perArm)
+        {
+            var cold = Time(() => Sequential(setC));
+            var warm = Time(() => Sequential(setC));
+            _out.WriteLine($"caching check (same {perArm} files, sequential twice):");
+            _out.WriteLine($"  first pass  {cold:0.00} s ({cold / perArm:0.00} s/file)");
+            _out.WriteLine($"  second pass {warm:0.00} s ({warm / perArm:0.00} s/file)");
+            _out.WriteLine($"  the cache is worth {cold / Math.Max(1e-6, warm):0.00}x");
+            _out.WriteLine("");
+        }
+
+        // 2. Disjoint arms, both orderings. Sequential first in the first pair, parallel first in
+        //    the second, so an order effect shows up as disagreement between the pairs.
+        var setA = all.Take(perArm).ToList();
+        var setB = all.Skip(perArm).Take(perArm).ToList();
+        var setD = all.Skip(perArm * 2).Take(perArm).ToList();
+        var setE = all.Skip(perArm * 3).Take(perArm).ToList();
+
+        var seq1 = Time(() => Sequential(setA));
+        var par1 = Time(() => InParallel(setB, lanes));
+        var par2 = Time(() => InParallel(setD, lanes));
+        var seq2 = Time(() => Sequential(setE));
+
+        var seq = (seq1 + seq2) / 2;
+        var par = (par1 + par2) / 2;
+
+        _out.WriteLine($"sequential : {seq1:0.00} s and {seq2:0.00} s  -> mean {seq:0.00} s "
+            + $"({seq / perArm:0.00} s/file)");
+        _out.WriteLine($"parallel   : {par1:0.00} s and {par2:0.00} s  -> mean {par:0.00} s "
+            + $"({par / perArm:0.00} s/file)");
+        _out.WriteLine($"speedup    : {seq / par:0.00}x");
+        _out.WriteLine("");
+        _out.WriteLine($"projected for 93 replicates: sequential {seq / perArm * 93:0} s, "
+            + $"parallel {par / perArm * 93:0} s");
+        _out.WriteLine("");
+        _out.WriteLine(par < seq * 0.9
+            ? "VERDICT: parallelism helps on disjoint files. The earlier arms were measuring the "
+              + "page cache, not the concurrency."
+            : "VERDICT: parallelism still does not help, even with the cache bias removed and the "
+              + "orderings balanced.");
+    }
+
+    private static double Time(Action work)
+    {
+        var clock = Stopwatch.StartNew();
+        work();
+        clock.Stop();
+        return clock.Elapsed.TotalSeconds;
+    }
+
+    private static double Sequential(IReadOnlyList<string> files)
+    {
+        var total = 0.0;
+        foreach (var f in files)
+            total += DirectMs2Total(f);
+        return total;
+    }
+
+    private static double InParallel(IReadOnlyList<string> files, int lanes)
+    {
+        var bag = new System.Collections.Concurrent.ConcurrentBag<double>();
+        System.Threading.Tasks.Parallel.ForEach(
+            files,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = lanes },
+            f => bag.Add(DirectMs2Total(f)));
+        return bag.Sum();
+    }
+    /// <summary>
+    /// How many concurrent reads is best on this share? Each lane count gets its OWN disjoint set of
+    /// files, so no arm reads what another has already pulled into the page cache - which is worth
+    /// 2.13x here and is what invalidated the first parallel measurements.
+    /// </summary>
+    [Fact]
+    public void HowManyLanesIsBest()
+    {
+        var rawDir = Environment.GetEnvironmentVariable("PRISM_MS2_RAW_DIR");
+        if (string.IsNullOrWhiteSpace(rawDir))
+        {
+            _out.WriteLine("skipped: set PRISM_MS2_RAW_DIR.");
+            return;
+        }
+
+        var perArm = int.TryParse(Environment.GetEnvironmentVariable("PRISM_MS2_ARM_FILES"), out var a)
+            ? a : 8;
+        var lanesToTry = new[] { 1, 2, 4, 8, 16 };
+
+        var all = System.IO.Directory.GetFiles(rawDir, "*.raw")
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var needed = perArm * lanesToTry.Length;
+        Assert.True(all.Count >= needed,
+            $"need {needed} files for {lanesToTry.Length} disjoint arms of {perArm}, found {all.Count}");
+
+        _out.WriteLine($"{perArm} cold files per arm, disjoint sets, "
+            + $"{Environment.ProcessorCount} logical cores");
+        _out.WriteLine("");
+        _out.WriteLine("lanes   time    s/file   speedup   projected 93");
+
+        var baseline = double.NaN;
+        var best = (Lanes: 1, PerFile: double.MaxValue);
+        for (var i = 0; i < lanesToTry.Length; i++)
+        {
+            var lanes = lanesToTry[i];
+            var set = all.Skip(perArm * i).Take(perArm).ToList();
+            var seconds = Time(() => InParallel(set, lanes));
+            var perFile = seconds / perArm;
+            if (lanes == 1)
+                baseline = perFile;
+            if (perFile < best.PerFile)
+                best = (lanes, perFile);
+
+            _out.WriteLine($"{lanes,5}  {seconds,6:0.00} s  {perFile,6:0.00}   "
+                + $"{baseline / perFile,6:0.00}x   {perFile * 93,8:0} s");
+        }
+
+        _out.WriteLine("");
+        _out.WriteLine($"best: {best.Lanes} lanes at {best.PerFile:0.00} s/file "
+            + $"-> {best.PerFile * 93:0} s for the cohort, {baseline / best.PerFile:0.00}x over serial");
     }
 }
