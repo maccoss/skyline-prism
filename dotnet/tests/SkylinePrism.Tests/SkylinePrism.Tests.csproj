@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <Import Project="..\..\Pwiz.props" />
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -31,11 +33,24 @@
                       Condition="'$(PrismWithPwiz)' == 'true'" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(PrismWithPwiz)' == 'true' and Exists('$(PwizSharpDir)\vendor-assemblies\Thermo\ThermoFisher.CommonCore.Data.dll')">
+    <!-- Spike only: measuring whether bypassing pwiz for Thermo is worth a vendor-specific path. -->
+    <Reference Include="ThermoFisher.CommonCore.Data">
+      <HintPath>$(PwizSharpDir)\vendor-assemblies\Thermo\ThermoFisher.CommonCore.Data.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="ThermoFisher.CommonCore.RawFileReader">
+      <HintPath>$(PwizSharpDir)\vendor-assemblies\Thermo\ThermoFisher.CommonCore.RawFileReader.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
   <ItemGroup Condition="'$(PrismWithPwiz)' != 'true'">
     <!-- Name types that only exist in a pwiz build, so they cannot be compiled without one. -->
     <Compile Remove="RawData\PwizMs2SignalReaderTests.cs" />
     <Compile Remove="Qc\Ms2AcquiredFractionTests.cs" />
     <Compile Remove="RawData\Ms2ReadThroughputTests.cs" />
+    <Compile Remove="RawData\ThermoDirectSpikeTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

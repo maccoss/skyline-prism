@@ -51,6 +51,13 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
     private int _ticSpectra;
 
     /// <summary>
+    /// Whether to collect isolation windows. They are a property of the ACQUISITION METHOD, so every
+    /// replicate of a cohort has the same set - collecting them 93 times over is waste. The caller
+    /// reads one file with this on and the rest with it off.
+    /// </summary>
+    public bool CollectWindows { get; set; } = true;
+
+    /// <summary>
     /// Registers the vendor readers before any instance exists, so constructing one is enough and no
     /// caller has to remember.
     /// </summary>
@@ -140,7 +147,16 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         // Combine the ion mobility dimension: pwiz otherwise presents an uncombined TIMS frame as
         // hundreds of spectra sharing one retention time and one isolation window, which would turn
         // one acquisition cycle into hundreds.
+        //
+        // This OPEN is the dominant cost of a read, not the data: on a 3.3 GB Thermo file over SMB
+        // it is ~2.2 s of a 2.7 s total, against 0.41 s for the chromatogram and 0.05 s for the
+        // isolation windows. It is the vendor SDK building its scan index, so it is I/O latency
+        // rather than compute - which is why reading several files at once helps here even though
+        // it barely helped the per-spectrum walk it replaced.
+        var openClock = System.Diagnostics.Stopwatch.StartNew();
         ReaderList.Default.Read(dataPath, msd, new ReaderConfig { CombineIonMobilitySpectra = true });
+        openClock.Stop();
+        log?.Invoke($"    timing: open {openClock.Elapsed.TotalSeconds:0.00} s");
 
         // The run TIC chromatogram, where the format offers one, answers this in a couple of calls
         // instead of a walk over every spectrum. See FromTicChromatogram.
@@ -169,6 +185,7 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         if (chromatograms is null || chromatograms.Count == 0)
             return null;
 
+        var chromClock = System.Diagnostics.Stopwatch.StartNew();
         Chromatogram? tic = null;
         for (var i = 0; i < chromatograms.Count && tic is null; i++)
         {
@@ -195,6 +212,7 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         {
             return null;
         }
+        chromClock.Stop();
 
         var cycles = new List<Ms2Cycle>();
         int ms1 = 0, ms2 = 0;
@@ -245,12 +263,19 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         // Isolation windows are NOT in the chromatogram. For DIA they repeat every cycle, so the
         // first couple of cycles carry the whole scheme: a few hundred spectrum reads rather than
         // every one.
-        var windows = SampleIsolationWindows(msd, ms2 / Math.Max(1, cycles.Count), ct);
+        var windowClock = System.Diagnostics.Stopwatch.StartNew();
+        var windows = CollectWindows
+            ? SampleIsolationWindows(msd, ms2 / Math.Max(1, cycles.Count), ct)
+            : Array.Empty<PrismIsolationWindow>();
+        windowClock.Stop();
 
         log?.Invoke(
             $"  {Path.GetFileName(dataPath)}: {ms2:N0} MS2 and {ms1:N0} MS1 scans, "
             + $"MS2 TIC {totalMs2:E3}, {cycles.Count:N0} cycles, {windows.Count} isolation windows "
             + "(from the run TIC chromatogram).");
+        log?.Invoke(
+            $"    timing: chromatogram {chromClock.Elapsed.TotalSeconds:0.00} s, "
+            + $"isolation windows {windowClock.Elapsed.TotalSeconds:0.00} s");
 
         return new Ms2SignalRecord(
             dataPath, Ms2ReadStatus.Ok, "pwiz-sharp tic", Ms2SignalSource.ReportedTic,
