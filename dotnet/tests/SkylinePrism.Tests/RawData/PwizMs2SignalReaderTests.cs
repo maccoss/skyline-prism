@@ -83,6 +83,64 @@ public class PwizMs2SignalReaderTests
     }
 
     /// <summary>
+    /// The two read paths must agree. The TIC-chromatogram path is 100x faster than walking every
+    /// spectrum, and it is only worth having because it produces the SAME answer - so that is pinned
+    /// here rather than trusted.
+    /// </summary>
+    /// <remarks>
+    /// Totals are compared on a RELATIVE tolerance. Both sum ~165,000 doubles at a magnitude of
+    /// 1e11, in different orders, so they agree to about 1e-16 relative and never bit-exactly. The
+    /// counts, cycles and isolation windows must match exactly, because those are integers and sets.
+    /// </remarks>
+    [Fact]
+    public void TheFastPathAgreesWithTheSpectrumWalk()
+    {
+        var path = Environment.GetEnvironmentVariable(FileVar);
+        if (string.IsNullOrWhiteSpace(path) || !PwizReaderRegistration.IsAvailable)
+        {
+            _out.WriteLine($"skipped: needs {FileVar} and a pwiz build.");
+            return;
+        }
+
+        var reader = new PwizMs2SignalReader();
+
+        var fastClock = System.Diagnostics.Stopwatch.StartNew();
+        var fast = reader.Read(path);
+        fastClock.Stop();
+
+        var walkClock = System.Diagnostics.Stopwatch.StartNew();
+        var walk = reader.ReadViaSpectrumWalk(path);
+        walkClock.Stop();
+
+        _out.WriteLine($"tic chromatogram : {fast.TotalMs2Signal:R}  "
+            + $"({fast.Ms2Count:N0} MS2, {fast.Cycles.Count:N0} cycles, "
+            + $"{fast.IsolationWindows.Count} windows) in {fastClock.Elapsed.TotalSeconds:0.0} s");
+        _out.WriteLine($"spectrum walk    : {walk.TotalMs2Signal:R}  "
+            + $"({walk.Ms2Count:N0} MS2, {walk.Cycles.Count:N0} cycles, "
+            + $"{walk.IsolationWindows.Count} windows) in {walkClock.Elapsed.TotalSeconds:0.0} s");
+        _out.WriteLine($"speedup          : "
+            + $"{walkClock.Elapsed.TotalSeconds / fastClock.Elapsed.TotalSeconds:0}x");
+        _out.WriteLine($"relative difference in the total: "
+            + $"{Math.Abs(fast.TotalMs2Signal - walk.TotalMs2Signal) / walk.TotalMs2Signal:E2}");
+
+        Assert.Equal(Ms2ReadStatus.Ok, fast.Status);
+        Assert.Equal(Ms2ReadStatus.Ok, walk.Status);
+
+        Assert.Equal(walk.Ms2Count, fast.Ms2Count);
+        Assert.Equal(walk.Ms1Count, fast.Ms1Count);
+        Assert.Equal(walk.Cycles.Count, fast.Cycles.Count);
+        Assert.True(
+            Math.Abs(fast.TotalMs2Signal - walk.TotalMs2Signal) <= 1e-12 * walk.TotalMs2Signal,
+            $"totals disagree: {fast.TotalMs2Signal:R} vs {walk.TotalMs2Signal:R}");
+
+        // The fast path samples the first couple of cycles for windows rather than reading every
+        // spectrum. For a repeating DIA cycle that is the whole scheme, which is what this asserts.
+        Assert.Equal(
+            walk.IsolationWindows.Select(w => (Math.Round(w.Start, 3), Math.Round(w.End, 3))).ToList(),
+            fast.IsolationWindows.Select(w => (Math.Round(w.Start, 3), Math.Round(w.End, 3))).ToList());
+    }
+
+    /// <summary>
     /// The measurement that matters: the acquired MS2 total ion current, which is the denominator no
     /// Skyline export can supply.
     /// </summary>
@@ -129,9 +187,14 @@ public class PwizMs2SignalReaderTests
         Assert.True(record.TotalMs2Signal > 0);
 
         // The per-cycle totals must add up to the run total, or the trace in Plot B would disagree
-        // with the bar in Plot A.
+        // with the bar in Plot A. RELATIVE tolerance, not decimal places: these are sums of ~165,000
+        // doubles at a magnitude of 1e11, accumulated in two different orders, so they agree to
+        // about 1e-16 relative and never to a fixed number of decimals. Asserting 3 dp here demanded
+        // 15 significant digits and failed on summation order alone.
         var fromCycles = record.Cycles.Sum(c => c.Ms2Signal);
-        Assert.Equal(record.TotalMs2Signal, fromCycles, 3);
+        Assert.True(
+            Math.Abs(record.TotalMs2Signal - fromCycles) <= 1e-12 * record.TotalMs2Signal,
+            $"run total {record.TotalMs2Signal:R} vs sum over cycles {fromCycles:R}");
         Assert.Equal(record.Ms2Count, record.Cycles.Sum(c => c.Ms2Count));
     }
 }

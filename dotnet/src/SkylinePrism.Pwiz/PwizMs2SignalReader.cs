@@ -82,6 +82,28 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         return Extensions.Any(e => name.EndsWith(e, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Force the general spectrum-walk path, skipping the TIC-chromatogram optimisation. For the
+    /// cross-check that keeps the two honest - the fast path is only trustworthy because it agrees
+    /// with the reference, so that agreement has to be testable rather than asserted in a comment.
+    /// </summary>
+    internal Ms2SignalRecord ReadViaSpectrumWalk(
+        string dataPath, Action<string>? log = null, CancellationToken ct = default)
+    {
+        try
+        {
+            using var msd = new MSData();
+            ReaderList.Default.Read(
+                dataPath, msd, new ReaderConfig { CombineIonMobilitySpectra = true });
+            return FromSpectrumWalk(msd, dataPath, log, ct);
+        }
+        catch (Exception ex)
+        {
+            return Ms2SignalRecord.Unavailable(
+                dataPath, Ms2ReadStatus.Failed, Describe(), ex.Message);
+        }
+    }
+
     /// <inheritdoc />
     public Ms2SignalRecord Read(
         string dataPath, Action<string>? log = null, CancellationToken ct = default)
@@ -120,6 +142,176 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
         // one acquisition cycle into hundreds.
         ReaderList.Default.Read(dataPath, msd, new ReaderConfig { CombineIonMobilitySpectra = true });
 
+        // The run TIC chromatogram, where the format offers one, answers this in a couple of calls
+        // instead of a walk over every spectrum. See FromTicChromatogram.
+        if (FromTicChromatogram(msd, dataPath, log, ct) is { } fast)
+            return fast;
+
+        return FromSpectrumWalk(msd, dataPath, log, ct);
+    }
+
+    /// <summary>
+    /// The fast path: total the run TIC chromatogram over its MS2 points.
+    ///
+    /// <para>A vendor TIC chromatogram carries time and intensity for EVERY scan, and pwiz adds a
+    /// third array holding the MS order per point. Summing intensity where that order is 2 gives the
+    /// acquired MS2 total directly, and the MS1 points mark the cycle boundaries, so the per-cycle
+    /// trace falls out of the same arrays. That replaces a walk over 165,000 spectra, each of which
+    /// costs several vendor-SDK calls and a Spectrum allocation.</para>
+    ///
+    /// <para>Returns null when the format has no TIC chromatogram or no MS-order array, and the
+    /// caller falls back to the spectrum walk. The two paths are asserted to agree.</para>
+    /// </summary>
+    private Ms2SignalRecord? FromTicChromatogram(
+        MSData msd, string dataPath, Action<string>? log, CancellationToken ct)
+    {
+        var chromatograms = msd.Run.ChromatogramList;
+        if (chromatograms is null || chromatograms.Count == 0)
+            return null;
+
+        Chromatogram? tic = null;
+        for (var i = 0; i < chromatograms.Count && tic is null; i++)
+        {
+            if (!string.Equals(
+                    chromatograms.ChromatogramIdentity(i).Id, "TIC", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            ct.ThrowIfCancellationRequested();
+            tic = chromatograms.GetChromatogram(i, getBinaryData: true);
+        }
+
+        var times = tic?.BinaryDataArrays
+            .FirstOrDefault(a => a.HasCVParam(CVID.MS_time_array))?.Data;
+        var intensities = tic?.BinaryDataArrays
+            .FirstOrDefault(a => a.HasCVParam(CVID.MS_intensity_array))?.Data;
+        // Without the MS-order array every point is of unknown level, and an MS2-only total cannot
+        // be taken from this. Falling back beats totalling MS1 and MS2 together, which is exactly
+        // the mistake Skyline TicArea invites.
+        var levels = tic?.IntegerDataArrays.FirstOrDefault()?.Data;
+
+        if (times is null || intensities is null || levels is null
+            || times.Count == 0 || intensities.Count != times.Count || levels.Count != times.Count)
+        {
+            return null;
+        }
+
+        var cycles = new List<Ms2Cycle>();
+        int ms1 = 0, ms2 = 0;
+        double totalMs2 = 0;
+        var cycleStart = double.NaN;
+        var cycleStop = double.NaN;
+        var cycleMs2 = 0;
+        var cycleSignal = 0.0;
+
+        void CloseCycle()
+        {
+            if (cycleMs2 == 0)
+                return;
+            cycles.Add(new Ms2Cycle(cycles.Count, cycleStart, cycleStop, cycleMs2, cycleSignal));
+            cycleMs2 = 0;
+            cycleSignal = 0;
+            cycleStart = double.NaN;
+            cycleStop = double.NaN;
+        }
+
+        for (var i = 0; i < times.Count; i++)
+        {
+            // Thermo writes the RAW MSOrder, which is negative for scan kinds that are not a plain
+            // MSn (Ng = -3, Nl = -2, Par = -1). Only a literal 1 and 2 are MS1 and MS2 here.
+            var level = levels[i];
+            if (level == 1)
+            {
+                ms1++;
+                CloseCycle();
+                continue;
+            }
+            if (level != 2)
+                continue;
+
+            ms2++;
+            totalMs2 += intensities[i];
+            cycleSignal += intensities[i];
+            cycleMs2++;
+            if (!double.IsFinite(cycleStart))
+                cycleStart = times[i];
+            cycleStop = times[i];
+        }
+        CloseCycle();
+
+        if (ms2 == 0)
+            return null;    // nothing this path can claim; let the walk report why
+
+        // Isolation windows are NOT in the chromatogram. For DIA they repeat every cycle, so the
+        // first couple of cycles carry the whole scheme: a few hundred spectrum reads rather than
+        // every one.
+        var windows = SampleIsolationWindows(msd, ms2 / Math.Max(1, cycles.Count), ct);
+
+        log?.Invoke(
+            $"  {Path.GetFileName(dataPath)}: {ms2:N0} MS2 and {ms1:N0} MS1 scans, "
+            + $"MS2 TIC {totalMs2:E3}, {cycles.Count:N0} cycles, {windows.Count} isolation windows "
+            + "(from the run TIC chromatogram).");
+
+        return new Ms2SignalRecord(
+            dataPath, Ms2ReadStatus.Ok, "pwiz-sharp tic", Ms2SignalSource.ReportedTic,
+            ms1, ms2, totalMs2, times[0], times[times.Count - 1],
+            cycles.Count > 0 ? Ms2CycleModel.Ms1Bounded : Ms2CycleModel.FixedRtBins,
+            cycles, windows);
+    }
+
+    /// <summary>
+    /// Isolation windows from the first couple of acquisition cycles. A DIA cycle sweeps the whole
+    /// m/z range and starts over, so two of them contain every window and reading more would re-read
+    /// the same set. Empty rather than guessed when the spectra are not available.
+    /// </summary>
+    private static IReadOnlyList<PrismIsolationWindow> SampleIsolationWindows(
+        MSData msd, int perCycle, CancellationToken ct)
+    {
+        var windows = new Dictionary<(long, long), PrismIsolationWindow>();
+        var spectra = msd.Run.SpectrumList;
+        if (spectra is null || spectra.Count == 0)
+            return Array.Empty<PrismIsolationWindow>();
+
+        // Two cycles worth, with a floor so a short or irregular run still samples something.
+        var limit = Math.Min(spectra.Count, Math.Max(64, perCycle * 2 + 8));
+        for (var i = 0; i < limit; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var spectrum = spectra.GetSpectrum(i, DetailLevel.FullMetadata);
+            if (spectrum.Params.CvParamValueOrDefault(CVID.MS_ms_level, 0) != 2
+                || spectrum.Precursors.Count == 0)
+            {
+                continue;
+            }
+            AddWindow(windows, spectrum.Precursors[0].IsolationWindow);
+        }
+        return windows.Values.OrderBy(w => w.Start).ToList();
+    }
+
+    /// <summary>One isolation window, keyed on rounded edges so float noise cannot multiply it.</summary>
+    private static void AddWindow(
+        Dictionary<(long, long), PrismIsolationWindow> windows, IsolationWindow window)
+    {
+        var target = window.CvParamValueOrDefault(CVID.MS_isolation_window_target_m_z, double.NaN);
+        if (!double.IsFinite(target))
+            return;
+        var lower = window.CvParamValueOrDefault(CVID.MS_isolation_window_lower_offset, 0.0);
+        var upper = window.CvParamValueOrDefault(CVID.MS_isolation_window_upper_offset, 0.0);
+        var start = target - lower;
+        var end = target + upper;
+        // 1e-4 Th is far below any real window and far above the noise.
+        var key = ((long)Math.Round(start * 1e4), (long)Math.Round(end * 1e4));
+        windows.TryAdd(key, new PrismIsolationWindow(start, end));
+    }
+
+    /// <summary>
+    /// The general path: every spectrum header. Slower - several vendor-SDK calls and an allocation
+    /// per spectrum - but it needs nothing beyond a spectrum list, so it covers formats with no TIC
+    /// chromatogram and is the reference the fast path is checked against.
+    /// </summary>
+    private Ms2SignalRecord FromSpectrumWalk(
+        MSData msd, string dataPath, Action<string>? log, CancellationToken ct)
+    {
         var spectra = msd.Run.SpectrumList
             ?? throw new InvalidDataException($"No spectra in {Path.GetFileName(dataPath)}.");
 
