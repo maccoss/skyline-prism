@@ -89,7 +89,7 @@ public static class MergedParquetReader
                 "SELECT " +
                 $"p.\"{cols.Peptide}\" AS pep, " +
                 $"{tidSql} AS tid, " +
-                $"{IsPrecursorSql(cols, "p")} AS isprec, " +
+                $"{IsPrecursorSql(cols.Transition, "p")} AS isprec, " +
                 $"TRY_CAST(p.\"{cols.PrecursorCharge}\" AS INTEGER) AS pz, " +
                 "m.s_idx AS samp, " +
                 $"p.\"{cols.Abundance}\" AS area, " +
@@ -225,12 +225,13 @@ public static class MergedParquetReader
     /// wrong rather than an error. Skyline labels these <c>precursor</c>, <c>precursor [M+1]</c>,
     /// <c>precursor [M+2]</c>, so the test is a prefix.</para>
     /// </summary>
+    /// <param name="transitionColumn">The fragment-ion column's name in this export.</param>
     /// <param name="alias">Table alias the column is qualified with, or null for none.</param>
-    internal static string IsPrecursorSql(SkylineColumns cols, string? alias = null)
+    internal static string IsPrecursorSql(string transitionColumn, string? alias = null)
     {
         var qualified = string.IsNullOrEmpty(alias)
-            ? $"\"{cols.Transition}\""
-            : $"{alias}.\"{cols.Transition}\"";
+            ? $"\"{transitionColumn}\""
+            : $"{alias}.\"{transitionColumn}\"";
         return $"starts_with({qualified}, 'precursor')";
     }
 
