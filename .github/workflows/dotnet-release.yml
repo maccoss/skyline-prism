@@ -85,8 +85,26 @@ jobs:
           # Fetching the SHA itself, rather than a branch tip, is what makes this a pin.
           git fetch -q --filter=blob:none --depth 1 origin "$PWIZ_SHARP_COMMIT"
           git checkout -q FETCH_HEAD
-          echo "PWIZ_SHARP_DIR=$(pwd)/pwiz-sharp" >> "$GITHUB_ENV"
+          # pwd -W, NOT pwd: this step is bash and the packaging step below is pwsh, so the path
+          # has to be one MSBuild can resolve on Windows. Git Bash's pwd prints "/d/a/_temp/pwiz",
+          # which MSBuild cannot, and dotnet-v26.24.0's first attempt failed on exactly that -
+          # RequirePwiz reported "No pwiz-sharp checkout at /d/a/_temp/pwiz/pwiz-sharp" for a
+          # checkout that was there. CI never caught it because it packages with AllowNoPwiz=true,
+          # so this line only runs when a release is actually cut.
+          echo "PWIZ_SHARP_DIR=$(pwd -W)/pwiz-sharp" >> "$GITHUB_ENV"
           du -sh pwiz-sharp
+
+      # Assert the path in the form the PACKAGING step will see it, not the form bash sees. A bash
+      # test would have passed on the broken POSIX path above; this is the check that catches it, in
+      # the step that owns the mistake rather than several minutes later in MSBuild.
+      - name: Verify pwiz-sharp is reachable from Windows
+        run: |
+          $proj = Join-Path $env:PWIZ_SHARP_DIR 'pwiz/src/MsData/MsData.csproj'
+          if (-not (Test-Path $proj)) {
+            Write-Error "PWIZ_SHARP_DIR=$env:PWIZ_SHARP_DIR is not resolvable from Windows (looked for $proj). The checkout step must export a Windows path - use 'pwd -W', not 'pwd'."
+            exit 1
+          }
+          Write-Host "pwiz-sharp OK: $proj"
 
       # IAgreeToVendorLicenses extracts the Thermo and Bruker SDKs, which are then redistributed
       # inside SkylinePrism.zip. That is the same thing Skyline and ProteoWizard's own releases do,
