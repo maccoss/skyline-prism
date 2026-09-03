@@ -1,8 +1,10 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using SkylinePrism.Core.RawData;
 
 namespace SkylinePrism.App;
 
@@ -61,7 +63,43 @@ public partial class App : Application
 
         WriteLog("==== Skyline-PRISM tool started ====");
         WriteLog("Args: " + string.Join(" ", e.Args));
+
+        // Make the instrument-file reader available, if this build carries one. Done here rather
+        // than lazily at the point of use so the log records which build the user is running -
+        // "acquired MS2 signal unknown" otherwise looks like a data problem rather than a package
+        // built without the reader.
+        RegisterRawReader();
         base.OnStartup(e);
+    }
+
+    /// <summary>
+    /// Registers the pwiz-backed reader when the build has one. Reflection rather than a direct
+    /// call: SkylinePrism.Pwiz is referenced only when a pwiz-sharp checkout was present at build
+    /// time, so naming its types here would stop a pwiz-less build compiling - and that build is
+    /// what a developer without the checkout, and the cross-platform CLI, both use.
+    /// </summary>
+    private static void RegisterRawReader()
+    {
+        try
+        {
+            var type = Type.GetType(
+                "SkylinePrism.Pwiz.PwizReaderRegistration, SkylinePrism.Pwiz", throwOnError: false);
+            if (type is null)
+            {
+                WriteLog("Instrument-file reader: not in this build; acquired MS2 signal will read "
+                    + "as unknown.");
+                return;
+            }
+
+            type.GetMethod("Register")?.Invoke(null, null);
+            WriteLog("Instrument-file reader: registered ("
+                + string.Join(", ", Ms2SignalReaders.All.Select(r => r.Describe())) + ").");
+        }
+        catch (Exception ex)
+        {
+            // A reader that cannot load is a missing denominator, not a reason to fail startup.
+            WriteLog("Instrument-file reader: could not be registered - " + ex.Message);
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

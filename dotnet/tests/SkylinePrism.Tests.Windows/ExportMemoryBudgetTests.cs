@@ -90,7 +90,9 @@ public class ExportMemoryBudgetTests
 
         MainWindow.PerExportGb(inputs, out var largest, out var largestGb);
 
-        Assert.Equal("big", largest);
+        // The file name, extension included: a closed-document input may be a .sky or a .sky.zip, and
+        // the log line naming the biggest one is more use when it says which.
+        Assert.Equal("big.sky", largest);
         Assert.Equal(64 * 1024 / (double)Gb, largestGb, 9);
     }
 

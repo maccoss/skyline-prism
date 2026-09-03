@@ -34,7 +34,8 @@ public static class QcReport
         "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" +
         "\">\n";
 
-    public static string Generate(string outputDir, PrismConfig config, bool savePlots = false)
+    public static string Generate(
+        string outputDir, PrismConfig config, bool savePlots = false, Action<string>? log = null)
     {
         var sampleTypes = ReadSampleTypes(Path.Combine(outputDir, "sample_metadata.csv"));
 
@@ -83,10 +84,14 @@ public static class QcReport
         var validation = ValidationStatus.Compute(pepRaw.Values, pepCorrected.Values, refIdx, qcIdx);
         var runInfo = Provenance.ReadRunInfo(Path.Combine(outputDir, "parameters.json"));
 
+        var signalPlots = RenderMs2SignalSection(
+            outputDir, runConfig, sampleTypes, savePlots, plotsDir, log);
+
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
             pepRaw.RowCount, protRaw.RowCount,
-            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, validation, runConfig, runInfo);
+            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, signalPlots,
+            validation, runConfig, runInfo);
 
         var htmlPath = Path.Combine(outputDir, "qc_report.html");
         File.WriteAllText(htmlPath, html);
@@ -95,6 +100,213 @@ public static class QcReport
 
     private sealed record PlotImage(string Caption, byte[] Png);
     private sealed record PlotSection(string Title, List<PlotImage> Images);
+
+    /// <summary>
+    /// The MS2 signal accounting section, or an empty list when there is nothing to show.
+    ///
+    /// <para>Reuses the cached <c>ms2_signal_accounting.parquet</c> when it answers the same question,
+    /// so <c>prism qc -d</c> replots an existing run for free and keeps working on a directory whose
+    /// <c>merged_data/</c> was cleaned up. Computing is a full pass over the merged table, so it
+    /// happens only when the run asked for the section and the cache cannot serve it.</para>
+    ///
+    /// <para><b>The cache is keyed on the settings, not just on the file name.</b> It used to be
+    /// preferred unconditionally: a re-run that switched measure, tolerance, isolation scheme or
+    /// protein lists then replotted the PREVIOUS run's numbers, captioned with the previous run's
+    /// settings, with nothing in the log - and a re-run that turned the section OFF still rendered
+    /// it. Both look entirely right on the page, which is what makes keying it properly worth the
+    /// resolve work below on every report.</para>
+    /// </summary>
+    private static List<PlotSection> RenderMs2SignalSection(
+        string outputDir, PrismConfig config, IReadOnlyDictionary<string, string> sampleTypes,
+        bool savePlots, string plotsDir, Action<string>? log)
+    {
+        var sections = new List<PlotSection>();
+        var settings = config.QcReport.Ms2Signal;
+        // Not asked for: a leftover cache from an earlier run into this directory is not a reason for
+        // the section to exist. (For `prism qc -d` these settings come from the directory's own
+        // parameters.json, so a run that DID ask for it still replots.)
+        if (!settings.Enabled)
+            return sections;
+
+        var cached = Ms2SignalAccounting.ReadCached(outputDir);
+
+        var tolerance = ProductMassTolerance.ParseSetting(settings.ExtractionTolerance);
+        if (tolerance is null)
+        {
+            log?.Invoke(
+                "  MS2 signal accounting: qc_report.ms2_signal.extraction_tolerance "
+                + $"'{settings.ExtractionTolerance}' is not a tolerance. Write it as \"10 ppm\" "
+                + "or \"0.4 m/z\".");
+        }
+
+        // Both of these read files, and neither is needed to REPLOT a cache that already matches - so
+        // a failure here is only fatal when there is nothing cached to fall back on.
+        var scheme = tolerance is null ? null : ResolveScheme(outputDir, settings.IsolationScheme, log);
+        var lists = ResolveMs2Lists(settings.ProteinLists, settings.ProteinListFiles, log);
+        var measure = string.Equals(settings.Measure, "ions", StringComparison.OrdinalIgnoreCase)
+            ? Ms2SignalMeasure.Ions
+            : Ms2SignalMeasure.Signal;
+
+        // A cached result records the scheme it used, so a directory whose isolation_schemes.xml has
+        // been cleaned up can still have its cache validated against everything else - which is what
+        // keeps `prism qc -d` a free replot there rather than a warning.
+        var schemeName = scheme?.Name ?? cached?.IsolationScheme;
+
+        Ms2SignalAccounting.Result? result = null;
+        if (tolerance is not null && schemeName is not null)
+        {
+            var wanted = Ms2SignalAccounting.SettingsKeyFor(
+                measure, tolerance.Describe(), schemeName, lists.Select(l => l.Name));
+            if (cached is not null
+                && cached.MatchesSettings(wanted, measure, tolerance.Describe(), schemeName))
+            {
+                result = cached;   // the free replot the cache exists for
+            }
+            else if (scheme is not null)
+            {
+                if (cached is not null)
+                {
+                    log?.Invoke(
+                        $"  MS2 signal accounting: the cached results are for {cached.SettingsSummary()}; "
+                        + "this run asks for "
+                        + Ms2SignalAccounting.SummarizeSettings(
+                            measure, tolerance.Describe(), scheme.Name, lists.Count)
+                        + ". Recomputing.");
+                }
+                result = Ms2SignalAccounting.Compute(
+                    outputDir, scheme, tolerance, lists, sampleTypes, log, measure: measure);
+                if (result is not null)
+                    Ms2SignalAccounting.Write(outputDir, result);
+            }
+        }
+
+        if (result is null && cached is not null)
+        {
+            // The settings cannot be honoured - no tolerance, no scheme, or no merged_data/ to
+            // recompute from; whichever it was has been logged above. The cached numbers are
+            // self-describing, and the caption below names the settings that produced them, so
+            // showing them beats dropping the section - as long as the mismatch is said plainly.
+            log?.Invoke(
+                "  MS2 signal accounting: showing the CACHED results instead. They are for "
+                + $"{cached.SettingsSummary()}, which is not what this run asks for; the caption "
+                + "names the settings that produced them.");
+            result = cached;
+        }
+
+        if (result is null || result.IsEmpty)
+            return sections;
+
+        var caption = result.Measure == Ms2SignalMeasure.Ions
+            ? $"MS2 IONS per replicate - intensity x injection time, summed per spectrum across each "
+              + $"peak - shared signal counted once (extraction {result.Tolerance}, isolation scheme "
+              + $"\"{result.IsolationScheme}\", {result.AssignedPeptides:N0} peptides). Not background "
+              + "subtracted."
+            : $"Integrated MS2 signal per replicate, shared signal counted once "
+              + $"(extraction {result.Tolerance}, isolation scheme \"{result.IsolationScheme}\", "
+              + $"{result.AssignedPeptides:N0} peptides).";
+
+        var images = new List<PlotImage>();
+        try
+        {
+            var png = PlotRenderer.Ms2AccountingPng(
+                result,
+                result.Measure == Ms2SignalMeasure.Ions
+                    ? "MS2 Ions Assigned to Peptides (shared signal counted once)"
+                    : "MS2 Signal Assigned to Peptides (shared signal counted once)");
+            if (savePlots && png.Length > 0)
+            {
+                Directory.CreateDirectory(plotsDir);
+                File.WriteAllBytes(Path.Combine(plotsDir, "ms2_signal_accounting.png"), png);
+            }
+            images.Add(new PlotImage(caption, png));
+        }
+        catch (Exception ex)
+        {
+            images.Add(new PlotImage(
+                caption + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>()));
+        }
+
+        sections.Add(new PlotSection(
+            // Deliberately not "total MS2": this is what Skyline integrated for the document's targets.
+            // The acquired total needs the instrument files, and calling this that would turn unknown
+            // coverage into apparently complete coverage.
+            "Signal Skyline Integrated for This Document's Targets", images));
+        return sections;
+    }
+
+    /// <summary>
+    /// The protein lists to draw a line for, dropping each one this machine cannot resolve with a
+    /// message rather than throwing.
+    ///
+    /// <para><see cref="ProteinListSet.ResolveForDisplay"/> throws on an unresolvable name, which is
+    /// right for marker normalization - a normalization nobody can reproduce should not run - but not
+    /// for an optional QC plot: a config written on another machine can name a list saved only there,
+    /// and that used to abort the whole run at Stage 5b, after every output had been computed and
+    /// with no <c>qc_report.html</c> to show for it. Every other failure in this section logs and
+    /// carries on; so does this one now, one list at a time so the resolvable ones survive.</para>
+    /// </summary>
+    private static IReadOnlyList<ProteinList> ResolveMs2Lists(
+        IEnumerable<string>? names, IEnumerable<string>? memberFiles, Action<string>? log)
+    {
+        var resolved = new List<ProteinList>();
+        // Files first, then names - the order ResolveForDisplay itself uses, so the plot's lines come
+        // out the same however they were specified.
+        foreach (var file in memberFiles ?? Enumerable.Empty<string>())
+            Add(() => ProteinListSet.ResolveForDisplay(null, new[] { file }));
+        foreach (var name in names ?? Enumerable.Empty<string>())
+            Add(() => ProteinListSet.ResolveForDisplay(new[] { name }));
+        return resolved;
+
+        void Add(Func<IReadOnlyList<ProteinList>> resolve)
+        {
+            try
+            {
+                resolved.AddRange(resolve());
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke(
+                    $"  MS2 signal accounting: {ex.Message} Continuing without that list - name only "
+                    + "lists saved on this machine, or give the members as a file via "
+                    + "qc_report.ms2_signal.protein_list_files.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The isolation scheme to account against: the one the config names, or the only usable one in
+    /// <c>isolation_schemes.xml</c>. Never guessed - fragments in different isolation windows never
+    /// share signal, so the wrong scheme silently changes every number on the plot.
+    /// </summary>
+    private static IsolationScheme? ResolveScheme(string outputDir, string? named, Action<string>? log)
+    {
+        var catalog = IsolationSchemeCatalog.Load(
+            Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+        var usable = catalog?.UsableSchemes ?? (IReadOnlyList<IsolationScheme>)Array.Empty<IsolationScheme>();
+
+        if (!string.IsNullOrWhiteSpace(named))
+        {
+            var match = usable.FirstOrDefault(
+                s => string.Equals(s.Name, named, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return match;
+            log?.Invoke(
+                $"  MS2 signal accounting skipped: no isolation scheme named '{named}' in "
+                + $"{IsolationSchemeCatalog.FileName}.");
+            return null;
+        }
+
+        if (usable.Count == 1)
+            return usable[0];
+
+        log?.Invoke(usable.Count == 0
+            ? "  MS2 signal accounting skipped: no isolation windows are known for this cohort. A DIA "
+              + "document normally stores none (isolation_scheme name=\"Results only\"), so import them "
+              + "from a data file in the Skyline tool, or set qc_report.ms2_signal.isolation_scheme."
+            : $"  MS2 signal accounting skipped: {usable.Count} isolation schemes are known for this "
+              + "cohort. Name one with qc_report.ms2_signal.isolation_scheme.");
+        return null;
+    }
 
     /// <summary>
     /// Render the before/after comparison sections for one level, mirroring the Python report:
@@ -226,6 +438,7 @@ public static class QcReport
         CvMetrics.BeforeAfter? pepRef, CvMetrics.BeforeAfter? pepQc,
         CvMetrics.BeforeAfter? protRef, CvMetrics.BeforeAfter? protQc,
         List<PlotSection> peptidePlots, List<PlotSection> proteinPlots,
+        List<PlotSection> signalPlots,
         ValidationStatus? validation, PrismConfig config, Provenance.RunInfo? runInfo)
     {
         // One reading for the whole page: rendering a large cohort's plots takes seconds, and a header
@@ -304,6 +517,11 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         AppendSections(sb, peptidePlots);
         sb.Append("<div class=\"section-header\">Protein-Level QC</div>");
         AppendSections(sb, proteinPlots);
+        if (signalPlots.Count > 0)
+        {
+            sb.Append("<div class=\"section-header\">MS2 Signal Accounting</div>");
+            AppendSections(sb, signalPlots);
+        }
 
         sb.Append($"<p class=\"footer\">Generated by Skyline-PRISM (C#) at {generatedAt}</p>");
         sb.Append("</div></body></html>");

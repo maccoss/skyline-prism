@@ -234,6 +234,80 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 |-----|---------|-------------|
 | `enabled` | `true` | Generate `qc_report.html` |
 | `save_plots` | `true` | Also write PNGs to `qc_plots/` |
+| `ms2_signal.enabled` | `false` | Compute MS2 signal accounting: per replicate, how much integrated MS2 signal the run assigns to a peptide. Off by default because it costs one extra streaming pass over the merged table plus an ORDER BY the sample id, comparable to Stage 2. Results are cached as `ms2_signal_accounting.parquet`, so `prism qc -d` replots without recomputing - see **The cache is keyed on the settings** below. Off, the section is absent even when a previous run into the same directory left a cache behind |
+| `ms2_signal.measure` | `"signal"` | `signal` or `ions`. **signal** sums integrated peak areas against the acquired total ion current - available from any export, but the two sides are not the same quantity and Skyline's `Area` is background-subtracted where a TIC is not, so both gaps need correcting and neither is visible in the answer. **ions** sums Skyline's own ion counts (intensity x injection time per spectrum, across the peak): both sides are counts of ions, neither is background subtracted, and no unit or background correction is needed at all. **`ions` needs the `LC Peak Transition Ion Count` column, which the standard `PRISM` report does not carry because Skyline is slow to compute it** - export the `PRISM-Ions` report instead (`Reports/Skyline-PRISM-Ions.skyr` in the tool zip: the same report plus that one column). The Skyline tool has an "Export ion counts" option on its Settings tab that does this, and grays `ions` out until every input will have the column. Asked for on an export without it, the accounting sums areas and says so in the log. Note that the column being PRESENT is not the same as its holding values: Skyline computes ion counts only where the spectrum metadata carries injection times and emits the column either way, so a document without them totals zero - which the log calls out as a warning, since flat bars look like a real result |
+| `ms2_signal.extraction_tolerance` | `"10 ppm"` | The +/- m/z range Skyline extracted each product ion over, which decides when two co-isolated peptides' fragments are the same detector counts. Write it as `"10 ppm"` or `"0.4 m/z"`. The value in force is printed in the log and named on the plot. The Skyline external tool overrides it from the document's own `transition_full_scan` settings, asking **every** input and WARNING when the documents disagree - the accounting applies one tolerance to the whole cohort, so plates acquired differently cannot all be right. Two windows the setting cannot express are left to this value and said so in the log: a resolving-power analyzer (tof/orbitrap/ft_icr), whose window is not a single +/- number, and a QIT window with `selective_extraction`, which is half the stated `product_res` |
+| `ms2_signal.isolation_scheme` | *(auto)* | Which scheme from `isolation_schemes.xml` to account against, by name. Blank picks it when the file defines exactly one; with several, the accounting is skipped until one is named. Never guessed - fragments in different isolation windows never share signal |
+| `ms2_signal.protein_lists` | *(none)* | Saved or shipped protein-list names to account for, one line each on the plot. Lists nest inside the assigned total and may overlap each other |
+| `ms2_signal.protein_list_files` | *(none)* | Member files, for lists not saved on this machine - the reproducible form |
+
+**What the accounting measures.** Summing transition areas over-counts: a DIA isolation window
+co-isolates tens of peptides, and two fragments whose extraction windows overlap are the same detector
+counts credited twice. Every total is therefore a **union** over regions of MS2 signal space -
+(isolation window, extraction window, integration bounds) - counted once. The naive sum is kept
+alongside so the report can say how much double counting was removed.
+
+**What it does not measure.** The *acquired* MS2 total needs the instrument data files and cannot come
+from any Skyline export - `TicArea` is one value per replicate and is MS1 by construction. The plot's
+bars are the signal Skyline integrated for the document's targets, and are labelled as such.
+
+**The cache is keyed on the settings.** `ms2_signal_accounting.parquet` records what was asked for
+(measure, extraction tolerance, isolation scheme, protein lists) alongside the numbers, and a run
+reuses it only when that matches. Re-running into the same output directory with a different measure
+recomputes and says so; it used to replot the previous run's numbers under the new run's caption, which
+is invisible on the page. When the settings cannot be honoured at all - `merged_data/` cleaned up, or no
+`isolation_schemes.xml` - a cached result is still shown, with a log line saying it is the cached one
+and a caption naming the settings that produced it.
+
+**Gross signal, not net.** Skyline's `Area` is background-SUBTRACTED (its own test asserts that
+integrating without background gives `Area + BackgroundArea`), whereas an acquired total ion current
+includes background. The accounting therefore sums `Area + Background`, so numerator and denominator
+are both gross. Quantification is unaffected and keeps the net area - adding background back would put
+detector baseline into every abundance. An export without the `Background` column still works, on net
+area, and the log says so, because the fraction is then an under-estimate.
+
+**Ions are not exported by default, and the reason is cost.** Measured on the 6.5 GB FLARE document
+(46M transition rows, 93 replicates) with SkylineCmd: a three-column report exported in **9.5 minutes**,
+while the same report plus five `LC Peak` ion-count columns was 13% done after **63 minutes**, writing
+at 4.5 MB/min against the baseline's 122 - **27x slower per byte** - projecting to **9-13 hours**,
+single-threaded and holding 15 GB resident. Every PRISM run would pay that for a QC section that is off
+by default, so `Skyline-PRISM.skyr` (the `PRISM` report) carries `Background` and not the ion columns.
+
+The ion count lives in a second definition, **`Skyline-PRISM-Ions.skyr` (the `PRISM-Ions` report)**: the
+`PRISM` report plus `LC Peak Transition Ion Count` - the one column `measure: ions` reads - and nothing
+else, so a document exported either way merges identically (`PrismReportDefinitionTests` holds the two
+files to that). In the Skyline tool, tick **Export ion counts** on the Settings tab and each document is
+exported with `PRISM-Ions`; the tool then offers `ions` as a measure, and greys it out whenever an input
+cannot supply the column (a pre-exported report is checked for it). For a manual export, install
+`Reports/Skyline-PRISM-Ions.skyr` from the tool zip and export that report.
+
+Expect it to take **about 30x longer** than the standard export. Measured on the same FLARE document, the
+per-transition column on its own wrote 7.9M rows in 42 minutes - 187k rows/min against the baseline's
+5.4M - so the export that takes 9.5 minutes as `PRISM` takes **about 4 hours** as `PRISM-Ions`. That is
+twice as fast as all five ion columns together, which says the cost is Skyline reading every transition's
+chromatogram points inside the peak (the area is a stored peak statistic; the ion count is not), not the
+number of columns derived from them - so there is no cheaper column to ask for.
+
+**Why ions are nonetheless the better measure.** Skyline's ion counting (Supplementary Table 3 of
+doi:10.1021/acs.jproteome.5c00593) gives `LC Peak Analyte Ion Count` - the sum over the spectra inside
+the peak boundaries of transition intensity times injection time - and `LC Peak Total Ion Count`, the
+same sum over the total ion current. Both sides are then ions, so the unit mismatch and the background
+asymmetry described below both disappear. Use the **LC Peak** columns, not the **Apex** ones: an apex
+value is a single spectrum, not the peak.
+
+It also cannot be reconstructed after the fact. On AGC-controlled data injection time varies by two
+orders of magnitude within one run (0.06 to 10.6 ms measured on an Astral file) and anti-correlates
+with intensity, because bright scans reach the target charge quickly. Applying a single injection time
+to a summed intensity overstates ions by ~2.9x on that data, so ions have to come from a per-spectrum
+calculation - Skyline's, or a re-extraction from the raw file.
+
+**Two things `signal` under-counts, and by roughly how much.** The assigned signal is the signal in the
+transitions the *document* carries, not everything a detected peptide produced: on a real cohort the
+document held six fragments per precursor, covering a median 77.6% of each peptide's library spectrum
+and 1.31x area-weighted. And a transition's `Area` is an integral in intensity-seconds while a summed
+per-scan TIC is intensity with no time factor, so the acquired side must be multiplied by the cycle
+duration before the ratio means anything - about 1.45 s on that cohort. The two corrections push
+opposite ways.
 
 ---
 

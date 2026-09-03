@@ -89,7 +89,7 @@ public static class MergedParquetReader
                 "SELECT " +
                 $"p.\"{cols.Peptide}\" AS pep, " +
                 $"{tidSql} AS tid, " +
-                $"starts_with(p.\"{cols.Transition}\", 'precursor') AS isprec, " +
+                $"{IsPrecursorSql(cols.Transition, "p")} AS isprec, " +
                 $"TRY_CAST(p.\"{cols.PrecursorCharge}\" AS INTEGER) AS pz, " +
                 "m.s_idx AS samp, " +
                 $"p.\"{cols.Abundance}\" AS area, " +
@@ -216,6 +216,25 @@ public static class MergedParquetReader
     /// keeps the bucket column out of the result, so the schema PRISM sees is exactly the schema it saw
     /// when the merge wrote a single file.
     /// </summary>
+    /// <summary>
+    /// The SQL predicate for "this row is a precursor (MS1) row, not a fragment".
+    ///
+    /// <para>Shared because Stage 2 excludes these rows from the rollup (<c>ExcludePrecursor</c>,
+    /// default on) and MS2 signal accounting has to exclude exactly the same set - a second copy of
+    /// the rule would be free to drift, and the symptom would be an assigned fraction that is quietly
+    /// wrong rather than an error. Skyline labels these <c>precursor</c>, <c>precursor [M+1]</c>,
+    /// <c>precursor [M+2]</c>, so the test is a prefix.</para>
+    /// </summary>
+    /// <param name="transitionColumn">The fragment-ion column's name in this export.</param>
+    /// <param name="alias">Table alias the column is qualified with, or null for none.</param>
+    internal static string IsPrecursorSql(string transitionColumn, string? alias = null)
+    {
+        var qualified = string.IsNullOrEmpty(alias)
+            ? $"\"{transitionColumn}\""
+            : $"{alias}.\"{transitionColumn}\"";
+        return $"starts_with({qualified}, 'precursor')";
+    }
+
     internal static string Scan(string target) =>
         $"read_parquet('{Esc(target)}', hive_partitioning=false)";
 

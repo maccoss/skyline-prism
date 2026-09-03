@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PRISM's bridge to pwiz-sharp: reads the acquired MS2 total ion current out of instrument
+    data files, which is the denominator the MS2 signal accounting cannot get from any Skyline
+    export.
+
+    OPTIONAL by design - see ..\Pwiz.props. With no pwiz checkout this project still builds and
+    simply registers no reader, so the accounting reports the acquired total as unknown and
+    every other part of the QC report is unaffected.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>SkylinePrism.Pwiz</RootNamespace>
+    <AssemblyName>SkylinePrism.Pwiz</AssemblyName>
+    <Description>Reads acquired MS2 signal from instrument data files, through pwiz-sharp.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- pwiz-sharp is a large third-party tree with its own documentation conventions; its
+         CS1591s are not ours to fix and would drown the warning-free build we do keep. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <Import Project="..\..\Pwiz.props" />
+
+  <PropertyGroup Condition="'$(PwizAvailable)' != 'true'">
+    <DefineConstants>$(DefineConstants);PRISM_NO_PWIZ</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PwizAvailable)' != 'true'">
+    <Compile Remove="PwizMs2SignalReader.cs" />
+    <Compile Remove="VendorReaders.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PwizAvailable)' == 'true'">
+    <ProjectReference Include="$(PwizMsDataProject)" />
+
+    <!--
+      Thermo only, for now. Not a limitation of the reader - it dispatches on format and will open
+      whatever pwiz can - but of what is worth carrying and redistributing.
+
+      Bruker costs far more than the others. Its native staging reaches across four more directories
+      of the pwiz tree (pwiz_aux, libraries, pwiz_tools/Shared/Lib for the VC90 CRT that its EDAL COM
+      interop needs), and it adds ~20 MB to the zip in baf2sql_c.dll and timsdata.dll alone. Thermo's
+      archive is 0.3 MB.
+
+      A Bruker .d therefore reports "no registered reader recognized the file", which the accounting
+      already handles: acquired MS2 signal reads as unknown and every other number is unaffected. Add
+      $(PwizBrukerProject) back when someone needs it - and note that Skyline shipping pwiz itself
+      makes the whole question go away, because its installation carries every vendor reader.
+
+      Waters comes along regardless: Thermo.csproj references Analysis, which references the Waters
+      reader. Nothing in the Thermo path touches it, so it looks vestigial upstream.
+    -->
+    <ProjectReference Include="$(PwizThermoProject)" Condition="Exists('$(PwizThermoProject)')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SkylinePrism.Tests" />
+  </ItemGroup>
+
+  <Target Name="ReportPwizAvailability" BeforeTargets="Build">
+    <Message Condition="'$(PwizAvailable)' == 'true'" Importance="normal"
+             Text="SkylinePrism.Pwiz: building against pwiz-sharp at $(PwizSharpDir)" />
+    <Message Condition="'$(PwizAvailable)' != 'true'" Importance="normal"
+             Text="SkylinePrism.Pwiz: no pwiz-sharp at $(PwizSharpDir); acquired MS2 signal will read as unknown. Set -p:PwizSharpDir to enable it." />
+  </Target>
+
+</Project>

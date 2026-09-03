@@ -46,8 +46,58 @@ jobs:
       - name: Test
         run: dotnet test SkylinePrism.sln --configuration Release
 
+      # pwiz-sharp, for the instrument-file reader the tool zip carries. The tool measures ACQUIRED
+      # MS2 signal by reading the data files directly - no Skyline export carries an MS2 total - and
+      # build/package.proj REFUSES to package without this, rather than shipping a zip that silently
+      # cannot open a .raw.
+      #
+      # Sparse and blob-filtered: the pwiz repository is ~3.4 GB, the pwiz-sharp subtree ~243 MB.
+      # Pinned to a commit because pwiz-sharp lives on a draft-PR branch (ProteoWizard/pwiz#4619,
+      # branch chambem2/pwiz-sharp) and a moving ref would change what a tagged release contains.
+      #
+      # TEMPORARY. Skyline is being ported to C# and will install pwiz itself; PRISM is a Skyline
+      # external tool, so once that ships the tool should resolve these assemblies from Skyline's
+      # own installation and this whole step, the ~4 MB it adds to the zip, and the vendor-SDK
+      # redistribution below all go away.
+      - name: Check out pwiz-sharp
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          # Bump deliberately. pwiz-sharp lives on a draft-PR branch, so the tip moves and a
+          # tagged PRISM release has to keep containing what it was tested against.
+          PWIZ_SHARP_COMMIT: 1d26ed967ba701d3c090ee882c4e526aa72c4126
+        run: |
+          set -euo pipefail
+          mkdir pwiz && cd pwiz
+          git init -q .
+          # pwiz-sharp carries test-data paths past MAX_PATH; without this the checkout reports
+          # "Filename too long" for each and leaves them missing.
+          git config core.longpaths true
+          git remote add origin https://github.com/ProteoWizard/pwiz.git
+          # Sparse set determined by building against it, not by reading the layout: pwiz-sharp
+          # reaches OUTSIDE its own directory into the parent repository for the PSI-MS controlled
+          # vocabulary (pwiz/data/common), 7za.exe (libraries) and the licence-gated vendor archives
+          # (pwiz_aux). Narrowing further breaks the build; widening pulls in the whole 3.4 GB tree.
+          # pwiz-sharp itself, plus the three parent-repository directories it reaches into.
+          SPARSE="pwiz-sharp/pwiz/src pwiz-sharp/vendor-archives pwiz-sharp/Tools pwiz-sharp/build"
+          SPARSE="$SPARSE pwiz/data/common libraries pwiz_aux"
+          git sparse-checkout set --cone $SPARSE
+          # Fetching the SHA itself, rather than a branch tip, is what makes this a pin.
+          git fetch -q --filter=blob:none --depth 1 origin "$PWIZ_SHARP_COMMIT"
+          git checkout -q FETCH_HEAD
+          echo "PWIZ_SHARP_DIR=$(pwd)/pwiz-sharp" >> "$GITHUB_ENV"
+          du -sh pwiz-sharp
+
+      # IAgreeToVendorLicenses extracts the Thermo and Bruker SDKs, which are then redistributed
+      # inside SkylinePrism.zip. That is the same thing Skyline and ProteoWizard's own releases do,
+      # and it is what makes the tool able to open a vendor file at all - but it IS a
+      # redistribution, so it is stated here rather than buried in a property default.
       - name: Package SkylinePrism.zip
-        run: dotnet msbuild build/package.proj /p:Configuration=Release
+        run: >
+          dotnet msbuild build/package.proj
+          /p:Configuration=Release
+          /p:PwizSharpDir="${{ env.PWIZ_SHARP_DIR }}"
+          /p:IAgreeToVendorLicenses=true
 
       - uses: actions/upload-artifact@v7
         with:

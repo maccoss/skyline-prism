@@ -372,6 +372,57 @@ public sealed class ProteinListSet
     /// Returns null when neither is given; throws when what was asked for does not exist, rather than
     /// carrying on without the normalization the config asked for.
     /// </summary>
+    /// <summary>
+    /// Lists selected for DISPLAY, by name and/or by member file.
+    ///
+    /// <para>Separate from <see cref="Resolve"/> because that one refuses a <see cref="ProteinList.DisplayOnly"/>
+    /// panel, and rightly so - normalizing by a readout divides out the thing you are looking for. But a
+    /// readout panel is exactly what someone wants to break MS2 signal down by: "how much of the labelled
+    /// signal is contamination" is the question, not a mistake. So the only failure here is a name that
+    /// does not resolve.</para>
+    ///
+    /// <para>Order is the caller's, and it is meaningful: matching stops at the first list that claims a
+    /// peptide.</para>
+    /// </summary>
+    /// <param name="setPath">Override for the saved set; null uses the per-user file.</param>
+    public static IReadOnlyList<ProteinList> ResolveForDisplay(
+        IEnumerable<string>? names, IEnumerable<string>? memberFiles = null, string? setPath = null)
+    {
+        var resolved = new List<ProteinList>();
+
+        foreach (var file in memberFiles ?? Enumerable.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(file))
+                continue;
+            if (!File.Exists(file))
+                throw new FileNotFoundException($"Protein list file not found: {file}", file);
+            resolved.Add(new ProteinList
+            {
+                Name = Path.GetFileNameWithoutExtension(file),
+                Members = ReadMembersFile(file),
+            });
+        }
+
+        var wanted = (names ?? Enumerable.Empty<string>())
+            .Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        if (wanted.Count == 0)
+            return resolved;
+
+        // Loaded once: Find goes through the saved set plus the shipped panels, and re-reading the
+        // per-user JSON per name would be both slower and able to disagree with itself mid-call.
+        var set = Load(setPath);
+        foreach (var name in wanted)
+        {
+            var found = set.Find(name)
+                ?? throw new InvalidOperationException(
+                    $"Protein list '{name}' was not found. Available: "
+                    + string.Join(", ", set.WithBuiltIns().Select(l => $"'{l.Name}'"))
+                    + ". Point at a file of members instead if it is not a saved or shipped list.");
+            resolved.Add(found);
+        }
+        return resolved;
+    }
+
     public static ProteinList? Resolve(string? name, string? membersFile, string? setPath = null)
     {
         if (!string.IsNullOrWhiteSpace(membersFile))
@@ -439,6 +490,47 @@ public sealed class ProteinListMatcher
         => Match(new AbundanceEntry(
             Key: accession ?? gene ?? proteinName ?? "", Label: "", Accession: accession, Gene: gene,
             ProteinName: proteinName, MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0));
+
+    /// <summary>
+    /// Whether any list claims a PEPTIDE, given the <c>;</c>-separated group columns that
+    /// <c>corrected_peptides.parquet</c> carries (<c>leading_protein</c>, <c>leading_gene_name</c>,
+    /// <c>leading_name</c>).
+    ///
+    /// <para>A shared peptide names every group it belongs to, and being in ONE of them is enough:
+    /// the signal genuinely came from a protein that is in the list. Deliberately NOT
+    /// <c>DynamicRange.FirstGroup</c>, which takes only the first group and would drop a peptide whose
+    /// list membership is via its second - the two rules disagree today, and this is the one that
+    /// matches where the signal came from.</para>
+    ///
+    /// <para>Scans accessions, then genes, then names, returning the first list to claim any of them.
+    /// Which list wins a peptide claimed by several is deterministic but not meaningful - callers that
+    /// care about totals should treat the lists as overlapping sets, not a partition.</para>
+    /// </summary>
+    public ProteinList? MatchPeptide(string? leadingProteins, string? genes, string? proteinNames)
+    {
+        foreach (var accession in SplitGroups(leadingProteins))
+            if (Match(accession, null, null) is { } byAccession)
+                return byAccession;
+        foreach (var gene in SplitGroups(genes))
+            if (Match(null, gene, null) is { } byGene)
+                return byGene;
+        foreach (var name in SplitGroups(proteinNames))
+            if (Match(null, null, name) is { } byName)
+                return byName;
+        return null;
+    }
+
+    /// <summary>
+    /// The members of a <c>;</c>-separated group column. Separator taken from
+    /// <see cref="Pipeline.PrismPipeline.PeptideGroupSeparator"/>, which is what writes these columns.
+    /// </summary>
+    public static IEnumerable<string> SplitGroups(string? column) =>
+        string.IsNullOrEmpty(column)
+            ? Array.Empty<string>()
+            : column.Split(Pipeline.PrismPipeline.PeptideGroupSeparator,
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0);
 
     /// <summary>The first visible list claiming this entry, or null.</summary>
     public ProteinList? Match(AbundanceEntry entry)

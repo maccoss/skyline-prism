@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
+using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Skyline;
 
@@ -74,6 +76,13 @@ public sealed class PrismInput : INotifyPropertyChanged
     }
 
     /// <summary>Human-readable source kind for the grid.</summary>
+    /// <summary>
+    /// Whether this input is a <c>.sky.zip</c>, which has to be extracted before Skyline's command
+    /// line can open it - see <see cref="SharedDocumentArchive"/>.
+    /// </summary>
+    public bool IsSharedArchive =>
+        Kind == PrismInputKind.ClosedDocument && SharedDocumentArchive.IsArchive(Path);
+
     public string KindLabel => Kind switch
     {
         PrismInputKind.RunningSkyline => "Open in Skyline",
@@ -94,10 +103,16 @@ public sealed class PrismInput : INotifyPropertyChanged
         };
     }
 
+    /// <param name="skyPath">
+    /// A <c>.sky</c>, or a <c>.sky.zip</c> shared document archive as downloaded from PanoramaWeb.
+    /// The label drops <b>both</b> extensions, so an archive and the document inside it produce the
+    /// same batch label - <c>Path.GetFileNameWithoutExtension</c> alone would leave a trailing
+    /// <c>.sky</c> in every sample ID.
+    /// </param>
     public static PrismInput FromClosedDocument(string skyPath)
     {
-        var name = System.IO.Path.GetFileNameWithoutExtension(skyPath);
-        return new PrismInput(PrismInputKind.ClosedDocument, name, SanitizeLabel(name))
+        var name = SharedDocumentArchive.StemOf(skyPath);
+        return new PrismInput(PrismInputKind.ClosedDocument, System.IO.Path.GetFileName(skyPath), SanitizeLabel(name))
         {
             Path = System.IO.Path.GetFullPath(skyPath),
         };
@@ -122,12 +137,32 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// Skyline when needed; a pre-exported report is used in place (no copy).
     /// </summary>
     /// <param name="skylineCmdPath">Optional explicit SkylineCmd.exe for the closed-document path.</param>
+    /// <param name="includeIonCounts">
+    /// Export the PRISM-Ions report (the standard report plus Skyline's per-transition LC Peak ion
+    /// count) instead of PRISM - much slower, and needed only for <c>qc_report.ms2_signal.measure:
+    /// ions</c>. Ignored for a pre-exported report, which has whatever columns it was exported with;
+    /// see <see cref="HasIonCounts"/>.
+    /// </param>
     public ExportedReports Prepare(
         string reportsDir, string? metadataReportName, string? batchAnnotation,
-        string? skylineCmdPath, Action<string> log, CancellationToken cancellationToken)
+        string? skylineCmdPath, Action<string> log, CancellationToken cancellationToken,
+        bool includeIonCounts = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var label = string.IsNullOrWhiteSpace(BatchLabel) ? SanitizeLabel(DisplayName) : SanitizeLabel(BatchLabel);
+        // StemOf, not the display name as it stands: DisplayName is the file NAME (so the Inputs grid
+        // can show "Plate1.sky.zip" and not leave the user guessing which kind it is), and a batch
+        // label ending in ".sky.zip" would carry that into every merged sample ID.
+        var label = string.IsNullOrWhiteSpace(BatchLabel)
+            ? SanitizeLabel(SharedDocumentArchive.StemOf(DisplayName))
+            : SanitizeLabel(BatchLabel);
+
+        // The two report variants get their own directories, because the exported file is named after
+        // the batch label (the merge derives Batch from the file stem) and so cannot carry the variant
+        // in its name. Sharing one path meant switching the measure back OVERWROTE the ion-count
+        // export - four hours of Skyline, unrecoverable without paying again - and the export cache
+        // could only ever hold one of the two. The stem, and therefore every batch label, is unchanged.
+        if (includeIonCounts)
+            reportsDir = System.IO.Path.Combine(reportsDir, "with-ion-counts");
 
         // Every line produced while preparing THIS input is tagged with its document. Inputs are exported
         // concurrently, and the deepest lines come from Skyline's own console ("Opening file...", "2%"),
@@ -136,6 +171,11 @@ public sealed class PrismInput : INotifyPropertyChanged
         // kinds, plus the runner output and the Skyline-selection messages, from one place.
         var scoped = Scoped(log, label);
 
+        // Captured before the ion-count rewrite below moves reportsDir into a subdirectory: an
+        // extraction that cannot go beside its archive belongs under the OUTPUT directory, not nested
+        // inside the reports folder - and nesting it made toggling the measure extract 17 GB twice.
+        var outputDir = System.IO.Path.GetDirectoryName(reportsDir);
+
         switch (Kind)
         {
             case PrismInputKind.RunningSkyline:
@@ -143,13 +183,15 @@ public sealed class PrismInput : INotifyPropertyChanged
                 var session = Session
                     ?? throw new InvalidOperationException($"{DisplayName}: no Skyline connection for this input.");
                 var driver = new SkylineReportDriver(session, scoped);
-                return driver.Export(reportsDir, metadataReportName, batchAnnotation, label);
+                return driver.Export(reportsDir, metadataReportName, batchAnnotation, label, includeIonCounts);
             }
 
             case PrismInputKind.ClosedDocument:
             {
+                var document = ResolveDocumentForExport(outputDir, scoped, cancellationToken);
                 var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
-                return exporter.Export(Path, reportsDir, label, batchAnnotation, cancellationToken);
+                return exporter.Export(
+                    document, reportsDir, label, batchAnnotation, cancellationToken, includeIonCounts);
             }
 
             default:
@@ -164,6 +206,25 @@ public sealed class PrismInput : INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>
+    /// The document Skyline is actually asked to open: this input's path, or - for a
+    /// <c>.sky.zip</c> - the document inside its extraction, made on the first run and reused after.
+    ///
+    /// <para>A shared archive cannot be handed to Skyline as it stands: its command line XML-parses
+    /// <c>--in</c> directly, so a <c>.sky.zip</c> fails with a generic "does not appear to be a
+    /// Skyline document". Only the GUI extracts, which is why a document already OPEN in Skyline
+    /// needs none of this - it was extracted on the way in.</para>
+    /// </summary>
+    /// <param name="outputDir">
+    /// The run's output directory - where an extraction goes when the archive's own folder cannot be
+    /// written to. Null is allowed; the extraction then falls back to the temp directory.
+    /// </param>
+    internal string ResolveDocumentForExport(
+        string? outputDir, Action<string> log, CancellationToken cancellationToken) =>
+        IsSharedArchive
+            ? SharedDocumentArchive.Extract(Path, outputDir, log, cancellationToken)
+            : Path;
 
     /// <summary>
     /// Prefix every message with <paramref name="label"/> so interleaved output from concurrent exports
@@ -195,6 +256,218 @@ public sealed class PrismInput : INotifyPropertyChanged
             log($"({DisplayName}: could not read the digestion enzyme: {ex.Message})");
             return null;
         }
+    }
+
+    private readonly object _documentBytesLock = new();
+    private long _documentBytes;
+    private (long Length, long Ticks) _documentBytesStamp;
+
+    /// <summary>
+    /// How big the DOCUMENT is, for the export memory budget: the <c>.sky</c>'s length, or - for a
+    /// <c>.sky.zip</c> - the uncompressed length of the document inside it, since that is what a
+    /// headless Skyline loads. 0 for an input that is not exported, or one that cannot be sized.
+    ///
+    /// <para>Remembered per (length, last-write-time) of the input file, and a failure is not
+    /// remembered at all - the same rule as <see cref="HasIonCounts"/>, and for a sharper reason. A
+    /// zero here does not read as "unknown", it reads as "small": the budget falls back to its floor
+    /// and may start four concurrent exports of a document that needs ~9 GB each, which is exactly
+    /// the memory exhaustion the budget exists to prevent, and a starved Skyline does not recover.
+    /// An archive added while it is still downloading answers 0 once; it must not answer 0 forever.</para>
+    /// </summary>
+    public long DocumentBytes()
+    {
+        if (Kind == PrismInputKind.ReportFile || string.IsNullOrEmpty(Path))
+            return 0;
+        lock (_documentBytesLock)
+        {
+            var stamp = FileStamp();
+            if (_documentBytes > 0 && stamp == _documentBytesStamp)
+                return _documentBytes;
+            try
+            {
+                _documentBytes = IsSharedArchive
+                    ? SharedDocumentArchive.DocumentBytes(Path)
+                    : new FileInfo(Path) is { Exists: true } info ? info.Length : 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _documentBytes = 0;   // unsizable: the budget's floor still applies
+            }
+            // Remember WHICH file was measured only when the measurement answered.
+            _documentBytesStamp = _documentBytes > 0 ? stamp : default;
+            return _documentBytes;
+        }
+    }
+
+    /// <summary>
+    /// The m/z range Skyline extracted each product ion over, from the document's
+    /// <c>&lt;transition_full_scan&gt;</c> settings - what the MS2 signal accounting needs to decide when
+    /// two transitions read the same detector counts. Null when this input cannot say: a pre-exported
+    /// report carries no settings, an unsaved live document has no file to read, and a document with no
+    /// full-scan settings has no tolerance. The caller then keeps the configured value.
+    ///
+    /// <para>For a live Skyline the SAVED document is read, the way the closed-document path reads it:
+    /// there is no RPC for the transition settings, and the extraction tolerance is not something that
+    /// is edited between saves the way peak boundaries are.</para>
+    /// </summary>
+    public ProductMassTolerance? TryGetExtractionTolerance(Action<string> log)
+    {
+        try
+        {
+            var documentPath = Kind switch
+            {
+                PrismInputKind.RunningSkyline when Session is not null =>
+                    Session.Execute(c => c.GetDocumentPath()),
+                PrismInputKind.ClosedDocument => Path,
+                _ => null,
+            };
+            if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
+                return null;
+            return SkyDocumentInfo.TryRead(documentPath, log)?.ProductTolerance;
+        }
+        catch (Exception ex)
+        {
+            log($"({DisplayName}: could not read the product-ion extraction settings: {ex.Message})");
+            return null;
+        }
+    }
+
+    /// <summary>What is known about an input's ion-count column WITHOUT touching the disk.</summary>
+    public enum IonCountState
+    {
+        /// <summary>Not a pre-exported report: the export decides, so there is nothing to probe.</summary>
+        NotApplicable,
+
+        /// <summary>A report that has not been probed yet, or whose probe could not read it.</summary>
+        Unknown,
+
+        Present,
+        Absent,
+    }
+
+    private readonly object _ionCountLock = new();
+    private IonCountState _ionCountState;
+    private (long Length, long Ticks) _ionCountStamp;
+    private int _ionCountProbeRunning;
+
+    /// <summary>
+    /// What is known about this input's <c>LC Peak Transition Ion Count</c> column, from memory only.
+    /// The Settings tab reads THIS rather than calling <see cref="HasIonCounts"/>, because the probe
+    /// is file I/O and the tab is on the UI thread.
+    /// </summary>
+    public IonCountState IonCounts =>
+        Kind == PrismInputKind.ReportFile ? _ionCountState : IonCountState.NotApplicable;
+
+    /// <summary>
+    /// For a pre-exported report: whether it carries Skyline's LC Peak Transition Ion Count column,
+    /// decided from the parquet schema or the CSV/TSV header alone - the rows are never read. Null for
+    /// the other input kinds, whose export is still to come and carries the column if asked to.
+    ///
+    /// <para><b>File I/O</b>, so call it off the UI thread (or through
+    /// <see cref="ProbeIonCountsInBackground"/>): a parquet footer on a mapped share, or a OneDrive
+    /// placeholder that has to be hydrated first, can take a long time to answer.</para>
+    ///
+    /// <para>The answer is remembered per (length, last-write-time), so a report RE-EXPORTED to the
+    /// same path - exactly what the Settings tab tells the user to do when ions is unavailable - is
+    /// probed again instead of answered from a stale no. A read that FAILS (a file still being
+    /// written, a share that blinked) is not remembered at all, for the same reason.</para>
+    /// </summary>
+    public bool? HasIonCounts()
+    {
+        if (Kind != PrismInputKind.ReportFile)
+            return null;
+        lock (_ionCountLock)
+        {
+            var stamp = FileStamp();
+            if (_ionCountState == IonCountState.Unknown || stamp != _ionCountStamp)
+            {
+                _ionCountState = Probe();
+                // Remember WHICH file was probed only when the probe actually answered.
+                _ionCountStamp = _ionCountState == IonCountState.Unknown ? default : stamp;
+            }
+            return _ionCountState == IonCountState.Present;
+        }
+    }
+
+    /// <summary>
+    /// Probe in the background if an answer is needed, then call <paramref name="onProbed"/> (on the
+    /// probing thread - the caller marshals). A no-op for an input that is not a report file or whose
+    /// answer is already current, and never more than one probe at a time per input.
+    /// </summary>
+    public void ProbeIonCountsInBackground(Action onProbed)
+    {
+        if (Kind != PrismInputKind.ReportFile)
+            return;
+        if (Interlocked.CompareExchange(ref _ionCountProbeRunning, 1, 0) != 0)
+            return;
+        Task.Run(() =>
+        {
+            var before = IonCounts;
+            try
+            {
+                HasIonCounts();
+            }
+            finally
+            {
+                Volatile.Write(ref _ionCountProbeRunning, 0);
+            }
+            if (IonCounts != before)
+                onProbed();
+        });
+    }
+
+    private IonCountState Probe()
+    {
+        try
+        {
+            return Ms2SignalRegions.FindIonCountColumn(ReadReportColumnNames(Path)) is not null
+                ? IonCountState.Present
+                : IonCountState.Absent;
+        }
+        catch
+        {
+            // Unreadable right now. Leave it UNKNOWN so a later probe sees the settled file; callers
+            // treat unknown as "no ions yet", which is the safe answer while it is unknown.
+            return IonCountState.Unknown;
+        }
+    }
+
+    private (long Length, long Ticks) FileStamp()
+    {
+        try
+        {
+            var info = new FileInfo(Path);
+            return info.Exists ? (info.Length, info.LastWriteTimeUtc.Ticks) : default;
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    /// <summary>
+    /// The column names of an exported report: the parquet schema, or the first line of a CSV/TSV.
+    ///
+    /// <para><b>The delimiter is chosen by EXTENSION</b>, deliberately the same rule as
+    /// <c>DuckDbMerge.ReadHeader</c>, which is what will actually read this file. Sniffing the header
+    /// for a tab instead - the obvious thing - lets the two disagree about the same file: a
+    /// comma-separated report saved as <c>.txt</c> would have its columns read here and not by the
+    /// merge, so the Settings tab would offer a measure the run then cannot deliver. The parquet half
+    /// reads the footer through Parquet.Net rather than DuckDB, because this is asked interactively.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> ReadReportColumnNames(string path)
+    {
+        var suffix = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (suffix == ".parquet")
+            return ParquetTable.ReadColumnNames(path);
+
+        using var reader = new StreamReader(path);
+        var header = reader.ReadLine() ?? "";
+        // CsvLine.Split honours quoting, so a quoted column name keeps its commas and loses its
+        // quotes; a tab-delimited header has neither problem.
+        return suffix is ".tsv" or ".txt"
+            ? header.Split('\t').Select(h => h.Trim()).ToArray()
+            : CsvLine.Split(header).Select(h => h.Trim()).ToArray();
     }
 
     /// <summary>

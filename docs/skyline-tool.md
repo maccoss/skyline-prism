@@ -85,7 +85,7 @@ for comparing one protein against another**. Sum is what Skyline's Relative Abun
   materially different quantity, closer to a per-peptide mean than to an absolute-abundance estimate.
 
 The digest and the rollup run off the UI thread with a progress bar, so a large cohort does not look like
-a hang; the theoretical counts are cached, so flipping back to iBAQ is instant. The drop-down is greyed
+a hang; the theoretical counts are cached, so flipping back to iBAQ is instant. The drop-down is grayed
 out at peptide level — there is no protein rollup below a peptide.
 
 The rollup needs `corrected_peptides.parquet`, so an output directory without one — an older run, or
@@ -110,7 +110,7 @@ rather than implying a single assignment.
 
 When a run used `marker_normalization`, two extra entries appear in the **Plot** picker on the QC Plots
 tab. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
-run actually subtracted, not a recomputation — so **Level** and **View** are greyed out for them: there
+run actually subtracted, not a recomputation — so **Level** and **View** are grayed out for them: there
 is one score per replicate for the whole run, with no before/after and no peptide/protein version.
 
 - **Marker score** — the per-sample score, one column per **Group-by** value. Set Group-by to the
@@ -125,7 +125,7 @@ is one score per replicate for the whole run, with no before/after and no peptid
   single-protein normalization wearing a panel's clothes.
 
 The replicate picker applies to **Marker score**, so a suspicious group can be isolated. **Group-by** is
-greyed out for **Marker loadings**, which draws one bar per protein in the panel — grouping or filtering
+grayed out for **Marker loadings**, which draws one bar per protein in the panel — grouping or filtering
 replicates cannot change it.
 
 Marker score refuses to draw above 12 Group-by values and names a better column instead: one column per
@@ -232,6 +232,85 @@ Tick **"Label this list's members on the plot"** to label a list. The plot's **r
 
 ---
 
+## Documents from Panorama (.sky.zip)
+
+Documents shared through [PanoramaWeb](https://panoramaweb.org) download as **`.sky.zip`** shared
+document archives - the `.sky`, its `.skyd` chromatogram cache, any spectral library and the audit log
+in one file. Add one on the **Inputs** tab exactly like a `.sky`; the file picker lists both.
+
+Skyline's *command line* cannot open an archive, which is why PRISM has to do something about it.
+`--in` hands the path straight to an XML reader, and the pre-flight check waves a `.sky.zip` through on
+its extension, so the failure is a generic parse error whose text contradicts itself:
+
+```
+Error: There was an error opening the file ...\Plate1.sky.zip
+The file you are trying to open (...) does not appear to be a Skyline document. Skyline documents
+normally have a ".sky" or ".sky.zip" filename extension and are in XML format.
+```
+
+Only Skyline's **window** extracts (File > Open). So a document already open in Skyline needs none of
+this - it was extracted on the way in - and PRISM handles the closed case itself:
+
+- **The header is read from inside the archive, with nothing extracted.** Adding one shows its
+  replicates, annotations, digestion enzyme and extraction tolerance immediately, because the parsers
+  stop at the end of the settings. On a measured Panorama plate the `.sky` entry alone was 4.4 GB, so
+  this is the difference between instant and minutes.
+- **The archive is extracted once, when the run needs it**, into `prism-extracted/<name>/` beside the
+  archive - the same place Skyline would put it, so it is a folder you recognize and can delete to
+  reclaim the space. A later run reuses it as long as the archive has not changed (matched on its size
+  and timestamp, like the export cache), so re-running to change a downstream setting does not repeat
+  the extraction. Re-downloading the archive does re-extract it.
+- **Budget for the disk.** A measured plate was 13.7 GB compressed and **17.4 GB extracted** - 12.0 GB
+  of that the `.skyd`, which the report export needs, so nothing selective is worth attempting. PRISM
+  refuses before starting if the drive has no room for it. Set **`PRISM_EXTRACT_DIR`** to send every
+  extraction to a fast local disk instead of back over the share.
+- **The batch label drops both extensions**, so `Plate1.sky.zip` and `Plate1.sky` give the same batch -
+  `Plate1`, not `Plate1.sky`.
+
+An archive with no `.sky` inside, or with several, is refused by name with the reason; PRISM will not
+guess which document you meant.
+
+## MS2 signal accounting
+
+Settings row **9** adds a QC-report section answering "how much of the MS2 signal does this analysis
+actually put a name to?" - per replicate, the signal the run assigns to a peptide, with a line per
+protein list ticked visible in **Protein lists...** (the same set the Dynamic Range tab highlights).
+Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted
+once, so two co-isolated peptides sharing a fragment mass are not both credited with it.
+
+**measure** picks what to total:
+
+| | What it sums | Needs |
+|---|---|---|
+| `signal` | Each transition's gross peak area (`Area + Background`) | Any export |
+| `ions` | Skyline's `LC Peak Transition Ion Count` - intensity x injection time per spectrum, summed across the peak | An export carrying that column |
+
+`ions` is the better measure: both it and an acquired total are then counts of ions, so no unit or
+background correction applies, and it cannot be recovered from an area afterwards (on AGC-controlled
+data the injection time varies by two orders of magnitude within a run and anti-correlates with
+intensity). It is grayed out, with the reason as its tooltip, until every input can supply the column.
+
+**Export ion counts** is what makes that possible: each Skyline document is exported with the
+`PRISM-Ions` report - the standard report plus that one column - instead of `PRISM`. Expect roughly a
+**30x slower export**: measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document,
+because Skyline reads every transition's chromatogram points to compute it. Three things follow:
+
+- **The option and the measure are separate.** Once ion counts are exported, both measures are
+  available, so a later re-run can plot either without exporting again.
+- **A closed document is exported once per variant** (into `skyline-reports/with-ion-counts/`), so
+  switching the measure back and forth does not repeat the four hours. A document open in Skyline has
+  no such cache - a live document can hold unsaved edits - so it re-exports on every run.
+- **An export Skyline has started cannot be recalled.** Stop ends PRISM's run, not Skyline's export;
+  the only way to end that early is to close Skyline, which loses unsaved changes to the document.
+
+The option is ignored for an input that is already an exported report, and PRISM refuses it outright
+when one of those lacks the column - inputs whose columns differ cannot be merged into one cohort, so
+paying for the slow export there would only fail in Stage 1.
+
+The tool also reads the document's own product-ion extraction tolerance
+(`Transition Settings > Full-Scan`) rather than using the config default, since that is what decides
+when two fragments are the same detector counts. Every input is asked, and disagreement is a warning.
+
 ## Spectrum density
 
 A map of how many peptide precursors were detected in each DIA spectrum of a run: retention time across,
@@ -324,6 +403,7 @@ Escape hatches for when an automatic choice picks badly. None are needed normall
 |----------|--------|
 | `PRISM_TEMP_DIR` | Where DuckDB spills the Stage 1 sort. By default this sits beside the output, unless the output is on a network drive, in which case it falls back to the machine's temp directory. Set this when the automatic choice lands on a small or quota'd disk. Stage 1 logs the directory it chose. |
 | `PRISM_ISOLATION_TIMEOUT_SEC` | How long to let Skyline read isolation windows out of a data file before giving up (default 300). Reading them normally takes ~10 s; raise this only if your data really is that slow to reach. |
+| `PRISM_EXTRACT_DIR` | Where `.sky.zip` archives are extracted, instead of beside the archive. One folder per archive underneath. For a Panorama download folder on a slow share, or one you would rather keep clean. |
 | `PRISM_SKYLINECMD` | Full path to `SkylineCmd.exe`, when the automatic discovery finds the wrong installation. |
 
 Memory for the Stage 1 merge is sized from the machine's **free** memory and is set with the

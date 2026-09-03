@@ -37,9 +37,30 @@
     <PackageReference Include="ScottPlot.WPF" Version="5.1.59" />
   </ItemGroup>
 
+  <Import Project="..\..\Pwiz.props" />
+
   <ItemGroup>
     <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
     <ProjectReference Include="..\SkylinePrism.Skyline\SkylinePrism.Skyline.csproj" />
+    <!--
+      The instrument-file reader, which is what lets the tool measure ACQUIRED MS2 signal - the
+      denominator no Skyline export carries. Its assemblies are published beside the exe and so
+      travel in SkylinePrism.zip: ~36 MB, mostly vendor natives (baf2sql_c.dll is 17 MB of it).
+
+      OPT-IN, via -p:PrismWithPwiz=true, which build\package.proj sets. Two reasons it is not just
+      "on when a checkout exists": a developer without one must still be able to build and run the
+      tool, and a developer WITH one must not silently lose the warning-free build - referencing
+      pwiz-sharp brings 58 of its own warnings, which are not ours to fix. It is NOT optional for a
+      release: the RequirePwiz check in build\package.proj refuses to package a zip without the
+      reader rather than shipping one that silently cannot open a raw file.
+
+      Bundling is deliberate and temporary. Skyline is being ported to C# and will install pwiz
+      itself; PRISM is a Skyline external tool, so once that lands the tool should resolve these
+      assemblies from Skyline's own installation instead of carrying its own copies. Keep the
+      dependency reachable through SkylinePrism.Pwiz alone so that swap is one reference.
+    -->
+    <ProjectReference Include="..\SkylinePrism.Pwiz\SkylinePrism.Pwiz.csproj"
+                      Condition="'$(PwizAvailable)' == 'true' and '$(PrismWithPwiz)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup>

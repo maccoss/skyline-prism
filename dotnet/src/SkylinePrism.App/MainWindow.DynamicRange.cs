@@ -1082,6 +1082,10 @@ public partial class MainWindow
         _proteinLists = dialog.Result;
         // A list created or renamed here is immediately selectable as a marker set on the Settings tab.
         RefreshMarkerListCombo();
+        // ...and the lists ticked visible here are what the MS2 signal accounting plots from now on,
+        // superseding any names a loaded config carried.
+        _ms2ListsFromConfig = null;
+        UpdateMs2SignalRow();
         try
         {
             _proteinLists.Save();

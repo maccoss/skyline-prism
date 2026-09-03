@@ -7,6 +7,10 @@
     <PublishDir>$(MSBuildThisFileDirectory)staging\</PublishDir>
     <ZipDir>$(MSBuildThisFileDirectory)..\publish\</ZipDir>
     <ZipPath>$(ZipDir)SkylinePrism.zip</ZipPath>
+    <!-- Reading vendor formats needs the vendor SDKs, which are licence-gated in pwiz. Defaulted
+         to true here because a tool that cannot open a .raw has no acquired-signal denominator,
+         which is the whole point of carrying the reader. Pass false to package without them. -->
+    <IAgreeToVendorLicenses Condition="'$(IAgreeToVendorLicenses)' == ''">true</IAgreeToVendorLicenses>
   </PropertyGroup>
 
   <!--
@@ -20,10 +24,36 @@
       dotnet msbuild dotnet/build/package.proj /p:Configuration=Debug
   -->
 
+  <Import Project="..\Pwiz.props" />
+
+  <!--
+    A release zip MUST carry the instrument-file reader. Without it the tool still runs and every
+    other part of the QC report works, but acquired MS2 signal reads as unknown - and a zip that
+    looks complete while quietly missing a feature is worse than a build that stops. Overridable
+    for a deliberate reader-less package:
+
+      dotnet msbuild dotnet/build/package.proj /p:AllowNoPwiz=true
+  -->
+  <Target Name="RequirePwiz" BeforeTargets="Pack"
+          Condition="'$(PwizAvailable)' != 'true' and '$(AllowNoPwiz)' != 'true'">
+    <Error Text="No pwiz-sharp checkout at $(PwizSharpDir), so the packaged tool could not read instrument files and acquired MS2 signal would report as unknown. Clone ProteoWizard/pwiz (branch chambem2/pwiz-sharp) beside this repo, or point -p:PwizSharpDir at it, or pass -p:AllowNoPwiz=true to package without the reader on purpose." />
+  </Target>
+
   <Target Name="Pack">
     <RemoveDir Directories="$(PublishDir)" />
     <MakeDir Directories="$(PublishDir);$(ZipDir)" />
-    <Exec Command="dotnet publish &quot;$(AppProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained false /p:UseAppHost=true /p:PublishDir=&quot;$(PublishDir)&quot;" />
+    <!--
+      PwizSharpDir and IAgreeToVendorLicenses are forwarded explicitly: the publish runs as a
+      separate MSBuild invocation, so properties passed to this project do NOT reach it. Without
+      the licence flag the vendor archives are never extracted and the readers publish as stubs
+      that recognize a .raw and then refuse to open it - a zip that looks complete and is not.
+    -->
+    <!--
+      PublishDir stays LAST. It ends in a directory separator, so the shell reads the closing
+      &quot; of /p:PublishDir=&quot;...\&quot; as escaped and swallows whatever follows into the path -
+      which put the two properties below inside the directory name and failed with MSB3191.
+    -->
+    <Exec Command="dotnet publish &quot;$(AppProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained false /p:UseAppHost=true /p:PrismWithPwiz=true /p:PwizSharpDir=&quot;$(PwizSharpDir)&quot; /p:IAgreeToVendorLicenses=$(IAgreeToVendorLicenses) /p:PublishDir=&quot;$(PublishDir)&quot;" />
     <Delete Files="$(ZipPath)" Condition="Exists('$(ZipPath)')" />
     <ZipDirectory SourceDirectory="$(PublishDir)" DestinationFile="$(ZipPath)" />
     <Message Importance="high" Text="Packaged $(ZipPath)" />

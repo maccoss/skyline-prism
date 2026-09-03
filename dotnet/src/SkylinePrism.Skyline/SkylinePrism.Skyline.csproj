@@ -36,8 +36,11 @@
     <!-- The PRISM report definitions, staged next to the tool so they can be installed into
          a Skyline document: the transition-level PRISM report and the replicate-level
          PRISM-Replicates metadata report (Skyline's built-in Replicates view is not in the
-         exportable saved-report list, so we ship our own equivalent). -->
+         exportable saved-report list, so we ship our own equivalent), and PRISM-Ions - PRISM plus
+         Skyline's per-transition ion count, exported only on request because of what it costs
+         (see PrismReport). -->
     <None Include="Reports\Skyline-PRISM.skyr" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Reports\Skyline-PRISM-Ions.skyr" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Reports\Skyline-PRISM-Replicates.skyr" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

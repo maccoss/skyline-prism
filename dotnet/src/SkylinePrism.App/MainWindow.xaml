@@ -219,6 +219,34 @@
                         <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                    Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
 
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
+                            <TextBlock Text="9. MS2 signal accounting:" Width="230" VerticalAlignment="Center" />
+                            <CheckBox x:Name="Ms2SignalCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                      Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                      Content="Plot how much of the MS2 signal the run assigns"
+                                      ToolTip="Adds a QC report section: per replicate, the MS2 signal the run assigns to a peptide, with a line per visible protein list. Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted once, so shared fragments are not double counted. Off by default because it costs one extra pass over the merged table, comparable to Stage 2." />
+                            <TextBlock Text="measure:" VerticalAlignment="Center" Margin="12,0,6,0" />
+                            <ComboBox x:Name="Ms2MeasureCombo" Width="90" IsEnabled="False"
+                                      SelectionChanged="OnMs2SignalChanged"
+                                      ToolTip="What to total. signal: gross peak areas (Area + Background), available from any export. ions: Skyline's LC Peak Transition Ion Count - intensity x injection time per spectrum, summed across the peak - the better measure, available only when the export carries that column.">
+                                <ComboBoxItem>signal</ComboBoxItem>
+                                <ComboBoxItem x:Name="Ms2MeasureIonsItem" ToolTipService.ShowOnDisabled="True">ions</ComboBoxItem>
+                            </ComboBox>
+                            <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
+                                    Click="OnManageProteinLists"
+                                    ToolTip="Which lists get a line on the plot: the ones ticked visible in the editor - the same set the Dynamic Range tab highlights." />
+                        </StackPanel>
+
+                        <StackPanel x:Name="Ms2IonExportRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
+                            <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                            <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
+                                      Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                      ToolTipService.ShowOnDisabled="True"
+                                      Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
+                                      ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
+                        </StackPanel>
+                        <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
+
                         <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
                                    Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
                         <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"

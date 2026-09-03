@@ -117,9 +117,16 @@ public sealed class HeadlessSkylineExporter
     /// the log said the document and report were unchanged. StageCache folds the version in for exactly
     /// this reason; the export sidecar has to as well.
     /// </param>
+    /// <param name="Report">
+    /// Which report definition was exported - <see cref="PrismReport.Name"/> or
+    /// <see cref="PrismReport.IonsName"/>. The two produce files of the same name and nearly the same
+    /// shape, so without this a run asking for ion counts would happily reuse an export that has none,
+    /// and the accounting would fall back to summing areas with only a log line to say so. A stamp
+    /// from before the field is null and therefore never matches, which costs one export.
+    /// </param>
     private sealed record ExportStamp(
         string Document, long Length, long LastWriteUtcTicks, string BatchAnnotation,
-        string ReportPath, string? MetadataPath, string Tool);
+        string ReportPath, string? MetadataPath, string Tool, string? Report = null);
 
     private static string ToolVersion =>
         typeof(HeadlessSkylineExporter).Assembly.GetName().Version?.ToString() ?? "0";
@@ -132,7 +139,7 @@ public sealed class HeadlessSkylineExporter
     /// and the files are still there; null otherwise. Never throws - a bad sidecar means "export again".
     /// </summary>
     private ExportedReports? TryReuseExport(
-        string skyPath, string workDir, string label, string? batchAnnotation)
+        string skyPath, string workDir, string label, string? batchAnnotation, string reportName)
     {
         try
         {
@@ -148,7 +155,8 @@ public sealed class HeadlessSkylineExporter
                 || !string.Equals(stamp.Document, info.FullName, StringComparison.OrdinalIgnoreCase)
                 || stamp.Length != info.Length
                 || stamp.LastWriteUtcTicks != info.LastWriteTimeUtc.Ticks
-                || !string.Equals(stamp.BatchAnnotation, batchAnnotation ?? "", StringComparison.Ordinal))
+                || !string.Equals(stamp.BatchAnnotation, batchAnnotation ?? "", StringComparison.Ordinal)
+                || !string.Equals(stamp.Report, reportName, StringComparison.Ordinal))
                 return null;
 
             if (!string.Equals(stamp.Tool, ToolVersion, StringComparison.Ordinal))
@@ -186,14 +194,15 @@ public sealed class HeadlessSkylineExporter
 
     /// <summary>Record what an export produced, so an unchanged document can skip it next time.</summary>
     private static void WriteExportStamp(
-        string skyPath, string workDir, string label, string? batchAnnotation, ExportedReports reports)
+        string skyPath, string workDir, string label, string? batchAnnotation, ExportedReports reports,
+        string reportName)
     {
         try
         {
             var info = new FileInfo(skyPath);
             var stamp = new ExportStamp(
                 info.FullName, info.Length, info.LastWriteTimeUtc.Ticks, batchAnnotation ?? "",
-                reports.InputPath, reports.ReplicatesCsv, ToolVersion);
+                reports.InputPath, reports.ReplicatesCsv, ToolVersion, reportName);
             File.WriteAllText(
                 StampPath(workDir, label),
                 System.Text.Json.JsonSerializer.Serialize(stamp));
@@ -213,9 +222,16 @@ public sealed class HeadlessSkylineExporter
     /// Replicate annotation carrying the batch/plate, forced into the metadata report even if it is not one
     /// of the document's declared annotations.
     /// </param>
+    /// <param name="includeIonCounts">
+    /// Export the <see cref="PrismReport.IonsName"/> report - the standard one plus Skyline's
+    /// per-transition LC Peak ion count - instead of <see cref="PrismReport.Name"/>. Much slower: Skyline
+    /// computes that column per spectrum for every transition. Needed for
+    /// <c>qc_report.ms2_signal.measure: ions</c>, and for nothing else.
+    /// </param>
     public ExportedReports Export(
         string skyPath, string workDir, string? documentLabel = null,
-        string? batchAnnotation = null, CancellationToken cancellationToken = default)
+        string? batchAnnotation = null, CancellationToken cancellationToken = default,
+        bool includeIonCounts = false)
     {
         if (!File.Exists(skyPath))
             throw new FileNotFoundException($"Skyline document not found: {skyPath}", skyPath);
@@ -232,7 +248,8 @@ public sealed class HeadlessSkylineExporter
         // Safe here because the document is CLOSED: a file cannot change without its size or
         // last-write-time changing. The running-Skyline path deliberately has no equivalent, because a
         // live document can hold unsaved edits that the .sky on disk knows nothing about.
-        if (TryReuseExport(skyPath, workDir, label, batchAnnotation) is { } reused)
+        var reportName = PrismReport.NameFor(includeIonCounts);
+        if (TryReuseExport(skyPath, workDir, label, batchAnnotation, reportName) is { } reused)
             return reused;
 
         // Before writing new sidecars, clear any this document left behind when a previous run was
@@ -256,18 +273,19 @@ public sealed class HeadlessSkylineExporter
 
         var metadataCsv = Path.Combine(workDir, SkylineReportDriver.MetadataFileName(label));
 
-        // 1. Transition report (the bundled PRISM.skyr is fixed, so install and export in one load).
-        var prismSkyr = Path.Combine(_reportsDir, "Skyline-PRISM.skyr");
+        // 1. Transition report (the bundled .skyr is fixed, so install and export in one load).
+        var prismSkyr = Path.Combine(_reportsDir, PrismReport.FileFor(includeIonCounts));
         if (!File.Exists(prismSkyr))
         {
-            // Not bundled next to the executable: fall back to whatever "PRISM" report is already in the
-            // user's Skyline settings (usually installed by an earlier run against a live document).
-            _log($"PRISM report definition not found at {prismSkyr}; "
-                 + "assuming a 'PRISM' report is already installed in Skyline.");
+            // Not bundled next to the executable: fall back to whatever report of that name is already in
+            // the user's Skyline settings (usually installed by an earlier run against a live document).
+            _log($"{reportName} report definition not found at {prismSkyr}; "
+                 + $"assuming a '{reportName}' report is already installed in Skyline.");
             prismSkyr = null;
         }
 
-        var (prismPath, isParquet) = ExportTransitionReport(skyPath, workDir, label, prismSkyr, cancellationToken);
+        var (prismPath, isParquet) = ExportTransitionReport(
+            skyPath, workDir, label, prismSkyr, reportName, cancellationToken);
 
         // 2. Replicate metadata: generate a .skyr carrying this document's annotation columns, then export.
         string? metadataResult = null;
@@ -345,7 +363,7 @@ public sealed class HeadlessSkylineExporter
                  + "export without it would keep inferring sample types from replicate names.");
             return exported;
         }
-        WriteExportStamp(skyPath, workDir, label, batchAnnotation, exported);
+        WriteExportStamp(skyPath, workDir, label, batchAnnotation, exported, reportName);
         return exported;
     }
 
@@ -369,10 +387,15 @@ public sealed class HeadlessSkylineExporter
     /// something 17x larger that the rest of the run then has to carry.</para>
     /// </summary>
     private (string Path, bool IsParquet) ExportTransitionReport(
-        string skyPath, string workDir, string label, string? prismSkyr, CancellationToken cancellationToken)
+        string skyPath, string workDir, string label, string? prismSkyr, string reportName,
+        CancellationToken cancellationToken)
     {
-        _log($"Exporting the PRISM transition report via {_runner.Description} "
+        _log($"Exporting the {reportName} transition report via {_runner.Description} "
              + "(this can take a while on a large document)...");
+        if (reportName == PrismReport.IonsName)
+        {
+            _log("  Ion counts requested: " + PrismReport.IonCountCostNote);
+        }
 
         var parquet = Path.Combine(workDir, label + ".parquet");
         if (_runner.SupportsParquet)
@@ -395,7 +418,7 @@ public sealed class HeadlessSkylineExporter
                 {
                     // No --report-format: the extension selects parquet.
                     _runner.Run(
-                        BuildArgs(skyPath, prismSkyr, "PRISM", sidecar, format: null), _log, cancellationToken);
+                        BuildArgs(skyPath, prismSkyr, reportName, sidecar, format: null), _log, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -424,7 +447,7 @@ public sealed class HeadlessSkylineExporter
                     // Every attempt threw on a host that CAN write parquet. CSV would "work" and is
                     // exactly the wrong answer - see the type remarks. Fail, and say what to try.
                     throw new InvalidOperationException(
-                        $"Could not export the PRISM report for {Path.GetFileName(skyPath)} as parquet "
+                        $"Could not export the {reportName} report for {Path.GetFileName(skyPath)} as parquet "
                         + $"after {ParquetAttempts} attempts via {_runner.Description}. Last failure: "
                         + $"{ex.Message} Not falling back to CSV: this host can write parquet, and the CSV "
                         + "for a document this size is roughly 17x larger and several times slower to "
@@ -459,7 +482,7 @@ public sealed class HeadlessSkylineExporter
         var csvSidecar = SidecarFor(csv);
         try
         {
-            _runner.Run(BuildArgs(skyPath, prismSkyr, "PRISM", csvSidecar, format: "csv"), _log, cancellationToken);
+            _runner.Run(BuildArgs(skyPath, prismSkyr, reportName, csvSidecar, format: "csv"), _log, cancellationToken);
         }
         catch
         {
@@ -470,7 +493,7 @@ public sealed class HeadlessSkylineExporter
         {
             TryDelete(csvSidecar);
             throw new InvalidOperationException(
-                $"Skyline did not produce a PRISM report for {Path.GetFileName(skyPath)}. "
+                $"Skyline did not produce a {reportName} report for {Path.GetFileName(skyPath)}. "
                 + "See the log above for its output.");
         }
         _log($"Exported {csv} ({new FileInfo(csv).Length:N0} bytes, invariant CSV).");
