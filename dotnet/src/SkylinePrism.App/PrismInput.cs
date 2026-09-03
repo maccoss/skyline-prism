@@ -76,6 +76,13 @@ public sealed class PrismInput : INotifyPropertyChanged
     }
 
     /// <summary>Human-readable source kind for the grid.</summary>
+    /// <summary>
+    /// Whether this input is a <c>.sky.zip</c>, which has to be extracted before Skyline's command
+    /// line can open it - see <see cref="SharedDocumentArchive"/>.
+    /// </summary>
+    public bool IsSharedArchive =>
+        Kind == PrismInputKind.ClosedDocument && SharedDocumentArchive.IsArchive(Path);
+
     public string KindLabel => Kind switch
     {
         PrismInputKind.RunningSkyline => "Open in Skyline",
@@ -96,10 +103,16 @@ public sealed class PrismInput : INotifyPropertyChanged
         };
     }
 
+    /// <param name="skyPath">
+    /// A <c>.sky</c>, or a <c>.sky.zip</c> shared document archive as downloaded from PanoramaWeb.
+    /// The label drops <b>both</b> extensions, so an archive and the document inside it produce the
+    /// same batch label - <c>Path.GetFileNameWithoutExtension</c> alone would leave a trailing
+    /// <c>.sky</c> in every sample ID.
+    /// </param>
     public static PrismInput FromClosedDocument(string skyPath)
     {
-        var name = System.IO.Path.GetFileNameWithoutExtension(skyPath);
-        return new PrismInput(PrismInputKind.ClosedDocument, name, SanitizeLabel(name))
+        var name = SharedDocumentArchive.StemOf(skyPath);
+        return new PrismInput(PrismInputKind.ClosedDocument, System.IO.Path.GetFileName(skyPath), SanitizeLabel(name))
         {
             Path = System.IO.Path.GetFullPath(skyPath),
         };
@@ -136,7 +149,12 @@ public sealed class PrismInput : INotifyPropertyChanged
         bool includeIonCounts = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var label = string.IsNullOrWhiteSpace(BatchLabel) ? SanitizeLabel(DisplayName) : SanitizeLabel(BatchLabel);
+        // StemOf, not the display name as it stands: DisplayName is the file NAME (so the Inputs grid
+        // can show "Plate1.sky.zip" and not leave the user guessing which kind it is), and a batch
+        // label ending in ".sky.zip" would carry that into every merged sample ID.
+        var label = string.IsNullOrWhiteSpace(BatchLabel)
+            ? SanitizeLabel(SharedDocumentArchive.StemOf(DisplayName))
+            : SanitizeLabel(BatchLabel);
 
         // The two report variants get their own directories, because the exported file is named after
         // the batch label (the merge derives Batch from the file stem) and so cannot carry the variant
@@ -165,9 +183,10 @@ public sealed class PrismInput : INotifyPropertyChanged
 
             case PrismInputKind.ClosedDocument:
             {
+                var document = ResolveDocumentForExport(reportsDir, scoped, cancellationToken);
                 var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
                 return exporter.Export(
-                    Path, reportsDir, label, batchAnnotation, cancellationToken, includeIonCounts);
+                    document, reportsDir, label, batchAnnotation, cancellationToken, includeIonCounts);
             }
 
             default:
@@ -182,6 +201,26 @@ public sealed class PrismInput : INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>
+    /// The document Skyline is actually asked to open: this input's path, or - for a
+    /// <c>.sky.zip</c> - the document inside its extraction, made on the first run and reused after.
+    ///
+    /// <para>A shared archive cannot be handed to Skyline as it stands: its command line XML-parses
+    /// <c>--in</c> directly, so a <c>.sky.zip</c> fails with a generic "does not appear to be a
+    /// Skyline document". Only the GUI extracts, which is why a document already OPEN in Skyline
+    /// needs none of this - it was extracted on the way in.</para>
+    /// </summary>
+    /// <param name="reportsDir">
+    /// The run's reports directory; its parent (the output directory) is where an extraction goes when
+    /// the archive's own folder cannot be written to.
+    /// </param>
+    internal string ResolveDocumentForExport(
+        string reportsDir, Action<string> log, CancellationToken cancellationToken) =>
+        IsSharedArchive
+            ? SharedDocumentArchive.Extract(
+                Path, System.IO.Path.GetDirectoryName(reportsDir), log, cancellationToken)
+            : Path;
 
     /// <summary>
     /// Prefix every message with <paramref name="label"/> so interleaved output from concurrent exports
@@ -213,6 +252,37 @@ public sealed class PrismInput : INotifyPropertyChanged
             log($"({DisplayName}: could not read the digestion enzyme: {ex.Message})");
             return null;
         }
+    }
+
+    private long? _documentBytes;
+
+    /// <summary>
+    /// How big the DOCUMENT is, for the export memory budget: the <c>.sky</c>'s length, or - for a
+    /// <c>.sky.zip</c> - the uncompressed length of the document inside it, since that is what a
+    /// headless Skyline loads. 0 for an input that is not exported, or one that cannot be sized.
+    ///
+    /// <para>Cached: it is read from the archive's central directory, which is cheap but not free, and
+    /// the budget asks once per run per input.</para>
+    /// </summary>
+    public long DocumentBytes()
+    {
+        if (Kind == PrismInputKind.ReportFile || string.IsNullOrEmpty(Path))
+            return 0;
+        if (_documentBytes is { } known)
+            return known;
+        long bytes;
+        try
+        {
+            bytes = IsSharedArchive
+                ? SharedDocumentArchive.DocumentBytes(Path)
+                : new FileInfo(Path) is { Exists: true } info ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            bytes = 0;   // unsizable: the budget's floor still applies
+        }
+        _documentBytes = bytes;
+        return bytes;
     }
 
     /// <summary>

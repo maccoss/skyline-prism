@@ -126,7 +126,8 @@ public sealed class SkyDocumentInfo
     }
 
     /// <summary>
-    /// Read just the <c>&lt;isolation_scheme&gt;</c> element from a .sky, or null if it has none. Stops at
+    /// Read just the <c>&lt;isolation_scheme&gt;</c> element from a .sky (or the document inside a
+    /// <c>.sky.zip</c>), or null if it has none. Stops at
     /// <c>&lt;/transition_settings&gt;</c>, so it reads only the head of the file. Never throws: an
     /// unreadable or non-Skyline file simply yields null.
     /// </summary>
@@ -143,8 +144,7 @@ public sealed class SkyDocumentInfo
                 DtdProcessing = DtdProcessing.Prohibit,
                 XmlResolver = null,
             };
-            using var stream = new FileStream(
-                skyPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var stream = OpenDocument(skyPath);
             using var reader = XmlReader.Create(stream, settings);
             while (reader.Read())
             {
@@ -188,6 +188,24 @@ public sealed class SkyDocumentInfo
         if (!File.Exists(skyPath))
             throw new FileNotFoundException($"Skyline document not found: {skyPath}", skyPath);
 
+        using var documentStream = OpenDocument(skyPath);
+        return Read(skyPath, documentStream);
+    }
+
+    /// <summary>
+    /// The document's XML, whether the path names a <c>.sky</c> or a <c>.sky.zip</c> - in which case
+    /// the archive's document entry is read in place, with nothing extracted. Every parser here stops
+    /// at the end of the settings, so an archive answers as cheaply as a loose document does even
+    /// when the entry inside it is gigabytes.
+    /// </summary>
+    private static Stream OpenDocument(string skyPath) =>
+        SharedDocumentArchive.IsArchive(skyPath)
+            ? SharedDocumentArchive.OpenDocumentEntry(skyPath)
+            : new FileStream(
+                skyPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+    private static SkyDocumentInfo Read(string skyPath, Stream documentStream)
+    {
         string? formatVersion = null, softwareVersion = null, documentGuid = null, enzymeXml = null;
         string? acquisitionMethod = null;
         string? productMassAnalyzer = null, productRes = null, productResMz = null;
@@ -204,9 +222,7 @@ public sealed class SkyDocumentInfo
             DtdProcessing = DtdProcessing.Prohibit, // never fetch/expand external entities from a user file
             XmlResolver = null,
         };
-        using var stream = new FileStream(
-            skyPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = XmlReader.Create(stream, settings);
+        using var reader = XmlReader.Create(documentStream, settings);
 
         while (reader.Read())
         {
@@ -299,6 +315,8 @@ public sealed class SkyDocumentInfo
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or XmlException or UnauthorizedAccessException)
         {
+            // InvalidDataException covers both a file that is not a Skyline document and an archive
+            // that is not a shared document (no .sky inside, or several) - its message says which.
             log?.Invoke($"Could not read {Path.GetFileName(skyPath)}: {ex.Message}");
             return null;
         }

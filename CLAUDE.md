@@ -657,6 +657,16 @@ resolves each to a report + metadata file:
   verified with `ParquetMagic` rather than trusted.
 - **Pre-exported report**: used in place; no Skyline at all. This is what makes the window usable as a
   **standalone PRISM GUI** — `MainWindow` must never require a non-null `_session` to run.
+- **Shared archives** (`.sky.zip`, how documents download from PanoramaWeb) are handled by
+  `SharedDocumentArchive`. **Skyline's command line cannot open one** - `--in` XML-parses the path and
+  its pre-flight check passes a `.sky.zip` on the extension alone, so the error is a generic "does not
+  appear to be a Skyline document" (verified against SkylineCmd). Only the GUI extracts, so a LIVE
+  document is unaffected. `PrismInput.ResolveDocumentForExport` extracts a closed archive once
+  (`prism-extracted/<stem>/` beside it, or `PRISM_EXTRACT_DIR`) and reuses it on the archive's
+  size+timestamp; header reads go through the archive's `.sky` entry with nothing extracted. Sizes are
+  the reason for the caching: a measured plate is 13.7 GB compressed, 17.4 GB extracted, 12.0 GB of
+  that the `.skyd`. Use `SharedDocumentArchive.StemOf`, never `Path.GetFileNameWithoutExtension`, or
+  the batch label keeps a trailing `.sky`.
 - **Closed-document metadata** comes from `SkyDocumentInfo`, which stream-parses the `.sky` header
   (stopping at `</settings_summary>`, so a 2 GB document reads in ~1 s) for the replicate-targeted
   `<annotation targets="…replicate…">` names, the `<enzyme>` element, and the replicate list. Read-only.

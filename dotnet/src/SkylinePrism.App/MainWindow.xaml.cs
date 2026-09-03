@@ -212,12 +212,18 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnAddClosedDocument(object sender, RoutedEventArgs e)
+    private async void OnAddClosedDocument(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
         {
             Title = "Select Skyline document(s)",
-            Filter = "Skyline documents (*.sky)|*.sky|All files (*.*)|*.*",
+            // .sky.zip is how a document arrives from PanoramaWeb - the document, its .skyd and its
+            // library in one file. PRISM extracts one before exporting; Skyline's command line cannot
+            // open it directly. Listed first so both kinds show by default.
+            Filter = "Skyline documents (*.sky;*.sky.zip)|*.sky;*.sky.zip"
+                + "|Skyline documents (*.sky)|*.sky"
+                + "|Shared document archives (*.sky.zip)|*.sky.zip"
+                + "|All files (*.*)|*.*",
             Multiselect = true,
         };
         var start = DialogStartDir();
@@ -226,19 +232,43 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() != true)
             return;
 
+        // The rows appear at once; each one's header is read in the background and fills its status
+        // in when it lands. The read is file I/O - a .sky header, or the document entry inside a
+        // .sky.zip - and on a network share (a Panorama download folder, say) doing it here would
+        // freeze the window on the click that added the files, once per file.
+        var pending = new List<PrismInput>();
         foreach (var path in dlg.FileNames)
         {
             var input = PrismInput.FromClosedDocument(path);
-            // Read the header now so the user sees replicate counts (and any problem) before running.
-            var info = SkyDocumentInfo.TryRead(path, Log);
-            input.Status = info is null
-                ? "could not read the document header"
-                : $"{info.Replicates.Count} replicate(s)"
-                  + (info.ReplicateAnnotationNames.Count > 0
-                      ? "; annotations: " + string.Join(", ", info.ReplicateAnnotationNames)
-                      : "");
+            input.Status = "reading the document header...";
             AddInput(input);
-            Log($"Input added (closed document): {path} - {input.Status}");
+            pending.Add(input);
+            Log($"Input added (closed document): {path}");
+        }
+
+        // async void, so this catches everything: an escaping exception here has no caller to reach
+        // and becomes an unhandled application exception. See UiThreadSafetyTests.
+        try
+        {
+            foreach (var input in pending)
+            {
+                var path = input.Path;
+                var info = await Task.Run(() => SkyDocumentInfo.TryRead(path, Log));
+                input.Status = info is null
+                    ? "could not read the document header"
+                    : $"{info.Replicates.Count} replicate(s)"
+                      + (info.ReplicateAnnotationNames.Count > 0
+                          ? "; annotations: " + string.Join(", ", info.ReplicateAnnotationNames)
+                          : "");
+                InputsGrid.Items.Refresh();
+                Log($"  {System.IO.Path.GetFileName(path)}: {input.Status}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // The inputs are already added and usable - only their status lines are missing.
+            Log("Could not read every document header: " + ex.Message);
+            App.WriteLog("Reading closed-document headers failed: " + ex);
         }
     }
 
@@ -1636,6 +1666,11 @@ public partial class MainWindow : Window
     /// <para>The <see cref="GbPerConcurrentExport"/> floor keeps the many-small-documents case exactly
     /// as it was: for a 100 MB document the baseline still dominates, the floor still applies, and the
     /// chosen concurrency is unchanged.</para>
+    ///
+    /// <para><b>The DOCUMENT's size, not the input file's.</b> A <c>.sky.zip</c> is compressed and
+    /// carries the chromatogram cache besides, so its own length says little about what Skyline will
+    /// load: a measured Panorama plate is 13.7 GB as an archive and 4.4 GB as a document.
+    /// <see cref="PrismInput.DocumentBytes"/> reads the entry's uncompressed length instead.</para>
     /// </summary>
     internal static double PerExportGb(
         IReadOnlyList<PrismInput> inputs, out string largest, out double largestGb)
@@ -1644,20 +1679,11 @@ public partial class MainWindow : Window
         long largestBytes = 0;
         foreach (var input in inputs)
         {
-            if (input.Kind == PrismInputKind.ReportFile || string.IsNullOrEmpty(input.Path))
-                continue; // nothing is exported, so nothing is loaded
-            try
-            {
-                var info = new FileInfo(input.Path);
-                if (!info.Exists || info.Length <= largestBytes)
-                    continue;
-                largestBytes = info.Length;
-                largest = input.DisplayName;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Unsizable input - the floor still applies.
-            }
+            var bytes = input.DocumentBytes();   // 0 for an input that is not exported
+            if (bytes <= largestBytes)
+                continue;
+            largestBytes = bytes;
+            largest = input.DisplayName;
         }
         largestGb = largestBytes / (1024.0 * 1024 * 1024);
         return PerExportGbForBytes(largestBytes);

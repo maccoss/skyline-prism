@@ -138,6 +138,10 @@ split across several Skyline documents does not need each report exported by han
   command line has no parquet writer). The document is opened read-only and never saved.
 - **Add exported report** — a `.parquet`/`.csv`/`.tsv` PRISM report you already have.
 
+A closed document may be a `.sky` or a **`.sky.zip`** shared document archive, which is how documents
+download from [PanoramaWeb](https://panoramaweb.org). PRISM extracts an archive once and reuses it;
+see [docs/skyline-tool.md](docs/skyline-tool.md#documents-from-panorama-skyzip).
+
 Each input carries an editable **Batch label** (the document name by default) that becomes its batch in
 the merged data, which keeps identically named reference/QC injections from different plates distinct.
 

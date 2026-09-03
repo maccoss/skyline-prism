@@ -232,6 +232,44 @@ Tick **"Label this list's members on the plot"** to label a list. The plot's **r
 
 ---
 
+## Documents from Panorama (.sky.zip)
+
+Documents shared through [PanoramaWeb](https://panoramaweb.org) download as **`.sky.zip`** shared
+document archives - the `.sky`, its `.skyd` chromatogram cache, any spectral library and the audit log
+in one file. Add one on the **Inputs** tab exactly like a `.sky`; the file picker lists both.
+
+Skyline's *command line* cannot open an archive, which is why PRISM has to do something about it.
+`--in` hands the path straight to an XML reader, and the pre-flight check waves a `.sky.zip` through on
+its extension, so the failure is a generic parse error whose text contradicts itself:
+
+```
+Error: There was an error opening the file ...\Plate1.sky.zip
+The file you are trying to open (...) does not appear to be a Skyline document. Skyline documents
+normally have a ".sky" or ".sky.zip" filename extension and are in XML format.
+```
+
+Only Skyline's **window** extracts (File > Open). So a document already open in Skyline needs none of
+this - it was extracted on the way in - and PRISM handles the closed case itself:
+
+- **The header is read from inside the archive, with nothing extracted.** Adding one shows its
+  replicates, annotations, digestion enzyme and extraction tolerance immediately, because the parsers
+  stop at the end of the settings. On a measured Panorama plate the `.sky` entry alone was 4.4 GB, so
+  this is the difference between instant and minutes.
+- **The archive is extracted once, when the run needs it**, into `prism-extracted/<name>/` beside the
+  archive - the same place Skyline would put it, so it is a folder you recognize and can delete to
+  reclaim the space. A later run reuses it as long as the archive has not changed (matched on its size
+  and timestamp, like the export cache), so re-running to change a downstream setting does not repeat
+  the extraction. Re-downloading the archive does re-extract it.
+- **Budget for the disk.** A measured plate was 13.7 GB compressed and **17.4 GB extracted** - 12.0 GB
+  of that the `.skyd`, which the report export needs, so nothing selective is worth attempting. PRISM
+  refuses before starting if the drive has no room for it. Set **`PRISM_EXTRACT_DIR`** to send every
+  extraction to a fast local disk instead of back over the share.
+- **The batch label drops both extensions**, so `Plate1.sky.zip` and `Plate1.sky` give the same batch -
+  `Plate1`, not `Plate1.sky`.
+
+An archive with no `.sky` inside, or with several, is refused by name with the reason; PRISM will not
+guess which document you meant.
+
 ## MS2 signal accounting
 
 Settings row **9** adds a QC-report section answering "how much of the MS2 signal does this analysis
@@ -365,6 +403,7 @@ Escape hatches for when an automatic choice picks badly. None are needed normall
 |----------|--------|
 | `PRISM_TEMP_DIR` | Where DuckDB spills the Stage 1 sort. By default this sits beside the output, unless the output is on a network drive, in which case it falls back to the machine's temp directory. Set this when the automatic choice lands on a small or quota'd disk. Stage 1 logs the directory it chose. |
 | `PRISM_ISOLATION_TIMEOUT_SEC` | How long to let Skyline read isolation windows out of a data file before giving up (default 300). Reading them normally takes ~10 s; raise this only if your data really is that slow to reach. |
+| `PRISM_EXTRACT_DIR` | Where `.sky.zip` archives are extracted, instead of beside the archive. One folder per archive underneath. For a Panorama download folder on a slow share, or one you would rather keep clean. |
 | `PRISM_SKYLINECMD` | Full path to `SkylineCmd.exe`, when the automatic discovery finds the wrong installation. |
 
 Memory for the Stage 1 merge is sized from the machine's **free** memory and is set with the

@@ -40,6 +40,26 @@ as the GitHub Release description and fails if it is missing.
   Skyline integrated for the document's targets, and it is labelled that way, because reading it as the
   acquired total would turn unknown coverage into apparently complete coverage.
 
+- **The Skyline tool now takes `.sky.zip` shared document archives, the way documents download from
+  PanoramaWeb.** Add one on the Inputs tab like any other document; the picker lists both kinds.
+
+  Skyline's command line cannot open an archive - `--in` XML-parses the path, and its pre-flight check
+  passes a `.sky.zip` on the extension alone, so the failure is a generic *"does not appear to be a
+  Skyline document"* whose own text then lists `.sky.zip` as an extension it accepts (verified against
+  SkylineCmd on a real 13.7 GB Panorama archive). Only Skyline's window extracts, so a document already
+  open in Skyline was never affected; PRISM now handles the closed case.
+
+  The document header is read from **inside** the archive with nothing extracted, so adding one shows
+  its replicates, annotations, enzyme and extraction tolerance immediately - the measured plate's `.sky`
+  entry was 4.4 GB, and the parsers stop at the end of the settings. The archive itself is extracted
+  once, when the run needs it, into `prism-extracted/<name>/` beside it (where Skyline would put it
+  too), and a later run reuses that as long as the archive has not changed - matched on size and
+  timestamp, like the export cache. Budget the disk: that plate was 13.7 GB compressed and **17.4 GB
+  extracted**, 12.0 GB of it the `.skyd` the report export needs, so nothing selective is worth
+  attempting; PRISM checks for room before it starts and `PRISM_EXTRACT_DIR` redirects extractions to a
+  fast local disk. Batch labels drop both extensions, so an archive and the document inside it give the
+  same batch name.
+
 - **MS2 signal accounting can total ions instead of signal, and the Skyline tool can export what that
   needs.** `qc_report.ms2_signal.measure` chooses: `signal` sums each transition's gross peak area
   (`Area + Background`), available from any export; `ions` sums Skyline's `LC Peak Transition Ion
