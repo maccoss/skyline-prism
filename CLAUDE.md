@@ -424,6 +424,13 @@ Key sections:
 
 ### Core/Qc/
 - `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory
+- `Ms2SignalAccounting`: the MS2 signal accounting, cached as `ms2_signal_accounting.parquet`.
+  **That cache is keyed on `SettingsKeyFor(measure, tolerance, isolation scheme, list names)`, and the
+  key is stored in the file** - add a `qc_report.ms2_signal` setting that changes the numbers and it
+  must go into that key too, or a re-run replots the previous run's numbers under the new run's
+  caption. Nothing fails loudly if you forget: both plots look right, and the caption comes from the
+  cache. The key records what was REQUESTED, never what was computed - asking for `ions` on an export
+  with no ion column falls back to signal, and keying on the fallback would recompute forever.
 - `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
 - `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
 - `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs

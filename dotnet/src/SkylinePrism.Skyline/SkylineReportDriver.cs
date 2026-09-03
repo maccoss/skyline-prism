@@ -62,10 +62,20 @@ public sealed class SkylineReportDriver
         _log($"Exporting the {reportName} report as parquet (this can take a while on large documents)...");
         if (includeIonCounts)
         {
-            _log("  Ion counts requested: Skyline computes LC Peak Transition Ion Count per spectrum for "
-                 + "every transition, so this export takes roughly 30x longer than the standard report "
-                 + "(about 4 hours instead of 9.5 minutes on a 46M-row document).");
+            _log("  Ion counts requested: " + PrismReport.IonCountCostNote);
         }
+        // Delete the destination FIRST, so what is validated afterwards can only be what this export
+        // wrote. PAR1 magic says the bytes are parquet, not that this run produced them, and the
+        // export goes to a stable path that nothing clears - so a thrown ExportReport used to leave
+        // the PREVIOUS run's file in place, pass the check, and get logged and analyzed as this run's
+        // export. Skyline once produced no report at all and PRISM reported 1.3 GB of parquet from 25
+        // days earlier. Two report definitions now share this path, so the stale file can also be the
+        // wrong REPORT - a standard export read as an ion-count one, or worse an ion-count export
+        // read as this document's when the document has since changed.
+        //
+        // The headless path solves this with a per-run sidecar it promotes on success; a live
+        // document cannot be re-exported into one cheaply, so it gets the delete.
+        TryDelete(prismParquet);
         try
         {
             _session.Execute(c => c.ExportReport(reportName, prismParquet, "invariant"));
@@ -86,10 +96,17 @@ public sealed class SkylineReportDriver
         }
 
         // Fallback: invariant CSV (older Skyline builds without parquet report export).
-        _log("A valid parquet was not produced; falling back to invariant CSV.");
+        _log($"A valid {reportName} parquet was not produced; falling back to invariant CSV.");
         TryDelete(prismParquet);
         var prismCsv = Path.Combine(workDir, label + ".csv");
+        TryDelete(prismCsv);   // same rule as the parquet above: validate only what this run wrote
         _session.Execute(c => c.ExportReport(reportName, prismCsv, "invariant"));
+        if (!File.Exists(prismCsv) || new FileInfo(prismCsv).Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"Skyline did not produce a {reportName} report for "
+                + $"{Path.GetFileName(docPath ?? label)}. See the log above for its output.");
+        }
         _log($"Exported {reportName} report (invariant CSV): {prismCsv}");
         return new ExportedReports(
             prismCsv, false,

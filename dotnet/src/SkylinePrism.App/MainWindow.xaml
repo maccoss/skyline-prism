@@ -241,8 +241,9 @@
                             <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
                             <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
                                       Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                      ToolTipService.ShowOnDisabled="True"
                                       Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
-                                      ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. Once exported, both measures are available; without it, ions is not." />
+                                      ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
                         </StackPanel>
                         <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
 

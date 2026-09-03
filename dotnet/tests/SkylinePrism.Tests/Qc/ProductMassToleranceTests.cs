@@ -215,4 +215,47 @@ public class ProductMassToleranceTests
         Assert.Null(ProductMassTolerance.Parse("orbitrap", "60000", "400")!.ToSetting());
         Assert.Null(ProductMassTolerance.Parse("ft_icr", "100000", "400")!.ToSetting());
     }
+
+    /// <summary>
+    /// Selective extraction HALVES a QIT window (it divides Skyline's default arm, which is the one
+    /// QIT takes), and the setting has no way to say so - "0.7 m/z" would come back meaning +/-0.7
+    /// where the document extracted +/-0.35. Twice too wide merges fragments that never shared
+    /// detector counts, while the caption names the document's own number, so there is nothing on the
+    /// plot to notice. Null instead, which the caller already handles by keeping the configured value
+    /// and saying why.
+    /// </summary>
+    [Fact]
+    public void ToSettingRefusesASelectiveExtractionQitWindow()
+    {
+        var selective = ProductMassTolerance.Parse("qit", "0.7", selectiveExtraction: "true")!;
+        var plain = ProductMassTolerance.Parse("qit", "0.7")!;
+
+        // The premise: the two really are different windows, so one string cannot serve both.
+        Assert.Equal(0.35, selective.WindowAt(1000).Width / 2, 9);
+        Assert.Equal(0.70, plain.WindowAt(1000).Width / 2, 9);
+
+        Assert.Null(selective.ToSetting());
+        Assert.Equal("0.7 m/z", plain.ToSetting());
+    }
+
+    /// <summary>
+    /// Centroided is the one analyzer selective extraction does not move (its denominator has no
+    /// ResPerFilter), so the setting still expresses it - and what matters is that the round trip
+    /// preserves the WINDOW, not that it preserves the flag.
+    /// </summary>
+    [Fact]
+    public void ToSettingKeepsTheWindowForASelectiveCentroidedTolerance()
+    {
+        var selective = ProductMassTolerance.Parse("centroided", "10", selectiveExtraction: "true")!;
+
+        var setting = selective.ToSetting();
+        Assert.Equal("10 ppm", setting);
+
+        var reparsed = ProductMassTolerance.ParseSetting(setting)!;
+        foreach (var mz in new[] { 200.0, 500.0, 1000.0 })
+        {
+            Assert.Equal(selective.WindowAt(mz).Start, reparsed.WindowAt(mz).Start, 9);
+            Assert.Equal(selective.WindowAt(mz).End, reparsed.WindowAt(mz).End, 9);
+        }
+    }
 }

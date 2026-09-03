@@ -394,9 +394,7 @@ public sealed class HeadlessSkylineExporter
              + "(this can take a while on a large document)...");
         if (reportName == PrismReport.IonsName)
         {
-            _log("  Ion counts requested: Skyline computes LC Peak Transition Ion Count per spectrum for "
-                 + "every transition, so this export takes roughly 30x longer than the standard report "
-                 + "(about 4 hours instead of 9.5 minutes on a 46M-row document).");
+            _log("  Ion counts requested: " + PrismReport.IonCountCostNote);
         }
 
         var parquet = Path.Combine(workDir, label + ".parquet");
@@ -449,7 +447,7 @@ public sealed class HeadlessSkylineExporter
                     // Every attempt threw on a host that CAN write parquet. CSV would "work" and is
                     // exactly the wrong answer - see the type remarks. Fail, and say what to try.
                     throw new InvalidOperationException(
-                        $"Could not export the PRISM report for {Path.GetFileName(skyPath)} as parquet "
+                        $"Could not export the {reportName} report for {Path.GetFileName(skyPath)} as parquet "
                         + $"after {ParquetAttempts} attempts via {_runner.Description}. Last failure: "
                         + $"{ex.Message} Not falling back to CSV: this host can write parquet, and the CSV "
                         + "for a document this size is roughly 17x larger and several times slower to "
@@ -495,7 +493,7 @@ public sealed class HeadlessSkylineExporter
         {
             TryDelete(csvSidecar);
             throw new InvalidOperationException(
-                $"Skyline did not produce a PRISM report for {Path.GetFileName(skyPath)}. "
+                $"Skyline did not produce a {reportName} report for {Path.GetFileName(skyPath)}. "
                 + "See the log above for its output.");
         }
         _log($"Exported {csv} ({new FileInfo(csv).Length:N0} bytes, invariant CSV).");

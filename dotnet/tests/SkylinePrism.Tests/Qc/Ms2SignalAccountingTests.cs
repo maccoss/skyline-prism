@@ -313,6 +313,7 @@ public class Ms2SignalAccountingTests : IClassFixture<CohortRunFixture>, IDispos
         var result = Ms2SignalAccounting.Compute(
             dir, IsolationScheme.AstralDefault(), Ppm10, Array.Empty<ProteinList>());
         Ms2SignalAccounting.Write(dir, result!);
+        AskForMs2Signal(dir);
 
         var html = File.ReadAllText(QcReport.Generate(dir, new PrismConfig(), savePlots: false));
 
@@ -320,6 +321,35 @@ public class Ms2SignalAccountingTests : IClassFixture<CohortRunFixture>, IDispos
         // Stops before the apostrophe so this pins the WORDING, not the HTML escaping scheme.
         Assert.Contains("Signal Skyline Integrated for This Document", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Total MS2 Signal", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Put the cohort's isolation windows where the report looks for them. The report resolves the
+    /// scheme from <c>isolation_schemes.xml</c> (the Skyline tool writes it during a run) rather than
+    /// being handed one, so a test that exercises the REPORT has to seed it; the tests that call
+    /// <c>Compute</c> directly pass the scheme instead.
+    /// </summary>
+    private static void SeedIsolationScheme(string dir)
+    {
+        var catalog = new IsolationSchemeCatalog();
+        catalog.AddDocumentScheme("Batch1", IsolationScheme.AstralDefault());
+        catalog.Save(Path.Combine(dir, IsolationSchemeCatalog.FileName));
+    }
+
+    /// <summary>
+    /// Record in the directory's provenance that the run asked for the accounting, which is what makes
+    /// the report replot a cached result: the report takes what it SAYS about a run from that run's
+    /// own parameters.json, never from the config handed to this invocation.
+    /// </summary>
+    private static void AskForMs2Signal(string dir, Action<PrismConfig>? tune = null)
+    {
+        var path = Path.Combine(dir, "parameters.json");
+        var config = Provenance.LoadConfig(path);
+        config.QcReport.Ms2Signal.Enabled = true;
+        tune?.Invoke(config);
+        Provenance.Write(
+            path, config, Array.Empty<string>(), new Provenance.Stats(0, 0, 0, 0),
+            DateTime.UtcNow.ToString("O"));
     }
 
     /// <summary>
@@ -370,5 +400,125 @@ public class Ms2SignalAccountingTests : IClassFixture<CohortRunFixture>, IDispos
             .Distinct(StringComparer.Ordinal)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
+    }
+    /// <summary>
+    /// A cached section belongs to the run that asked for it. Turning the accounting off and
+    /// regenerating must not resurrect the previous run's plot - which the report did, because it
+    /// preferred the cache before it even looked at whether the section had been asked for.
+    /// </summary>
+    [Fact]
+    public void TheReportDropsACachedSectionTheRunDidNotAskFor()
+    {
+        var dir = SeedCohort();
+        Ms2SignalAccounting.Write(
+            dir,
+            Ms2SignalAccounting.Compute(
+                dir, IsolationScheme.AstralDefault(), Ppm10, Array.Empty<ProteinList>())!);
+        // Provenance left as the fixture wrote it: qc_report.ms2_signal.enabled is false.
+
+        var html = File.ReadAllText(QcReport.Generate(dir, new PrismConfig(), savePlots: false));
+
+        Assert.DoesNotContain("MS2 Signal Accounting", html, StringComparison.Ordinal);
+        // ...and the cache is left alone, so asking for the section again replots it for free.
+        Assert.True(File.Exists(Path.Combine(dir, Ms2SignalAccounting.AccountingFile)));
+    }
+
+    /// <summary>
+    /// The cache is keyed on the SETTINGS, not just on its file name.
+    ///
+    /// <para>This is the failure the keying exists for: a re-run that switched to ion counts - after a
+    /// four-hour Skyline export to get them - found a cached parquet and replotted the previous run's
+    /// peak areas under the new run's caption, silently. Both plots look right; nothing in the log
+    /// mentioned it.</para>
+    ///
+    /// <para>The second half matters as much. This cohort's export has no ion-count column, so the
+    /// recomputed result falls back to signal - and if the cache were keyed on what was COMPUTED
+    /// rather than on what was ASKED for, every report from then on would recompute forever.</para>
+    /// </summary>
+    [Fact]
+    public void ChangingTheMeasureRecomputesRatherThanReplottingTheCache()
+    {
+        var dir = SeedCohort();
+        SeedIsolationScheme(dir);
+        Ms2SignalAccounting.Write(
+            dir,
+            Ms2SignalAccounting.Compute(
+                dir, IsolationScheme.AstralDefault(), Ppm10, Array.Empty<ProteinList>())!);
+        AskForMs2Signal(dir, c => c.QcReport.Ms2Signal.Measure = "ions");
+
+        var first = new List<string>();
+        QcReport.Generate(dir, new PrismConfig(), savePlots: false, log: first.Add);
+        Assert.Contains(first, m => m.Contains("Recomputing", StringComparison.Ordinal));
+
+        // Second pass: the key now records that ions were asked for, so the same request is served
+        // from the cache. Without that, the fallback to signal would miss the key every time.
+        var second = new List<string>();
+        QcReport.Generate(dir, new PrismConfig(), savePlots: false, log: second.Add);
+        Assert.DoesNotContain(second, m => m.Contains("Recomputing", StringComparison.Ordinal));
+    }
+
+    /// <summary>Same rule for the extraction tolerance, which changes the numbers just as much.</summary>
+    [Fact]
+    public void ChangingTheToleranceRecomputes()
+    {
+        var dir = SeedCohort();
+        SeedIsolationScheme(dir);
+        Ms2SignalAccounting.Write(
+            dir,
+            Ms2SignalAccounting.Compute(
+                dir, IsolationScheme.AstralDefault(), Ppm10, Array.Empty<ProteinList>())!);
+        AskForMs2Signal(dir, c => c.QcReport.Ms2Signal.ExtractionTolerance = "100 ppm");
+
+        var log = new List<string>();
+        QcReport.Generate(dir, new PrismConfig(), savePlots: false, log: log.Add);
+
+        Assert.Contains(log, m => m.Contains("Recomputing", StringComparison.Ordinal));
+        Assert.Equal(
+            "+/-100 ppm (centroided)", Ms2SignalAccounting.ReadCached(dir)!.Tolerance);
+    }
+
+    /// <summary>
+    /// Which quantity the cached numbers ARE has to survive the round trip: ion counts and gross peak
+    /// areas are both large positive doubles, so a replot that assumes signal captions ion counts as
+    /// "Integrated MS2 signal" in the title, the axis and the caption at once, with nothing to give it
+    /// away. (<c>ListsMatchable</c> was hardcoded true on the way back for the same reason.)
+    /// </summary>
+    [Fact]
+    public void TheCacheRemembersWhichMeasureProducedIt()
+    {
+        var dir = SeedCohort();
+        var computed = Ms2SignalAccounting.Compute(
+            dir, IsolationScheme.AstralDefault(), Ppm10, Array.Empty<ProteinList>())!;
+
+        Ms2SignalAccounting.Write(
+            dir, computed with { Measure = Ms2SignalMeasure.Ions, ListsMatchable = false });
+        var read = Ms2SignalAccounting.ReadCached(dir)!;
+
+        Assert.Equal(Ms2SignalMeasure.Ions, read.Measure);
+        Assert.False(read.ListsMatchable);
+        Assert.Equal(computed.SettingsKey, read.SettingsKey);
+    }
+
+    /// <summary>
+    /// A protein list this machine has no list for must cost the plot's lines, not the whole run. The
+    /// resolver threw, and nothing between it and the caller caught: a provenance file from a
+    /// colleague's machine aborted the run at Stage 5b - after the export, the merge, the rollups and
+    /// the correction had all completed - and left no qc_report.html at all. Every other failure in
+    /// that section logs and carries on.
+    /// </summary>
+    [Fact]
+    public void AnUnresolvableProteinListDoesNotThrowAwayTheReport()
+    {
+        var dir = SeedCohort();
+        SeedIsolationScheme(dir);
+        AskForMs2Signal(dir, c => c.QcReport.Ms2Signal.ProteinLists =
+            new List<string> { "a list saved on somebody else's machine" });
+
+        var log = new List<string>();
+        var html = File.ReadAllText(
+            QcReport.Generate(dir, new PrismConfig(), savePlots: false, log: log.Add));
+
+        Assert.Contains("MS2 Signal Accounting", html, StringComparison.Ordinal);
+        Assert.Contains(log, m => m.Contains("somebody else's machine", StringComparison.Ordinal));
     }
 }

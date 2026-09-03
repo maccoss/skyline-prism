@@ -37,6 +37,17 @@ public static class PrismReport
     public const string TransitionIonCountColumn =
         "Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount";
 
+    /// <summary>
+    /// What asking for ion counts costs, in one sentence, for a log line or a tooltip. Measured on the
+    /// 6.5 GB FLARE document (46M transition rows): 7.9M rows in 42 minutes against the standard
+    /// report's 5.4M rows/minute. Lives here because both exporters and the GUI say it, and five
+    /// copies of a measured number drift.
+    /// </summary>
+    public const string IonCountCostNote =
+        "Skyline computes LC Peak Transition Ion Count per spectrum for every transition, so this "
+        + "export takes roughly 30x longer than the standard report (about 4 hours instead of "
+        + "9.5 minutes on a 46M-row document).";
+
     /// <summary>The view name to install and export for the requested variant.</summary>
     public static string NameFor(bool includeIonCounts) => includeIonCounts ? IonsName : Name;
 

@@ -154,4 +154,48 @@ public class Ms2SignalMeasureTests
         Assert.Null(Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "Background" }));
         Assert.Null(Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "Apex Transition Ion Count" }));
     }
+    /// <summary>
+    /// The precursor-level column must NEVER be taken for the per-transition one. Skyline's
+    /// "LC Peak Analyte Ion Count Fragment" is the precursor's total over its transitions - its own
+    /// PeakMetricsTest asserts it equals their sum - and the export repeats it on every one of that
+    /// precursor's transition rows, so reading it per transition multiplies the assigned total by the
+    /// fragment count. Roughly 6x on a DIA document: large enough to be wrong, plausible enough to
+    /// pass unnoticed. It was briefly accepted here as an alternative "spelling"; it is a different
+    /// quantity, not a spelling.
+    /// </summary>
+    [Fact]
+    public void FindIonCountColumn_RejectsThePrecursorLevelAnalyteColumn()
+    {
+        Assert.Null(Ms2SignalRegions.FindIonCountColumn(
+            new[] { "Area", "LC Peak Analyte Ion Count Fragment" }));
+        Assert.Null(Ms2SignalRegions.FindIonCountColumn(
+            new[] { "Area", "LCPeakAnalyteIonCountFragment" }));
+        Assert.Null(Ms2SignalRegions.FindIonCountColumn(
+            new[] { "Area", "LC Peak Total Ion Count Fragment" }));
+
+        // And an export carrying both still resolves to the per-transition one.
+        Assert.Equal(
+            "LC Peak Transition Ion Count",
+            Ms2SignalRegions.FindIonCountColumn(new[]
+            {
+                "Area", "LC Peak Analyte Ion Count Fragment", "LC Peak Transition Ion Count",
+            }));
+    }
+
+    /// <summary>
+    /// The same rule reaching the accounting: an export with only the precursor-level column cannot
+    /// support ions, so a run asking for them falls back and says so rather than inflating the total.
+    /// </summary>
+    [Fact]
+    public void AnalyteOnlyExportCannotSupportIons()
+    {
+        var cols = Ms2SignalRegions.Resolve(
+            AreaOnly.Concat(new[] { "LC Peak Analyte Ion Count Fragment" }).ToArray())!;
+
+        Assert.False(cols.HasIonCounts);
+        Assert.DoesNotContain(
+            "Ion Count",
+            Ms2SignalRegions.GrossSignalSql(cols, Ms2SignalMeasure.Ions),
+            StringComparison.Ordinal);
+    }
 }

@@ -104,10 +104,17 @@ public static class QcReport
     /// <summary>
     /// The MS2 signal accounting section, or an empty list when there is nothing to show.
     ///
-    /// <para>Prefers the cached <c>ms2_signal_accounting.parquet</c>, so <c>prism qc -d</c> replots an
-    /// existing run for free and keeps working on a directory whose <c>merged_data/</c> was cleaned up.
-    /// It only computes when the run asked for it and nothing is cached - the computation is a full
-    /// pass over the merged table, which is not something a report regeneration should silently do.</para>
+    /// <para>Reuses the cached <c>ms2_signal_accounting.parquet</c> when it answers the same question,
+    /// so <c>prism qc -d</c> replots an existing run for free and keeps working on a directory whose
+    /// <c>merged_data/</c> was cleaned up. Computing is a full pass over the merged table, so it
+    /// happens only when the run asked for the section and the cache cannot serve it.</para>
+    ///
+    /// <para><b>The cache is keyed on the settings, not just on the file name.</b> It used to be
+    /// preferred unconditionally: a re-run that switched measure, tolerance, isolation scheme or
+    /// protein lists then replotted the PREVIOUS run's numbers, captioned with the previous run's
+    /// settings, with nothing in the log - and a re-run that turned the section OFF still rendered
+    /// it. Both look entirely right on the page, which is what makes keying it properly worth the
+    /// resolve work below on every report.</para>
     /// </summary>
     private static List<PlotSection> RenderMs2SignalSection(
         string outputDir, PrismConfig config, IReadOnlyDictionary<string, string> sampleTypes,
@@ -115,34 +122,75 @@ public static class QcReport
     {
         var sections = new List<PlotSection>();
         var settings = config.QcReport.Ms2Signal;
+        // Not asked for: a leftover cache from an earlier run into this directory is not a reason for
+        // the section to exist. (For `prism qc -d` these settings come from the directory's own
+        // parameters.json, so a run that DID ask for it still replots.)
+        if (!settings.Enabled)
+            return sections;
 
-        var result = Ms2SignalAccounting.ReadCached(outputDir);
-        if (result is null && settings.Enabled)
+        var cached = Ms2SignalAccounting.ReadCached(outputDir);
+
+        var tolerance = ProductMassTolerance.ParseSetting(settings.ExtractionTolerance);
+        if (tolerance is null)
         {
-            var tolerance = ProductMassTolerance.ParseSetting(settings.ExtractionTolerance);
-            if (tolerance is null)
+            log?.Invoke(
+                "  MS2 signal accounting: qc_report.ms2_signal.extraction_tolerance "
+                + $"'{settings.ExtractionTolerance}' is not a tolerance. Write it as \"10 ppm\" "
+                + "or \"0.4 m/z\".");
+        }
+
+        // Both of these read files, and neither is needed to REPLOT a cache that already matches - so
+        // a failure here is only fatal when there is nothing cached to fall back on.
+        var scheme = tolerance is null ? null : ResolveScheme(outputDir, settings.IsolationScheme, log);
+        var lists = ResolveMs2Lists(settings.ProteinLists, settings.ProteinListFiles, log);
+        var measure = string.Equals(settings.Measure, "ions", StringComparison.OrdinalIgnoreCase)
+            ? Ms2SignalMeasure.Ions
+            : Ms2SignalMeasure.Signal;
+
+        // A cached result records the scheme it used, so a directory whose isolation_schemes.xml has
+        // been cleaned up can still have its cache validated against everything else - which is what
+        // keeps `prism qc -d` a free replot there rather than a warning.
+        var schemeName = scheme?.Name ?? cached?.IsolationScheme;
+
+        Ms2SignalAccounting.Result? result = null;
+        if (tolerance is not null && schemeName is not null)
+        {
+            var wanted = Ms2SignalAccounting.SettingsKeyFor(
+                measure, tolerance.Describe(), schemeName, lists.Select(l => l.Name));
+            if (cached is not null
+                && cached.MatchesSettings(wanted, measure, tolerance.Describe(), schemeName))
             {
-                log?.Invoke(
-                    "  MS2 signal accounting skipped: qc_report.ms2_signal.extraction_tolerance "
-                    + $"'{settings.ExtractionTolerance}' is not a tolerance. Write it as \"10 ppm\" "
-                    + "or \"0.4 m/z\".");
-                return sections;
+                result = cached;   // the free replot the cache exists for
             }
+            else if (scheme is not null)
+            {
+                if (cached is not null)
+                {
+                    log?.Invoke(
+                        $"  MS2 signal accounting: the cached results are for {cached.SettingsSummary()}; "
+                        + "this run asks for "
+                        + Ms2SignalAccounting.SummarizeSettings(
+                            measure, tolerance.Describe(), scheme.Name, lists.Count)
+                        + ". Recomputing.");
+                }
+                result = Ms2SignalAccounting.Compute(
+                    outputDir, scheme, tolerance, lists, sampleTypes, log, measure: measure);
+                if (result is not null)
+                    Ms2SignalAccounting.Write(outputDir, result);
+            }
+        }
 
-            var scheme = ResolveScheme(outputDir, settings.IsolationScheme, log);
-            if (scheme is null)
-                return sections;
-
-            var lists = ProteinListSet.ResolveForDisplay(
-                settings.ProteinLists, settings.ProteinListFiles);
-
-            var measure = string.Equals(settings.Measure, "ions", StringComparison.OrdinalIgnoreCase)
-                ? Ms2SignalMeasure.Ions
-                : Ms2SignalMeasure.Signal;
-            result = Ms2SignalAccounting.Compute(
-                outputDir, scheme, tolerance, lists, sampleTypes, log, measure: measure);
-            if (result is not null)
-                Ms2SignalAccounting.Write(outputDir, result);
+        if (result is null && cached is not null)
+        {
+            // The settings cannot be honoured - no tolerance, no scheme, or no merged_data/ to
+            // recompute from; whichever it was has been logged above. The cached numbers are
+            // self-describing, and the caption below names the settings that produced them, so
+            // showing them beats dropping the section - as long as the mismatch is said plainly.
+            log?.Invoke(
+                "  MS2 signal accounting: showing the CACHED results instead. They are for "
+                + $"{cached.SettingsSummary()}, which is not what this run asks for; the caption "
+                + "names the settings that produced them.");
+            result = cached;
         }
 
         if (result is null || result.IsEmpty)
@@ -184,6 +232,45 @@ public static class QcReport
             // coverage into apparently complete coverage.
             "Signal Skyline Integrated for This Document's Targets", images));
         return sections;
+    }
+
+    /// <summary>
+    /// The protein lists to draw a line for, dropping each one this machine cannot resolve with a
+    /// message rather than throwing.
+    ///
+    /// <para><see cref="ProteinListSet.ResolveForDisplay"/> throws on an unresolvable name, which is
+    /// right for marker normalization - a normalization nobody can reproduce should not run - but not
+    /// for an optional QC plot: a config written on another machine can name a list saved only there,
+    /// and that used to abort the whole run at Stage 5b, after every output had been computed and
+    /// with no <c>qc_report.html</c> to show for it. Every other failure in this section logs and
+    /// carries on; so does this one now, one list at a time so the resolvable ones survive.</para>
+    /// </summary>
+    private static IReadOnlyList<ProteinList> ResolveMs2Lists(
+        IEnumerable<string>? names, IEnumerable<string>? memberFiles, Action<string>? log)
+    {
+        var resolved = new List<ProteinList>();
+        // Files first, then names - the order ResolveForDisplay itself uses, so the plot's lines come
+        // out the same however they were specified.
+        foreach (var file in memberFiles ?? Enumerable.Empty<string>())
+            Add(() => ProteinListSet.ResolveForDisplay(null, new[] { file }));
+        foreach (var name in names ?? Enumerable.Empty<string>())
+            Add(() => ProteinListSet.ResolveForDisplay(new[] { name }));
+        return resolved;
+
+        void Add(Func<IReadOnlyList<ProteinList>> resolve)
+        {
+            try
+            {
+                resolved.AddRange(resolve());
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke(
+                    $"  MS2 signal accounting: {ex.Message} Continuing without that list - name only "
+                    + "lists saved on this machine, or give the members as a file via "
+                    + "qc_report.ms2_signal.protein_list_files.");
+            }
+        }
     }
 
     /// <summary>

@@ -78,6 +78,10 @@ public static class Ms2SignalAccounting
     /// which case every list bar is zero for want of data rather than for want of members.</param>
     /// <param name="Measure">Which quantity was totalled. Carried because it is not recoverable from
     /// the numbers, and the two are not interchangeable - a plot has to say which it is showing.</param>
+    /// <param name="SettingsKey">
+    /// What was ASKED FOR, from <see cref="SettingsKeyFor"/> - the cache's validity key. Empty on a
+    /// result read back from a file written before the key existed.
+    /// </param>
     public sealed record Result(
         IReadOnlyList<Row> Rows,
         IReadOnlyList<string> ListNames,
@@ -87,10 +91,61 @@ public static class Ms2SignalAccounting
         string Tolerance,
         string IsolationScheme,
         bool ListsMatchable,
-        Ms2SignalMeasure Measure = Ms2SignalMeasure.Signal)
+        Ms2SignalMeasure Measure = Ms2SignalMeasure.Signal,
+        string SettingsKey = "")
     {
         public bool IsEmpty => Rows.Count == 0;
+
+        /// <summary>What produced these numbers, for a log line that explains a cache miss.</summary>
+        public string SettingsSummary() =>
+            SummarizeSettings(Measure, Tolerance, IsolationScheme, ListNames.Count);
+
+        /// <summary>
+        /// Whether these cached numbers answer the question the settings now ask.
+        ///
+        /// <para>The file is keyed on its NAME alone, so without this a re-run into the same output
+        /// directory replots the previous run's numbers under the new run's settings - the one
+        /// failure nobody would spot, because both plots look right and the caption comes from the
+        /// cache. A four-hour ion-count export was discarded exactly that way.</para>
+        ///
+        /// <para>The key records what was REQUESTED, not what was computed, which matters when the
+        /// export cannot supply it: asking for ions on a report with no ion column falls back to
+        /// signal, and comparing the fallback would then miss forever, recomputing on every report.</para>
+        /// </summary>
+        public bool MatchesSettings(
+            string settingsKey, Ms2SignalMeasure measure, string tolerance, string isolationScheme)
+        {
+            if (!string.IsNullOrEmpty(SettingsKey))
+                return string.Equals(SettingsKey, settingsKey, StringComparison.Ordinal);
+
+            // A file written before the key existed: compare what it does record, so upgrading does
+            // not force a recompute of every directory. One recompute writes a key, so a requested
+            // measure the export cannot supply cannot loop here either.
+            return Measure == measure
+                && string.Equals(Tolerance, tolerance, StringComparison.Ordinal)
+                && string.Equals(IsolationScheme, isolationScheme, StringComparison.Ordinal);
+        }
     }
+
+    /// <summary>
+    /// The cache validity key for a set of settings: what was asked for, in one string. Anything that
+    /// changes the numbers belongs here - and only here, so adding a setting later is one edit.
+    /// </summary>
+    public static string SettingsKeyFor(
+        Ms2SignalMeasure measure, string tolerance, string isolationScheme,
+        IEnumerable<string> listNames) =>
+        string.Join(
+            "|",
+            measure == Ms2SignalMeasure.Ions ? "ions" : "signal",
+            tolerance,
+            isolationScheme,
+            string.Join(",", listNames));
+
+    /// <summary>One phrase naming a set of settings, for the log line on a cache miss.</summary>
+    public static string SummarizeSettings(
+        Ms2SignalMeasure measure, string tolerance, string isolationScheme, int listCount) =>
+        $"{(measure == Ms2SignalMeasure.Ions ? "ions" : "signal")}, extraction {tolerance}, "
+        + $"isolation scheme \"{isolationScheme}\", {listCount} protein list(s)";
 
     /// <summary>
     /// Compute the accounting for every replicate in <paramref name="outputDir"/>, or null when
@@ -107,6 +162,9 @@ public static class Ms2SignalAccounting
         Action<string>? log = null, int memoryBudgetMb = 0,
         Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
+        // What was ASKED FOR. `measure` is reassigned below when the export cannot supply it, and the
+        // cache has to be keyed on the request so the fallback does not miss the cache forever.
+        var requested = measure;
         var mergedRoot = Path.Combine(outputDir, "merged_data");
         if (!MergedDataset.Exists(mergedRoot))
         {
@@ -203,12 +261,36 @@ public static class Ms2SignalAccounting
             rows, classified.ListNames, lists.Select(l => l.ColorHex).ToList(),
             classified.PerListPeptides, classified.AssignedPeptides,
             tolerance.Describe(), scheme.Name, classified.HasGroupColumns || lists.Count == 0,
-            measure);
+            measure,
+            SettingsKeyFor(requested, tolerance.Describe(), scheme.Name, classified.ListNames));
 
         var removed = Median(rows.Select(r => r.DoubleCountedFraction));
         log?.Invoke(
             $"  MS2 signal accounting: {rows.Count:N0} replicate(s); counting shared signal once "
             + $"removed a median {Percent(removed)} of the naive sum.");
+
+        // A total of zero looks exactly like a real result on the plot - flat bars, plausible axis -
+        // so it is said out loud. The commonest cause is a measure whose COLUMN is present but whose
+        // VALUES are not: Skyline computes ion counts only where the spectrum metadata carries
+        // injection times, and it emits the column either way, so no column check can catch it.
+        var skippedTotal = rows.Sum(r => (long)r.Skipped);
+        if (rows.All(r => !(r.AssignedArea > 0)))
+        {
+            log?.Invoke(
+                "  MS2 signal accounting WARNING: every replicate totalled ZERO"
+                + (skippedTotal > 0 ? $" ({skippedTotal:N0} region(s) had no usable value)" : "")
+                + (measure == Ms2SignalMeasure.Ions
+                    ? ". The ion-count column is there but empty - Skyline computes ion counts only "
+                      + "where the spectra carry injection times. Use measure: signal for this document."
+                    : ". Check that the export carries peak areas.")
+                + " The plot is kept for the record, with every bar at zero.");
+        }
+        else if (skippedTotal > 0)
+        {
+            log?.Invoke(
+                $"  MS2 signal accounting: {skippedTotal:N0} region(s) skipped for a non-finite "
+                + "product m/z, integration bound or value.");
+        }
         return result;
     }
 
@@ -240,6 +322,15 @@ public static class Ms2SignalAccounting
             ParquetWideWriter.Strings("tolerance", Repeat(result.Tolerance, n)),
             ParquetWideWriter.Strings("isolation_scheme", Repeat(result.IsolationScheme, n)),
             ParquetWideWriter.Longs("assigned_peptides", Repeat((long)result.AssignedPeptides, n)),
+            // WHICH quantity these are. Not recoverable from the numbers - ion counts and gross areas
+            // are both large positive doubles - so a replot without it captions ions as integrated
+            // signal, in the title, the axis and the caption at once.
+            ParquetWideWriter.Strings(
+                "measure",
+                Repeat(result.Measure == Ms2SignalMeasure.Ions ? "ions" : "signal", n)),
+            // And what was ASKED for, so a re-run can tell a replot from a stale cache.
+            ParquetWideWriter.Strings("settings_key", Repeat(result.SettingsKey, n)),
+            ParquetWideWriter.Longs("lists_matchable", Repeat(result.ListsMatchable ? 1L : 0L, n)),
         };
 
         ParquetWideWriter.Write(
@@ -346,12 +437,20 @@ public static class Ms2SignalAccounting
                 Area(sharedArea, i)));
         }
 
+        // Absent in a file written before these columns existed: measure falls back to the old
+        // implicit answer (signal), lists_matchable to the old hardcoded true, and an empty key makes
+        // MatchesSettings compare the individual fields instead.
+        var matchable = Counts(reader, "lists_matchable");
         return new Result(
             rows, listNames, listColors, listPeptides,
             At(assignedPeptides, 0),
             First(reader, "tolerance") ?? "unknown",
             First(reader, "isolation_scheme") ?? "unknown",
-            ListsMatchable: true);
+            matchable is null || At(matchable, 0) != 0,
+            string.Equals(First(reader, "measure"), "ions", StringComparison.OrdinalIgnoreCase)
+                ? Ms2SignalMeasure.Ions
+                : Ms2SignalMeasure.Signal,
+            First(reader, "settings_key") ?? "");
     }
 
     private static Dictionary<string, double[]> ReadCachedLists(

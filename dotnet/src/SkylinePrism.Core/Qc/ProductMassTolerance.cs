@@ -49,7 +49,9 @@ public readonly record struct ExtractionWindow(double Start, double End)
 /// <param name="Analyzer">Skyline's <c>product_mass_analyzer</c>: centroided, qit, tof, orbitrap, ft_icr.</param>
 /// <param name="Resolution">Skyline's <c>product_res</c> - ppm for centroided, m/z for QIT, resolving power otherwise.</param>
 /// <param name="ResolutionMz">Skyline's <c>product_res_mz</c>, the m/z the resolving power is calibrated at. Required for orbitrap and ft_icr, absent otherwise.</param>
-/// <param name="SelectiveExtraction">Skyline's <c>selective_extraction</c>: halves the window for the resolving-power analyzers.</param>
+/// <param name="SelectiveExtraction">Skyline's <c>selective_extraction</c>: halves the window for every
+/// analyzer except <c>centroided</c> - it divides the resolving-power denominators and, on Skyline's
+/// default arm, the QIT tolerance too. Skyline offers it for any profile-mode analyzer, QIT included.</param>
 public sealed record ProductMassTolerance(
     string Analyzer, double Resolution, double? ResolutionMz = null, bool SelectiveExtraction = false)
 {
@@ -176,15 +178,24 @@ public sealed record ProductMassTolerance(
     /// <see cref="ParseSetting"/> gives back an equal tolerance; this is how the Skyline tool hands a
     /// document's own extraction setting to <c>qc_report.ms2_signal.extraction_tolerance</c>.
     ///
-    /// <para>Null for the resolving-power analyzers (tof, orbitrap, ft_icr): their window is not one
-    /// +/- number, and the setting cannot express it. A caller then keeps the configured value and says
-    /// so, rather than converting to a nearest-ppm that would be right at one m/z only.</para>
+    /// <para>Null whenever the setting cannot express this window, so a caller keeps the configured
+    /// value and says so rather than writing a number that means something else:</para>
+    /// <list type="bullet">
+    /// <item><description>the resolving-power analyzers (tof, orbitrap, ft_icr), whose window is not
+    /// one +/- number - a nearest-ppm conversion would be right at a single m/z only;</description></item>
+    /// <item><description>a QIT window with <see cref="SelectiveExtraction"/>, which HALVES it
+    /// (<c>ResPerFilter</c> reaches the qit arm, matching Skyline's own default arm). The setting has
+    /// no way to say "selective", so <c>"0.7 m/z"</c> would parse back to +/-0.7 where the document
+    /// extracted +/-0.35 - twice too wide, over-merging fragment sharing while the plot caption named
+    /// the document's own number.</description></item>
+    /// </list>
     /// </summary>
     public string? ToSetting() => Analyzer switch
     {
         // "R" round-trips the double exactly, so what is written parses back to the same tolerance.
+        // Selective extraction does not affect the centroided arm's window (no ResPerFilter there).
         "centroided" => Resolution.ToString("R", CultureInfo.InvariantCulture) + " ppm",
-        "qit" => Resolution.ToString("R", CultureInfo.InvariantCulture) + " m/z",
+        "qit" when !SelectiveExtraction => Resolution.ToString("R", CultureInfo.InvariantCulture) + " m/z",
         _ => null,
     };
 

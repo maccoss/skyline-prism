@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.IO;
-
-using System.Linq;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -64,6 +63,33 @@ public static class Ms2SignalRegions
     }
 
     /// <summary>
+    /// Skyline's per-transition ion count column - the one <see cref="Ms2SignalMeasure.Ions"/> reads -
+    /// by whatever spelling an export or the merge gave it, or null when the export has none.
+    /// <c>FindColumn</c> matches ignoring case, spaces and underscores, so "LC Peak Transition Ion
+    /// Count" is found however it was written. Public because the Skyline tool asks the same question
+    /// of a pre-exported report before offering <c>ions</c> as a choice.
+    ///
+    /// <para><b>Exactly one column is accepted, and the near-misses are the point.</b> Skyline
+    /// publishes several ion counts and only this one is a per-transition total:</para>
+    /// <list type="bullet">
+    /// <item><description><c>Apex ...</c> is a single spectrum - the peak's highest point - not a
+    /// total over the peak.</description></item>
+    /// <item><description><c>LC Peak Analyte Ion Count Fragment</c> is a PRECURSOR-level total: it
+    /// sums the precursor's transitions already (Skyline's own PeakMetricsTest asserts it equals
+    /// their sum) and the export repeats it on every one of that precursor's transition rows. Read
+    /// as the per-transition value it would be counted once per transition, inflating the assigned
+    /// total by the fragment count - roughly 6x on a DIA document, and plausible enough to pass
+    /// unnoticed. It was briefly accepted here as a second "spelling"; it is not a spelling of
+    /// anything, it is a different quantity.</description></item>
+    /// </list>
+    /// </summary>
+    public static string? FindIonCountColumn(IEnumerable<string> available)
+    {
+        var names = available as ICollection<string> ?? available.ToList();
+        return SkylineColumns.FindColumn(names, "LC Peak Transition Ion Count");
+    }
+
+    /// <summary>
     /// The signal expression the accounting sums: <c>Area + Background</c> where the export carries
     /// the background, and <c>Area</c> alone where it does not.
     ///
@@ -79,21 +105,6 @@ public static class Ms2SignalRegions
     /// baseline into every abundance. The gross figure exists solely to be comparable with a gross
     /// denominator.</para>
     /// </summary>
-    /// <summary>
-    /// Skyline's per-transition ion count column - the one <see cref="Ms2SignalMeasure.Ions"/> reads -
-    /// by whatever spelling an export or the merge gave it, or null when the export has none.
-    /// <c>FindColumn</c> matches ignoring case, spaces and underscores, so "LC Peak Transition Ion
-    /// Count" is found however it was written. The Apex variant is deliberately NOT accepted: it is
-    /// one spectrum, not a total. Public because the Skyline tool asks the same question of a
-    /// pre-exported report before offering <c>ions</c> as a choice.
-    /// </summary>
-    public static string? FindIonCountColumn(IEnumerable<string> available)
-    {
-        var names = available as ICollection<string> ?? available.ToList();
-        return SkylineColumns.FindColumn(
-            names, "LC Peak Transition Ion Count", "LC Peak Analyte Ion Count Fragment");
-    }
-
     internal static string GrossSignalSql(Columns cols, Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
         // Ions are already gross and already a count, so there is nothing to add or convert - which

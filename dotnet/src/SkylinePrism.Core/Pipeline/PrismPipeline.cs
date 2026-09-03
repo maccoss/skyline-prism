@@ -38,10 +38,17 @@ public sealed class PrismPipeline
     /// whatever stage happens to be running. Outputs written before the stop are left in place - they
     /// are intermediates of an incomplete run, not results.
     /// </summary>
+    /// <param name="beforeQcReport">
+    /// Run just before Stage 5b, if the QC report is enabled. For a caller with work the REPORT needs
+    /// but the stages do not - the Skyline tool reads the acquisition's isolation windows in the
+    /// background, and only the MS2 signal accounting consumes them - so it can be waited for here
+    /// instead of in front of Stage 1, where it delayed every stage for a value used by the last one.
+    /// </param>
     public static Result Run(
         IReadOnlyList<string> inputs, string outputDir, PrismConfig config,
         IReadOnlyList<string>? metadataPaths = null, Action<string>? log = null,
-        bool forceReprocess = false, CancellationToken cancellationToken = default)
+        bool forceReprocess = false, CancellationToken cancellationToken = default,
+        Action? beforeQcReport = null)
     {
         Directory.CreateDirectory(outputDir);
         var reportRaw = log ?? (_ => { });
@@ -696,6 +703,7 @@ public sealed class PrismPipeline
         // Stage 5b: QC report.
         if (config.QcReport.Enabled)
         {
+            beforeQcReport?.Invoke();
             report("Stage 5b: Generating QC report (qc_report.html)...");
             // The log sink matters here: MS2 signal accounting runs inside the report and is the one
             // part of it that can take minutes, so its progress and its skip reasons belong in the run log.

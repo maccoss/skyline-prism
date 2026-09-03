@@ -29,7 +29,11 @@ as the GitHub Release description and fails if it is missing.
 
   Off by default because it costs one extra streaming pass over the merged table. Results are cached as
   `ms2_signal_accounting.parquet` (and `ms2_signal_lists.parquet`), so `prism qc -d` replots without
-  recomputing and keeps working on a directory whose `merged_data/` was cleaned up.
+  recomputing and keeps working on a directory whose `merged_data/` was cleaned up. The cache is keyed
+  on what was asked for - measure, extraction tolerance, isolation scheme, protein lists - so a re-run
+  that changes any of them recomputes and says so, rather than replotting the previous run's numbers
+  under the new run's caption. With the section turned off, a cache left by an earlier run into the
+  same directory is left alone rather than rendered.
 
   The largest bar is **not** acquired MS2 signal - that needs the instrument files, and no Skyline
   export can supply it (`TicArea` is one value per replicate and MS1 by construction). It is the signal
@@ -58,13 +62,21 @@ as the GitHub Release description and fails if it is missing.
 
   On the Settings tab, **9. MS2 signal accounting** turns the QC section on, picks the measure, and has
   an **Export ion counts** option that exports each Skyline document with `PRISM-Ions` instead. The two
-  are deliberately separate: once ion counts are exported, both measures are available; `ions` is greyed
+  are deliberately separate: once ion counts are exported, both measures are available; `ions` is grayed
   out - with the reason as its tooltip - until every input will carry the column, and a pre-exported
-  report is checked for it from its header. The tool also reads the document's own product-ion
-  extraction tolerance (`transition_full_scan`) into `extraction_tolerance`, the way it already reads
-  the digestion enzyme, and waits for the isolation-window read before writing the QC report so the
-  section is there on the first run. A cached headless export records which report produced it, so
-  switching the export option re-exports rather than reusing a file without the column.
+  report is checked for it from its header (off the UI thread, and re-checked when the file changes, so
+  re-exporting one makes `ions` available without re-adding the input). The export is refused outright
+  when an input cannot carry the column, because a cohort whose inputs have different columns cannot be
+  merged - the run would otherwise die in Stage 1 after hours of export. Each report variant gets its
+  own export directory, so switching the measure back does not overwrite the expensive one.
+
+  The tool also reads the document's own product-ion extraction tolerance (`transition_full_scan`) into
+  `extraction_tolerance`, the way it already reads the digestion enzyme - asking every input and warning
+  when the documents disagree, since one tolerance is applied to the whole cohort. Windows the setting
+  cannot express (a resolving-power analyzer, or a QIT window with selective extraction) are left to the
+  configured value and named in the log. The QC report waits - briefly, and only at Stage 5b - for the
+  isolation-window read, so the section is there on the first run without the window read delaying the
+  stages that do not need it.
 
 - **The Skyline tool can now measure ACQUIRED MS2 signal, by reading the instrument files.** This is
   the denominator the MS2 signal accounting needs and no Skyline export carries: `TicArea` is MS1 by
