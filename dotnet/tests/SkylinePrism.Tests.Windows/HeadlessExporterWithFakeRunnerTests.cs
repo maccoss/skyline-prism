@@ -803,4 +803,54 @@ public class HeadlessExporterWithFakeRunnerTests
         Assert.Throws<FileNotFoundException>(() => new HeadlessSkylineExporter(runner, reportsDir: dir)
             .Export(Path.Combine(dir, "nope.sky"), Path.Combine(dir, "out"), "PlateA"));
     }
+    /// <summary>
+    /// Asking for ion counts installs and exports the PRISM-Ions definition, not PRISM. The name is the
+    /// only record of which was exported - the file stems are identical.
+    /// </summary>
+    [Fact]
+    public void Export_WithIonCounts_InstallsAndExportsThePrismIonsReport()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        File.WriteAllText(Path.Combine(dir, PrismReport.IonsFileName), "<views />");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir)
+            .Export(sky, Path.Combine(dir, "out"), "PlateA", includeIonCounts: true);
+
+        Assert.EndsWith(PrismReport.IonsFileName, runner.ReportAdd(0));
+        Assert.Contains("--report-name=PRISM-Ions", runner.Invocations[0]);
+        Assert.DoesNotContain("--report-name=PRISM", runner.Invocations[0]);
+    }
+
+    /// <summary>
+    /// A cached export made with the other report definition is the wrong shape even though the
+    /// document is untouched: one has the ion-count column and one does not, and reusing the wrong one
+    /// would make "ions" silently sum areas. Both directions re-export.
+    /// </summary>
+    [Fact]
+    public void Export_DoesNotReuse_WhenTheReportDefinitionChanged()
+    {
+        var dir = TempDir();
+        var sky = WriteSky(dir);
+        var work = Path.Combine(dir, "out");
+        var runner = new FakeRunner(supportsParquet: false) { OnRun = (_, file) => WriteCsv(file) };
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        var afterStandard = runner.Invocations.Count;
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA", includeIonCounts: true);
+        var afterIons = runner.Invocations.Count;
+        Assert.True(afterIons > afterStandard, "switching to ion counts must re-export");
+        Assert.Contains("--report-name=PRISM-Ions", runner.Invocations[afterStandard]);
+
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        Assert.True(runner.Invocations.Count > afterIons, "switching back must re-export too");
+        Assert.Contains("--report-name=PRISM", runner.Invocations[afterIons]);
+
+        // And the same request twice is still served from the cache.
+        var before = runner.Invocations.Count;
+        new HeadlessSkylineExporter(runner, reportsDir: dir).Export(sky, work, "PlateA");
+        Assert.Equal(before, runner.Invocations.Count);
+    }
 }

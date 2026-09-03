@@ -4,6 +4,8 @@ using System.Globalization;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.IO;
 
+using System.Linq;
+
 namespace SkylinePrism.Core.Qc;
 
 /// <summary>
@@ -77,6 +79,21 @@ public static class Ms2SignalRegions
     /// baseline into every abundance. The gross figure exists solely to be comparable with a gross
     /// denominator.</para>
     /// </summary>
+    /// <summary>
+    /// Skyline's per-transition ion count column - the one <see cref="Ms2SignalMeasure.Ions"/> reads -
+    /// by whatever spelling an export or the merge gave it, or null when the export has none.
+    /// <c>FindColumn</c> matches ignoring case, spaces and underscores, so "LC Peak Transition Ion
+    /// Count" is found however it was written. The Apex variant is deliberately NOT accepted: it is
+    /// one spectrum, not a total. Public because the Skyline tool asks the same question of a
+    /// pre-exported report before offering <c>ions</c> as a choice.
+    /// </summary>
+    public static string? FindIonCountColumn(IEnumerable<string> available)
+    {
+        var names = available as ICollection<string> ?? available.ToList();
+        return SkylineColumns.FindColumn(
+            names, "LC Peak Transition Ion Count", "LC Peak Analyte Ion Count Fragment");
+    }
+
     internal static string GrossSignalSql(Columns cols, Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
         // Ions are already gross and already a count, so there is nothing to add or convert - which
@@ -110,11 +127,7 @@ public static class Ms2SignalRegions
         // and the caller says so rather than quietly reporting a lower fraction.
         var background = SkylineColumns.FindColumn(available, "Background");
 
-        // Skyline's per-transition ion count. FindColumn matches ignoring case, spaces and
-        // underscores, so the exported "LC Peak Transition Ion Count" is found however the merge
-        // spelled it. The Apex variant is deliberately NOT accepted: it is one spectrum, not a total.
-        var transitionIons = SkylineColumns.FindColumn(
-            available, "LC Peak Transition Ion Count", "LC Peak Analyte Ion Count Fragment");
+        var transitionIons = FindIonCountColumn(available);
 
         return sample is null || peptide is null || transition is null || area is null
             || precursorMz is null || productMz is null || start is null || end is null

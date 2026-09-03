@@ -614,6 +614,18 @@ tool's Skyline integration. Key points (mirrored in the code under `dotnet/src/S
 > with the plain annotation name (`Plate`). Both engines build the view through
 > `ReplicatesReportBuilder`, which applies the quoting — go through it rather than hand-rolling XML.
 
+> [!NOTE]
+> **Two transition report definitions ship, and they must stay in lockstep.** `Reports/Skyline-PRISM.skyr`
+> (view `PRISM`) is the standard export; `Reports/Skyline-PRISM-Ions.skyr` (view `PRISM-Ions`) is the same
+> columns in the same order plus exactly one more, `Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount`,
+> which `qc_report.ms2_signal.measure: ions` reads. It is a separate report because Skyline is slow to compute
+> that column (measured at 29x slower per row on a 46M-row document - about 4 hours instead of 9.5 minutes -
+> and one column costs half of what five do, so the cost is per-transition chromatogram access) and because a report is
+> installed into the user's Skyline settings by view name - two names mean the fast report is never silently
+> replaced by the slow one. Both exporters choose through `PrismReport.NameFor/FileFor(includeIonCounts)`;
+> the headless export stamp records which report produced a cached export. `PrismReportDefinitionTests`
+> fails the build if the two files drift, so add a column to BOTH or to neither.
+
 ### Inputs: multiple documents, open or closed (`PrismInput`)
 
 The tool takes a LIST of inputs — one per batch/plate — merged into a single cohort. `PrismInput.Prepare`

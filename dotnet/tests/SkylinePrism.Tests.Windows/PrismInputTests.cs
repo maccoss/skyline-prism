@@ -211,4 +211,49 @@ public class PrismInputTests
         Assert.Equal("Report file", PrismInput.FromReportFile(TempFile("a.csv")).KindLabel);
         Assert.Equal("Skyline document", PrismInput.FromClosedDocument(TempFile("a.sky", "<x/>")).KindLabel);
     }
+    /// <summary>
+    /// The Settings tab offers "ions" for a pre-exported report only when the file carries the column,
+    /// decided from the header alone. Skyline spells it "LC Peak Transition Ion Count", quoted or not.
+    /// </summary>
+    [Fact]
+    public void HasIonCounts_ReadsTheHeaderOfAPreExportedReport()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_ions_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        const char tab = (char)9;
+
+        var with = Path.Combine(dir, "with.csv");
+        File.WriteAllLines(with, new[]
+        {
+            "Replicate Name,Area,Background," + '"' + "LC Peak Transition Ion Count" + '"',
+            "R1,1,2,3",
+        });
+        var without = Path.Combine(dir, "without.tsv");
+        File.WriteAllLines(without, new[]
+        {
+            string.Join(tab, "Replicate Name", "Area", "Background"),
+            string.Join(tab, "R1", "1", "2"),
+        });
+        var apexOnly = Path.Combine(dir, "apex.csv");
+        File.WriteAllLines(apexOnly, new[] { "Replicate Name,Area,Apex Transition Ion Count", "R1,1,3" });
+
+        Assert.True(PrismInput.FromReportFile(with).HasIonCounts());
+        Assert.False(PrismInput.FromReportFile(without).HasIonCounts());
+        Assert.False(PrismInput.FromReportFile(apexOnly).HasIonCounts());
+    }
+
+    [Fact]
+    public void HasIonCounts_IsNullForInputsStillToBeExported()
+    {
+        // A closed document has whatever the export is asked for; the answer is not the file's to give.
+        Assert.Null(PrismInput.FromClosedDocument(Path.Combine(Path.GetTempPath(), "x.sky")).HasIonCounts());
+    }
+
+    [Fact]
+    public void HasIonCounts_IsFalseNotAnException_ForAnUnreadableFile()
+    {
+        var missing = PrismInput.FromReportFile(
+            Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid().ToString("N") + ".csv"));
+        Assert.False(missing.HasIonCounts());
+    }
 }

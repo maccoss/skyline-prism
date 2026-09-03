@@ -36,6 +36,36 @@ as the GitHub Release description and fails if it is missing.
   Skyline integrated for the document's targets, and it is labelled that way, because reading it as the
   acquired total would turn unknown coverage into apparently complete coverage.
 
+- **MS2 signal accounting can total ions instead of signal, and the Skyline tool can export what that
+  needs.** `qc_report.ms2_signal.measure` chooses: `signal` sums each transition's gross peak area
+  (`Area + Background`), available from any export; `ions` sums Skyline's `LC Peak Transition Ion
+  Count` - intensity times injection time per spectrum, summed across the peak - so the total is a count
+  of ions, neither side is background subtracted, and no unit correction applies. Ions are the better
+  measure and cannot be recovered from an area after the fact: on AGC-controlled data the injection
+  time varies by two orders of magnitude within one run (0.06 to 10.6 ms measured on an Astral file)
+  and anti-correlates with intensity, so a constant approximation is wrong by 2.9x.
+
+  The column is expensive for Skyline to compute, so it is not in the standard `PRISM` report. Measured
+  on the 6.5 GB FLARE document (46M transition rows, 93 replicates): the three-column baseline exported
+  in 9.5 minutes; with five LC Peak ion-count columns it was 13% done after 63 minutes - 27x slower per
+  byte, projecting to 9-13 hours. The per-transition column alone was measured too: 7.9M rows in 42
+  minutes, 187k rows/min against the baseline's 5.4M, so **29x slower per row - about 4 hours instead of
+  9.5 minutes**. Twice as fast as all five, which places the cost in reading each transition's
+  chromatogram points rather than in the columns derived from them; there is no cheaper column to ask
+  for. A second definition, **`PRISM-Ions`** (`Skyline-PRISM-Ions.skyr`), is
+  the `PRISM` report plus that one column and nothing else, so a document exported either way merges
+  identically; a test holds the two files to that relation.
+
+  On the Settings tab, **9. MS2 signal accounting** turns the QC section on, picks the measure, and has
+  an **Export ion counts** option that exports each Skyline document with `PRISM-Ions` instead. The two
+  are deliberately separate: once ion counts are exported, both measures are available; `ions` is greyed
+  out - with the reason as its tooltip - until every input will carry the column, and a pre-exported
+  report is checked for it from its header. The tool also reads the document's own product-ion
+  extraction tolerance (`transition_full_scan`) into `extraction_tolerance`, the way it already reads
+  the digestion enzyme, and waits for the isolation-window read before writing the QC report so the
+  section is there on the first run. A cached headless export records which report produced it, so
+  switching the export option re-exports rather than reusing a file without the column.
+
 - **The Skyline tool can now measure ACQUIRED MS2 signal, by reading the instrument files.** This is
   the denominator the MS2 signal accounting needs and no Skyline export carries: `TicArea` is MS1 by
   construction (its TIC filter sets `Ms1ProductFilters` and leaves `Ms2ProductFilters` empty), so it

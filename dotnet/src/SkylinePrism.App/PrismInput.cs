@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Skyline;
 
@@ -122,9 +123,16 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// Skyline when needed; a pre-exported report is used in place (no copy).
     /// </summary>
     /// <param name="skylineCmdPath">Optional explicit SkylineCmd.exe for the closed-document path.</param>
+    /// <param name="includeIonCounts">
+    /// Export the PRISM-Ions report (the standard report plus Skyline's per-transition LC Peak ion
+    /// count) instead of PRISM - much slower, and needed only for <c>qc_report.ms2_signal.measure:
+    /// ions</c>. Ignored for a pre-exported report, which has whatever columns it was exported with;
+    /// see <see cref="HasIonCounts"/>.
+    /// </param>
     public ExportedReports Prepare(
         string reportsDir, string? metadataReportName, string? batchAnnotation,
-        string? skylineCmdPath, Action<string> log, CancellationToken cancellationToken)
+        string? skylineCmdPath, Action<string> log, CancellationToken cancellationToken,
+        bool includeIonCounts = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var label = string.IsNullOrWhiteSpace(BatchLabel) ? SanitizeLabel(DisplayName) : SanitizeLabel(BatchLabel);
@@ -143,13 +151,14 @@ public sealed class PrismInput : INotifyPropertyChanged
                 var session = Session
                     ?? throw new InvalidOperationException($"{DisplayName}: no Skyline connection for this input.");
                 var driver = new SkylineReportDriver(session, scoped);
-                return driver.Export(reportsDir, metadataReportName, batchAnnotation, label);
+                return driver.Export(reportsDir, metadataReportName, batchAnnotation, label, includeIonCounts);
             }
 
             case PrismInputKind.ClosedDocument:
             {
                 var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
-                return exporter.Export(Path, reportsDir, label, batchAnnotation, cancellationToken);
+                return exporter.Export(
+                    Path, reportsDir, label, batchAnnotation, cancellationToken, includeIonCounts);
             }
 
             default:
@@ -195,6 +204,77 @@ public sealed class PrismInput : INotifyPropertyChanged
             log($"({DisplayName}: could not read the digestion enzyme: {ex.Message})");
             return null;
         }
+    }
+
+    /// <summary>
+    /// The m/z range Skyline extracted each product ion over, from the document's
+    /// <c>&lt;transition_full_scan&gt;</c> settings - what the MS2 signal accounting needs to decide when
+    /// two transitions read the same detector counts. Null when this input cannot say: a pre-exported
+    /// report carries no settings, an unsaved live document has no file to read, and a document with no
+    /// full-scan settings has no tolerance. The caller then keeps the configured value.
+    ///
+    /// <para>For a live Skyline the SAVED document is read, the way the closed-document path reads it:
+    /// there is no RPC for the transition settings, and the extraction tolerance is not something that
+    /// is edited between saves the way peak boundaries are.</para>
+    /// </summary>
+    public ProductMassTolerance? TryGetExtractionTolerance(Action<string> log)
+    {
+        try
+        {
+            var documentPath = Kind switch
+            {
+                PrismInputKind.RunningSkyline when Session is not null =>
+                    Session.Execute(c => c.GetDocumentPath()),
+                PrismInputKind.ClosedDocument => Path,
+                _ => null,
+            };
+            if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
+                return null;
+            return SkyDocumentInfo.TryRead(documentPath, log)?.ProductTolerance;
+        }
+        catch (Exception ex)
+        {
+            log($"({DisplayName}: could not read the product-ion extraction settings: {ex.Message})");
+            return null;
+        }
+    }
+
+    private bool? _hasIonCounts;
+
+    /// <summary>
+    /// For a pre-exported report: whether it carries Skyline's LC Peak Transition Ion Count column,
+    /// decided from the parquet schema or the CSV/TSV header alone - the rows are never read. Null for
+    /// the other input kinds, whose export is still to come and carries the column if asked to. Cached,
+    /// because the answer is a property of the file and the Settings tab asks on every change.
+    /// </summary>
+    public bool? HasIonCounts()
+    {
+        if (Kind != PrismInputKind.ReportFile)
+            return null;
+        if (_hasIonCounts is { } known)
+            return known;
+        try
+        {
+            _hasIonCounts = Ms2SignalRegions.FindIonCountColumn(ReadReportColumnNames(Path)) is not null;
+        }
+        catch
+        {
+            // Unreadable right now: offer no ions rather than guess. The run reports the real problem.
+            _hasIonCounts = false;
+        }
+        return _hasIonCounts;
+    }
+
+    /// <summary>The column names of an exported report: the parquet schema, or the first line of a CSV/TSV.</summary>
+    internal static IReadOnlyList<string> ReadReportColumnNames(string path)
+    {
+        if (System.IO.Path.GetExtension(path).Equals(".parquet", StringComparison.OrdinalIgnoreCase))
+            return ParquetTable.ReadColumnNames(path);
+        using var reader = new StreamReader(path);
+        var header = reader.ReadLine() ?? "";
+        const char tab = (char)9;
+        var separator = header.Contains(tab) ? tab : ',';
+        return header.Split(separator).Select(h => h.Trim().Trim('"')).ToArray();
     }
 
     /// <summary>

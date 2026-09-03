@@ -440,4 +440,45 @@ public class SkylineReportDriverTests
         client.ThrowOnSelect = true;
         Assert.False(driver.SelectElement("MoleculeGroup:/gone"));
     }
+    /// <summary>
+    /// The live path makes the same choice as the headless one: ion counts requested means the
+    /// PRISM-Ions definition is installed (from the bundled file beside the executable) and exported.
+    /// </summary>
+    [Fact]
+    public void Export_WithIonCounts_ExportsThePrismIonsReport()
+    {
+        var client = new FakeClient
+        {
+            OnExport = (_, path) =>
+            {
+                if (path.EndsWith(".parquet")) WriteValidParquet(path);
+                else File.WriteAllLines(path, new[] { "a,b", "1,2" });
+            },
+        };
+        var work = TempDir();
+
+        var res = new SkylineReportDriver(new FakeExecutor(client)).Export(work, includeIonCounts: true);
+
+        Assert.True(res.InputIsParquet);
+        Assert.Contains(client.Exports, e => e.Report == "PRISM-Ions" && e.Path.EndsWith(".parquet"));
+        Assert.DoesNotContain(client.Exports, e => e.Report == "PRISM");
+        Assert.Contains(client.Commands, cmd => cmd.Any(a =>
+            a.StartsWith("--report-add=") && a.EndsWith(PrismReport.IonsFileName)));
+        Assert.DoesNotContain(client.Commands, cmd => cmd.Any(a =>
+            a.StartsWith("--report-add=") && a.EndsWith(PrismReport.FileName)));
+    }
+
+    /// <summary>The default is unchanged: the standard, cheap report, and no PRISM-Ions anywhere.</summary>
+    [Fact]
+    public void Export_WithoutIonCounts_KeepsTheStandardReport()
+    {
+        var client = new FakeClient { OnExport = (_, p) => File.WriteAllText(p, "x") };
+        var work = TempDir();
+
+        new SkylineReportDriver(new FakeExecutor(client)).Export(work);
+
+        Assert.Contains(client.Exports, e => e.Report == "PRISM");
+        Assert.DoesNotContain(client.Exports, e => e.Report == "PRISM-Ions");
+        Assert.DoesNotContain(client.Commands, cmd => cmd.Any(a => a.EndsWith(PrismReport.IonsFileName)));
+    }
 }

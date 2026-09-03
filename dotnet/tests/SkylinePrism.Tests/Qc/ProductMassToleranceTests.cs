@@ -184,4 +184,35 @@ public class ProductMassToleranceTests
         Assert.Equal("+/-0.7 m/z (QIT)", ProductMassTolerance.Parse("qit", "0.7")!.Describe());
         Assert.Contains("resolving power", ProductMassTolerance.Parse("tof", "30000")!.Describe());
     }
+    /// <summary>
+    /// The Skyline tool hands a document's extraction setting to the config as text, so the text must
+    /// mean exactly the tolerance it came from - a rounding in the spelling would change how much
+    /// fragment sharing the accounting finds, with the plot naming a tolerance that was never in force.
+    /// </summary>
+    [Fact]
+    public void ToSettingRoundTripsThroughParseSetting()
+    {
+        foreach (var (analyzer, res) in new[] { ("centroided", "10"), ("qit", "0.7"), ("centroided", "12.5"), ("qit", "0.3") })
+        {
+            var t = ProductMassTolerance.Parse(analyzer, res)!;
+            var setting = t.ToSetting();
+            Assert.NotNull(setting);
+            Assert.Equal(t, ProductMassTolerance.ParseSetting(setting));
+        }
+
+        Assert.Equal("10 ppm", ProductMassTolerance.Parse("centroided", "10")!.ToSetting());
+        Assert.Equal("0.7 m/z", ProductMassTolerance.Parse("qit", "0.7")!.ToSetting());
+    }
+
+    /// <summary>
+    /// A resolving-power window is not one +/- number, so there is no setting to write. Null, not a
+    /// nearest-ppm guess that would be right at a single m/z.
+    /// </summary>
+    [Fact]
+    public void ToSettingIsNullForResolvingPowerAnalyzers()
+    {
+        Assert.Null(ProductMassTolerance.Parse("tof", "30000")!.ToSetting());
+        Assert.Null(ProductMassTolerance.Parse("orbitrap", "60000", "400")!.ToSetting());
+        Assert.Null(ProductMassTolerance.Parse("ft_icr", "100000", "400")!.ToSetting());
+    }
 }

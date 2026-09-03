@@ -159,8 +159,9 @@ qc_report:
   # Stage 2), and the result is cached so `prism qc -d` replots without recomputing.
   ms2_signal:
     enabled: false
-    measure: "signal"                  # signal | ions - see docs/parameters.md; ions is the better
-                                       # measure but needs an export with Skyline's ion-count columns
+    measure: "signal"                  # signal | ions - see docs/parameters.md. ions is the better measure
+                                       # but needs the PRISM-Ions report (Skyline-PRISM-Ions.skyr), a much
+                                       # slower export; the Skyline tool offers it as an export option
     extraction_tolerance: "10 ppm"     # +/- tolerance Skyline extracted product ions over ("0.4 m/z" also works)
     # isolation_scheme: "Astral 3 Th, 400-900 m/z"       # from isolation_schemes.xml; blank = the only one there
     # protein_lists: ["Hemolysis", "Coagulation"]        # saved or shipped list names, one bar each

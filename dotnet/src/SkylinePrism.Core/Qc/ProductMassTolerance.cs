@@ -172,6 +172,23 @@ public sealed record ProductMassTolerance(
     }
 
     /// <summary>
+    /// The config spelling of this tolerance - <c>"10 ppm"</c> or <c>"0.7 m/z"</c> - chosen so that
+    /// <see cref="ParseSetting"/> gives back an equal tolerance; this is how the Skyline tool hands a
+    /// document's own extraction setting to <c>qc_report.ms2_signal.extraction_tolerance</c>.
+    ///
+    /// <para>Null for the resolving-power analyzers (tof, orbitrap, ft_icr): their window is not one
+    /// +/- number, and the setting cannot express it. A caller then keeps the configured value and says
+    /// so, rather than converting to a nearest-ppm that would be right at one m/z only.</para>
+    /// </summary>
+    public string? ToSetting() => Analyzer switch
+    {
+        // "R" round-trips the double exactly, so what is written parses back to the same tolerance.
+        "centroided" => Resolution.ToString("R", CultureInfo.InvariantCulture) + " ppm",
+        "qit" => Resolution.ToString("R", CultureInfo.InvariantCulture) + " m/z",
+        _ => null,
+    };
+
+    /// <summary>
     /// How the tolerance reads in a log line or a plot caption. Stated as the +/- tolerance where that
     /// is a single number, because that is what the document's own setting means.
     /// </summary>

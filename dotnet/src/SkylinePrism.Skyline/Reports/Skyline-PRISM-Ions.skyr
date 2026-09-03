@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<views>
+  <!--
+    PRISM-Ions: the PRISM transition report plus Skyline's per-transition ion count. It exists as a
+    SEPARATE report because that one column is expensive - Skyline computes intensity x injection time
+    per spectrum for every transition - so the standard PRISM report does not carry it and the tool
+    exports this one only when asked (the Settings tab's "Export ion counts" option, which is what
+    makes qc_report.ms2_signal.measure = ions possible).
+
+    Every other column MUST match Skyline-PRISM.skyr, in the same order, so a document exported either
+    way merges identically; PrismReportDefinitionTests holds the two files to that. The Apex and
+    precursor-level ion metrics are deliberately absent: the accounting reads the LC Peak total per
+    transition, and an apex value is one spectrum, not a peak.
+  -->
+  <view name="PRISM-Ions" rowsource="pwiz.Skyline.Model.Databinding.Entities.Transition" sublist="Results!*" uimode="proteomic">
+    <column name="Precursor.Peptide.Protein" />
+    <column name="Precursor.Peptide.Protein.Accession" />
+    <column name="Precursor.Peptide.Protein.Gene" />
+    <column name="Precursor.Peptide" />
+    <column name="Precursor.Peptide.ModifiedSequence.UnimodIds" />
+    <column name="Precursor.Charge" />
+    <column name="Precursor.Mz" />
+    <column name="Results!*.Value.PrecursorResult.IsotopeDotProduct" />
+    <column name="Results!*.Value.PrecursorResult.DetectionQValue" />
+    <column name="FragmentIon" />
+    <column name="ProductCharge" />
+    <column name="ProductMz" />
+    <column name="Results!*.Value.Area" />
+    <column name="Results!*.Value.Background" />
+    <column name="Results!*.Value.RetentionTime" />
+    <column name="Results!*.Value.StartTime" />
+    <column name="Results!*.Value.EndTime" />
+    <column name="Results!*.Value.Fwhm" />
+    <column name="Results!*.Value.ShapeCorrelation" />
+    <column name="Results!*.Value.Truncated" />
+    <column name="Results!*.Value.PrecursorResult.PeptideResult.ResultFile.Replicate.Name" />
+    <column name="Results!*.Value.PrecursorResult.PeptideResult.ResultFile.FileName" />
+    <column name="Results!*.Value.PrecursorResult.PeptideResult.ResultFile.TicArea" />
+    <column name="Results!*.Value.PrecursorResult.PeptideResult.ResultFile.AcquiredTime" />
+    <!-- Exported as "LC Peak Transition Ion Count": the sum over the spectra inside the peak boundaries
+         of transition intensity x injection time. Not background subtracted. -->
+    <column name="Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount" />
+  </view>
+</views>

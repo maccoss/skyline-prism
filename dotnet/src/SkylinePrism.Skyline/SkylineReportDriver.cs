@@ -33,9 +33,15 @@ public sealed class SkylineReportDriver
     /// file stem. Defaults to "PRISM" (the single-document case); pass the document name when several
     /// documents are being combined, so their replicates stay distinguishable.
     /// </param>
+    /// <param name="includeIonCounts">
+    /// Export the <see cref="PrismReport.IonsName"/> report - the standard one plus Skyline's
+    /// per-transition LC Peak ion count - instead of <see cref="PrismReport.Name"/>. Much slower: Skyline
+    /// computes that column per spectrum for every transition. Needed for
+    /// <c>qc_report.ms2_signal.measure: ions</c>, and for nothing else.
+    /// </param>
     public ExportedReports Export(
         string workDir, string? metadataReportName = null, string? batchAnnotation = null,
-        string? documentLabel = null)
+        string? documentLabel = null, bool includeIonCounts = false)
     {
         Directory.CreateDirectory(workDir);
 
@@ -47,24 +53,31 @@ public sealed class SkylineReportDriver
 
         var label = string.IsNullOrWhiteSpace(documentLabel) ? "PRISM" : documentLabel!;
 
-        EnsureReportsInstalled();
+        var reportName = PrismReport.NameFor(includeIonCounts);
+        EnsureReportsInstalled(includeIonCounts);
 
-        // Preferred path: export PRISM directly as parquet. Skyline determines the format
+        // Preferred path: export the report directly as parquet. Skyline determines the format
         // from the file extension, the same mechanism that produced the CSV.
         var prismParquet = Path.Combine(workDir, label + ".parquet");
-        _log("Exporting PRISM report as parquet (this can take a while on large documents)...");
+        _log($"Exporting the {reportName} report as parquet (this can take a while on large documents)...");
+        if (includeIonCounts)
+        {
+            _log("  Ion counts requested: Skyline computes LC Peak Transition Ion Count per spectrum for "
+                 + "every transition, so this export takes roughly 30x longer than the standard report "
+                 + "(about 4 hours instead of 9.5 minutes on a 46M-row document).");
+        }
         try
         {
-            _session.Execute(c => c.ExportReport("PRISM", prismParquet, "invariant"));
+            _session.Execute(c => c.ExportReport(reportName, prismParquet, "invariant"));
         }
         catch (Exception ex)
         {
-            _log($"PRISM parquet export threw: {ex.Message}");
+            _log($"{reportName} parquet export threw: {ex.Message}");
         }
 
         if (IsValidParquet(prismParquet))
         {
-            _log($"Exported PRISM report (parquet): {prismParquet} "
+            _log($"Exported {reportName} report (parquet): {prismParquet} "
                  + $"({new FileInfo(prismParquet).Length:N0} bytes)");
             DeleteSupersededCsv(workDir, label);
             return new ExportedReports(
@@ -76,8 +89,8 @@ public sealed class SkylineReportDriver
         _log("A valid parquet was not produced; falling back to invariant CSV.");
         TryDelete(prismParquet);
         var prismCsv = Path.Combine(workDir, label + ".csv");
-        _session.Execute(c => c.ExportReport("PRISM", prismCsv, "invariant"));
-        _log($"Exported PRISM report (invariant CSV): {prismCsv}");
+        _session.Execute(c => c.ExportReport(reportName, prismCsv, "invariant"));
+        _log($"Exported {reportName} report (invariant CSV): {prismCsv}");
         return new ExportedReports(
             prismCsv, false,
             ExportMetadataReport(workDir, metadataReportName, batchAnnotation, label), docPath, label);
@@ -402,12 +415,14 @@ public sealed class SkylineReportDriver
         return names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().ToList();
     }
 
-    private void EnsureReportsInstalled()
+    private void EnsureReportsInstalled(bool includeIonCounts)
     {
-        // Only the PRISM transition report is always needed. The replicate metadata comes from the
-        // Replicates document grid (read dynamically), so the PRISM-Replicates saved report is installed
-        // on demand only if that grid read fails - keeping it out of the document's saved-report list.
-        InstallReport("Skyline-PRISM.skyr", "PRISM");
+        // Only the transition report is always needed - the standard PRISM one, or PRISM-Ions when ion
+        // counts were asked for; they are separate saved reports so the fast one is never replaced by
+        // the slow one. The replicate metadata comes from the Replicates document grid (read
+        // dynamically), so the PRISM-Replicates saved report is installed on demand only if that grid
+        // read fails - keeping it out of the document's saved-report list.
+        InstallReport(PrismReport.FileFor(includeIonCounts), PrismReport.NameFor(includeIonCounts));
     }
 
     /// <summary>

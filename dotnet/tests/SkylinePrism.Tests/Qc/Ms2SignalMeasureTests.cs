@@ -139,4 +139,19 @@ public class Ms2SignalMeasureTests
         Assert.Equal(Ms2SignalMeasure.Signal, signal.Measure);   // the default
         Assert.Equal(Ms2SignalMeasure.Ions, ions.Measure);
     }
+    /// <summary>
+    /// The same question the Skyline tool asks of a pre-exported report before it offers "ions": does
+    /// this file carry the column? Spelled as Skyline exports it, as the merge might rewrite it, and
+    /// never satisfied by an Apex column.
+    /// </summary>
+    [Fact]
+    public void FindIonCountColumn_AcceptsTheLcPeakSpellingsAndNotApex()
+    {
+        Assert.Equal("LC Peak Transition Ion Count",
+            Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "LC Peak Transition Ion Count" }));
+        Assert.Equal("LCPeakTransitionIonCount",
+            Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "LCPeakTransitionIonCount" }));
+        Assert.Null(Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "Background" }));
+        Assert.Null(Ms2SignalRegions.FindIonCountColumn(new[] { "Area", "Apex Transition Ion Count" }));
+    }
 }
