@@ -396,6 +396,72 @@ public class SharedDocumentArchiveTests
     }
 
     /// <summary>
+    /// Two archives that share a NAME must not share an extraction. Beside the archive the stem is
+    /// unique by construction, but a redirected target gathers archives from everywhere - two Panorama
+    /// folders both holding "Plate1.sky.zip" is ordinary - and a shared folder there is not a
+    /// survivable collision: one input extracts, hands the path to Skyline, and the other re-extracts
+    /// over the files that Skyline is reading. The stamp cannot help; it is checked before extracting.
+    /// </summary>
+    [Fact]
+    public void SameNamedArchivesFromDifferentFoldersDoNotShareAnExtraction()
+    {
+        var one = TempDir();
+        var two = TempDir();
+        var elsewhere = TempDir();
+        var a = WriteArchive(one, entries: new[] { ("Plate1.sky", Document), ("Plate1.skyd", "cache A") });
+        var b = WriteArchive(two, entries: new[] { ("Plate1.sky", Document), ("Plate1.skyd", "cache B") });
+        Assert.Equal(Path.GetFileName(a), Path.GetFileName(b));   // the premise
+
+        Environment.SetEnvironmentVariable(SharedDocumentArchive.ExtractDirEnvVar, elsewhere);
+        try
+        {
+            var docA = SharedDocumentArchive.Extract(a, null, _out.WriteLine);
+            var docB = SharedDocumentArchive.Extract(b, null, _out.WriteLine);
+
+            Assert.NotEqual(Path.GetDirectoryName(docA), Path.GetDirectoryName(docB));
+            // ...and neither extraction was overwritten by the other.
+            Assert.Equal("cache A", File.ReadAllText(Path.Combine(Path.GetDirectoryName(docA)!, "Plate1.skyd")));
+            Assert.Equal("cache B", File.ReadAllText(Path.Combine(Path.GetDirectoryName(docB)!, "Plate1.skyd")));
+
+            // Both are still reused on a second ask, so distinguishing them did not cost the cache.
+            var log = new List<string>();
+            SharedDocumentArchive.Extract(a, null, log.Add);
+            Assert.Contains(log, m => m.Contains("Reusing", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SharedDocumentArchive.ExtractDirEnvVar, null);
+        }
+    }
+
+    /// <summary>
+    /// The document size is remembered per (length, last-write-time), never as a bare answer. A zero
+    /// does not read as "unknown" downstream, it reads as "small": the export budget falls back to its
+    /// floor and may start four concurrent exports of a document needing ~9 GB each - the memory
+    /// exhaustion the budget exists to prevent, from which a starved Skyline does not recover. An
+    /// archive added while it is still downloading must not answer 0 for the rest of the session.
+    /// </summary>
+    [Fact]
+    public void TheDocumentSizeIsNotRememberedFromAFailedRead()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "Plate1.sky.zip");
+        File.WriteAllBytes(path, new byte[] { 0x50, 0x4B, 0x03, 0x04 });   // a truncated download
+
+        var input = PrismInput.FromClosedDocument(path);
+        Assert.Equal(0, input.DocumentBytes());
+
+        // The download finishes at the same path.
+        File.Delete(path);
+        var body = Document + new string(' ', 100_000);
+        WriteArchive(dir, entries: new[] { ("Plate1.sky", body), ("Plate1.skyd", "x") });
+
+        Assert.True(
+            input.DocumentBytes() > 100_000,
+            "a completed download must be measured, not answered from the failed read");
+    }
+
+    /// <summary>
     /// A real Panorama archive, opt-in via <c>PRISM_SKY_ZIP</c>: how long the extraction actually
     /// takes, and that the document inside reads. Skipped in CI - these are 13.7 GB files on a share.
     /// </summary>

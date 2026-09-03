@@ -149,9 +149,11 @@ public static class SharedDocumentArchive
     private static string ToolVersion =>
         typeof(SharedDocumentArchive).Assembly.GetName().Version?.ToString() ?? "0";
 
-    // One extraction at a time per destination. Two inputs can name the same archive (the same plate
-    // added twice, or two runs sharing a download folder), and the export loop runs inputs in
-    // parallel - so without this they would extract over each other's files.
+    // One extraction at a time per destination WITHIN THIS PROCESS. Two inputs can name the same
+    // archive (the same plate added twice), and the export loop runs inputs in parallel, so without
+    // this they would extract over each other's files. It is deliberately not a cross-process lock:
+    // two PRISM windows extracting one archive at the same moment would still collide, which is rare
+    // (and announces itself as a sharing violation naming the file) but is not prevented here.
     private static readonly ConcurrentDictionary<string, object> Locks =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -237,9 +239,15 @@ public static class SharedDocumentArchive
     {
         var stem = StemOf(archive.FullName);
 
+        // BESIDE the archive, the stem alone identifies it: two archives in one folder cannot share a
+        // name. Anywhere ELSE, they can - two Panorama folders both holding "Plate1.sky.zip" is an
+        // ordinary thing - and a shared target directory is not a survivable collision. The stamp
+        // does not save it: input A extracts, writes its stamp and hands the path to Skyline; input B
+        // finds the stamp names a different archive, and re-extracts over the files A's Skyline is
+        // reading. So a redirected target carries a digest of the archive's full path.
         var configured = Environment.GetEnvironmentVariable(ExtractDirEnvVar);
         if (!string.IsNullOrWhiteSpace(configured))
-            return Path.Combine(configured!, stem);
+            return Path.Combine(configured!, Distinguish(stem, archive.FullName));
 
         var beside = archive.DirectoryName is null
             ? null
@@ -251,12 +259,24 @@ public static class SharedDocumentArchive
         if (string.IsNullOrWhiteSpace(fallbackDir))
         {
             return beside
-                ?? Path.Combine(Path.GetTempPath(), ExtractRootName, stem);
+                ?? Path.Combine(Path.GetTempPath(), ExtractRootName, Distinguish(stem, archive.FullName));
         }
 
         log?.Invoke(
             $"Cannot write beside {archive.Name}, so it will be extracted under {fallbackDir} instead.");
-        return Path.Combine(fallbackDir!, ExtractRootName, stem);
+        return Path.Combine(fallbackDir!, ExtractRootName, Distinguish(stem, archive.FullName));
+    }
+
+    /// <summary>
+    /// <c>&lt;stem&gt;-&lt;8 hex&gt;</c>: still recognizable, but one folder per ARCHIVE rather than per
+    /// name. Only for targets that gather archives from several places; beside the archive the stem is
+    /// already unique.
+    /// </summary>
+    private static string Distinguish(string stem, string archiveFullPath)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(archiveFullPath.ToLowerInvariant()));
+        return stem + "-" + Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
     private static bool CanWrite(string dir)
@@ -264,7 +284,11 @@ public static class SharedDocumentArchive
         try
         {
             Directory.CreateDirectory(dir);
-            var probe = Path.Combine(dir, ".prism-write-probe");
+            // A per-probe name: inputs are exported in parallel, so two archives in one folder probe
+            // this directory at the same moment. A fixed name made them collide on each other's file
+            // and one would conclude - wrongly, and with a misleading log line - that the folder was
+            // not writable, then extract 17 GB somewhere else.
+            var probe = Path.Combine(dir, ".prism-write-probe-" + Guid.NewGuid().ToString("N")[..8]);
             File.WriteAllBytes(probe, Array.Empty<byte>());
             File.Delete(probe);
             return true;
@@ -335,26 +359,34 @@ public static class SharedDocumentArchive
     /// </summary>
     private static void EnsureRoom(string target, long bytes, string archiveName)
     {
+        // The QUERY is best-effort and the DECISION is not, so they cannot share a try: free space is
+        // unknowable on a UNC path (ArgumentException) and on a drive that is not ready - a
+        // disconnected mapped drive throws DriveNotFoundException, an IOException. Catching IOException
+        // around the whole thing would have swallowed this method's own refusal below, turning the
+        // guard into the failure it exists to prevent.
+        long free;
+        string root;
         try
         {
-            var root = Path.GetPathRoot(Path.GetFullPath(target));
+            root = Path.GetPathRoot(Path.GetFullPath(target)) ?? "";
             if (string.IsNullOrEmpty(root))
                 return;
-            var free = new DriveInfo(root).AvailableFreeSpace;
-            // A margin, because the drive is doing other work and a document that only just fits is
-            // not a document anyone can then process.
-            var needed = bytes + 1024L * 1024 * 1024;
-            if (free >= needed)
-                return;
-            throw new IOException(
-                $"Extracting {archiveName} needs {bytes / (1024.0 * 1024 * 1024):N1} GB (plus a little "
-                + $"headroom) but {root} has {free / (1024.0 * 1024 * 1024):N1} GB free. Free some "
-                + "space, or point the run's output directory at a bigger drive.");
+            free = new DriveInfo(root).AvailableFreeSpace;
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+                                       or UnauthorizedAccessException or IOException)
         {
-            // Unknowable free space (a UNC path, an odd mount): let the extraction try.
+            return;   // cannot tell: let the extraction try
         }
+
+        // A margin, because the drive is doing other work and a document that only just fits is not a
+        // document anyone can then process.
+        if (free >= bytes + 1024L * 1024 * 1024)
+            return;
+        throw new IOException(
+            $"Extracting {archiveName} needs {bytes / (1024.0 * 1024 * 1024):N1} GB (plus a little "
+            + $"headroom) but {root} has {free / (1024.0 * 1024 * 1024):N1} GB free. Free some "
+            + "space, or point the run's output directory at a bigger drive.");
     }
 
     /// <summary>A zip entry's stream that owns its archive, so one <c>using</c> closes both.</summary>

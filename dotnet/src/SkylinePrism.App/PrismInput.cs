@@ -171,6 +171,11 @@ public sealed class PrismInput : INotifyPropertyChanged
         // kinds, plus the runner output and the Skyline-selection messages, from one place.
         var scoped = Scoped(log, label);
 
+        // Captured before the ion-count rewrite below moves reportsDir into a subdirectory: an
+        // extraction that cannot go beside its archive belongs under the OUTPUT directory, not nested
+        // inside the reports folder - and nesting it made toggling the measure extract 17 GB twice.
+        var outputDir = System.IO.Path.GetDirectoryName(reportsDir);
+
         switch (Kind)
         {
             case PrismInputKind.RunningSkyline:
@@ -183,7 +188,7 @@ public sealed class PrismInput : INotifyPropertyChanged
 
             case PrismInputKind.ClosedDocument:
             {
-                var document = ResolveDocumentForExport(reportsDir, scoped, cancellationToken);
+                var document = ResolveDocumentForExport(outputDir, scoped, cancellationToken);
                 var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
                 return exporter.Export(
                     document, reportsDir, label, batchAnnotation, cancellationToken, includeIonCounts);
@@ -211,15 +216,14 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// Skyline document". Only the GUI extracts, which is why a document already OPEN in Skyline
     /// needs none of this - it was extracted on the way in.</para>
     /// </summary>
-    /// <param name="reportsDir">
-    /// The run's reports directory; its parent (the output directory) is where an extraction goes when
-    /// the archive's own folder cannot be written to.
+    /// <param name="outputDir">
+    /// The run's output directory - where an extraction goes when the archive's own folder cannot be
+    /// written to. Null is allowed; the extraction then falls back to the temp directory.
     /// </param>
     internal string ResolveDocumentForExport(
-        string reportsDir, Action<string> log, CancellationToken cancellationToken) =>
+        string? outputDir, Action<string> log, CancellationToken cancellationToken) =>
         IsSharedArchive
-            ? SharedDocumentArchive.Extract(
-                Path, System.IO.Path.GetDirectoryName(reportsDir), log, cancellationToken)
+            ? SharedDocumentArchive.Extract(Path, outputDir, log, cancellationToken)
             : Path;
 
     /// <summary>
@@ -254,35 +258,45 @@ public sealed class PrismInput : INotifyPropertyChanged
         }
     }
 
-    private long? _documentBytes;
+    private readonly object _documentBytesLock = new();
+    private long _documentBytes;
+    private (long Length, long Ticks) _documentBytesStamp;
 
     /// <summary>
     /// How big the DOCUMENT is, for the export memory budget: the <c>.sky</c>'s length, or - for a
     /// <c>.sky.zip</c> - the uncompressed length of the document inside it, since that is what a
     /// headless Skyline loads. 0 for an input that is not exported, or one that cannot be sized.
     ///
-    /// <para>Cached: it is read from the archive's central directory, which is cheap but not free, and
-    /// the budget asks once per run per input.</para>
+    /// <para>Remembered per (length, last-write-time) of the input file, and a failure is not
+    /// remembered at all - the same rule as <see cref="HasIonCounts"/>, and for a sharper reason. A
+    /// zero here does not read as "unknown", it reads as "small": the budget falls back to its floor
+    /// and may start four concurrent exports of a document that needs ~9 GB each, which is exactly
+    /// the memory exhaustion the budget exists to prevent, and a starved Skyline does not recover.
+    /// An archive added while it is still downloading answers 0 once; it must not answer 0 forever.</para>
     /// </summary>
     public long DocumentBytes()
     {
         if (Kind == PrismInputKind.ReportFile || string.IsNullOrEmpty(Path))
             return 0;
-        if (_documentBytes is { } known)
-            return known;
-        long bytes;
-        try
+        lock (_documentBytesLock)
         {
-            bytes = IsSharedArchive
-                ? SharedDocumentArchive.DocumentBytes(Path)
-                : new FileInfo(Path) is { Exists: true } info ? info.Length : 0;
+            var stamp = FileStamp();
+            if (_documentBytes > 0 && stamp == _documentBytesStamp)
+                return _documentBytes;
+            try
+            {
+                _documentBytes = IsSharedArchive
+                    ? SharedDocumentArchive.DocumentBytes(Path)
+                    : new FileInfo(Path) is { Exists: true } info ? info.Length : 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _documentBytes = 0;   // unsizable: the budget's floor still applies
+            }
+            // Remember WHICH file was measured only when the measurement answered.
+            _documentBytesStamp = _documentBytes > 0 ? stamp : default;
+            return _documentBytes;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            bytes = 0;   // unsizable: the budget's floor still applies
-        }
-        _documentBytes = bytes;
-        return bytes;
     }
 
     /// <summary>

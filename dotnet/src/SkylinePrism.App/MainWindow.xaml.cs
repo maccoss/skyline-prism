@@ -254,14 +254,21 @@ public partial class MainWindow : Window
             {
                 var path = input.Path;
                 var info = await Task.Run(() => SkyDocumentInfo.TryRead(path, Log));
-                input.Status = info is null
+                var status = info is null
                     ? "could not read the document header"
                     : $"{info.Replicates.Count} replicate(s)"
                       + (info.ReplicateAnnotationNames.Count > 0
                           ? "; annotations: " + string.Join(", ", info.ReplicateAnnotationNames)
                           : "");
-                InputsGrid.Items.Refresh();
-                Log($"  {System.IO.Path.GetFileName(path)}: {input.Status}");
+                // Once a run starts it OWNS this column - it writes "exporting..." and then any
+                // failure - so a header landing afterwards must not paint "43 replicate(s)" over a
+                // FAILED row. The log keeps the header either way.
+                if (!_isRunning)
+                    input.Status = status;
+                // No Items.Refresh(): Status raises PropertyChanged, and refreshing here - on a
+                // continuation rather than in a click handler - throws if the user happens to be
+                // editing a Batch label cell, which would kill the remaining reads.
+                Log($"  {System.IO.Path.GetFileName(path)}: {status}");
             }
         }
         catch (Exception ex)
