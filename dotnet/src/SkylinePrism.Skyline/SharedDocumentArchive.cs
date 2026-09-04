@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -149,13 +148,22 @@ public static class SharedDocumentArchive
     private static string ToolVersion =>
         typeof(SharedDocumentArchive).Assembly.GetName().Version?.ToString() ?? "0";
 
-    // One extraction at a time per destination WITHIN THIS PROCESS. Two inputs can name the same
-    // archive (the same plate added twice), and the export loop runs inputs in parallel, so without
-    // this they would extract over each other's files. It is deliberately not a cross-process lock:
-    // two PRISM windows extracting one archive at the same moment would still collide, which is rare
-    // (and announces itself as a sharing violation naming the file) but is not prevented here.
-    private static readonly ConcurrentDictionary<string, object> Locks =
-        new(StringComparer.OrdinalIgnoreCase);
+    // ONE extraction at a time in this process, whatever the destination.
+    //
+    // It used to be one per destination, which let the export loop run four at once - and that is
+    // measurably the wrong thing, because an extraction is not CPU work, it is a single I/O path.
+    // Measured on a Panorama folder over SMB: four concurrent extractions moved 3.7 MB/s each,
+    // ~15 MB/s together, while ONE extraction from the same share to a local disk ran at 227 MB/s.
+    // Concurrency there buys nothing and costs seeks; worse, it makes four archives all finish at the
+    // end instead of one finishing early, so the run looks stalled for an hour.
+    //
+    // Deliberately not a cross-process lock: two PRISM windows extracting one archive at the same
+    // moment would still collide, which is rare, announces itself as a sharing violation naming the
+    // file, and is not prevented here.
+    private static readonly SemaphoreSlim ExtractGate = new(1, 1);
+
+    /// <summary>How often a long extraction reports progress. An hour of silence reads as a hang.</summary>
+    private static readonly TimeSpan ProgressEvery = TimeSpan.FromSeconds(20);
 
     /// <summary>
     /// Extract <paramref name="archivePath"/> if it has not already been extracted, and return the
@@ -164,9 +172,8 @@ public static class SharedDocumentArchive
     /// re-extracting on every run is not a cost worth paying twice.
     /// </summary>
     /// <param name="fallbackDir">
-    /// Where to extract when the archive's own folder cannot be written to - a read-only share, or a
-    /// Panorama download directory the user would rather keep clean. Normally the run's output
-    /// directory.
+    /// A directory PRISM may extract into when the archive's own folder is the wrong place - normally
+    /// the run's output directory. Used only if it is on a local disk; see <see cref="ChooseTarget"/>.
     /// </param>
     public static string Extract(
         string archivePath, string? fallbackDir, Action<string>? log = null,
@@ -178,8 +185,15 @@ public static class SharedDocumentArchive
         var archive = new FileInfo(archivePath);
         var target = ChooseTarget(archive, fallbackDir, log);
 
-        lock (Locks.GetOrAdd(target, _ => new object()))
+        // Outside the gate: a reusable extraction is a file check, and a run whose archives are all
+        // already extracted must not queue up behind anything.
+        if (TryReuse(archive, target, log) is { } reusedEarly)
+            return reusedEarly;
+
+        ExtractGate.Wait(cancellationToken);
+        try
         {
+            // Re-checked inside: another input may have extracted this same archive while we waited.
             if (TryReuse(archive, target, log) is { } reused)
                 return reused;
 
@@ -193,8 +207,10 @@ public static class SharedDocumentArchive
                 $"Extracting {archive.Name} ({archive.Length / (1024.0 * 1024 * 1024):N1} GB compressed, "
                 + $"{bytes / (1024.0 * 1024 * 1024):N1} GB extracted, {zip.Entries.Count} file(s)) to "
                 + $"{target}. Skyline's command line cannot open a .sky.zip, so this happens once - "
-                + "later runs reuse it.");
+                + "later runs reuse it. One archive at a time: this is disk and network, not CPU.");
 
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            long done = 0;
             foreach (var entry in zip.Entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -207,9 +223,7 @@ public static class SharedDocumentArchive
                 var parent = Path.GetDirectoryName(destination);
                 if (!string.IsNullOrEmpty(parent))
                     Directory.CreateDirectory(parent);
-                // Overwrite, so a run killed mid-extraction is repaired rather than refused. The
-                // stamp is written last, so that half-done state is never mistaken for reusable.
-                entry.ExtractToFile(destination, overwrite: true);
+                done += CopyEntry(entry, destination, bytes, done, timer, log, cancellationToken);
             }
 
             var document = ResolveEntryPath(target, entryName);
@@ -225,15 +239,68 @@ public static class SharedDocumentArchive
                 JsonSerializer.Serialize(new ExtractStamp(
                     archive.FullName, archive.Length, archive.LastWriteTimeUtc.Ticks, entryName,
                     ToolVersion)));
-            log?.Invoke($"Extracted {archive.Name}: {document}");
+            log?.Invoke(
+                $"Extracted {archive.Name} in {timer.Elapsed.TotalMinutes:N1} min "
+                + $"({bytes / (1024.0 * 1024) / Math.Max(1, timer.Elapsed.TotalSeconds):N0} MB/s): {document}");
             return document;
+        }
+        finally
+        {
+            ExtractGate.Release();
         }
     }
 
     /// <summary>
-    /// Beside the archive by default - which is where Skyline extracts too, so the result is a folder
-    /// the user recognizes and can delete to reclaim the space - falling back to the run's output
-    /// directory when that is not writable.
+    /// Copy one entry out, reporting progress while it goes. <c>ExtractToFile</c> would be shorter but
+    /// says nothing until it finishes, and these entries are 12 GB - the whole complaint that prompted
+    /// this was an extraction that "never seems to finish", from a log that had gone quiet.
+    /// </summary>
+    private static long CopyEntry(
+        ZipArchiveEntry entry, string destination, long totalBytes, long alreadyDone,
+        System.Diagnostics.Stopwatch timer, Action<string>? log, CancellationToken cancellationToken)
+    {
+        using var source = entry.Open();
+        using var sink = new FileStream(
+            destination, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
+
+        var buffer = new byte[1 << 20];
+        long written = 0;
+        var nextReport = timer.Elapsed + ProgressEvery;
+        int read;
+        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sink.Write(buffer, 0, read);
+            written += read;
+            if (timer.Elapsed < nextReport)
+                continue;
+            nextReport = timer.Elapsed + ProgressEvery;
+            var doneNow = alreadyDone + written;
+            var rate = doneNow / (1024.0 * 1024) / Math.Max(1, timer.Elapsed.TotalSeconds);
+            var remaining = rate > 0 ? (totalBytes - doneNow) / (1024.0 * 1024) / rate / 60 : 0;
+            log?.Invoke(
+                $"  {100.0 * doneNow / Math.Max(1, totalBytes):N0}% "
+                + $"({doneNow / (1024.0 * 1024 * 1024):N1} of {totalBytes / (1024.0 * 1024 * 1024):N1} GB, "
+                + $"{rate:N0} MB/s, about {remaining:N0} min left) - {Path.GetFileName(destination)}");
+        }
+        return written;
+    }
+
+    /// <summary>
+    /// Where to extract. Beside the archive when the archive is on a LOCAL disk - which is where
+    /// Skyline extracts too, so the result is a folder the user recognizes and can delete - and onto a
+    /// local disk otherwise.
+    ///
+    /// <para><b>Why not always beside it.</b> A Panorama download folder is normally a network share,
+    /// and extracting there reads ~12 GB and writes ~17 GB back over the same link. Measured on one:
+    /// 3.7 MB/s per archive with four running, ~15 MB/s in total, against <b>227 MB/s</b> for the same
+    /// archive extracted to a local disk - 15x. A 12-plate cohort is the difference between minutes
+    /// and most of a day, and the first report of it was "it starts 4 files and never seems to fully
+    /// uncompress". The extraction is a derived cache, not the user's data, so it does not belong on
+    /// their share by default.</para>
+    ///
+    /// <para><see cref="ExtractDirEnvVar"/> overrides everything, which is what to reach for when the
+    /// local disk is short of room - and <see cref="EnsureRoom"/> says so by name when it is.</para>
     /// </summary>
     private static string ChooseTarget(FileInfo archive, string? fallbackDir, Action<string>? log)
     {
@@ -249,22 +316,23 @@ public static class SharedDocumentArchive
         if (!string.IsNullOrWhiteSpace(configured))
             return Path.Combine(configured!, Distinguish(stem, archive.FullName));
 
-        var beside = archive.DirectoryName is null
-            ? null
-            : Path.Combine(archive.DirectoryName, ExtractRootName, stem);
-
-        if (beside is not null && CanWrite(Path.Combine(archive.DirectoryName!, ExtractRootName)))
-            return beside;
-
-        if (string.IsNullOrWhiteSpace(fallbackDir))
+        // Beside the archive only when the archive is on a local disk AND that folder takes writes.
+        if (IsOnLocalDisk(archive.DirectoryName)
+            && CanWrite(Path.Combine(archive.DirectoryName!, ExtractRootName)))
         {
-            return beside
-                ?? Path.Combine(Path.GetTempPath(), ExtractRootName, Distinguish(stem, archive.FullName));
+            return Path.Combine(archive.DirectoryName!, ExtractRootName, stem);
         }
 
+        // Otherwise a local disk: the output directory if that is local, else the temp directory.
+        // Distinguish() because these roots gather archives from anywhere, and two Panorama folders
+        // can hold the same plate name.
+        var localRoot = IsOnLocalDisk(fallbackDir) ? fallbackDir! : Path.GetTempPath();
+        var target = Path.Combine(localRoot, ExtractRootName, Distinguish(stem, archive.FullName));
         log?.Invoke(
-            $"Cannot write beside {archive.Name}, so it will be extracted under {fallbackDir} instead.");
-        return Path.Combine(fallbackDir!, ExtractRootName, Distinguish(stem, archive.FullName));
+            $"{archive.Name} is not on a local disk, so it will be extracted to {target} rather than "
+            + "beside it - extracting onto a network share was measured 15x slower. Set "
+            + $"{ExtractDirEnvVar} to choose the disk yourself.");
+        return target;
     }
 
     /// <summary>
@@ -277,6 +345,30 @@ public static class SharedDocumentArchive
         var hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(archiveFullPath.ToLowerInvariant()));
         return stem + "-" + Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Whether this path is on a local fixed disk. A mapped network drive, a UNC path and removable
+    /// media are all "no" - the first because that is the case this exists to catch, the others
+    /// because neither is somewhere to put 17 GB of derived files by default.
+    /// </summary>
+    internal static bool IsOnLocalDisk(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        try
+        {
+            var full = Path.GetFullPath(path!);
+            if (full.StartsWith(@"\\", StringComparison.Ordinal))
+                return false;   // UNC: DriveInfo cannot answer for it
+            var root = Path.GetPathRoot(full);
+            return !string.IsNullOrEmpty(root) && new DriveInfo(root).DriveType == DriveType.Fixed;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+                                       or UnauthorizedAccessException or IOException)
+        {
+            return false;   // unknowable: treat as not-local, which only costs a different target
+        }
     }
 
     private static bool CanWrite(string dir)
@@ -383,10 +475,38 @@ public static class SharedDocumentArchive
         // document anyone can then process.
         if (free >= bytes + 1024L * 1024 * 1024)
             return;
+        // Name the env var, not the output directory: the output directory is only used as a target
+        // when it is itself on a local disk, so "point it somewhere bigger" was advice that would not
+        // have worked for the case that gets here - a Panorama folder on a share.
+        var roomier = RoomiestLocalDrive(bytes);
         throw new IOException(
             $"Extracting {archiveName} needs {bytes / (1024.0 * 1024 * 1024):N1} GB (plus a little "
-            + $"headroom) but {root} has {free / (1024.0 * 1024 * 1024):N1} GB free. Free some "
-            + "space, or point the run's output directory at a bigger drive.");
+            + $"headroom) but {root} has {free / (1024.0 * 1024 * 1024):N1} GB free. Set "
+            + $"{ExtractDirEnvVar} to a drive with room"
+            + (roomier is null ? "" : $" - {roomier} has the most free space")
+            + ", or free some space.");
+    }
+
+    /// <summary>
+    /// The local fixed drive with the most free space, when it could hold <paramref name="bytes"/> -
+    /// so the out-of-space message can name somewhere that would actually work instead of leaving the
+    /// user to go looking.
+    /// </summary>
+    private static string? RoomiestLocalDrive(long bytes)
+    {
+        try
+        {
+            return DriveInfo.GetDrives()
+                .Where(d => d.DriveType == DriveType.Fixed && d.IsReady
+                            && d.AvailableFreeSpace > bytes + 1024L * 1024 * 1024)
+                .OrderByDescending(d => d.AvailableFreeSpace)
+                .Select(d => $"{d.Name} ({d.AvailableFreeSpace / (1024.0 * 1024 * 1024):N0} GB free)")
+                .FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>A zip entry's stream that owns its archive, so one <c>using</c> closes both.</summary>

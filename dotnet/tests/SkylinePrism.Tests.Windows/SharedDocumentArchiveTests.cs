@@ -462,6 +462,34 @@ public class SharedDocumentArchiveTests
     }
 
     /// <summary>
+    /// Where an extraction goes turns on this one question, so it is worth pinning: a network share is
+    /// not a local disk.
+    ///
+    /// <para>Extracting onto the share the archive came from was measured at 3.7 MB/s per archive with
+    /// four running - ~15 MB/s together - against 227 MB/s for the same archive extracted to a local
+    /// disk. It reads ~12 GB and writes ~17 GB back over one link, so a 12-plate cohort is the
+    /// difference between minutes and most of a day, and it first showed up as "it starts 4 files and
+    /// never seems to fully uncompress".</para>
+    /// </summary>
+    [Fact]
+    public void ANetworkPathIsNotALocalDisk()
+    {
+        // The temp directory is where an extraction lands when nothing better is offered, so it had
+        // better read as local.
+        Assert.True(SharedDocumentArchive.IsOnLocalDisk(Path.GetTempPath()));
+        Assert.True(SharedDocumentArchive.IsOnLocalDisk(TempDir()));
+
+        // A UNC path is answered without touching the network - DriveInfo cannot speak for one.
+        Assert.False(SharedDocumentArchive.IsOnLocalDisk(@"\\panorama\share\Plate1.sky.zip"));
+        Assert.False(SharedDocumentArchive.IsOnLocalDisk(@"\\127.0.0.1\c$\x"));
+
+        // A letter with nothing mounted on it is not somewhere to put 17 GB either.
+        Assert.False(SharedDocumentArchive.IsOnLocalDisk(@"Q:\prism"));
+        Assert.False(SharedDocumentArchive.IsOnLocalDisk(null));
+        Assert.False(SharedDocumentArchive.IsOnLocalDisk("   "));
+    }
+
+    /// <summary>
     /// A real Panorama archive, opt-in via <c>PRISM_SKY_ZIP</c>: how long the extraction actually
     /// takes, and that the document inside reads. Skipped in CI - these are 13.7 GB files on a share.
     /// </summary>
