@@ -63,9 +63,9 @@
                         <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
                                 Click="OnAddOpenDocument"
                                 ToolTip="Pick a document from a running Skyline instance (exported over the live connection, as parquet)." />
-                        <Button Content="Add Skyline document (.sky)..." Padding="10,4" Margin="0,0,6,0"
+                        <Button Content="Add Skyline document (.sky / .sky.zip)..." Padding="10,4" Margin="0,0,6,0"
                                 Click="OnAddClosedDocument"
-                                ToolTip="Pick a .sky file that is not open. PRISM exports it headlessly with SkylineCmd (invariant CSV)." />
+                                ToolTip="Pick a document that is not open in Skyline: a .sky, or a .sky.zip shared document archive as downloaded from PanoramaWeb. PRISM exports it headlessly with the installed Skyline; an archive is extracted first (once, then reused) because Skyline's command line cannot open one." />
                         <Button Content="Add exported report..." Padding="10,4" Margin="0,0,6,0"
                                 Click="OnAddReportFile"
                                 ToolTip="Use a PRISM report you already exported (.parquet / .csv / .tsv). No Skyline required." />

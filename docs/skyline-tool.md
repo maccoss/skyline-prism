@@ -34,6 +34,7 @@ capabilities and only one of them is currently affected by a Skyline bug.
 |---|---|---|
 | **Open in Skyline** | Live JSON-RPC to the running instance | **parquet** |
 | **Skyline document (.sky)**, closed | `SkylineRunner` — launches the installed Skyline headlessly and opens the document with `--in` | **parquet** |
+| **Shared archive (.sky.zip)**, e.g. from PanoramaWeb | extracted once, then as above — Skyline’s command line cannot open an archive | **parquet** |
 | **Exported report** | Nothing; the file is used in place | as supplied |
 
 A run may mix all three freely: the merge reads parquet and CSV in the same pass, so ten closed
