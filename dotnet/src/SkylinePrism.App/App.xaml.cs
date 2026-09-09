@@ -24,6 +24,32 @@ public partial class App : Application
 
     private static readonly object LogLock = new();
 
+    /// <summary>
+    /// Set once shutdown has begun, after which <see cref="Report"/> logs a fault instead of
+    /// showing it.
+    /// </summary>
+    /// <remarks>
+    /// <para>WPF's own teardown can throw, and did, on a machine that had completed a full run:
+    /// <c>System.DllNotFoundException</c> from
+    /// <c>&lt;CrtImplementationDetails&gt;.ModuleUninitializer.SingletonDomainUnload</c> ->
+    /// <c>__scrt_uninitialize_type_info</c>. That module uninitializer belongs to
+    /// <c>DirectWriteForwarder.dll</c> - the one mixed-mode C++/CLI assembly in a WPF process, part
+    /// of the Microsoft.WindowsDesktop.App shared runtime, and the only loaded module that imports
+    /// <c>vcruntime140</c>. Nothing in PRISM is on that stack; it fires when the CLR raises
+    /// domain-unload at process exit and the CRT entry point can no longer be resolved.</para>
+    ///
+    /// <para>So the fault is unreachable from here, and the dialog was worse than the fault: the run
+    /// had finished, every output was written, and <c>AppDomain.UnhandledException</c> on .NET is
+    /// notification-only - it cannot keep the process alive - so the dialog only stood between the
+    /// user and a window they had already closed.</para>
+    ///
+    /// <para>Suppression is by TIMING, not by matching this exception. Once shutdown has begun there
+    /// is no work left to protect and no action left to offer, so any fault arriving then belongs in
+    /// the log and nowhere else. A background failure DURING a run still raises its dialog, which is
+    /// the case these handlers exist for.</para>
+    /// </remarks>
+    private static volatile bool _shutdownStarted;
+
     private static string InitLogPath()
     {
         try
@@ -60,6 +86,11 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // Both hooks, because which one runs first depends on how the tool was closed:
+        // ShutdownStarted fires as the dispatcher begins tearing down, OnExit once the last window
+        // has closed. The teardown fault this guards against arrives later than either.
+        Dispatcher.ShutdownStarted += (_, _) => _shutdownStarted = true;
 
         WriteLog("==== Skyline-PRISM tool started ====");
         WriteLog("Args: " + string.Join(" ", e.Args));
@@ -118,9 +149,26 @@ public partial class App : Application
         e.SetObserved();
     }
 
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _shutdownStarted = true;
+        WriteLog("==== Skyline-PRISM tool exiting ====");
+        base.OnExit(e);
+    }
+
     private static void Report(string source, Exception? ex)
     {
         WriteLog($"UNHANDLED ({source}): {ex}");
+
+        if (_shutdownStarted)
+        {
+            // Logged in full above, deliberately not shown - see _shutdownStarted.
+            WriteLog("  Raised while the tool was already exiting, so it is not shown: no output is "
+                + "at risk and the process cannot be kept alive. If a run reached \"Done.\", it "
+                + "finished normally.");
+            return;
+        }
+
         try
         {
             MessageBox.Show(
