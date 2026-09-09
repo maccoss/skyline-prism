@@ -154,10 +154,8 @@ public class QcReportTests
 
             // A report has to say what produced it and with which settings, or its numbers cannot be
             // traced back to a run. Version and date come from the run's own parameters.json.
-            var version = System.Reflection.Assembly.GetAssembly(typeof(QcReport))!
-                .GetName().Version!.ToString();
             Assert.Contains("Analysis Information", html);
-            Assert.Contains($"PRISM v{version}", html);
+            Assert.Contains($"PRISM v{PrismVersion.Current}", html);
             Assert.Contains("Processing date", html);
             Assert.Contains("Computer", html);
             Assert.Contains("Processing Parameters", html);

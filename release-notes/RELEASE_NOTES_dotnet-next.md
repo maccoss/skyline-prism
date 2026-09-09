@@ -8,6 +8,13 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- Version strings no longer carry a spurious fourth component. `prism --version` printed
+  `prism 26.24.2.0`, the QC report footer read `PRISM v26.24.2.0`, and `parameters.json` recorded
+  `"pipeline_version": "26.24.2.0"` - for a release tagged `dotnet-v26.24.2`. PRISM versions as
+  CalVer `YY.feature.patch`, so there is no fourth number; the trailing `.0` was padding added by
+  .NET's `AssemblyVersion`, which is always normalized to four components. All three now print
+  `26.24.2`.
+
 ## Performance
 
 ## Breaking Changes

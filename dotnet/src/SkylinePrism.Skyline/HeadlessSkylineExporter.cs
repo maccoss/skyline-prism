@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using SkylinePrism.Core.Pipeline;
 
 namespace SkylinePrism.Skyline;
 
@@ -128,8 +129,7 @@ public sealed class HeadlessSkylineExporter
         string Document, long Length, long LastWriteUtcTicks, string BatchAnnotation,
         string ReportPath, string? MetadataPath, string Tool, string? Report = null);
 
-    private static string ToolVersion =>
-        typeof(HeadlessSkylineExporter).Assembly.GetName().Version?.ToString() ?? "0";
+    private static string ToolVersion => PrismVersion.Current;
 
     private static string StampPath(string workDir, string label) =>
         Path.Combine(workDir, label + ".export.json");
