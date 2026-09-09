@@ -154,8 +154,19 @@ public class QcReportTests
 
             // A report has to say what produced it and with which settings, or its numbers cannot be
             // traced back to a run. Version and date come from the run's own parameters.json.
+            //
+            // Read the expected version out of that file rather than from PrismVersion.Current: the
+            // footer's contract is that it reports the version which PRODUCED the outputs, and
+            // `prism qc -d` re-renders it later from a possibly different build. Asserting against
+            // the accessor the renderer itself calls would put the same value on both sides and pass
+            // even if it returned nonsense.
+            using var parameters = System.Text.Json.JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(tempOut, "parameters.json")));
+            var recordedVersion = parameters.RootElement.GetProperty("pipeline_version").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(recordedVersion), "parameters.json recorded no version");
+
             Assert.Contains("Analysis Information", html);
-            Assert.Contains($"PRISM v{PrismVersion.Current}", html);
+            Assert.Contains($"PRISM v{recordedVersion}", html);
             Assert.Contains("Processing date", html);
             Assert.Contains("Computer", html);
             Assert.Contains("Processing Parameters", html);

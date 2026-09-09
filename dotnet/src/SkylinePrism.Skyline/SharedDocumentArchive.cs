@@ -143,6 +143,16 @@ public static class SharedDocumentArchive
     }
 
     /// <summary>What a previous extraction produced, and from what.</summary>
+    /// <param name="Tool">
+    /// A diagnostic breadcrumb, and deliberately NOT part of the reuse decision - unlike the
+    /// same-named field on <c>HeadlessSkylineExporter.ExportStamp</c>, which gates reuse because a
+    /// release can change the report definition an export was made with.
+    ///
+    /// <para>Nothing about unzipping depends on the PRISM version, so gating on it would re-extract
+    /// 13.7 GB (17.4 GB on disk, measured on one Panorama plate) on every release for no change in
+    /// the bytes produced. <see cref="TryReuse"/> therefore compares the archive's identity, size
+    /// and timestamp and ignores this. Do not "fix" the asymmetry by adding the comparison.</para>
+    /// </param>
     private sealed record ExtractStamp(
         string Archive, long Length, long LastWriteUtcTicks, string DocumentEntry, string Tool);
 

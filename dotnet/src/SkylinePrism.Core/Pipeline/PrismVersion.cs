@@ -33,7 +33,30 @@ public static class PrismVersion
     /// <summary>The running PRISM version, e.g. <c>26.24.2</c>. Never null, never empty.</summary>
     public static string Current { get; } = Resolve();
 
+    /// <summary>
+    /// Never throws, deliberately. This runs inside a static initializer, so an exception here
+    /// becomes a <c>TypeInitializationException</c> on EVERY later read of <see cref="Current"/> -
+    /// including the ones inside <c>Provenance.Write</c> and <c>StageCache.Fingerprint</c>, which
+    /// would abort a run over a version string. The two properties this replaced could not throw
+    /// (both ended in a <c>?? "0"</c> fallback) and that contract is worth keeping: reflection over
+    /// assembly attributes is not quite total - <c>GetCustomAttribute</c> can raise
+    /// <c>CustomAttributeFormatException</c> or <c>TypeLoadException</c>, and <c>GetName</c> throws
+    /// for some dynamically generated assemblies. An unknown version is worth degrading over; a
+    /// failed run is not.
+    /// </summary>
     private static string Resolve()
+    {
+        try
+        {
+            return ResolveCore();
+        }
+        catch
+        {
+            return "0.0.0";
+        }
+    }
+
+    private static string ResolveCore()
     {
         var assembly = typeof(PrismVersion).Assembly;
 

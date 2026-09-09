@@ -15,8 +15,15 @@
          PrismVersion reads that attribute (AssemblyVersion is padded to four components, which is
          where the spurious trailing ".0" in "PRISM v26.24.2.0" came from), and the same string feeds
          the stage-cache fingerprint and the export/extraction sidecars - so a per-commit suffix would
-         invalidate all three on every rebuild. PrismVersion also strips anything after "+"; this
-         property just keeps the attribute itself clean, since Windows shows it as "Product version". -->
+         invalidate all three on every rebuild.
+
+         THIS LINE IS LOAD-BEARING, not cosmetic. The SDK appends the suffix by default here:
+         measured on the commit before it was added, the generated attribute read
+         AssemblyInformationalVersionAttribute("26.24.2+a70d1c3936cd483ed1a5d04bb002ef5b4950a076");
+         with the property it reads "26.24.2". PrismVersion also strips anything after "+", so
+         removing this would not corrupt the version string - but it WOULD put a per-commit token in
+         front of that strip as the only thing standing between a rebuild and a full recompute, and
+         it would show the SHA in the Windows "Product version" field. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <LangVersion>latest</LangVersion>

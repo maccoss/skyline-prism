@@ -46,7 +46,16 @@ public partial class App : Application
     /// <para>Suppression is by TIMING, not by matching this exception. Once shutdown has begun there
     /// is no work left to protect and no action left to offer, so any fault arriving then belongs in
     /// the log and nowhere else. A background failure DURING a run still raises its dialog, which is
-    /// the case these handlers exist for.</para>
+    /// the case these handlers exist for. The one case that changes meaning: closing the window
+    /// mid-run, which <c>MainWindow.OnClosing</c> confirms and then cancels - a real failure from the
+    /// task still unwinding is logged rather than shown. The user asked for it to stop, and
+    /// <c>prism_run_*.log</c> still records it.</para>
+    ///
+    /// <para>A field rather than WPF's own <c>Dispatcher.HasShutdownStarted</c>, which looks like the
+    /// obvious spelling and is not: <see cref="Report"/> is static and reached from arbitrary threads
+    /// during teardown, where <c>Application.Current</c> can already be null and reading the
+    /// dispatcher cross-thread that late is unreliable. A plain bool is readable from anywhere at any
+    /// point in the shutdown sequence, which is exactly what this guard needs.</para>
     /// </remarks>
     private static volatile bool _shutdownStarted;
 
@@ -87,9 +96,12 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
-        // Both hooks, because which one runs first depends on how the tool was closed:
-        // ShutdownStarted fires as the dispatcher begins tearing down, OnExit once the last window
-        // has closed. The teardown fault this guards against arrives later than either.
+        // OnExit is the hook that actually fires today: ShutdownMode is the default
+        // OnLastWindowClose and nothing here calls Environment.Exit, Application.Shutdown or
+        // Dispatcher.InvokeShutdown, so closing MainWindow raises Exit before the dispatcher's
+        // ShutdownStarted. This second subscription is a cheap guard for a path that does not exist
+        // yet - a direct InvokeShutdown, or a change to ShutdownMode - and not, as this comment
+        // previously claimed, for one that does. Either way both run well before the teardown fault.
         Dispatcher.ShutdownStarted += (_, _) => _shutdownStarted = true;
 
         WriteLog("==== Skyline-PRISM tool started ====");
@@ -160,6 +172,11 @@ public partial class App : Application
     {
         WriteLog($"UNHANDLED ({source}): {ex}");
 
+        // Guarded here rather than by unsubscribing OnAppDomainUnhandledException in OnExit, which
+        // would express the same intent at the source and is the tidier-looking change. It would
+        // also stop the log line below, and that line is the only reason the reported fault was
+        // identifiable at all - the user had nothing but a dialog and this file. Keep the
+        // diagnostics; drop only the interruption.
         if (_shutdownStarted)
         {
             // Logged in full above, deliberately not shown - see _shutdownStarted.

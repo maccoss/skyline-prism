@@ -21,8 +21,9 @@ public class PrismVersionTests
     [Fact]
     public void TheVersionHasThreePartsAndNoPadding()
     {
+        // The anchored pattern already excludes a "+<commit>" suffix, so there is no separate
+        // assertion for it - one that could never fail reads as a guarantee it is not providing.
         Assert.Matches(@"^\d+\.\d+\.\d+$", PrismVersion.Current);
-        Assert.DoesNotContain("+", PrismVersion.Current);
     }
 
     /// <summary>
@@ -40,8 +41,10 @@ public class PrismVersionTests
             PrismVersion.Current);
 
         // The padded form is what used to be printed; keep the distinction visible here, because a
-        // future "simplification" back to GetName().Version would still pass the test above.
-        Assert.Equal(0, assemblyVersion.Revision);
+        // future "simplification" back to GetName().Version would still pass the test above. This
+        // does NOT also assert Revision == 0: that pins MSBuild's padding convention rather than
+        // anything about PrismVersion, and would fail on an explicit four-part <AssemblyVersion>
+        // carrying a build number - a common CI practice, and not a regression.
         Assert.NotEqual(assemblyVersion.ToString(), PrismVersion.Current);
     }
 
@@ -66,7 +69,8 @@ public class PrismVersionTests
             Assert.Matches(@"^\d+\.\d+\.\d+$", stored);
 
             var info = Provenance.ReadRunInfo(path);
-            Assert.Equal(PrismVersion.Current, info!.PipelineVersion);
+            Assert.NotNull(info);   // so a schema change fails with a name, not a NullReferenceException
+            Assert.Equal(PrismVersion.Current, info.PipelineVersion);
         }
         finally
         {
