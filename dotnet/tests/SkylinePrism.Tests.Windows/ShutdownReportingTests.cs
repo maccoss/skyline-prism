@@ -44,12 +44,21 @@ public class ShutdownReportingTests
     {
         var text = ReadAppSource();
 
-        // OnExit is the hook that fires on the app's only shutdown path; ShutdownStarted is a guard
-        // for a path that does not exist yet. Both are asserted by name, but the COUNT deliberately
-        // is not: pinning it at exactly two would fail on adding a correct third hook (ProcessExit,
-        // say) and equally on dropping the redundant one, neither of which is a regression.
-        Assert.Contains("protected override void OnExit", text);
-        Assert.Contains("Dispatcher.ShutdownStarted", text);
+        // The invariant is "at least one shutdown hook sets the flag", so WHICH hooks are present is
+        // deliberately not pinned. OnExit is the only path the app takes today, ShutdownStarted
+        // guards one it does not take yet, and ProcessExit would be a third if an Environment.Exit
+        // path ever appeared - adding or dropping any one of those is not a regression while one
+        // remains. An earlier version of this test named two of them with Assert.Contains, which
+        // contradicted that reasoning by making the redundant hook mandatory.
+        var hooks = new[]
+        {
+            "protected override void OnExit",
+            "Dispatcher.ShutdownStarted",
+            "AppDomain.CurrentDomain.ProcessExit",
+        };
+        Assert.True(
+            Array.Exists(hooks, h => text.Contains(h, StringComparison.Ordinal)),
+            "App must subscribe to at least one shutdown hook: " + string.Join(", ", hooks));
         Assert.True(
             CountOf(text, "_shutdownStarted = true") >= 1,
             "At least one shutdown hook must set the flag before teardown.");

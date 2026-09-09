@@ -160,8 +160,10 @@ public class QcReportTests
             // `prism qc -d` re-renders it later from a possibly different build. Asserting against
             // the accessor the renderer itself calls would put the same value on both sides and pass
             // even if it returned nonsense.
-            using var parameters = System.Text.Json.JsonDocument.Parse(
-                File.ReadAllText(Path.Combine(tempOut, "parameters.json")));
+            var parametersPath = Path.Combine(tempOut, "parameters.json");
+            Assert.True(File.Exists(parametersPath), "parameters.json not generated");
+
+            using var parameters = System.Text.Json.JsonDocument.Parse(File.ReadAllText(parametersPath));
             var recordedVersion = parameters.RootElement.GetProperty("pipeline_version").GetString();
             Assert.False(string.IsNullOrWhiteSpace(recordedVersion), "parameters.json recorded no version");
 
