@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -88,8 +87,7 @@ public sealed class StageCache
         // Any release invalidates every stage. Blunt, and deliberately so: a change to a rollup's
         // arithmetic leaves no trace in the config, and silently reusing across it would be the one
         // failure this cache must never produce.
-        sb.Append("prism=").Append(
-            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0").Append('\n');
+        sb.Append("prism=").Append(PrismVersion.Current).Append('\n');
         foreach (var up in (upstream ?? Array.Empty<string>()).OrderBy(x => x, StringComparer.Ordinal))
             sb.Append("upstream=").Append(up).Append('\n');
         foreach (var input in (extraInputs ?? Array.Empty<string>()).OrderBy(x => x, StringComparer.Ordinal))

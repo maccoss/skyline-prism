@@ -547,7 +547,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         // the one that produced the outputs.
         Row("Pipeline", info is not null
             ? $"PRISM v{HtmlEncode(info.PipelineVersion)} (C#)"
-            : $"PRISM v{HtmlEncode(Provenance.AssemblyVersion)} (C#) <span style=\"color:#888\">- report "
+            : $"PRISM v{HtmlEncode(PrismVersion.Current)} (C#) <span style=\"color:#888\">- report "
               + "generator only; no parameters.json here, so the version that produced these outputs is "
               + "unrecorded</span>");
         if (info is not null)

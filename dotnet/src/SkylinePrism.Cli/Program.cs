@@ -210,8 +210,7 @@ public static class Program
 
     private static int PrintVersion()
     {
-        var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
-        Console.WriteLine($"prism {version}");
+        Console.WriteLine($"prism {PrismVersion.Current}");
         return 0;
     }
 

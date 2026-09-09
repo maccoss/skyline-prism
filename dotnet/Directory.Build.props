@@ -11,6 +11,14 @@
          at release time; dotnet-release.yml verifies the match before publishing. -->
     <Version>26.24.2</Version>
 
+    <!-- Keep AssemblyInformationalVersion equal to <Version> verbatim, with no "+<commit>" suffix.
+         PrismVersion reads that attribute (AssemblyVersion is padded to four components, which is
+         where the spurious trailing ".0" in "PRISM v26.24.2.0" came from), and the same string feeds
+         the stage-cache fingerprint and the export/extraction sidecars - so a per-commit suffix would
+         invalidate all three on every rebuild. PrismVersion also strips anything after "+"; this
+         property just keeps the attribute itself clean, since Windows shows it as "Product version". -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

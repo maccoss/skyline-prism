@@ -7,6 +7,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using SkylinePrism.Core.Pipeline;
 
 namespace SkylinePrism.Skyline;
 
@@ -145,8 +146,7 @@ public static class SharedDocumentArchive
     private sealed record ExtractStamp(
         string Archive, long Length, long LastWriteUtcTicks, string DocumentEntry, string Tool);
 
-    private static string ToolVersion =>
-        typeof(SharedDocumentArchive).Assembly.GetName().Version?.ToString() ?? "0";
+    private static string ToolVersion => PrismVersion.Current;
 
     // ONE extraction at a time in this process, whatever the destination.
     //

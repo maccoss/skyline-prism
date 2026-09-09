@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Text.Json;
 using SkylinePrism.Core.Config;
 
@@ -26,10 +25,6 @@ public static class Provenance
     public sealed record RunInfo(
         string PipelineVersion, string ProcessingDate, string Host, IReadOnlyList<string> SourceFiles);
 
-    /// <summary>Version of the running PRISM assembly (the 4-part X.Y.Z.0 that `prism --version` prints).</summary>
-    public static string AssemblyVersion =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
-
     private static JsonSerializerOptions Options() => new()
     {
         WriteIndented = true,
@@ -44,7 +39,7 @@ public static class Provenance
     {
         var doc = new Dictionary<string, object?>
         {
-            ["pipeline_version"] = AssemblyVersion,
+            ["pipeline_version"] = PrismVersion.Current,
             ["processing_date"] = processingDateUtc,
             // The machine that produced the outputs. Recorded here rather than read off the current
             // host when the QC report renders, because `prism qc` can regenerate a report anywhere.

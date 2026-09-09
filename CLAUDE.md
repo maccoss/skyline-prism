@@ -440,6 +440,13 @@ Key sections:
 `<Version>` - drives every assembly version, `prism --version`, and provenance `pipeline_version`.
 It must match `SkylinePrism.App/tool-inf/info.properties` `Version =` and the release tag.
 
+Every surface that prints a version goes through `Core/Pipeline/PrismVersion.Current`, which reads
+`AssemblyInformationalVersion` (MSBuild's verbatim copy of `<Version>`). Do **not** reach for
+`Assembly.GetName().Version`: it returns a `System.Version`, always normalized to four components, so
+`<Version>26.24.2` surfaces as `26.24.2.0` - a fourth number PRISM's CalVer scheme does not have and
+nothing can ever change. That padded form shipped in the QC report footer and `prism --version` up to
+v26.24.2; `PrismVersionTests` now pins it out.
+
 ## CLI Commands
 
 The `prism` CLI is the cross-platform entry point. The primary command is `prism run`:
@@ -896,7 +903,7 @@ Two version sources MUST stay in lockstep; `dotnet-release.yml` fails the releas
 from the tag:
 
 - `dotnet/Directory.Build.props` `<Version>` - drives every C# assembly version, the CLI's
-  `prism --version` (prints the 4-part `X.Y.Z.0`), and provenance `pipeline_version`.
+  `prism --version`, and provenance `pipeline_version`.
 - `dotnet/src/SkylinePrism.App/tool-inf/info.properties` `Version =` - the Skyline tool manifest.
 
 Steps:
@@ -910,7 +917,7 @@ Steps:
 3. **Run the ship gate** locally:
    `pwsh -File dotnet/build/package-and-verify.ps1 -Configuration Release` (tests -> packages
    `SkylinePrism.zip` -> extracts and launch-verifies the exe). Confirm `prism --version` prints
-   `{version}.0`.
+   `{version}` exactly - no trailing `.0` (it printed one up to v26.24.2; see `PrismVersion`).
 4. Commit, open a PR to `main`, let CI go green (`dotnet-ci.yml`), run
    `/code-review`, then **squash-merge** it (`gh pr merge --squash --delete-branch`). Always squash,
    for every PR, not just releases - `main` keeps one commit per change. Write the squash commit
