@@ -15,7 +15,9 @@ as the GitHub Release description and fails if it is missing.
   in WPF's own `DirectWriteForwarder.dll` resolving the Visual C++ runtime as the process exits -
   no PRISM code is on the stack, and `AppDomain.UnhandledException` cannot keep the process alive -
   so a fault arriving after shutdown has begun is now written to `prism-tool.log` and not shown. A
-  background failure during a run still raises its dialog.
+  background failure during a run still raises its dialog. One case changes meaning: if you close
+  the tool mid-run and confirm stopping it, a real failure from the task still unwinding is logged
+  rather than shown - `prism_run_*.log` still records it.
 
 - Version strings no longer carry a spurious fourth component. `prism --version` printed
   `prism 26.24.2.0`, the QC report footer read `PRISM v26.24.2.0`, and `parameters.json` recorded
