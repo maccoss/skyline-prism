@@ -251,9 +251,13 @@ public static class DuckDbMerge
         // Built in a staging directory beside the target and renamed into place on success - never
         // written over the top of the previous one. See Publish for why the obvious version of this
         // (delete the target, then write to the same path) fails on a network share.
-        var staging = fullOutput + StagingSuffix;
-        MergedDataset.Delete(staging);   // a leftover from a run that was killed mid-merge
-        SweepAsidePartitions(fullOutput);
+        // UNIQUE per merge, and never deleted-then-reused. A fixed ".building" path would have moved
+        // the very race this change removes rather than removing it: clearing it and immediately
+        // COPYing to the same path is the same delete-then-recreate sequence, just one directory over.
+        // A path that cannot pre-exist needs no clearing at all - and two PRISM windows pointed at one
+        // output directory no longer write into each other.
+        var staging = fullOutput + StagingSuffix + Guid.NewGuid().ToString("N")[..8];
+        SweepLeftovers(fullOutput);
         var outputEsc = SqlEscape(staging);
 
         long totalRows;
@@ -334,7 +338,7 @@ public static class DuckDbMerge
     }
 
     /// <summary>Suffix of the directory a merge is built in before it is renamed into place.</summary>
-    internal const string StagingSuffix = ".building";
+    internal const string StagingSuffix = ".building-";
 
     /// <summary>Prefix of a previous merge that has been renamed out of the way, pending deletion.</summary>
     internal const string AsideSuffix = ".stale-";
@@ -358,6 +362,12 @@ public static class DuckDbMerge
     /// <para>Deleting the renamed copy is best-effort on purpose: by then the merge has succeeded and
     /// the target is already correct, so a share too slow to finish the delete must not fail the run.
     /// What it leaves behind is swept by the next merge.</para>
+    ///
+    /// <para>That delete is NOT the hazard described above, and the difference is worth stating
+    /// because the two look alike. The hazard is deleting a path and then immediately WRITING to it
+    /// again. <c>aside</c> carries a fresh id, is never reused and is never written to, so however
+    /// long the share takes to finish removing it, nothing is waiting on that path. The same holds
+    /// for everything <see cref="SweepLeftovers"/> removes.</para>
     /// </remarks>
     internal static void Publish(string staging, string target)
     {
@@ -375,19 +385,45 @@ public static class DuckDbMerge
     }
 
     /// <summary>
-    /// Delete any previous merge left renamed-aside by <see cref="Publish"/>, best-effort. Only ever
-    /// removes siblings this class named itself, and never the target or the staging directory.
+    /// How long an abandoned staging directory has to sit before the sweep will remove it. Only a
+    /// process that died without running its <c>finally</c> - killed, out of memory, power lost -
+    /// leaves one, and the alternative to a bound like this is deleting a directory that a
+    /// CONCURRENTLY RUNNING merge is writing into. Far longer than any merge takes: the largest
+    /// cohort measured here merges in about 40 minutes.
     /// </summary>
-    internal static void SweepAsidePartitions(string target)
+    private static readonly TimeSpan OrphanStagingAge = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Delete this target's leftovers, best-effort: previous merges renamed aside by
+    /// <see cref="Publish"/>, and staging directories abandoned by a killed process. Only ever
+    /// removes siblings this class named itself.
+    /// </summary>
+    /// <remarks>
+    /// The two are treated differently on purpose. An aside is dead the moment it is named - it is
+    /// the OLD data, already replaced - so it goes unconditionally. A staging directory might belong
+    /// to a merge running right now in another window pointed at the same output directory, so it
+    /// only goes once it is far too old to be live. Deleting those on sight would turn one harmless
+    /// leftover into a second run failing mid-write.
+    /// </remarks>
+    internal static void SweepLeftovers(string target)
     {
         var parent = Path.GetDirectoryName(target);
         if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
             return;
+        var stem = Path.GetFileName(target);
         try
         {
-            foreach (var dir in Directory.GetDirectories(
-                         parent, Path.GetFileName(target) + AsideSuffix + "*"))
+            foreach (var dir in Directory.GetDirectories(parent, stem + AsideSuffix + "*"))
                 try { Directory.Delete(dir, recursive: true); } catch (Exception) { }
+
+            var cutoff = DateTime.UtcNow - OrphanStagingAge;
+            foreach (var dir in Directory.GetDirectories(parent, stem + StagingSuffix + "*"))
+                try
+                {
+                    if (Directory.GetLastWriteTimeUtc(dir) < cutoff)
+                        Directory.Delete(dir, recursive: true);
+                }
+                catch (Exception) { }
         }
         catch (Exception)
         {

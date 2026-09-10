@@ -48,6 +48,9 @@ public class MergePublishTests
         }
     }
 
+    private static string[] StagingDirsIn(string dir, string stem) =>
+        Directory.GetDirectories(dir, stem + DuckDbMerge.StagingSuffix + "*");
+
     private static int[] BucketsIn(string root) => Directory
         .GetDirectories(root, MergedDataset.BucketColumn + "=*")
         .Select(d => int.Parse(Path.GetFileName(d).Split('=')[1]))
@@ -95,7 +98,7 @@ public class MergePublishTests
                 + "', hive_partitioning=false)";
             Assert.Equal(good.TotalRows, Convert.ToInt64(cmd.ExecuteScalar()));
 
-            Assert.False(Directory.Exists(target + DuckDbMerge.StagingSuffix));
+            Assert.Empty(StagingDirsIn(dir, "merged_data"));
         }
         finally
         {
@@ -117,7 +120,7 @@ public class MergePublishTests
         {
             var target = Path.Combine(dir, "merged_data");
             SeedPartitions(target, 0, 1, 2, 3);
-            var staging = target + DuckDbMerge.StagingSuffix;
+            var staging = target + DuckDbMerge.StagingSuffix + "unittest";
             SeedPartitions(staging, 0, 1);
 
             DuckDbMerge.Publish(staging, target);
@@ -146,7 +149,7 @@ public class MergePublishTests
         {
             var target = Path.Combine(dir, "merged_data");
             File.WriteAllText(target, "a single-file merge from an older release");
-            var staging = target + DuckDbMerge.StagingSuffix;
+            var staging = target + DuckDbMerge.StagingSuffix + "unittest";
             SeedPartitions(staging, 0);
 
             DuckDbMerge.Publish(staging, target);
@@ -174,16 +177,28 @@ public class MergePublishTests
         {
             var target = Path.Combine(dir, "merged_data");
             Directory.CreateDirectory(target);
-            Directory.CreateDirectory(target + DuckDbMerge.StagingSuffix);
             Directory.CreateDirectory(target + DuckDbMerge.AsideSuffix + "aaaaaaaa");
             Directory.CreateDirectory(target + DuckDbMerge.AsideSuffix + "bbbbbbbb");
             Directory.CreateDirectory(Path.Combine(dir, "merged_data_other"));
             File.WriteAllText(Path.Combine(dir, "merged_data.cache.json"), "{}");
 
-            DuckDbMerge.SweepAsidePartitions(target);
+            // A staging directory being written RIGHT NOW by another window pointed at the same output
+            // directory. Sweeping this would turn a tidy-up into a second run failing mid-write, so
+            // recency is what protects it.
+            var live = target + DuckDbMerge.StagingSuffix + "live0000";
+            Directory.CreateDirectory(live);
 
-            Assert.True(Directory.Exists(target));
-            Assert.True(Directory.Exists(target + DuckDbMerge.StagingSuffix));
+            // One abandoned by a process that died without running its finally. Backdated past the
+            // bound, which is the only thing that distinguishes it from the live one above.
+            var orphan = target + DuckDbMerge.StagingSuffix + "orph0000";
+            Directory.CreateDirectory(orphan);
+            Directory.SetLastWriteTimeUtc(orphan, DateTime.UtcNow - TimeSpan.FromDays(3));
+
+            DuckDbMerge.SweepLeftovers(target);
+
+            Assert.True(Directory.Exists(target), "the target itself must never be swept");
+            Assert.True(Directory.Exists(live), "a live concurrent merge's staging must survive");
+            Assert.False(Directory.Exists(orphan), "an abandoned staging directory should be removed");
             Assert.True(Directory.Exists(Path.Combine(dir, "merged_data_other")));
             Assert.True(File.Exists(Path.Combine(dir, "merged_data.cache.json")));
             Assert.Empty(Directory.GetDirectories(dir, "merged_data" + DuckDbMerge.AsideSuffix + "*"));
@@ -238,7 +253,7 @@ public class MergePublishTests
                 + "', hive_partitioning=false)";
             Assert.Equal(second.TotalRows, Convert.ToInt64(cmd.ExecuteScalar()));
 
-            Assert.False(Directory.Exists(target + DuckDbMerge.StagingSuffix));
+            Assert.Empty(StagingDirsIn(dir, "merged_data"));
             Assert.Empty(Directory.GetDirectories(dir, "merged_data" + DuckDbMerge.AsideSuffix + "*"));
         }
         finally
