@@ -1069,8 +1069,7 @@ public partial class MainWindow
     {
         RangeStatusText.Text = message;
         RangePlot.Reset();
-        RangePlot.Plot.Title(message);
-        PlotRenderer.StyleQcPlot(RangePlot.Plot);
+        PlotRenderer.DrawEmptyState(RangePlot.Plot, message);
         RangePlot.Refresh();
     }
 

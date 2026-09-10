@@ -43,6 +43,13 @@ internal static class QcPlotChrome
     /// </summary>
     public static void Reset(Plot plt)
     {
+        // Undo the empty state before anything else. PlotRenderer.DrawEmptyState strips the axes and
+        // grid so a panel with no data cannot be misread as a flat measurement - and Clear() does not
+        // put them back, so without this the first REAL plot after an empty one renders with no axes
+        // at all. Exactly the class of leftover this method exists for.
+        plt.Axes.Frameless(false);
+        plt.ShowGrid();
+
         plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic();
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic();
         plt.Axes.Left.Label.Text = "";

@@ -6,7 +6,23 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **The tool window is split into Analysis and Visualization.** Inputs, Settings and Log are about
+  producing results and now sit under **Analysis**; QC Plots, Spectrum density and Dynamic Range are
+  about reading them and sit under **Visualization**, chosen from a list down the left rather than
+  from a tab strip. The output directory, **Run PRISM** and **Stop** stay above both. The plots are
+  expected to keep arriving and a tab strip stops being readable at around eight of them; each pane
+  also keeps its own state - zoom, ticked replicates, matrices already read - while you are on
+  another one.
+
 ## Bug Fixes
+
+- **A plot panel with no data no longer draws axes.** The three panels had drifted into three
+  different empty states: QC Plots rendered nothing at all before the first run, leaving ScottPlot's
+  raw default with an unstyled numbered grid to no scale; after a run it reset the chrome but never
+  the axis limits, so a missing view inherited the previous plot's scale; and Spectrum density and
+  Dynamic Range reset the whole control. All three now show one sentence saying why the panel is
+  empty, on a panel with no axes at all - so an empty result cannot be misread as a flat measurement,
+  and the numbers on it cannot be read as data that was never there.
 
 - **Re-running an analysis onto a network share could fail Stage 1, and a stopped run could destroy
   the previous merge.** Both came from the same thing: the merge deleted `merged_data/` and then had

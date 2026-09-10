@@ -108,6 +108,12 @@ public partial class MainWindow : Window
         QcPlotCombo.SelectedIndex = 0;
         // QcGroupByCombo / QcGroupCombo are populated from the Replicates report after a run.
 
+        // The visualization nav rail starts on QC plots. Set here rather than in XAML for the reason
+        // the whole block is here (see XamlInitializationOrderTests) and for a second one specific to
+        // the rail: its handler reaches the panes beside it, which are declared AFTER it, so a XAML
+        // SelectedIndex would call into null controls from EndInit.
+        VizNav.SelectedIndex = (int)VizPane.Qc;
+
         if (_session is not null)
         {
             _ = AddLaunchingDocumentAsync();
@@ -118,7 +124,7 @@ public partial class MainWindow : Window
         else
         {
             AddOpenDocButton.IsEnabled = false; // re-enabled if a running instance turns up when clicked
-            MainTabs.SelectedItem = InputsTab;  // standalone: the first thing to do is add an input
+            ShowAnalysis(InputsTab);  // standalone: the first thing to do is add an input
         }
 
         // Last line of the constructor, and the ship gate's proof that the UI actually came up:
@@ -1119,7 +1125,7 @@ public partial class MainWindow : Window
         if (_inputs.Count == 0)
         {
             Log("No inputs. Add a document or an exported report on the Inputs tab.");
-            MainTabs.SelectedItem = InputsTab;
+            ShowAnalysis(InputsTab);
             return;
         }
 
@@ -1131,7 +1137,7 @@ public partial class MainWindow : Window
         RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
-        MainTabs.SelectedItem = LogTab; // show progress as it runs
+        ShowAnalysis(LogTab); // show progress as it runs
 
         var outputDir = OutputDirBox.Text;
         var batchColumn = BatchColumnBox.Text?.Trim();
@@ -1170,7 +1176,7 @@ public partial class MainWindow : Window
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
-            MainTabs.SelectedItem = QcTab; // land on the plots when the run finishes
+            ShowVisualization(VizPane.Qc); // land on the plots when the run finishes
         }
         catch (Exception ex) when (IsCancellation(ex))
         {
@@ -2154,8 +2160,15 @@ public partial class MainWindow : Window
 
     private void RenderQc()
     {
-        if (QcViewCombo is null || _qcData.Count == 0)
+        if (QcViewCombo is null)
             return;
+        if (_qcData.Count == 0)
+        {
+            // Before this, RenderQc simply returned and the panel kept ScottPlot's raw default -
+            // unstyled, ungridded to no scale, and silent about why it was blank.
+            ShowQcMessage("No results yet - run PRISM, or point the output directory at a finished run.");
+            return;
+        }
         var kind = ComboText(QcPlotCombo, "PCA");
         UpdateQcControls(kind); // may force Level=Peptide and grey out Level/View for RT plots
         var view = ComboText(QcViewCombo, "Corrected").ToLowerInvariant();
@@ -2221,8 +2234,7 @@ public partial class MainWindow : Window
         QcPlotChrome.Reset(plt);
         if (!_qcData.TryGetValue($"{view}|{level}", out var d) || d.Samples.Count < 2)
         {
-            plt.Title($"No {view} {level} data yet - run PRISM first.");
-            QcPlot.Refresh();
+            ShowQcMessage($"No {view} {level} data yet - run PRISM first.");
             return;
         }
         // Optional group filter driven by a Replicates-report column; several values may be ticked.
@@ -2340,7 +2352,7 @@ public partial class MainWindow : Window
         {
             if (!_qcData.TryGetValue($"{view}|{level}", out var d))
             {
-                ShowStaticMessage($"No {view} {level} data yet - run PRISM first.");
+                ShowQcMessage($"No {view} {level} data yet - run PRISM first.");
                 return;
             }
             var groupCols = GroupColumns(d.Samples);
@@ -2354,19 +2366,19 @@ public partial class MainWindow : Window
             switch (kind)
             {
                 case "Control correlation":
-                    if (groupCols.Count < 2) { ShowStaticMessage($"Correlation needs >= 2 samples in '{groupLabel}'."); return; }
+                    if (groupCols.Count < 2) { ShowQcMessage($"Correlation needs >= 2 samples in '{groupLabel}'."); return; }
                     var corrTypes = groupCols.Select(i => _qcTypes.GetValueOrDefault(d.Samples[i], "unknown")).ToList();
                     png = PlotRenderer.CorrelationHeatmap(d.FeaturesBySamples, groupCols, "", corrTypes);
                     break;
                 case "RT-lowess":
-                    if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
-                    if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
+                    if (d.MeanRt is null) { ShowQcMessage("RT plots are peptide-level only."); return; }
+                    if (groupCols.Count < 1) { ShowQcMessage($"No samples in '{groupLabel}'."); return; }
                     png = PlotRenderer.RtLowessCurves(Subset(d.FeaturesBySamples, groupCols), d.MeanRt,
                         groupCols.Select(i => SampleAnnotation(d.Samples[i], column)).ToList(), "");
                     break;
                 case "RT-bin boxplot":
-                    if (d.MeanRt is null) { ShowStaticMessage("RT plots are peptide-level only."); return; }
-                    if (groupCols.Count < 1) { ShowStaticMessage($"No samples in '{groupLabel}'."); return; }
+                    if (d.MeanRt is null) { ShowQcMessage("RT plots are peptide-level only."); return; }
+                    if (groupCols.Count < 1) { ShowQcMessage($"No samples in '{groupLabel}'."); return; }
                     png = PlotRenderer.RtBinBoxplot(Subset(d.FeaturesBySamples, groupCols), d.MeanRt, "", "#1f77b4");
                     break;
                 case "RT-binned CV":
@@ -2374,22 +2386,22 @@ public partial class MainWindow : Window
                     if (!_qcData.TryGetValue("raw|peptide", out var rawD) ||
                         !_qcData.TryGetValue("corrected|peptide", out var corrD) || rawD.MeanRt is null)
                     {
-                        ShowStaticMessage("RT-binned CV needs both raw and corrected peptide data.");
+                        ShowQcMessage("RT-binned CV needs both raw and corrected peptide data.");
                         return;
                     }
                     var cvCols = GroupColumns(rawD.Samples);
-                    if (cvCols.Count < 2) { ShowStaticMessage($"RT-binned CV needs >= 2 samples in '{groupLabel}'."); return; }
+                    if (cvCols.Count < 2) { ShowQcMessage($"RT-binned CV needs >= 2 samples in '{groupLabel}'."); return; }
                     png = PlotRenderer.RtBinCv(rawD.FeaturesBySamples, corrD.FeaturesBySamples, rawD.MeanRt, cvCols, "", "#1f77b4");
                     break;
             }
             if (png is not null)
                 ShowStaticImage(png);
             else
-                ShowStaticMessage("(no plot)");
+                ShowQcMessage("(no plot)");
         }
         catch (Exception ex)
         {
-            ShowStaticMessage("render failed: " + ex.Message);
+            ShowQcMessage("render failed: " + ex.Message);
         }
     }
 
@@ -2409,15 +2421,15 @@ public partial class MainWindow : Window
         QcImage.Visibility = Visibility.Visible;
     }
 
-    // The image control can't show text, so reuse the ScottPlot control to display a message.
-    private void ShowStaticMessage(string msg)
+    // The image control cannot show text, so reuse the ScottPlot control to display a message.
+    // Chrome is reset first and the empty state drawn second: Reset clears the title, so the other
+    // order would wipe the message.
+    private void ShowQcMessage(string msg)
     {
         QcImage.Visibility = Visibility.Collapsed;
         QcPlot.Visibility = Visibility.Visible;
-        var plt = QcPlot.Plot;
-        plt.Clear();
-        QcPlotChrome.Reset(plt);
-        plt.Title(msg);
+        QcPlotChrome.Reset(QcPlot.Plot);
+        PlotRenderer.DrawEmptyState(QcPlot.Plot, msg);
         QcPlot.Refresh();
     }
 

@@ -57,355 +57,371 @@
         </StackPanel>
 
         <TabControl Grid.Row="5" x:Name="MainTabs" SelectionChanged="OnMainTabChanged">
-            <TabItem Header="Inputs" x:Name="InputsTab">
-                <DockPanel Margin="8">
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
-                        <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
-                                Click="OnAddOpenDocument"
-                                ToolTip="Pick a document from a running Skyline instance (exported over the live connection, as parquet)." />
-                        <Button Content="Add Skyline document (.sky / .sky.zip)..." Padding="10,4" Margin="0,0,6,0"
-                                Click="OnAddClosedDocument"
-                                ToolTip="Pick a document that is not open in Skyline: a .sky, or a .sky.zip shared document archive as downloaded from PanoramaWeb. PRISM exports it headlessly with the installed Skyline; an archive is extracted first (once, then reused) because Skyline's command line cannot open one." />
-                        <Button Content="Add exported report..." Padding="10,4" Margin="0,0,6,0"
-                                Click="OnAddReportFile"
-                                ToolTip="Use a PRISM report you already exported (.parquet / .csv / .tsv). No Skyline required." />
-                        <Button x:Name="RemoveInputButton" Content="Remove" Padding="10,4" Margin="0,0,6,0"
-                                Click="OnRemoveInput" />
-                        <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
-                                   Text="Add one input per batch. Each input's Batch label becomes its Source Document label, so identically named QC/reference replicates stay distinct across documents." />
-                    </StackPanel>
-                    <DataGrid x:Name="InputsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
-                              CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                              SelectionMode="Extended" RowHeaderWidth="0">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Source" Binding="{Binding KindLabel}" IsReadOnly="True" Width="140" />
-                            <DataGridTextColumn Header="Document / file" Binding="{Binding DisplayName}" IsReadOnly="True" Width="2*" />
-                            <DataGridTextColumn Header="Batch label" Binding="{Binding BatchLabel, UpdateSourceTrigger=PropertyChanged}" Width="160" />
-                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="*" />
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </DockPanel>
+            <TabItem Header="Analysis" x:Name="AnalysisTab">
+                <TabControl x:Name="AnalysisTabs">
+                    <TabItem Header="Inputs" x:Name="InputsTab">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
+                                        Click="OnAddOpenDocument"
+                                        ToolTip="Pick a document from a running Skyline instance (exported over the live connection, as parquet)." />
+                                <Button Content="Add Skyline document (.sky / .sky.zip)..." Padding="10,4" Margin="0,0,6,0"
+                                        Click="OnAddClosedDocument"
+                                        ToolTip="Pick a document that is not open in Skyline: a .sky, or a .sky.zip shared document archive as downloaded from PanoramaWeb. PRISM exports it headlessly with the installed Skyline; an archive is extracted first (once, then reused) because Skyline's command line cannot open one." />
+                                <Button Content="Add exported report..." Padding="10,4" Margin="0,0,6,0"
+                                        Click="OnAddReportFile"
+                                        ToolTip="Use a PRISM report you already exported (.parquet / .csv / .tsv). No Skyline required." />
+                                <Button x:Name="RemoveInputButton" Content="Remove" Padding="10,4" Margin="0,0,6,0"
+                                        Click="OnRemoveInput" />
+                                <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
+                                           Text="Add one input per batch. Each input's Batch label becomes its Source Document label, so identically named QC/reference replicates stay distinct across documents." />
+                            </StackPanel>
+                            <DataGrid x:Name="InputsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                                      CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                      SelectionMode="Extended" RowHeaderWidth="0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding KindLabel}" IsReadOnly="True" Width="140" />
+                                    <DataGridTextColumn Header="Document / file" Binding="{Binding DisplayName}" IsReadOnly="True" Width="2*" />
+                                    <DataGridTextColumn Header="Batch label" Binding="{Binding BatchLabel, UpdateSourceTrigger=PropertyChanged}" Width="160" />
+                                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="*" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+                    <TabItem Header="Settings">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="14">
+                                <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="1. Transition &#8594; peptide rollup:" Width="230" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="TransitionRollupCombo" Width="160" SelectionChanged="OnTransitionRollupChanged">
+                                        <ComboBoxItem>sum</ComboBoxItem>
+                                        <ComboBoxItem>median_polish</ComboBoxItem>
+                                        <ComboBoxItem>library_assist</ComboBoxItem>
+                                    </ComboBox>
+                                    <TextBlock Text="min transitions:" VerticalAlignment="Center" Margin="20,0,6,0" />
+                                    <TextBox x:Name="MinTransitionsBox" Width="46" Text="3" />
+                                    <CheckBox x:Name="UseMs1Check" Content="include MS1 precursors" VerticalAlignment="Center" Margin="20,0,0,0" />
+                                </StackPanel>
+
+                                <StackPanel x:Name="LibraryRow" Orientation="Horizontal" Margin="0,2,0,6" IsEnabled="False">
+                                    <TextBlock Text="    Spectral library (.blib):" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <ComboBox x:Name="LibraryCombo" Width="330" IsEditable="True" />
+                                    <Button Content="Browse..." Margin="8,0,0,0" Padding="8,2" Click="OnBrowseLibrary" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="2. Peptide normalization:" Width="230" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="PeptideNormCombo" Width="160">
+                                        <ComboBoxItem>rt_lowess</ComboBoxItem>
+                                        <ComboBoxItem>median</ComboBoxItem>
+                                        <ComboBoxItem>quantile</ComboBoxItem>
+                                        <ComboBoxItem>vsn</ComboBoxItem>
+                                        <ComboBoxItem>none</ComboBoxItem>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="   Sample outliers:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <CheckBox x:Name="ExcludeOutliersCheck" Content="exclude low-signal outlier samples (otherwise report only)" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="4. Protein parsimony:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ParsimonyCheck" Content="group indistinguishable proteins" IsChecked="True"
+                                              VerticalAlignment="Center" Checked="OnParsimonyChanged" Unchecked="OnParsimonyChanged"
+                                              ToolTip="Merge proteins that share the same peptide evidence into one group. Unchecked, every accession is its own group." />
+                                </StackPanel>
+
+                                <StackPanel x:Name="SharedPeptideRow" Orientation="Horizontal" Margin="0,2,0,6">
+                                    <TextBlock Text="    Shared peptides:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <ComboBox x:Name="SharedPeptideCombo" Width="160">
+                                        <ComboBoxItem>all_groups</ComboBoxItem>
+                                        <ComboBoxItem>razor</ComboBoxItem>
+                                        <ComboBoxItem>unique_only</ComboBoxItem>
+                                    </ComboBox>
+                                    <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
+                                               Text="How a peptide matching several groups is quantified: count it for every group, assign it to one (razor), or use only proteotypic peptides." />
+                                </StackPanel>
+
+                                <StackPanel x:Name="FastaRow" Orientation="Horizontal" Margin="0,2,0,6">
+                                    <TextBlock Text="    Protein FASTA:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <TextBox x:Name="FastaBox" Width="330" VerticalAlignment="Center"
+                                             TextChanged="OnFastaChanged"
+                                             ToolTip="The search database. Enables enzyme-aware parsimony - a peptide is attached to a protein only where the enzyme could actually have produced it, which removes matches to homologs that merely share the subsequence. Also supplies iBAQ's theoretical peptide counts. Optional: without it PRISM uses the Skyline Protein Accession column." />
+                                    <Button Content="Browse..." Padding="10,2" Margin="6,0,0,0" Click="OnBrowseFasta" />
+                                    <TextBlock x:Name="FastaHint" VerticalAlignment="Center" Margin="10,0,0,0"
+                                               Foreground="#888" TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="5. Peptide &#8594; protein rollup:" Width="230" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="ProteinRollupCombo" Width="160"
+                                              SelectionChanged="OnProteinRollupChanged">
+                                        <ComboBoxItem>median_polish</ComboBoxItem>
+                                        <ComboBoxItem>sum</ComboBoxItem>
+                                        <ComboBoxItem>topn</ComboBoxItem>
+                                        <ComboBoxItem>maxlfq</ComboBoxItem>
+                                        <ComboBoxItem>ibaq</ComboBoxItem>
+                                    </ComboBox>
+                                    <TextBlock Text="sum below:" VerticalAlignment="Center" Margin="20,0,6,0"
+                                               ToolTip="{Binding ElementName=MinPeptidesBox, Path=ToolTip}" />
+                                    <TextBox x:Name="MinPeptidesBox" Width="46" Text="3">
+                                        <TextBox.ToolTip>
+                                            <TextBlock>
+                                                Groups with fewer than this many quantified peptides are rolled up by a simple<LineBreak />
+                                                SUM instead of the method above (median polish is not meaningful on 1-2 peptides),<LineBreak />
+                                                and are flagged low_confidence in the output.<LineBreak /><LineBreak />
+                                                This is NOT a filter - no protein is dropped for having too few peptides.
+                                            </TextBlock>
+                                        </TextBox.ToolTip>
+                                    </TextBox>
+                                    <TextBlock Text="peptides" VerticalAlignment="Center" Margin="4,0,0,0" Foreground="#888" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="6. Protein normalization:" Width="230" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="ProteinNormCombo" Width="160">
+                                        <ComboBoxItem>median</ComboBoxItem>
+                                        <ComboBoxItem>none</ComboBoxItem>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ReferenceAnchoredCheck" VerticalAlignment="Center"
+                                              Content="Anchor ComBat on the Standard samples"
+                                              ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels." />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="8. Marker normalization:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="MarkerNormCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                              Checked="OnMarkerNormChanged" Unchecked="OnMarkerNormChanged"
+                                              Content="Normalize to a protein list"
+                                              ToolTip="Estimate one per-sample score from how a set of marker proteins move together (PC1 of the z-scored markers, at the protein level), then remove from every peptide and protein the part that tracks it. Answers 'what changed per unit of the marked material' rather than 'what changed in whatever was captured'. Runs after the normalization above, never instead of it." />
+                                    <ComboBox x:Name="MarkerNormListCombo" Width="200" IsEnabled="False"
+                                              ToolTip="Which protein list defines the markers. These are the same lists the Dynamic Range tab highlights." />
+                                    <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
+                                            Click="OnManageProteinLists"
+                                            ToolTip="Create or edit the named protein lists. Always available - a panel usually has to be curated before it can be selected here. The same editor opens from the Dynamic Range tab; there is one set of lists." />
+                                </StackPanel>
+
+                                <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
+                                    <TextBlock Text="9. MS2 signal accounting:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="Ms2SignalCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                              Content="Plot how much of the MS2 signal the run assigns"
+                                              ToolTip="Adds a QC report section: per replicate, the MS2 signal the run assigns to a peptide, with a line per visible protein list. Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted once, so shared fragments are not double counted. Off by default because it costs one extra pass over the merged table, comparable to Stage 2." />
+                                    <TextBlock Text="measure:" VerticalAlignment="Center" Margin="12,0,6,0" />
+                                    <ComboBox x:Name="Ms2MeasureCombo" Width="90" IsEnabled="False"
+                                              SelectionChanged="OnMs2SignalChanged"
+                                              ToolTip="What to total. signal: gross peak areas (Area + Background), available from any export. ions: Skyline's LC Peak Transition Ion Count - intensity x injection time per spectrum, summed across the peak - the better measure, available only when the export carries that column.">
+                                        <ComboBoxItem>signal</ComboBoxItem>
+                                        <ComboBoxItem x:Name="Ms2MeasureIonsItem" ToolTipService.ShowOnDisabled="True">ions</ComboBoxItem>
+                                    </ComboBox>
+                                    <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
+                                            Click="OnManageProteinLists"
+                                            ToolTip="Which lists get a line on the plot: the ones ticked visible in the editor - the same set the Dynamic Range tab highlights." />
+                                </StackPanel>
+
+                                <StackPanel x:Name="Ms2IonExportRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
+                                    <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
+                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                              ToolTipService.ShowOnDisabled="True"
+                                              Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
+                                              ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
+                                </StackPanel>
+                                <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
+
+                                <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                                <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="Log" x:Name="LogTab">
+                        <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                                 VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
+                                 HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
+                    </TabItem>
+                </TabControl>
             </TabItem>
-            <TabItem Header="Settings">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="14">
-                        <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="1. Transition &#8594; peptide rollup:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="TransitionRollupCombo" Width="160" SelectionChanged="OnTransitionRollupChanged">
-                                <ComboBoxItem>sum</ComboBoxItem>
-                                <ComboBoxItem>median_polish</ComboBoxItem>
-                                <ComboBoxItem>library_assist</ComboBoxItem>
-                            </ComboBox>
-                            <TextBlock Text="min transitions:" VerticalAlignment="Center" Margin="20,0,6,0" />
-                            <TextBox x:Name="MinTransitionsBox" Width="46" Text="3" />
-                            <CheckBox x:Name="UseMs1Check" Content="include MS1 precursors" VerticalAlignment="Center" Margin="20,0,0,0" />
-                        </StackPanel>
-
-                        <StackPanel x:Name="LibraryRow" Orientation="Horizontal" Margin="0,2,0,6" IsEnabled="False">
-                            <TextBlock Text="    Spectral library (.blib):" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                            <ComboBox x:Name="LibraryCombo" Width="330" IsEditable="True" />
-                            <Button Content="Browse..." Margin="8,0,0,0" Padding="8,2" Click="OnBrowseLibrary" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="2. Peptide normalization:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="PeptideNormCombo" Width="160">
-                                <ComboBoxItem>rt_lowess</ComboBoxItem>
-                                <ComboBoxItem>median</ComboBoxItem>
-                                <ComboBoxItem>quantile</ComboBoxItem>
-                                <ComboBoxItem>vsn</ComboBoxItem>
-                                <ComboBoxItem>none</ComboBoxItem>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="   Sample outliers:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                            <CheckBox x:Name="ExcludeOutliersCheck" Content="exclude low-signal outlier samples (otherwise report only)" VerticalAlignment="Center" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="4. Protein parsimony:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="ParsimonyCheck" Content="group indistinguishable proteins" IsChecked="True"
-                                      VerticalAlignment="Center" Checked="OnParsimonyChanged" Unchecked="OnParsimonyChanged"
-                                      ToolTip="Merge proteins that share the same peptide evidence into one group. Unchecked, every accession is its own group." />
-                        </StackPanel>
-
-                        <StackPanel x:Name="SharedPeptideRow" Orientation="Horizontal" Margin="0,2,0,6">
-                            <TextBlock Text="    Shared peptides:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                            <ComboBox x:Name="SharedPeptideCombo" Width="160">
-                                <ComboBoxItem>all_groups</ComboBoxItem>
-                                <ComboBoxItem>razor</ComboBoxItem>
-                                <ComboBoxItem>unique_only</ComboBoxItem>
-                            </ComboBox>
-                            <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888" TextWrapping="Wrap"
-                                       Text="How a peptide matching several groups is quantified: count it for every group, assign it to one (razor), or use only proteotypic peptides." />
-                        </StackPanel>
-
-                        <StackPanel x:Name="FastaRow" Orientation="Horizontal" Margin="0,2,0,6">
-                            <TextBlock Text="    Protein FASTA:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                            <TextBox x:Name="FastaBox" Width="330" VerticalAlignment="Center"
-                                     TextChanged="OnFastaChanged"
-                                     ToolTip="The search database. Enables enzyme-aware parsimony - a peptide is attached to a protein only where the enzyme could actually have produced it, which removes matches to homologs that merely share the subsequence. Also supplies iBAQ's theoretical peptide counts. Optional: without it PRISM uses the Skyline Protein Accession column." />
-                            <Button Content="Browse..." Padding="10,2" Margin="6,0,0,0" Click="OnBrowseFasta" />
-                            <TextBlock x:Name="FastaHint" VerticalAlignment="Center" Margin="10,0,0,0"
-                                       Foreground="#888" TextWrapping="Wrap" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="5. Peptide &#8594; protein rollup:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="ProteinRollupCombo" Width="160"
-                                      SelectionChanged="OnProteinRollupChanged">
-                                <ComboBoxItem>median_polish</ComboBoxItem>
-                                <ComboBoxItem>sum</ComboBoxItem>
-                                <ComboBoxItem>topn</ComboBoxItem>
-                                <ComboBoxItem>maxlfq</ComboBoxItem>
-                                <ComboBoxItem>ibaq</ComboBoxItem>
-                            </ComboBox>
-                            <TextBlock Text="sum below:" VerticalAlignment="Center" Margin="20,0,6,0"
-                                       ToolTip="{Binding ElementName=MinPeptidesBox, Path=ToolTip}" />
-                            <TextBox x:Name="MinPeptidesBox" Width="46" Text="3">
-                                <TextBox.ToolTip>
-                                    <TextBlock>
-                                        Groups with fewer than this many quantified peptides are rolled up by a simple<LineBreak />
-                                        SUM instead of the method above (median polish is not meaningful on 1-2 peptides),<LineBreak />
-                                        and are flagged low_confidence in the output.<LineBreak /><LineBreak />
-                                        This is NOT a filter - no protein is dropped for having too few peptides.
-                                    </TextBlock>
-                                </TextBox.ToolTip>
-                            </TextBox>
-                            <TextBlock Text="peptides" VerticalAlignment="Center" Margin="4,0,0,0" Foreground="#888" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="6. Protein normalization:" Width="230" VerticalAlignment="Center" />
-                            <ComboBox x:Name="ProteinNormCombo" Width="160">
-                                <ComboBoxItem>median</ComboBoxItem>
-                                <ComboBoxItem>none</ComboBoxItem>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="ReferenceAnchoredCheck" VerticalAlignment="Center"
-                                      Content="Anchor ComBat on the Standard samples"
-                                      ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels." />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBlock Text="8. Marker normalization:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="MarkerNormCheck" VerticalAlignment="Center" Margin="0,0,8,0"
-                                      Checked="OnMarkerNormChanged" Unchecked="OnMarkerNormChanged"
-                                      Content="Normalize to a protein list"
-                                      ToolTip="Estimate one per-sample score from how a set of marker proteins move together (PC1 of the z-scored markers, at the protein level), then remove from every peptide and protein the part that tracks it. Answers 'what changed per unit of the marked material' rather than 'what changed in whatever was captured'. Runs after the normalization above, never instead of it." />
-                            <ComboBox x:Name="MarkerNormListCombo" Width="200" IsEnabled="False"
-                                      ToolTip="Which protein list defines the markers. These are the same lists the Dynamic Range tab highlights." />
-                            <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
-                                    Click="OnManageProteinLists"
-                                    ToolTip="Create or edit the named protein lists. Always available - a panel usually has to be curated before it can be selected here. The same editor opens from the Dynamic Range tab; there is one set of lists." />
-                        </StackPanel>
-
-                        <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
-                                   Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
-
-                        <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
-                            <TextBlock Text="9. MS2 signal accounting:" Width="230" VerticalAlignment="Center" />
-                            <CheckBox x:Name="Ms2SignalCheck" VerticalAlignment="Center" Margin="0,0,8,0"
-                                      Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                      Content="Plot how much of the MS2 signal the run assigns"
-                                      ToolTip="Adds a QC report section: per replicate, the MS2 signal the run assigns to a peptide, with a line per visible protein list. Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted once, so shared fragments are not double counted. Off by default because it costs one extra pass over the merged table, comparable to Stage 2." />
-                            <TextBlock Text="measure:" VerticalAlignment="Center" Margin="12,0,6,0" />
-                            <ComboBox x:Name="Ms2MeasureCombo" Width="90" IsEnabled="False"
-                                      SelectionChanged="OnMs2SignalChanged"
-                                      ToolTip="What to total. signal: gross peak areas (Area + Background), available from any export. ions: Skyline's LC Peak Transition Ion Count - intensity x injection time per spectrum, summed across the peak - the better measure, available only when the export carries that column.">
-                                <ComboBoxItem>signal</ComboBoxItem>
-                                <ComboBoxItem x:Name="Ms2MeasureIonsItem" ToolTipService.ShowOnDisabled="True">ions</ComboBoxItem>
-                            </ComboBox>
-                            <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
-                                    Click="OnManageProteinLists"
-                                    ToolTip="Which lists get a line on the plot: the ones ticked visible in the editor - the same set the Dynamic Range tab highlights." />
-                        </StackPanel>
-
-                        <StackPanel x:Name="Ms2IonExportRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
-                            <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                            <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
-                                      Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                      ToolTipService.ShowOnDisabled="True"
-                                      Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
-                                      ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
-                        </StackPanel>
-                        <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
-
-                        <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
-                                   Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
-                        <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
-                                   Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-            <TabItem Header="Log" x:Name="LogTab">
-                <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
-                         VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
-                         HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
-            </TabItem>
-            <TabItem Header="QC Plots" x:Name="QcTab">
-                <DockPanel>
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,6,6,2">
-                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <ComboBox x:Name="QcViewCombo" Width="110" SelectionChanged="OnQcChanged">
-                            <ComboBoxItem>Corrected</ComboBoxItem>
-                            <ComboBoxItem>Raw</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="QcLevelCombo" Width="100" SelectionChanged="OnQcChanged">
-                            <ComboBoxItem>Peptide</ComboBoxItem>
-                            <ComboBoxItem>Protein</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
-                                  ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
-                        <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
-                        <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
-                                  ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                              Margin="2,1" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
-                            <ComboBoxItem>PCA</ComboBoxItem>
-                            <ComboBoxItem>Marker score</ComboBoxItem>
-                            <ComboBoxItem>Marker loadings</ComboBoxItem>
-                            <ComboBoxItem>CV distribution</ComboBoxItem>
-                            <ComboBoxItem>Intensity distribution</ComboBoxItem>
-                            <ComboBoxItem>Control correlation</ComboBoxItem>
-                            <ComboBoxItem>RT-lowess</ComboBoxItem>
-                            <ComboBoxItem>RT-binned CV</ComboBoxItem>
-                            <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
-                                   VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
-                    </StackPanel>
-                    <Grid>
-                        <sp:WpfPlot x:Name="QcPlot" />
-                        <Image x:Name="QcImage" Visibility="Collapsed" Stretch="Uniform" Margin="4" />
+            <TabItem Header="Visualization" x:Name="VisualizationTab">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" MinWidth="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ListBox Grid.Column="0" x:Name="VizNav" Width="170"
+                             SelectionChanged="OnVizNavChanged"
+                             BorderThickness="0,0,1,0" BorderBrush="#dfe6ef"
+                             Background="#fbfcfe">
+                        <ListBoxItem x:Name="QcNavItem" Content="QC Plots" Padding="10,7" />
+                        <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
+                        <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
+                    </ListBox>
+                    <Grid Grid.Column="1">
+                        <DockPanel x:Name="QcPane">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="QcViewCombo" Width="110" SelectionChanged="OnQcChanged">
+                                    <ComboBoxItem>Corrected</ComboBoxItem>
+                                    <ComboBoxItem>Raw</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="QcLevelCombo" Width="100" SelectionChanged="OnQcChanged">
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
+                                          ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
+                                <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
+                                          ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock Text="Plot:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="QcPlotCombo" Width="170" SelectionChanged="OnQcChanged">
+                                    <ComboBoxItem>PCA</ComboBoxItem>
+                                    <ComboBoxItem>Marker score</ComboBoxItem>
+                                    <ComboBoxItem>Marker loadings</ComboBoxItem>
+                                    <ComboBoxItem>CV distribution</ComboBoxItem>
+                                    <ComboBoxItem>Intensity distribution</ComboBoxItem>
+                                    <ComboBoxItem>Control correlation</ComboBoxItem>
+                                    <ComboBoxItem>RT-lowess</ComboBoxItem>
+                                    <ComboBoxItem>RT-binned CV</ComboBoxItem>
+                                    <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
+                                           VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
+                            </StackPanel>
+                            <Grid>
+                                <sp:WpfPlot x:Name="QcPlot" />
+                                <Image x:Name="QcImage" Visibility="Collapsed" Stretch="Uniform" Margin="4" />
+                            </Grid>
+                        </DockPanel>
+                        <DockPanel x:Name="DensityPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="Run:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="DensitySampleCombo" Width="230" SelectionChanged="OnDensitySampleChanged"
+                                          ToolTip="Which acquisition to map. Every run in the merged report is listed." />
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DensityViewCombo" Width="150" SelectedIndex="0"
+                                          SelectionChanged="OnDensityViewChanged"
+                                          ToolTip="Three readings of the same map: where the load is (heatmap), how it is distributed across spectra (histogram), and how it moves over the gradient (load over time).">
+                                    <ComboBoxItem Tag="Heatmap">Heatmap</ComboBoxItem>
+                                    <ComboBoxItem Tag="Histogram">Load histogram</ComboBoxItem>
+                                    <ComboBoxItem Tag="LoadOverTime">Load over time</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Isolation scheme:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DensitySchemeCombo" Width="200" SelectionChanged="OnDensitySchemeChanged"
+                                          ToolTip="The acquisition's real isolation windows - one map row per window, so one cell is one DIA spectrum. Taken from the document when it defines a scheme; otherwise pick the scheme the data was acquired with." />
+                                <TextBox x:Name="DensityMzBinBox" Width="46" Text="8.0" VerticalAlignment="Center"
+                                         Margin="4,0,0,0" Visibility="Collapsed"
+                                         LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
+                                         ToolTip="Width of one uniform m/z bin, in Th. Only used by the approximate fallback - its edges are arbitrary and will not line up with the real windows." />
+                                <TextBlock Text="RT bin (min):" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBox x:Name="DensityRtBinBox" Width="46" Text="0.1" VerticalAlignment="Center"
+                                         LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
+                                         ToolTip="Width of one RT column, in minutes - roughly the cycle time of the method." />
+                                <TextBlock Text="Max q-value:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBox x:Name="DensityQValueBox" Width="52" Text="0.01" VerticalAlignment="Center"
+                                         LostFocus="OnDensityQValueChanged" KeyDown="OnDensityQValueKeyDown"
+                                         ToolTip="Detection q-value cutoff: only precursors at or below it count as detected. Blank counts every integrated peak." />
+                                <TextBlock x:Name="DensityColormapLabel" Text="Colors:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DensityColormapCombo" Width="110" SelectedIndex="0"
+                                          SelectionChanged="OnDensityColormapChanged">
+                                    <ComboBoxItem>Viridis</ComboBoxItem>
+                                    <ComboBoxItem>Turbo</ComboBoxItem>
+                                    <ComboBoxItem>Magma</ComboBoxItem>
+                                    <ComboBoxItem>Inferno</ComboBoxItem>
+                                    <ComboBoxItem>Plasma</ComboBoxItem>
+                                    <ComboBoxItem>Thermal</ComboBoxItem>
+                                    <ComboBoxItem>Grayscale</ComboBoxItem>
+                                </ComboBox>
+                                <Button x:Name="DensityRefreshButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
+                                        Click="OnDensityReload"
+                                        ToolTip="Re-read merged_data.parquet from the output directory above." />
+                                <TextBlock x:Name="DensityStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                                <TextBlock x:Name="DensityHoverText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#1a3c6e" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <sp:WpfPlot x:Name="DensityPlot" MouseMove="OnDensityPlotMouseMove" />
+                        </DockPanel>
+                        <DockPanel x:Name="RangePane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="RangeLevelCombo" Width="90" SelectedIndex="0"
+                                          SelectionChanged="OnRangeLevelChanged"
+                                          ToolTip="Which corrected PRISM matrix to rank: corrected_proteins.parquet or corrected_peptides.parquet.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="RangeRollupLabel" Text="Rollup:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="RangeRollupCombo" Width="130" SelectedIndex="0"
+                                          SelectionChanged="OnRangeRollupChanged"
+                                          ToolTip="View the proteins under a different rollup than the run used. 'As run' reads corrected_proteins.parquet; every other choice re-rolls corrected_peptides.parquet with that method, without re-running parsimony or the protein-level normalization - so it shows the shape and ordering that method gives, not the run's exact numbers.">
+                                    <ComboBoxItem>As run</ComboBoxItem>
+                                    <ComboBoxItem>Sum</ComboBoxItem>
+                                    <ComboBoxItem>Median polish</ComboBoxItem>
+                                    <ComboBoxItem>Top N</ComboBoxItem>
+                                    <ComboBoxItem>MaxLFQ</ComboBoxItem>
+                                    <ComboBoxItem>iBAQ</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Replicates:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="RangeSampleCombo" Width="210" IsEditable="True" IsReadOnly="True"
+                                          ToolTip="Which replicates to average. Tick none for All.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
+                                        Click="OnManageProteinLists"
+                                        ToolTip="Define named protein lists with colors - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
+                                <Button x:Name="RangeReloadButton" Content="Reload" Padding="10,2" Margin="8,0,0,0"
+                                        Click="OnRangeReload"
+                                        ToolTip="Re-read the corrected matrices from the output directory above." />
+                                <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"
+                                           Text="Click a point to select it in Skyline; right-click for labels." />
+                                <ProgressBar x:Name="RangeProgress" Width="120" Height="12" Margin="12,0,0,0"
+                                             Minimum="0" Maximum="1" VerticalAlignment="Center"
+                                             Visibility="Collapsed" />
+                                <TextBlock x:Name="RangeStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
+                        </DockPanel>
                     </Grid>
-                </DockPanel>
-            </TabItem>
-            <TabItem Header="Spectrum density" x:Name="DensityTab">
-                <DockPanel>
-                    <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
-                        <TextBlock Text="Run:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <ComboBox x:Name="DensitySampleCombo" Width="230" SelectionChanged="OnDensitySampleChanged"
-                                  ToolTip="Which acquisition to map. Every run in the merged report is listed." />
-                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="DensityViewCombo" Width="150" SelectedIndex="0"
-                                  SelectionChanged="OnDensityViewChanged"
-                                  ToolTip="Three readings of the same map: where the load is (heatmap), how it is distributed across spectra (histogram), and how it moves over the gradient (load over time).">
-                            <ComboBoxItem Tag="Heatmap">Heatmap</ComboBoxItem>
-                            <ComboBoxItem Tag="Histogram">Load histogram</ComboBoxItem>
-                            <ComboBoxItem Tag="LoadOverTime">Load over time</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock Text="Isolation scheme:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="DensitySchemeCombo" Width="200" SelectionChanged="OnDensitySchemeChanged"
-                                  ToolTip="The acquisition's real isolation windows - one map row per window, so one cell is one DIA spectrum. Taken from the document when it defines a scheme; otherwise pick the scheme the data was acquired with." />
-                        <TextBox x:Name="DensityMzBinBox" Width="46" Text="8.0" VerticalAlignment="Center"
-                                 Margin="4,0,0,0" Visibility="Collapsed"
-                                 LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
-                                 ToolTip="Width of one uniform m/z bin, in Th. Only used by the approximate fallback - its edges are arbitrary and will not line up with the real windows." />
-                        <TextBlock Text="RT bin (min):" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <TextBox x:Name="DensityRtBinBox" Width="46" Text="0.1" VerticalAlignment="Center"
-                                 LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
-                                 ToolTip="Width of one RT column, in minutes - roughly the cycle time of the method." />
-                        <TextBlock Text="Max q-value:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <TextBox x:Name="DensityQValueBox" Width="52" Text="0.01" VerticalAlignment="Center"
-                                 LostFocus="OnDensityQValueChanged" KeyDown="OnDensityQValueKeyDown"
-                                 ToolTip="Detection q-value cutoff: only precursors at or below it count as detected. Blank counts every integrated peak." />
-                        <TextBlock x:Name="DensityColormapLabel" Text="Colors:" VerticalAlignment="Center"
-                                   Margin="16,0,4,0" />
-                        <ComboBox x:Name="DensityColormapCombo" Width="110" SelectedIndex="0"
-                                  SelectionChanged="OnDensityColormapChanged">
-                            <ComboBoxItem>Viridis</ComboBoxItem>
-                            <ComboBoxItem>Turbo</ComboBoxItem>
-                            <ComboBoxItem>Magma</ComboBoxItem>
-                            <ComboBoxItem>Inferno</ComboBoxItem>
-                            <ComboBoxItem>Plasma</ComboBoxItem>
-                            <ComboBoxItem>Thermal</ComboBoxItem>
-                            <ComboBoxItem>Grayscale</ComboBoxItem>
-                        </ComboBox>
-                        <Button x:Name="DensityRefreshButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
-                                Click="OnDensityReload"
-                                ToolTip="Re-read merged_data.parquet from the output directory above." />
-                        <TextBlock x:Name="DensityStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
-                                   Foreground="#888" TextWrapping="Wrap" />
-                        <TextBlock x:Name="DensityHoverText" VerticalAlignment="Center" Margin="12,0,0,0"
-                                   Foreground="#1a3c6e" TextWrapping="Wrap" />
-                    </WrapPanel>
-                    <sp:WpfPlot x:Name="DensityPlot" MouseMove="OnDensityPlotMouseMove" />
-                </DockPanel>
-            </TabItem>
-            <TabItem Header="Dynamic Range" x:Name="DynamicRangeTab">
-                <DockPanel>
-                    <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
-                        <TextBlock Text="Level:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <ComboBox x:Name="RangeLevelCombo" Width="90" SelectedIndex="0"
-                                  SelectionChanged="OnRangeLevelChanged"
-                                  ToolTip="Which corrected PRISM matrix to rank: corrected_proteins.parquet or corrected_peptides.parquet.">
-                            <ComboBoxItem>Protein</ComboBoxItem>
-                            <ComboBoxItem>Peptide</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock x:Name="RangeRollupLabel" Text="Rollup:" VerticalAlignment="Center"
-                                   Margin="16,0,4,0" />
-                        <ComboBox x:Name="RangeRollupCombo" Width="130" SelectedIndex="0"
-                                  SelectionChanged="OnRangeRollupChanged"
-                                  ToolTip="View the proteins under a different rollup than the run used. 'As run' reads corrected_proteins.parquet; every other choice re-rolls corrected_peptides.parquet with that method, without re-running parsimony or the protein-level normalization - so it shows the shape and ordering that method gives, not the run's exact numbers.">
-                            <ComboBoxItem>As run</ComboBoxItem>
-                            <ComboBoxItem>Sum</ComboBoxItem>
-                            <ComboBoxItem>Median polish</ComboBoxItem>
-                            <ComboBoxItem>Top N</ComboBoxItem>
-                            <ComboBoxItem>MaxLFQ</ComboBoxItem>
-                            <ComboBoxItem>iBAQ</ComboBoxItem>
-                        </ComboBox>
-                        <TextBlock Text="Replicates:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                        <ComboBox x:Name="RangeSampleCombo" Width="210" IsEditable="True" IsReadOnly="True"
-                                  ToolTip="Which replicates to average. Tick none for All.">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                              Margin="2,1" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <Button Content="Protein lists..." Padding="10,2" Margin="16,0,0,0"
-                                Click="OnManageProteinLists"
-                                ToolTip="Define named protein lists with colors - plasma contaminants, EV markers, endothelial markers - and toggle them on the plot." />
-                        <Button x:Name="RangeReloadButton" Content="Reload" Padding="10,2" Margin="8,0,0,0"
-                                Click="OnRangeReload"
-                                ToolTip="Re-read the corrected matrices from the output directory above." />
-                        <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#888"
-                                   Text="Click a point to select it in Skyline; right-click for labels." />
-                        <ProgressBar x:Name="RangeProgress" Width="120" Height="12" Margin="12,0,0,0"
-                                     Minimum="0" Maximum="1" VerticalAlignment="Center"
-                                     Visibility="Collapsed" />
-                        <TextBlock x:Name="RangeStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
-                                   Foreground="#888" TextWrapping="Wrap" />
-                    </WrapPanel>
-                    <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
-                </DockPanel>
+                </Grid>
             </TabItem>
         </TabControl>
 

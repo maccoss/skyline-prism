@@ -54,7 +54,7 @@ public class XamlInitializationOrderTests
         }
 
         Assert.True(unguarded.Count == 0,
-            "These ComboBoxes set SelectedIndex in XAML, so their SelectionChanged fires during "
+            "These selectors set SelectedIndex in XAML, so their SelectionChanged fires during "
             + "InitializeComponent - before the controls declared after them exist. Their handlers must "
             + "return early on !IsInitialized, or the first one to touch a later control crashes the "
             + "tool on startup:" + Environment.NewLine
@@ -62,15 +62,22 @@ public class XamlInitializationOrderTests
     }
 
     /// <summary>
-    /// Every <c>&lt;ComboBox&gt;</c> in the window's XAML that sets both <c>SelectedIndex</c> and
+    /// Every selector in the window's XAML that sets both <c>SelectedIndex</c> and
     /// <c>SelectionChanged</c>, as (control name, handler name).
     /// </summary>
+    /// <remarks>
+    /// Not just <c>ComboBox</c>: the rule is a property of <c>Selector</c>, so it holds for the
+    /// <c>ListBox</c> nav rail and for a nested <c>TabControl</c> too. Scanning only ComboBoxes was a
+    /// hole - the visualization rail is a ListBox whose handler reaches the panes declared after it,
+    /// which is precisely the crash this test exists to prevent, and it would have gone unnoticed.
+    /// </remarks>
     private static List<(string Control, string Handler)> PreselectedComboHandlers()
     {
         var xaml = File.ReadAllText(Path.Combine(AppDir, "MainWindow.xaml"));
         var found = new List<(string, string)>();
         // Attributes may be spread over several lines, so match the whole opening tag.
-        foreach (Match tag in Regex.Matches(xaml, @"<ComboBox\b[^>]*>", RegexOptions.Singleline))
+        foreach (Match tag in Regex.Matches(
+                     xaml, @"<(?:ComboBox|ListBox|ListView|TabControl)\b[^>]*>", RegexOptions.Singleline))
         {
             var text = tag.Value;
             if (!Regex.IsMatch(text, @"\bSelectedIndex\s*="))
@@ -79,7 +86,7 @@ public class XamlInitializationOrderTests
             if (!handler.Success)
                 continue;
             var name = Regex.Match(text, @"\bx:Name\s*=\s*""(\w+)""");
-            found.Add((name.Success ? name.Groups[1].Value : "(unnamed ComboBox)", handler.Groups[1].Value));
+            found.Add((name.Success ? name.Groups[1].Value : "(unnamed selector)", handler.Groups[1].Value));
         }
         return found;
     }
