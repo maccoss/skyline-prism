@@ -248,13 +248,21 @@ public static class DuckDbMerge
         Directory.CreateDirectory(tempDir);
 
         var fullOutput = Path.GetFullPath(outputPath);
-        var outputEsc = SqlEscape(fullOutput);
-        // A stale layout underneath would be read back as extra partitions, so the target is always
-        // cleared rather than written over. Callers only reach here when they mean to rebuild.
-        MergedDataset.Delete(fullOutput);
+        // Built in a staging directory beside the target and renamed into place on success - never
+        // written over the top of the previous one. See Publish for why the obvious version of this
+        // (delete the target, then write to the same path) fails on a network share.
+        var staging = fullOutput + StagingSuffix;
+        MergedDataset.Delete(staging);   // a leftover from a run that was killed mid-merge
+        SweepAsidePartitions(fullOutput);
+        var outputEsc = SqlEscape(staging);
 
         long totalRows;
         int partitions;
+        // Set only once the COPY and its row count have both succeeded, so the cleanup below can tell
+        // a finished merge from a half-written one. Publish runs AFTER the try, not inside it: the
+        // DuckDB connection is disposed on the way out, and renaming a directory whose parquet files
+        // are still open would fail with a sharing violation on Windows.
+        var merged = false;
         try
         {
             using var conn = new DuckDBConnection("Data Source=:memory:");
@@ -291,9 +299,10 @@ public static class DuckDbMerge
             // than scanning the data back.
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
-                $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(MergedDataset.Open(fullOutput).ScanTarget)}', "
+                $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(MergedDataset.Open(staging).ScanTarget)}', "
                 + "hive_partitioning=false)";
             totalRows = Convert.ToInt64(cmd.ExecuteScalar());
+            merged = true;
         }
         finally
         {
@@ -306,10 +315,85 @@ public static class DuckDbMerge
             // read-only) or DirectoryNotFoundException (a concurrent run already cleaned up) as
             // readily as IOException. Leftover scratch is a nuisance; a swallowed root cause is not.
             try { Directory.Delete(tempDir, recursive: true); } catch (Exception) { }
+
+            // Staging goes too, and for a stronger reason than scratch: a merge that threw part way
+            // leaves a directory holding SOME of the buckets, and MergedDataset.Exists is true for any
+            // directory with one _pep_bucket=* in it while Open globs whatever it finds. Left at the
+            // target path that is a truncated dataset that reads as a whole one - which is what a
+            // failed merge used to leave behind, so the Spectrum density pane would happily plot a
+            // fraction of the cohort with nothing to say it was incomplete. Staged, the failure leaves
+            // the PREVIOUS merge untouched instead.
+            if (!merged && Directory.Exists(staging))
+                try { Directory.Delete(staging, recursive: true); } catch (Exception) { }
         }
+
+        Publish(staging, fullOutput);
 
         return new MergeResult(
             fullOutput, peptideColumn, totalRows, tempDir, memoryBudgetMb, partitions);
+    }
+
+    /// <summary>Suffix of the directory a merge is built in before it is renamed into place.</summary>
+    internal const string StagingSuffix = ".building";
+
+    /// <summary>Prefix of a previous merge that has been renamed out of the way, pending deletion.</summary>
+    internal const string AsideSuffix = ".stale-";
+
+    /// <summary>
+    /// Move the finished merge onto the target path, retiring whatever was there.
+    /// </summary>
+    /// <remarks>
+    /// <para>The old tree is renamed ASIDE and then deleted, rather than deleted in place. A rename is
+    /// a single metadata operation, so the target path is free the instant it returns; <see
+    /// cref="Directory.Delete(string, bool)"/> only STARTS the removal - on Windows a directory
+    /// survives until its last handle closes, and over SMB neither the server-side removal nor the
+    /// client's directory cache is synchronous with the return.</para>
+    ///
+    /// <para>Deleting in place and immediately rewriting the same path is what this replaces, and it
+    /// failed on a lab network share with <c>Cannot open file "...\merged_data\_pep_bucket=1\
+    /// data_0.parquet": The system cannot find the path specified</c> - ERROR_PATH_NOT_FOUND, i.e. a
+    /// missing DIRECTORY in the path, raised only after <c>_pep_bucket=0</c> had already been written.
+    /// The first bucket landed in the moments before the deletion caught up with it.</para>
+    ///
+    /// <para>Deleting the renamed copy is best-effort on purpose: by then the merge has succeeded and
+    /// the target is already correct, so a share too slow to finish the delete must not fail the run.
+    /// What it leaves behind is swept by the next merge.</para>
+    /// </remarks>
+    internal static void Publish(string staging, string target)
+    {
+        if (File.Exists(target) || Directory.Exists(target))
+        {
+            var aside = target + AsideSuffix + Guid.NewGuid().ToString("N")[..8];
+            if (File.Exists(target))
+                File.Move(target, aside);       // the legacy single-file merged_data.parquet layout
+            else
+                Directory.Move(target, aside);
+            try { MergedDataset.Delete(aside); } catch (Exception) { }
+        }
+
+        Directory.Move(staging, target);
+    }
+
+    /// <summary>
+    /// Delete any previous merge left renamed-aside by <see cref="Publish"/>, best-effort. Only ever
+    /// removes siblings this class named itself, and never the target or the staging directory.
+    /// </summary>
+    internal static void SweepAsidePartitions(string target)
+    {
+        var parent = Path.GetDirectoryName(target);
+        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+            return;
+        try
+        {
+            foreach (var dir in Directory.GetDirectories(
+                         parent, Path.GetFileName(target) + AsideSuffix + "*"))
+                try { Directory.Delete(dir, recursive: true); } catch (Exception) { }
+        }
+        catch (Exception)
+        {
+            // Enumerating the parent is itself IO on a share that may be unwell. Sweeping is tidying,
+            // never a precondition for the merge that follows.
+        }
     }
 
     /// <summary>
