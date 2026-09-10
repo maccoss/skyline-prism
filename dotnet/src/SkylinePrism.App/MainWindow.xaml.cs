@@ -1792,9 +1792,9 @@ public partial class MainWindow : Window
     // PCA hover: the current PCA points (data coordinate + replicate name) and the highlight overlay
     // (a ring marker + a text label). Recreated on every render because Plot.Clear() drops all plottables;
     // null when the active QC plot is not PCA, which makes the hover handler a no-op.
-    private List<(ScottPlot.Coordinates Loc, string Name)>? _pcaHoverPoints;
-    private ScottPlot.Plottables.Marker? _pcaHoverMarker;
-    private ScottPlot.Plottables.Text? _pcaHoverText;
+    private List<(ScottPlot.Coordinates Loc, string Name)>? _hoverPoints;
+    private ScottPlot.Plottables.Marker? _hoverMarker;
+    private ScottPlot.Plottables.Text? _hoverText;
     private string? _qcOutputDir;
     // Replicate annotations from the exported Replicates report: replicate -> (column -> value).
     private readonly Dictionary<string, Dictionary<string, string>> _replicateAnn = new(StringComparer.Ordinal);
@@ -2284,9 +2284,11 @@ public partial class MainWindow : Window
             return string.IsNullOrEmpty(v) ? "(none)" : v;
         }).ToList();
 
-        _pcaHoverPoints = null; // only PCA populates it; disables the hover handler for the other plots
-        _pcaHoverMarker = null;
-        _pcaHoverText = null;
+        // Cleared first, then set by whichever draw supports hovering (PCA and Marker score do).
+        // A plot that leaves it null gets no hover, which is what the CV and intensity plots want.
+        _hoverPoints = null;
+        _hoverMarker = null;
+        _hoverText = null;
         // Replicate name per plotted column, with the shared __@__<batch> suffix stripped when redundant.
         var sampleNames = StripSharedBatchSuffix(cols.Select(i => d.Samples[i]).ToList(), d.Samples);
         try
@@ -2294,16 +2296,17 @@ public partial class MainWindow : Window
             switch (kind)
             {
                 case "Marker score":
-                    DrawMarkerScore(plt, cols.Select(i => d.Samples[i]).ToList(), column);
+                    _hoverPoints = DrawMarkerScore(
+                        plt, cols.Select(i => d.Samples[i]).ToList(), column);
                     break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
-                default: _pcaHoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
+                default: _hoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
             }
         }
         catch (Exception ex)
         {
-            _pcaHoverPoints = null;
+            _hoverPoints = null;
             // A draw method that threw part-way may already have installed its tick generators, so a
             // bare title would sit over another plot's axes - the state this whole change removes.
             QcPlotChrome.Reset(plt);
@@ -2315,8 +2318,8 @@ public partial class MainWindow : Window
         if (kind == "CV distribution") // bar plot: sit the bars on the x-axis (y starts at 0)
             plt.Axes.SetLimitsY(0, plt.Axes.GetLimits().Top);
         // Added AFTER autoscaling so the initially-hidden overlay doesn't skew the axis limits.
-        if (_pcaHoverPoints is { Count: > 0 })
-            AddPcaHoverOverlay(plt, _pcaHoverPoints[0].Loc);
+        if (_hoverPoints is { Count: > 0 })
+            AddHoverOverlay(plt, _hoverPoints[0].Loc);
         QcPlot.Refresh();
     }
 
@@ -2434,27 +2437,29 @@ public partial class MainWindow : Window
     }
 
     // Create the (initially hidden) PCA hover overlay - a ring marker + a text label seeded at a point.
-    private void AddPcaHoverOverlay(Plot plt, Coordinates seed)
+    private void AddHoverOverlay(Plot plt, Coordinates seed)
     {
         var marker = plt.Add.Marker(seed.X, seed.Y, MarkerShape.OpenCircle, 20, Colors.Black);
         marker.IsVisible = false;
-        _pcaHoverMarker = marker;
+        _hoverMarker = marker;
 
         var text = plt.Add.Text(" ", seed.X, seed.Y);
-        PlotRenderer.StyleTextLabel(text, 14, bold: true);
+        // 20, not the 14 this started at: StyleQcPlot puts tick labels at 24, so the readout was
+        // the smallest text on the plot when it is the only text a user leans in to read.
+        PlotRenderer.StyleTextLabel(text, 20, bold: true);
         text.LabelFontColor = Colors.Black;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.85);
         text.LabelAlignment = Alignment.LowerLeft;
         text.IsVisible = false;
-        _pcaHoverText = text;
+        _hoverText = text;
     }
 
     // Show the replicate name when the cursor is within ~18 px of a PCA point. Active only while the PCA
-    // plot is shown (_pcaHoverPoints non-null); a no-op for the CV / intensity plots.
+    // plot is shown (_hoverPoints non-null); a no-op for the CV / intensity plots.
     private void QcPlot_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        var points = _pcaHoverPoints;
-        if (points is null || points.Count == 0 || _pcaHoverMarker is null || _pcaHoverText is null)
+        var points = _hoverPoints;
+        if (points is null || points.Count == 0 || _hoverMarker is null || _hoverText is null)
             return;
 
         var plt = QcPlot.Plot;
@@ -2462,31 +2467,23 @@ public partial class MainWindow : Window
         var scale = QcPlot.DisplayScale;
         double mx = pos.X * scale, my = pos.Y * scale;
 
-        var best = double.MaxValue;
-        var bestIdx = -1;
-        for (var i = 0; i < points.Count; i++)
-        {
-            var px = plt.GetPixel(points[i].Loc);
-            double dx = px.X - mx, dy = px.Y - my;
-            var d2 = dx * dx + dy * dy;
-            if (d2 < best) { best = d2; bestIdx = i; }
-        }
+        var bestIdx = QcPlotChrome.NearestPoint(
+            points.Select(pt => plt.GetPixel(pt.Loc)).ToList(), new Pixel(mx, my));
 
-        const double thresholdPx = 18;
-        if (bestIdx >= 0 && best <= thresholdPx * thresholdPx)
+        if (bestIdx >= 0)
         {
             var p = points[bestIdx];
-            _pcaHoverMarker.Location = p.Loc;
-            _pcaHoverMarker.IsVisible = true;
-            _pcaHoverText.Location = p.Loc;
-            _pcaHoverText.LabelText = p.Name;
-            _pcaHoverText.IsVisible = true;
+            _hoverMarker.Location = p.Loc;
+            _hoverMarker.IsVisible = true;
+            _hoverText.Location = p.Loc;
+            _hoverText.LabelText = p.Name;
+            _hoverText.IsVisible = true;
             QcPlot.Refresh();
         }
-        else if (_pcaHoverMarker.IsVisible)
+        else if (_hoverMarker.IsVisible)
         {
-            _pcaHoverMarker.IsVisible = false;
-            _pcaHoverText.IsVisible = false;
+            _hoverMarker.IsVisible = false;
+            _hoverText.IsVisible = false;
             QcPlot.Refresh();
         }
     }
@@ -2542,13 +2539,20 @@ public partial class MainWindow : Window
     /// judgement cannot be automated - the same separation is what you would expect if the biology
     /// really does change the marked material - which is why this is a plot rather than a warning.</para>
     /// </summary>
-    private void DrawMarkerScore(Plot plt, IReadOnlyList<string> samples, string? column)
+    /// <summary>
+    /// Draws the strip plot and returns one hover point per plotted sample, in the same shape
+    /// <see cref="DrawPca"/> returns: the jittered position actually drawn and the replicate name.
+    /// The jitter is why this has to come from the draw - the x of a point is not recoverable from
+    /// the data, only from the Random the loop below walked.
+    /// </summary>
+    private List<(Coordinates Loc, string Name)> DrawMarkerScore(
+        Plot plt, IReadOnlyList<string> samples, string? column)
     {
         if (_markerReport is null || _markerReport.Samples.Count == 0)
         {
             plt.Title("This run did not use marker normalization.\n"
                 + "Tick \"Normalize to a protein list\" on the Settings tab to get this plot.");
-            return;
+            return new();
         }
 
         var byName = new Dictionary<string, double>(StringComparer.Ordinal);
@@ -2575,7 +2579,7 @@ public partial class MainWindow : Window
         if (groups.Count == 0)
         {
             plt.Title("None of the scored replicates are in this selection.");
-            return;
+            return new();
         }
 
         var ordered = groups.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
@@ -2586,10 +2590,11 @@ public partial class MainWindow : Window
             // show that. Say which column to try instead of drawing something unreadable.
             plt.Title($"{column} has {ordered.Count} values - too many to compare.\n"
                 + "Group by a study factor: condition, timepoint, batch.");
-            return;
+            return new();
         }
         var rng = new Random(11); // fixed seed: the jitter must not move when the plot is redrawn
         var colorIndex = 0;
+        var hover = new List<(Coordinates Loc, string Name)>();
         for (var g = 0; g < ordered.Count; g++)
         {
             var (label, points) = (ordered[g].Key, ordered[g].Value);
@@ -2597,6 +2602,8 @@ public partial class MainWindow : Window
             // points are the information, and a box would hide an outlier driving the whole score.
             var xs = points.Select(_ => g + (rng.NextDouble() - 0.5) * 0.35).ToArray();
             var markers = plt.Add.Markers(xs, points.Select(p => p.Score).ToArray());
+            for (var i = 0; i < points.Count; i++)
+                hover.Add((new Coordinates(xs[i], points[i].Score), points[i].Name));
             markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
             markers.MarkerSize = 12;
             markers.LegendText = $"{label} (n={points.Count})";
@@ -2621,6 +2628,7 @@ public partial class MainWindow : Window
         plt.Title(ordered.Count > 1
             ? "Separation here means the panel tracks the phenotype, not the capture"
             : "Set Group-by to the study condition to check this panel");
+        return hover;
     }
 
     /// <summary>

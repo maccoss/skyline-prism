@@ -14,6 +14,13 @@ as the GitHub Release description and fails if it is missing.
   also keeps its own state - zoom, ticked replicates, matrices already read - while you are on
   another one.
 
+- **The Marker score plot reads out replicate names on hover**, the way the PCA plot does. Its points
+  are jittered within their column so overlapping scores stay separable, which means the horizontal
+  position carries no information - hovering is the only way to tell which injection an outlying score
+  belongs to. The hover readout on both plots is also larger: it was the smallest text on a plot whose
+  axis labels are set at nearly twice the size, while being the one piece of text a user leans in to
+  read.
+
 ## Bug Fixes
 
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three

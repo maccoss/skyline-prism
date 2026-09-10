@@ -29,6 +29,44 @@ internal static class QcPlotChrome
     public static bool ShowMarkerScoreLegend(int groups) => groups <= MaxMarkerScoreLegendGroups;
 
     /// <summary>
+    /// How near the cursor has to be, in pixels, to read as hovering a point. Comfortably larger than
+    /// the 12 px markers, because the target is a mouse pointer rather than a click.
+    /// </summary>
+    public const double HoverRadiusPx = 18;
+
+    /// <summary>
+    /// Index of the plotted point nearest <paramref name="cursor"/> and within
+    /// <see cref="HoverRadiusPx"/> of it, or -1 when the cursor is over empty space.
+    /// </summary>
+    /// <remarks>
+    /// Pixels rather than data coordinates, and squared distances rather than distances: a fixed
+    /// pixel radius is what "near the cursor" means on screen, and it cannot be expressed in data
+    /// units on a plot whose two axes carry different quantities at different scales - a radius that
+    /// looked right on the PCA would be a sliver on the marker-score plot, whose x is a group index
+    /// and whose y is a PC1 score.
+    ///
+    /// <para>The -1 case is the one that matters and the easy one to lose: it is what hides the
+    /// readout again when the cursor moves off a point. Returning the nearest point regardless would
+    /// leave a label stuck to the plot for as long as the mouse stayed inside it.</para>
+    /// </remarks>
+    public static int NearestPoint(IReadOnlyList<Pixel> points, Pixel cursor)
+    {
+        var best = double.MaxValue;
+        var bestIdx = -1;
+        for (var i = 0; i < points.Count; i++)
+        {
+            double dx = points[i].X - cursor.X, dy = points[i].Y - cursor.Y;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best)
+            {
+                best = d2;
+                bestIdx = i;
+            }
+        }
+        return best <= HoverRadiusPx * HoverRadiusPx ? bestIdx : -1;
+    }
+
+    /// <summary>
     /// Return the shared plot to a blank slate. One <see cref="Plot"/> is reused for every plot kind, and
     /// <c>Clear()</c> removes only the plottables - a tick generator, an axis label, the legend and the
     /// title all survive into whatever is drawn next.
