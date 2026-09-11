@@ -196,6 +196,14 @@ public static class QcReport
         if (result is null || result.IsEmpty)
             return sections;
 
+        // The denominator, if a raw read has been done for this directory. Joined here rather than
+        // stored with the accounting because the two are populated separately: reading the instrument
+        // files is opt-in and expensive, and neither should invalidate the other. Absent, every number
+        // below is still correct - the plot simply has no acquired bar and claims no fraction.
+        var acquired = Ms2AcquiredSignal.ReadTotals(outputDir);
+        if (acquired.Count > 0)
+            result = result.WithAcquired(acquired);
+
         var caption = result.Measure == Ms2SignalMeasure.Ions
             ? $"MS2 IONS per replicate - intensity x injection time, summed per spectrum across each "
               + $"peak - shared signal counted once (extraction {result.Tolerance}, isolation scheme "
@@ -204,6 +212,25 @@ public static class QcReport
             : $"Integrated MS2 signal per replicate, shared signal counted once "
               + $"(extraction {result.Tolerance}, isolation scheme \"{result.IsolationScheme}\", "
               + $"{result.AssignedPeptides:N0} peptides).";
+
+        if (result.HasAcquired)
+        {
+            var withDenominator = result.Rows.Count(r => double.IsFinite(r.AcquiredFraction));
+            caption += $" Of the MS2 the instrument acquired, a median of "
+                + $"{result.MedianAcquiredFraction():P1} is assigned to a peptide"
+                + (withDenominator == result.Rows.Count
+                    ? "."
+                    : $" (over the {withDenominator:N0} of {result.Rows.Count:N0} replicates whose "
+                      + "data file could be read).");
+        }
+        else
+        {
+            // Said explicitly rather than left to inference. Without this the bars read as though
+            // they were the whole of the MS2, which would make an analysis assigning a third of the
+            // signal look like one assigning all of it.
+            caption += " No instrument data files have been read for this directory, so the bars are "
+                + "assigned signal only - not a fraction of what was acquired.";
+        }
 
         var images = new List<PlotImage>();
         try

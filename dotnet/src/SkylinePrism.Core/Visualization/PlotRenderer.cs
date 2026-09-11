@@ -1335,11 +1335,50 @@ public static class PlotRenderer
         }
 
         var rows = result.Rows;
-        var tallest = rows.Max(r => Finite(r.AssignedArea));
+        // Acquired contains assigned, so when it is known it is what the axis has to reach. Taking the
+        // max of both rather than of acquired alone: the denominator is per replicate and some rows may
+        // not have one, and those rows still have bars to fit.
+        var hasAcquired = result.HasAcquired;
+        var tallest = rows.Max(r => Math.Max(
+            Finite(r.AssignedArea), hasAcquired ? Finite(r.AcquiredArea) : 0));
 
         // Peak areas run to 10 digits, and ten-digit tick labels take a third of the canvas. Scale the
         // values and say the factor in the axis label instead.
         var (scale, unit) = SignalScale(tallest);
+
+        // Drawn FIRST so the assigned bars land on top of it. A full-width background bar rather
+        // than a narrower nested one, which is the trap the per-list series had to avoid: at 192
+        // replicates a bar is ~4 px, so two nested WIDTHS differ by under a pixel. Two nested HEIGHTS
+        // at the same width read perfectly at any density, and "assigned fills this much of acquired"
+        // is exactly the shape of the question.
+        if (hasAcquired)
+        {
+            var acquiredBars = new List<Bar>(rows.Count);
+            for (var i = 0; i < rows.Count; i++)
+            {
+                acquiredBars.Add(new Bar
+                {
+                    Position = i,
+                    // Finite() gives 0 for a replicate with no data file, so its background bar simply
+                    // does not appear - which is the honest rendering of an unknown denominator.
+                    Value = Finite(rows[i].AcquiredArea) / scale,
+                    FillColor = AcquiredBarColor,
+                    LineWidth = 0,
+                    Size = 0.85,
+                });
+            }
+            plt.Add.Bars(acquiredBars);
+
+            var acquiredKey = plt.Add.Marker(double.NaN, double.NaN);
+            acquiredKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
+            acquiredKey.MarkerStyle.Size = 14;
+            acquiredKey.MarkerStyle.FillColor = AcquiredBarColor;
+            acquiredKey.MarkerStyle.LineWidth = 0;
+            var withDenominator = rows.Count(r => double.IsFinite(r.AcquiredFraction));
+            acquiredKey.LegendText = withDenominator == rows.Count
+                ? "acquired MS2"
+                : $"acquired MS2 ({withDenominator:N0} of {rows.Count:N0})";
+        }
 
         var assigned = new List<Bar>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
@@ -1401,7 +1440,7 @@ public static class PlotRenderer
         {
             plt.YLabel($"MS2 ions{unit}");
             StyleQcPlot(plt, fontScale);
-            SetPlotTitle(plt, title, fontScale);
+            SetPlotTitle(plt, WithFraction(title, result), fontScale);
             plt.Axes.SetLimits(-0.8, rows.Count - 0.2, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
             return;
         }
@@ -1410,7 +1449,7 @@ public static class PlotRenderer
         // once" qualifier lives in the title and the report caption, where there is room for it.
         plt.YLabel($"Integrated MS2 signal{unit}");
         StyleQcPlot(plt, fontScale);
-        SetPlotTitle(plt, title, fontScale);
+        SetPlotTitle(plt, WithFraction(title, result), fontScale);
 
         plt.Axes.SetLimits(-0.8, rows.Count - 0.2, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
     }
@@ -1450,6 +1489,30 @@ public static class PlotRenderer
     }
 
     private static double Finite(double value) => double.IsFinite(value) && value > 0 ? value : 0;
+
+    /// <summary>
+    /// The acquired-total bar: deliberately a flat neutral, so it reads as the CONTAINER the colored
+    /// per-sample-type bars sit inside rather than as another category competing with them.
+    /// </summary>
+    private static readonly Color AcquiredBarColor = Colors.Gray.WithAlpha(0.30);
+
+    /// <summary>
+    /// Add the median assigned/acquired to the title once a denominator exists. Done here rather than
+    /// at each call site so the GUI and the report cannot disagree about it - and omitted entirely
+    /// when nothing was read, because a plot with no denominator must not imply one.
+    /// </summary>
+    private static string? WithFraction(string? title, Qc.Ms2SignalAccounting.Result result)
+    {
+        if (!result.HasAcquired)
+            return title;
+        var median = result.MedianAcquiredFraction();
+        if (!double.IsFinite(median))
+            return title;
+        var suffix = $"median {median:P1} of acquired MS2";
+        return string.IsNullOrEmpty(title) ? suffix : $"{title}{NewLine}{suffix}";
+    }
+
+    private const string NewLine = "\n";
 
     /// <summary>
     /// MS2 signal against retention time for one replicate: what the instrument acquired, how much

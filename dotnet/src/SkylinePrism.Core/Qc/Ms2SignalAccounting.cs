@@ -62,11 +62,23 @@ public static class Ms2SignalAccounting
         int UnknownPeptides,
         int Skipped,
         double DuplicateArea,
-        double SharedArea)
+        double SharedArea,
+        double AcquiredArea = double.NaN)
     {
         /// <summary>How much of the naive sum was double counting, as a fraction. NaN with no signal.</summary>
         public double DoubleCountedFraction =>
             SummedArea > 0 ? 1 - AssignedArea / SummedArea : double.NaN;
+
+        /// <summary>
+        /// Assigned signal as a fraction of what the instrument acquired, or NaN when no data file
+        /// was read for this replicate.
+        ///
+        /// <para>NaN rather than 0 or 1 deliberately: "we did not measure the denominator" and "the
+        /// analysis assigned none of it" are opposite findings, and a plot that renders them the
+        /// same way is worse than one that omits the bar.</para>
+        /// </summary>
+        public double AcquiredFraction =>
+            double.IsFinite(AcquiredArea) && AcquiredArea > 0 ? AssignedArea / AcquiredArea : double.NaN;
     }
 
     /// <param name="ListNames">Selected lists, aligned with every row's <see cref="Row.ListArea"/>.</param>
@@ -95,6 +107,46 @@ public static class Ms2SignalAccounting
         string SettingsKey = "")
     {
         public bool IsEmpty => Rows.Count == 0;
+
+        /// <summary>Whether any replicate has an acquired total, i.e. whether a fraction exists.</summary>
+        public bool HasAcquired => Rows.Any(r => double.IsFinite(r.AcquiredArea) && r.AcquiredArea > 0);
+
+        /// <summary>
+        /// The same results with each row's acquired MS2 total filled in from
+        /// <paramref name="acquired"/>, keyed by sample id. Rows with no entry keep NaN.
+        /// </summary>
+        /// <remarks>
+        /// A join at render time rather than a stored column, because the two halves are populated
+        /// separately and at very different cost - see <see cref="Ms2AcquiredSignal"/>. It also means
+        /// reading raw files never invalidates the accounting cache, and recomputing the accounting
+        /// never discards a cohort read that took hours.
+        /// </remarks>
+        public Result WithAcquired(IReadOnlyDictionary<string, double> acquired)
+        {
+            if (acquired is null || acquired.Count == 0)
+                return this;
+            return this with
+            {
+                Rows = Rows
+                    .Select(r => acquired.TryGetValue(r.Sample, out var total)
+                        ? r with { AcquiredArea = total }
+                        : r)
+                    .ToList(),
+            };
+        }
+
+        /// <summary>Median assigned/acquired over the replicates that have a denominator; NaN if none.</summary>
+        public double MedianAcquiredFraction()
+        {
+            var values = Rows.Select(r => r.AcquiredFraction)
+                .Where(double.IsFinite)
+                .OrderBy(v => v)
+                .ToList();
+            if (values.Count == 0)
+                return double.NaN;
+            var mid = values.Count / 2;
+            return values.Count % 2 == 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+        }
 
         /// <summary>What produced these numbers, for a log line that explains a cache miss.</summary>
         public string SettingsSummary() =>

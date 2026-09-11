@@ -494,6 +494,12 @@ prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 # Regenerate QC report from existing output (without reprocessing)
 prism qc -d output_dir/
 
+# Read acquired MS2 signal from the instrument files - the denominator no Skyline
+# export carries. Writes ms2_signal.parquet; re-run `prism qc -d` and the MS2
+# accounting plot gains its acquired bar and reports assigned/acquired.
+# Deliberately NOT part of `prism run`: a cohort is hundreds of GB of raw data.
+prism ms2-signal -d output_dir/ -r /path/to/raw --max 3
+
 # Compare control-sample CVs between two runs
 prism compare -1 run1/ -2 run2/ -o comparison.html
 
