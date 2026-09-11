@@ -228,8 +228,18 @@ public static class QcReport
             // Said explicitly rather than left to inference. Without this the bars read as though
             // they were the whole of the MS2, which would make an analysis assigning a third of the
             // signal look like one assigning all of it.
-            caption += " No instrument data files have been read for this directory, so the bars are "
-                + "assigned signal only - not a fraction of what was acquired.";
+            //
+            // WHICH of the two it is matters, and the earlier wording asserted the first whatever
+            // had happened: "no files have been read" sends a reader to look for a raw directory,
+            // when the actual problem may be that every file was found, read, and failed - which is
+            // a different fix and is in the run log.
+            var attempted = Ms2AcquiredSignal.Read(outputDir);
+            caption += attempted.Count > 0
+                ? $" The instrument data files for {attempted.Count:N0} replicate(s) were read and "
+                  + "none of them yielded a usable acquired total, so the bars are assigned signal "
+                  + "only - not a fraction of what was acquired. The run log says why each failed."
+                : " No instrument data files have been read for this directory, so the bars are "
+                  + "assigned signal only - not a fraction of what was acquired.";
         }
 
         var images = new List<PlotImage>();

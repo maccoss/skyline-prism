@@ -235,7 +235,7 @@ public static partial class PlotRenderer
     {
         var plt = new Plot();
         DrawIonAccounting(plt, result, level, title, fontScale);
-        return plt.GetImageBytes(width, height);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
     /// <summary>PNG of <see cref="DrawIonProfile"/>, for the QC report.</summary>
@@ -245,7 +245,7 @@ public static partial class PlotRenderer
     {
         var plt = new Plot();
         DrawIonProfile(plt, cycles, level, binMinutes, title, fontScale);
-        return plt.GetImageBytes(width, height);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
     /// <summary>PNG of <see cref="DrawIonFractionProfile"/>, for the QC report.</summary>
@@ -255,16 +255,18 @@ public static partial class PlotRenderer
     {
         var plt = new Plot();
         DrawIonFractionProfile(plt, cycles, level, binMinutes, title, fontScale);
-        return plt.GetImageBytes(width, height);
+        return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
-    private readonly record struct CycleBin(double RtMin, double Acquired, double Assigned);
+    /// <summary>One retention-time bin's totals. Internal so the conservation rule below can be
+    /// asserted on its own numbers rather than read back off a rendered plot.</summary>
+    internal readonly record struct CycleBin(double RtMin, double Acquired, double Assigned);
 
     /// <summary>
     /// Group cycles into retention-time bins. Bin membership is by the cycle's START time, so a
     /// cycle belongs to exactly one bin and no signal is counted twice.
     /// </summary>
-    private static List<CycleBin> BinCycles(
+    internal static List<CycleBin> BinCycles(
         IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes)
     {
         var bins = new List<CycleBin>();

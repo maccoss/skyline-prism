@@ -98,6 +98,20 @@ public static class Ms2AcquiredSignal
         {
             log?.Invoke($"  No instrument data files under {rawDirectory}, so acquired MS2 signal "
                 + "cannot be read. The accounting will plot assigned signal without a denominator.");
+
+            // A store from an earlier read is deliberately LEFT rather than deleted: it cost a pass
+            // over the cohort's instrument files, and "the raw directory is empty today" usually
+            // means the files moved, not that the measurement is wrong. But it is now going to be
+            // used under this run's caption, so it is said out loud instead of quietly reused.
+            var existing = Read(outputDir);
+            if (existing.Count > 0)
+            {
+                log?.Invoke(
+                    $"  {FileName} in this directory already holds acquired totals for "
+                    + $"{existing.Count(e => e.IsUsable):N0} replicate(s), read earlier. Those are "
+                    + "what the report will use. Point --raw-dir at the data files and re-run if "
+                    + "they are stale.");
+            }
             return new PopulateResult(Array.Empty<Entry>(), 0, sampleList.Count, 0);
         }
 
