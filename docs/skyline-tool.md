@@ -138,6 +138,10 @@ is one score per replicate for the whole run, with no before/after and no peptid
   panel is tracking the phenotype**, and normalizing on it removes the finding along with the capture.
   That judgement cannot be automated — the same separation is what you would see if the biology really
   does change the marked material — which is why it is a plot and not a warning.
+
+  **Hover a point to read its replicate name**, as on the PCA plot. Points are jittered within their
+  column so that overlapping scores stay separable, so the horizontal position carries no meaning —
+  hovering is how you tell which injection an outlying score belongs to.
 - **Marker loadings** — each marker's PC1 contribution, largest first, with opposing markers in red.
   Opposing signs are normal and are why the score is PC1 rather than a mean. The title gives the largest
   marker's share of the axis and says so when it is over half: a panel carried by one protein is a

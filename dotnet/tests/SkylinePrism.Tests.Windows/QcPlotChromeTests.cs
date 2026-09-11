@@ -113,4 +113,45 @@ public class QcPlotChromeTests
         Assert.True(string.IsNullOrEmpty(plt.Axes.Title.Label.Text));
         Assert.IsType<ScottPlot.TickGenerators.NumericAutomatic>(plt.Axes.Left.TickGenerator);
     }
+
+    /// <summary>
+    /// The hover hit test, which the PCA and marker-score plots share. Pure pixel arithmetic, so it is
+    /// testable where the handler around it - which needs a window, a dispatcher and a laid-out plot to
+    /// project data coordinates into pixels - is not.
+    /// </summary>
+    [Fact]
+    public void NearestPointFindsThePointUnderTheCursor()
+    {
+        var points = new[] { new Pixel(10, 10), new Pixel(100, 100), new Pixel(300, 50) };
+
+        Assert.Equal(0, QcPlotChrome.NearestPoint(points, new Pixel(12, 8)));
+        Assert.Equal(1, QcPlotChrome.NearestPoint(points, new Pixel(104, 96)));
+        Assert.Equal(2, QcPlotChrome.NearestPoint(points, new Pixel(300, 50)));
+    }
+
+    /// <summary>
+    /// The case that hides the readout again when the cursor leaves a point. Returning the nearest
+    /// point regardless would leave a label pinned to the plot for as long as the mouse stayed inside
+    /// it - so this is the half of the contract worth pinning.
+    /// </summary>
+    [Fact]
+    public void NearestPointReturnsNothingOverEmptySpace()
+    {
+        var points = new[] { new Pixel(10, 10) };
+
+        Assert.Equal(-1, QcPlotChrome.NearestPoint(points, new Pixel(400, 400)));
+
+        // Just outside the radius, on the diagonal, and just inside it on one axis.
+        Assert.Equal(-1, QcPlotChrome.NearestPoint(
+            points, new Pixel(10 + QcPlotChrome.HoverRadiusPx + 1, 10)));
+        Assert.Equal(0, QcPlotChrome.NearestPoint(
+            points, new Pixel(10 + QcPlotChrome.HoverRadiusPx - 1, 10)));
+    }
+
+    /// <summary>An empty plot must not report a hit; the handler runs on every mouse move.</summary>
+    [Fact]
+    public void NearestPointHandlesNoPoints()
+    {
+        Assert.Equal(-1, QcPlotChrome.NearestPoint(System.Array.Empty<Pixel>(), new Pixel(0, 0)));
+    }
 }
