@@ -25,10 +25,18 @@ public static class ReplicateDataFiles
     /// <summary>Separator PRISM joins a replicate and its batch with to make a sample id.</summary>
     public const string SampleIdSeparator = "__@__";
 
-    /// <summary>Extensions worth offering to a reader, in the order a directory is searched.</summary>
+    /// <summary>
+    /// Extensions worth offering to a reader.
+    ///
+    /// <para>This must stay a SUPERSET of what the readers' own <c>CanRead</c> accepts. A file whose
+    /// extension is missing here is never enumerated, so it is never offered, and the replicate
+    /// reports a missing denominator while the reader would have opened it happily. Matched
+    /// case-insensitively (see <see cref="Enumerate"/>).</para>
+    /// </summary>
     public static readonly string[] DataFileExtensions =
     {
-        ".raw", ".mzML", ".mzXML", ".d", ".wiff", ".wiff2",
+        ".raw", ".mzML", ".mzXML", ".mzML.gz", ".mz5", ".d", ".wiff", ".wiff2", ".lcd", ".yep",
+        ".baf",
     };
 
     /// <summary>The replicate half of a PRISM sample id (<c>replicate__@__batch</c>).</summary>
@@ -87,12 +95,17 @@ public static class ReplicateDataFiles
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
             return new List<string>();
 
+        // Enumerated once and filtered in code rather than with one glob per extension: a glob
+        // pattern is matched case-INSENSITIVELY on Windows and case-SENSITIVELY on Linux, so
+        // "*.raw" found a .RAW file on one platform and not the other. Directories are included as
+        // well as files, because a Bruker .d and an Agilent .d are acquisitions that happen to be
+        // folders and a reader opens them by directory path.
         var found = new List<string>();
-        foreach (var ext in DataFileExtensions)
+        foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
         {
-            // Directories as well as files: a Bruker .d and an Agilent .d are acquisitions that happen
-            // to be folders, and a reader opens them by directory path.
-            found.AddRange(Directory.EnumerateFileSystemEntries(directory, "*" + ext));
+            var name = entry.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (DataFileExtensions.Any(e => name.EndsWith(e, StringComparison.OrdinalIgnoreCase)))
+                found.Add(entry);
         }
         return found
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -100,24 +113,58 @@ public static class ReplicateDataFiles
             .ToList();
     }
 
+    /// <param name="Matched">Sample id to data file, one file per sample and one sample per file.</param>
+    /// <param name="Unmatched">Samples no file matched - a missing denominator the plot must name.</param>
+    /// <param name="Ambiguous">
+    /// Samples that matched a file another sample also matched. None of them is assigned it.
+    /// </param>
+    public sealed record Resolution(
+        Dictionary<string, string> Matched, List<string> Unmatched, List<string> Ambiguous);
+
     /// <summary>
-    /// Resolve every sample against a directory of data files, reporting the ones that did not match
-    /// rather than dropping them silently - an unmatched replicate is a missing denominator, and the
-    /// plot has to be able to say which.
+    /// Resolve every sample against a directory of data files, one-to-one, reporting what did not
+    /// match rather than dropping it silently.
+    ///
+    /// <para><b>One file cannot serve two samples.</b> Reference and QC injections are normally named
+    /// identically in every plate's document, so <c>QC_1__@__plateA</c> and <c>QC_1__@__plateB</c>
+    /// both match <c>QC_1.raw</c> - but those are two injections, run on two plates, and whichever
+    /// file is present is at most one of them. Assigning it to both gives two replicates the same
+    /// denominator; assigning it to whichever came first makes the answer depend on dictionary order.
+    /// Both are reported as <see cref="Resolution.Ambiguous"/> instead, so the plot omits their
+    /// acquired bars and says why. This is the collision CLAUDE.md warns about for metadata, in the
+    /// one place it reaches instrument files.</para>
     /// </summary>
-    public static (Dictionary<string, string> Matched, List<string> Unmatched) ResolveAll(
+    public static Resolution ResolveAll(
         IEnumerable<string> sampleIds, IReadOnlyList<string> files)
     {
-        var matched = new Dictionary<string, string>(StringComparer.Ordinal);
+        // First pass: what each sample would take, and how many samples want each file.
+        var wanted = new Dictionary<string, string>(StringComparer.Ordinal);
+        var claimants = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var unmatched = new List<string>();
         foreach (var sampleId in sampleIds)
         {
             var path = Resolve(sampleId, files);
             if (path is null)
+            {
                 unmatched.Add(sampleId);
-            else
-                matched[sampleId] = path;
+                continue;
+            }
+            wanted[sampleId] = path;
+            if (!claimants.TryGetValue(path, out var list))
+                claimants[path] = list = new List<string>();
+            list.Add(sampleId);
         }
-        return (matched, unmatched);
+
+        var matched = new Dictionary<string, string>(StringComparer.Ordinal);
+        var ambiguous = new List<string>();
+        foreach (var (sampleId, path) in wanted)
+        {
+            if (claimants[path].Count == 1)
+                matched[sampleId] = path;
+            else
+                ambiguous.Add(sampleId);
+        }
+        ambiguous.Sort(StringComparer.Ordinal);
+        return new Resolution(matched, unmatched, ambiguous);
     }
 }

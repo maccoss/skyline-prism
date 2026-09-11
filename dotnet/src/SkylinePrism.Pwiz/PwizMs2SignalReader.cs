@@ -33,7 +33,7 @@ namespace SkylinePrism.Pwiz;
 /// back to summing and says so in <see cref="Describe"/>, so a cohort that mixes the two is visible
 /// rather than silently averaged over.</para>
 /// </remarks>
-public sealed class PwizMs2SignalReader : IMs2SignalReader
+public sealed partial class PwizMs2SignalReader : IMs2SignalReader, IIonAccountingReader
 {
     /// <summary>Extensions pwiz can open here. A directory-shaped format (.d) counts as a path.</summary>
     private static readonly string[] Extensions =

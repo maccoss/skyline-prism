@@ -101,7 +101,11 @@ public static class Ms2AcquiredSignal
             return new PopulateResult(Array.Empty<Entry>(), 0, sampleList.Count, 0);
         }
 
-        var (matched, unmatched) = ReplicateDataFiles.ResolveAll(sampleList, files);
+        var resolution = ReplicateDataFiles.ResolveAll(sampleList, files);
+        var matched = resolution.Matched;
+        // Ambiguous samples have no usable file of their own, so they join the unmatched for every
+        // purpose below - reported, and left without an acquired total rather than given a guess.
+        var unmatched = resolution.Unmatched.Concat(resolution.Ambiguous).ToList();
         log?.Invoke($"  Matched {matched.Count:N0} of {sampleList.Count:N0} replicate(s) to a data "
             + $"file in {rawDirectory} ({files.Count:N0} file(s) there).");
         if (unmatched.Count > 0)

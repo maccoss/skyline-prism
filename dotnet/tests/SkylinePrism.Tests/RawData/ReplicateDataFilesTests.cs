@@ -82,12 +82,45 @@ public class ReplicateDataFilesTests
     public void ResolveAllReportsWhatItCouldNotMatch()
     {
         var files = new[] { @"C:\raw\run_A.raw" };
-        var (matched, unmatched) = ReplicateDataFiles.ResolveAll(
-            new[] { "A__@__p1", "B__@__p1" }, files);
+        var resolved = ReplicateDataFiles.ResolveAll(new[] { "A__@__p1", "B__@__p1" }, files);
 
-        Assert.Single(matched);
-        Assert.Equal(@"C:\raw\run_A.raw", matched["A__@__p1"]);
-        Assert.Equal(new[] { "B__@__p1" }, unmatched);
+        Assert.Single(resolved.Matched);
+        Assert.Equal(@"C:\raw\run_A.raw", resolved.Matched["A__@__p1"]);
+        Assert.Equal(new[] { "B__@__p1" }, resolved.Unmatched);
+        Assert.Empty(resolved.Ambiguous);
+    }
+
+    /// <summary>
+    /// Reference and QC injections are normally named identically in every plate's document, so the
+    /// same replicate name appears in two batches and both resolve to the one file that is present.
+    /// Assigning it to both would give two plates the same denominator; assigning it to whichever
+    /// came first would make the answer depend on dictionary order. Neither gets it.
+    /// </summary>
+    [Fact]
+    public void OneFileCannotServeTwoReplicates()
+    {
+        var files = new[] { @"C:\raw\QC_1.raw" };
+        var resolved = ReplicateDataFiles.ResolveAll(
+            new[] { "QC_1__@__plateA", "QC_1__@__plateB" }, files);
+
+        Assert.Empty(resolved.Matched);
+        Assert.Empty(resolved.Unmatched);
+        Assert.Equal(new[] { "QC_1__@__plateA", "QC_1__@__plateB" }, resolved.Ambiguous);
+    }
+
+    /// <summary>
+    /// The same collision resolves normally when each replicate has a file of its own - the rule is
+    /// one file per sample, not "a repeated replicate name is always ambiguous".
+    /// </summary>
+    [Fact]
+    public void TwoReplicatesWithTheirOwnFilesBothResolve()
+    {
+        var files = new[] { @"C:\raw\plateA_QC_1.raw", @"C:\raw\plateB_QC_1.raw" };
+        var resolved = ReplicateDataFiles.ResolveAll(
+            new[] { "plateA_QC_1__@__a", "plateB_QC_1__@__b" }, files);
+
+        Assert.Equal(2, resolved.Matched.Count);
+        Assert.Empty(resolved.Ambiguous);
     }
 
     /// <summary>
