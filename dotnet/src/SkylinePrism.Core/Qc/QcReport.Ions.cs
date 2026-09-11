@@ -164,7 +164,7 @@ public static partial class QcReport
     /// impossible, so where one occurs the figure is withheld and named as a defect rather than
     /// quietly excluded from a median.
     /// </summary>
-    private static string FractionCaption(
+    internal static string FractionCaption(
         IReadOnlyList<IonAccountingRow> usable, PlotRenderer.IonLevel level)
     {
         var exceeded = usable.Count(r => r.Exceeded);
