@@ -225,6 +225,69 @@ public class IonAccountingTests
             IonAccountingStore.SettingsKeyFor("10 ppm", "10 ppm", "scheme", new[] { "L" }, sources));
     }
 
+    /// <summary>
+    /// A cache keyed for these settings is not necessarily COMPLETE for them, and the difference
+    /// matters because nothing fails loudly.
+    /// </summary>
+    /// <remarks>
+    /// The key covers the instrument files that could be measured, not the ones that were - so a
+    /// <c>--max</c> spot check writes a whole-cohort key over a handful of rows. Trusting the key
+    /// alone then makes a later full run return the short cache and never measure the rest, and the
+    /// only symptom is a plot with too few bars. So the reader's job is to say which replicates are
+    /// covered, and the run measures the remainder.
+    /// </remarks>
+    [Fact]
+    public void APartialCacheIsDetectableByCoverageNotByItsKey()
+    {
+        var dir = TempDir();
+        try
+        {
+            // What a "--max 2" run over a four-replicate cohort leaves behind.
+            IonAccountingStore.Write(dir, new IonAccountingResult(
+                "whole-cohort-key", "t", "p", "s", Array.Empty<string>(), 10, true,
+                new[] { Row(100, 100, 10, 10, "s1"), Row(100, 100, 20, 20, "s2") },
+                new[]
+                {
+                    new IonCycleRow("s1", 0, 0, 1, 1, 167, 100, 100, 10, 10),
+                    new IonCycleRow("s2", 0, 0, 1, 1, 167, 100, 100, 20, 20),
+                }));
+
+            var cached = IonAccountingStore.Read(dir);
+            Assert.NotNull(cached);
+
+            // The key matches the cohort's settings, so a key check alone accepts it...
+            Assert.True(cached!.MatchesSettings("whole-cohort-key"));
+
+            // ...while the coverage check - which is what the run actually uses - does not.
+            var wanted = new[] { "s1", "s2", "s3", "s4" };
+            var covered = cached.Rows.Where(r => r.IsUsable).Select(r => r.Sample).ToHashSet();
+            Assert.Equal(new[] { "s3", "s4" }, wanted.Where(s => !covered.Contains(s)));
+
+            // And the reusable replicates' traces are readable, so they need not be re-measured.
+            Assert.Single(IonAccountingStore.ReadCycles(dir, "s1"));
+            Assert.Single(IonAccountingStore.ReadCycles(dir, "s2"));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    /// <summary>
+    /// A row that failed to read is NOT coverage - it must be retried, not treated as done.
+    /// </summary>
+    [Fact]
+    public void AFailedReplicateDoesNotCountAsCovered()
+    {
+        var failed = new IonAccountingRow(
+            "s1", "experimental", "", Ms2ReadStatus.NotFound, "none", 0, 0,
+            0, 0, 0, 0, double.NaN, double.NaN, 0, 0, 0, 0,
+            Array.Empty<double>(), Array.Empty<double>());
+
+        Assert.False(failed.IsUsable);
+        Assert.True(Row(100, 100, 10, 10, "s2").IsUsable);
+    }
+
     // ---------------------------------------------------------------- the claim loader
 
     /// <summary>

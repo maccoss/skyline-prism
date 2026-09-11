@@ -145,17 +145,44 @@ public static class IonAccountingRun
         var settingsKey = IonAccountingStore.SettingsKeyFor(
             productText, precursorText, schemeText, classified.ListNames, sources);
 
+        // What the cache already holds for THESE settings. A keyed cache is not automatically
+        // complete: the key covers the files that could be measured, not the ones that were, so a
+        // --max run writes a whole-cohort key over a handful of rows. Reusing by COVERAGE rather
+        // than trusting the key outright fixes that, and makes adding a plate to a cohort measure
+        // only the new plate.
+        var reusable = new Dictionary<string, IonAccountingRow>(StringComparer.Ordinal);
+        var reusedCycles = new List<IonCycleRow>();
         if (!force)
         {
             var cached = IonAccountingStore.Read(outputDir);
             if (cached is not null && cached.MatchesSettings(settingsKey))
             {
+                foreach (var row in cached.Rows)
+                {
+                    if (row.IsUsable)
+                        reusable[row.Sample] = row;
+                }
+
+                var missing = resolution.Matched.Keys
+                    .Count(s => !reusable.ContainsKey(s));
+                if (missing == 0)
+                {
+                    log?.Invoke(
+                        $"  Ion accounting: reusing the cache for {cached.Rows.Count:N0} replicate(s) "
+                        + $"({IonAccountingStore.SummarizeSettings(productText, precursorText, schemeText, lists.Count)}).");
+                    return cached;
+                }
+
+                // Read the reusable replicates' traces NOW: the first incremental save rewrites
+                // ion_cycles.parquet from what is in memory, so anything not loaded is lost.
+                foreach (var sample in reusable.Keys)
+                    reusedCycles.AddRange(IonAccountingStore.ReadCycles(outputDir, sample));
+
                 log?.Invoke(
-                    $"  Ion accounting: reusing the cache for {cached.Rows.Count:N0} replicate(s) "
-                    + $"({IonAccountingStore.SummarizeSettings(productText, precursorText, schemeText, lists.Count)}).");
-                return cached;
+                    $"  Ion accounting: the cache covers {reusable.Count:N0} replicate(s) of these "
+                    + $"settings; measuring the {missing:N0} it does not.");
             }
-            if (cached is not null)
+            else if (cached is not null)
             {
                 log?.Invoke(
                     "  Ion accounting: the cache was computed for different settings or different "
@@ -174,8 +201,8 @@ public static class IonAccountingRun
                 + "is computed.");
         }
 
-        var rows = new List<IonAccountingRow>();
-        var cycles = new List<IonCycleRow>();
+        var rows = new List<IonAccountingRow>(reusable.Values);
+        var cycles = new List<IonCycleRow>(reusedCycles);
         var clock = Stopwatch.StartNew();
         var read = 0;
         var effectiveLanes = Math.Max(1, lanes > 0 ? lanes : DefaultLanes);
@@ -196,6 +223,8 @@ public static class IonAccountingRun
                 ct.ThrowIfCancellationRequested();
                 if (!resolution.Matched.TryGetValue(sample, out var path))
                     return;
+                if (reusable.ContainsKey(sample))
+                    return;   // already measured for these settings
                 if (maxReplicates > 0 && read >= maxReplicates)
                     return;
                 read++;
@@ -261,9 +290,10 @@ public static class IonAccountingRun
 
         // Replicates with no file of their own still get a row, so the plot can show a gap rather
         // than silently omitting an injection.
+        var measured = new HashSet<string>(rows.Select(r => r.Sample), StringComparer.Ordinal);
         foreach (var sample in samples)
         {
-            if (resolution.Matched.ContainsKey(sample))
+            if (measured.Contains(sample))
                 continue;
             // NotFound whichever it was - no file of its own, or a file another replicate also
             // claimed. The distinction is in the pairing report above rather than in a status,
