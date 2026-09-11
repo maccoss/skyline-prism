@@ -29,16 +29,30 @@ namespace SkylinePrism.Core.Qc;
 public static class IonAccountingRun
 {
     /// <summary>
-    /// Concurrent instrument-file reads.
-    ///
-    /// <para>Eight because the read is what costs: measured on one 4.44 GB Thermo file, 206.7 s
-    /// total of which 204.5 s is inside the reader and 1.0 s is masking 465,307 claims against
-    /// 168,920 spectra. Per-spectrum decoding runs at about 817 spectra/s cold, and that figure is
-    /// the same from local disk as over the share to within the network's 2.6x - so the limit is
-    /// the decoding, not the storage, and lanes buy close to their count until the cores run out.
-    /// Sixteen logical processors was the machine this was measured on.</para>
+    /// Concurrent instrument-file reads. Reading is what costs, so this is the one setting that
+    /// changes how long a cohort takes.
     /// </summary>
-    public const int DefaultLanes = 8;
+    /// <remarks>
+    /// <para><b>What was measured</b>, on 4.44 GB Thermo files of about 168,920 spectra each, on a
+    /// 16-processor machine:</para>
+    /// <list type="bullet">
+    /// <item><description>One lane, file on local disk: 206.7 s, of which 204.5 s is inside the
+    /// reader and <b>1.0 s</b> is masking 465,307 claims against every spectrum. 817 spectra/s. So
+    /// the union arithmetic is half a percent of the work and the decode is everything.</description></item>
+    /// <item><description>Two lanes, files on the SMB share: 370 s each, 455 spectra/s, two files
+    /// finishing together - so 185 s per file in aggregate, better than one lane locally. Per-file
+    /// rate fell 1.8x for 2x the concurrency, about 0.9 scaling efficiency.</description></item>
+    /// <item><description>Working set scales at roughly 2 GB per lane, on top of the DuckDB
+    /// budget.</description></item>
+    /// </list>
+    /// <para><b>What was not.</b> Eight lanes has never been run to completion here - the one
+    /// attempt was killed before any file finished, and "no file has finished yet" is what eight
+    /// concurrent reads look like whether they are healthy or not. So the default is four: above the
+    /// two lanes that were measured, below a count whose memory (about 16 GB) and scaling are
+    /// unverified. Raise it with --lanes if you measure better, and do not infer a stall from a
+    /// quiet log - a file only reports when it is done.</para>
+    /// </remarks>
+    public const int DefaultLanes = 4;
 
     /// <summary>
     /// Compute for every replicate in <paramref name="outputDir"/>, reusing the cache unless
@@ -244,11 +258,12 @@ public static class IonAccountingRun
         {
             if (resolution.Matched.ContainsKey(sample))
                 continue;
-            var status = resolution.Ambiguous.Contains(sample, StringComparer.Ordinal)
-                ? Ms2ReadStatus.NotFound
-                : Ms2ReadStatus.NotFound;
+            // NotFound whichever it was - no file of its own, or a file another replicate also
+            // claimed. The distinction is in the pairing report above rather than in a status,
+            // because there is no reading of this row that should differ: either way the replicate
+            // has no measured denominator and the plot must show a gap rather than a zero.
             rows.Add(new IonAccountingRow(
-                sample, SampleTypeOf(sampleTypes, sample), "", status, "none",
+                sample, SampleTypeOf(sampleTypes, sample), "", Ms2ReadStatus.NotFound, "none",
                 0, 0, 0, 0, 0, 0, double.NaN, double.NaN, 0, 0, 0, 0,
                 new double[classified.ListNames.Count], new double[classified.ListNames.Count]));
         }

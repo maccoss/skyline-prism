@@ -654,7 +654,7 @@ public static class Program
               --force                     Recompute even when the cache matches
               --max <n>                   Stop after n replicates, for a first look at a cohort
                                           whose files are a terabyte on a network share
-              --lanes <n>                 Files to read at a time (default 8). Reading is 99.5%
+              --lanes <n>                 Files to read at a time (default 4). Reading is 99.5%
                                           of the cost and it is per file, so this is the one
                                           setting that changes how long a cohort takes
 
