@@ -98,6 +98,12 @@ public readonly record struct IonCycle(
 /// rather than absolute - and the fraction, which is what the plots show, is unaffected either
 /// way.</para>
 ///
+/// <para><b>Before comparing these totals with Skyline's own ion counts, check which unit Skyline
+/// multiplies by.</b> It has not been verified here. If Skyline uses milliseconds - the same slip
+/// this code made - its counts sit 1000x above a true ion count, and the two would disagree by that
+/// factor with neither side being wrong about anything except the unit. The RATIO of assigned to
+/// acquired is the safe thing to compare, because it is insensitive to the choice.</para>
+///
 /// <para><b>Why the reader computes both halves.</b> The assigned total is the union of the regions
 /// peptides claim, evaluated against each spectrum. It cannot be assembled from Skyline's
 /// per-transition areas or ion counts: those sum shared signal once per transition, which
