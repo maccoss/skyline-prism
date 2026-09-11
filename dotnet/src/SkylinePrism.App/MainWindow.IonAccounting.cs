@@ -367,6 +367,16 @@ public partial class MainWindow
             $"{result.AssignedPeptides:N0} peptides claiming signal",
         };
 
+        var offScale = usable.Count(r => r.IonScaleImplausible);
+        if (offScale > 0)
+        {
+            // The fraction is still right when the unit is wrong, so nothing else on the pane will
+            // look amiss. See IonAccountingRecord.IonScaleImplausible.
+            parts.Add(
+                $"WARNING: {offScale:N0} replicate(s) report an impossible number of ions per scan, "
+                + "so the totals are in the wrong unit (the fractions are unaffected)");
+        }
+
         var exceeded = usable.Count(r => r.Exceeded);
         if (exceeded > 0)
         {

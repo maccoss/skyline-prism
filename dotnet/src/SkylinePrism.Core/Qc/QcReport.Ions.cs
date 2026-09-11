@@ -53,6 +53,19 @@ public static partial class QcReport
             + $"{result.PrecursorTolerance}. Isolation scheme: {result.IsolationScheme}. "
             + $"{result.AssignedPeptides:N0} peptides claimed signal.";
 
+        // A cached result carries no run log, and a units error leaves the FRACTION correct - so the
+        // plots look entirely normal and only the absolute totals are wrong. Said in the caption
+        // because that is the only place a reader of the HTML would ever find it.
+        var offScale = usable.Count(r => r.IonScaleImplausible);
+        if (offScale > 0)
+        {
+            var worst = usable.First(r => r.IonScaleImplausible);
+            settings = $"WARNING: {offScale:N0} replicate(s) report an impossible number of ions per "
+                + $"scan (e.g. {worst.MeanMs1IonsPerScan:E2} at MS1, {worst.MeanMs2IonsPerScan:E2} at "
+                + "MS2, against an AGC target of perhaps 1e6). The TOTALS are in the wrong unit; the "
+                + "fractions are unaffected, which is why the plots still look right. " + settings;
+        }
+
         // ---- Per replicate, one panel per MS level. Never one axis for both: measured over a whole
         // run MS2 acquires about three times the ions of MS1 while the assigned share goes the other
         // way, so a shared axis would flatten one of them.
