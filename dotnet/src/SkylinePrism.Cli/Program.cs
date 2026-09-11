@@ -654,9 +654,11 @@ public static class Program
               --force                     Recompute even when the cache matches
               --max <n>                   Stop after n replicates, for a first look at a cohort
                                           whose files are a terabyte on a network share
-              --lanes <n>                 Files to read at a time (default 4). Reading is 99.5%
-                                          of the cost and it is per file, so this is the one
-                                          setting that changes how long a cohort takes
+              --lanes <n>                 Files to read at a time (default 2). Reading is 99.5%
+                                          of the cost, but it is limited by the storage rather
+                                          than the CPU: four lanes measured slightly WORSE than
+                                          two on an SMB share, at twice the memory. Raise it only
+                                          if you measure a gain
 
         Writes ion_accounting.parquet and ion_cycles.parquet into the output directory. The
         cache is keyed on both tolerances, the isolation scheme, the selected protein lists

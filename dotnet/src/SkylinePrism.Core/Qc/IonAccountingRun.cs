@@ -30,32 +30,34 @@ public static class IonAccountingRun
 {
     /// <summary>
     /// Concurrent instrument-file reads. Reading is what costs, so this is the one setting that
-    /// changes how long a cohort takes.
+    /// changes how long a cohort takes - and past two lanes it changes it for the worse.
     /// </summary>
     /// <remarks>
-    /// <para><b>What was measured</b>, on 4.44 GB Thermo files of about 168,920 spectra each, on a
+    /// <para>Measured on 4.44 GB Thermo files of about 168,920 spectra each, over an SMB share, on a
     /// 16-processor machine:</para>
-    /// <list type="bullet">
-    /// <item><description>One lane, file on local disk: 206.7 s, of which 204.5 s is inside the
-    /// reader and <b>1.0 s</b> is masking 465,307 claims against every spectrum. 817 spectra/s. So
-    /// the union arithmetic is half a percent of the work and the decode is everything.</description></item>
-    /// <item><description>Two lanes, files on the SMB share: 370 s each, 455 spectra/s, two files
-    /// finishing together - so 185 s per file in aggregate, better than one lane locally. Per-file
-    /// rate fell 1.8x for 2x the concurrency, about 0.9 scaling efficiency.</description></item>
-    /// <item><description>Working set was 13.4 GB at two lanes and 20.9 GB at eight, on a 64 GB
-    /// machine. Most of that is DuckDB's buffer pool for the cohort-wide ORDER BY rather than the
-    /// readers - the two points imply roughly 1 GB per extra lane on top of a large fixed cost, and
-    /// the fixed part is why the first reading (4.1 GB, taken before the sort had filled its pool)
-    /// was misleading. Do not size a machine off a per-lane figure alone.</description></item>
+    /// <list type="table">
+    /// <listheader><term>lanes</term><description>per file / concurrent / AGGREGATE</description></listheader>
+    /// <item><term>1 (local disk)</term><description>206.7 s, 817 spectra/s</description></item>
+    /// <item><term>2</term><description>370 s each, 2 at once, <b>185 s per file</b></description></item>
+    /// <item><term>4</term><description>~800 s each, 4 at once, <b>~205 s per file</b></description></item>
     /// </list>
-    /// <para><b>What was not.</b> Eight lanes has never been run to completion here - the one
-    /// attempt was killed before any file finished, and "no file has finished yet" is what eight
-    /// concurrent reads look like whether they are healthy or not. So the default is four: above the
-    /// two lanes that were measured, below a count whose memory (about 16 GB) and scaling are
-    /// unverified. Raise it with --lanes if you measure better, and do not infer a stall from a
-    /// quiet log - a file only reports when it is done.</para>
+    /// <para>So doubling the lanes halved the per-file rate (455 to ~230 spectra/s) and bought
+    /// nothing: four lanes is marginally WORSE than two, at twice the memory. The limit is not the
+    /// CPU - each reader uses about 0.64 of a core at four lanes with sixteen available - so it is
+    /// the share's throughput, and more readers only divide it more finely.</para>
+    /// <para><b>The lever is locality, not concurrency.</b> One lane against a local copy of the
+    /// file ran at 817 spectra/s against 455 at two lanes over the share; those two differ in both
+    /// locality and lane count, so the split between the two causes is not yet measured - but a
+    /// sequential copy of the same file runs at 212 MB/s, twenty-odd times faster than the walk
+    /// reads it, so staging a file locally before reading it is the thing worth trying next.</para>
+    /// <para>Working set was 13.4 GB at two lanes and 27.8 GB at four, on 64 GB - mostly DuckDB's
+    /// buffer pool for the cohort-wide ORDER BY rather than the readers, so do not size a machine
+    /// from a per-lane figure.</para>
+    /// <para>Two, then, because two is what measured best. Raise it with --lanes if your storage
+    /// behaves differently, and measure rather than assuming - and do not read a stall out of a
+    /// quiet log, because a file only reports when it is done.</para>
     /// </remarks>
-    public const int DefaultLanes = 4;
+    public const int DefaultLanes = 2;
 
     /// <summary>
     /// Compute for every replicate in <paramref name="outputDir"/>, reusing the cache unless
