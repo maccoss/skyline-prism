@@ -145,7 +145,11 @@ public static class IonAccountingStore
         IEnumerable<string> listNames, IReadOnlyList<string> sources) =>
         string.Join(
             "|",
-            "ions-v1",
+            // v2: v1 multiplied the intensity by the injection time in MILLISECONDS, so
+            // every total it cached is 1000x too large. The fractions were right, but the
+            // columns are named "ions" - so the key is bumped to make every directory
+            // recompute rather than replot the old magnitudes under the new caption.
+            "ions-v2",
             productTolerance,
             precursorTolerance,
             isolationScheme,
@@ -172,7 +176,7 @@ public static class IonAccountingStore
             ParquetWideWriter.Strings("reader", rows.Select(r => r.Reader).ToArray()),
             ParquetWideWriter.Longs("ms1_count", rows.Select(r => (long)r.Ms1Count).ToArray()),
             ParquetWideWriter.Longs("ms2_count", rows.Select(r => (long)r.Ms2Count).ToArray()),
-            // LINEAR ion-proportional totals - intensity times injection time. Never log.
+            // LINEAR counts of ions - intensity (a rate) times injection time in SECONDS. Never log.
             ParquetWideWriter.Doubles("ms1_acquired", rows.Select(r => r.Ms1Acquired).ToArray()),
             ParquetWideWriter.Doubles("ms2_acquired", rows.Select(r => r.Ms2Acquired).ToArray()),
             ParquetWideWriter.Doubles("ms1_assigned", rows.Select(r => r.Ms1Assigned).ToArray()),

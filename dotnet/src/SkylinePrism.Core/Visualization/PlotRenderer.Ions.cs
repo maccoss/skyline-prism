@@ -37,7 +37,8 @@ public static partial class PlotRenderer
     /// <para><b>A fraction over 1 is never drawn.</b> It is impossible, so it means a defect - a
     /// units mismatch, a scheme that does not match the acquisition, or claims merged too loosely -
     /// and clamping it to 100% would turn a visible bug into a plausible reading. The earlier version
-    /// of this feature reported a fraction 7x too large for exactly that kind of reason.</para>
+    /// of this feature reported a fraction built from mismatched units for exactly that kind of
+    /// reason, and it looked entirely plausible.</para>
     /// </remarks>
     public static void DrawIonAccounting(
         Plot plt, IonAccountingResult result, IonLevel level, string? title = null,

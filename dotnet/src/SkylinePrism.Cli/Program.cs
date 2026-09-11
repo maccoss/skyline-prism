@@ -263,10 +263,10 @@ public static class Program
     /// Its own command, and never part of <c>prism run</c>, for the same reason as
     /// <c>ms2-signal</c>: the cohort this was written against is 192 files at about 6 GB each,
     /// roughly 1.1 TB, normally over a network share. What it buys over <c>ms2-signal</c> is that
-    /// BOTH halves of the fraction are measured the same way - intensity times ion injection time,
-    /// summed from the same peak arrays - so the ratio is dimensionless. The earlier command divided
-    /// an intensity-time integral by an intensity, which on a real file is wrong by the mean
-    /// injection time, measured at 7.0x.
+    /// BOTH halves of the fraction are measured the same way - intensity times ion injection time in
+    /// seconds, summed from the same peak arrays - so the ratio is dimensionless. The earlier command
+    /// divided an intensity-time integral by an intensity: a ratio with units of time, which is not a
+    /// fraction at all.
     /// </remarks>
     private static int CmdIonAccounting(string[] args)
     {

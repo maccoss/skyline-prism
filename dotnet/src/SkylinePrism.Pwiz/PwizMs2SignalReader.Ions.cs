@@ -31,10 +31,17 @@ namespace SkylinePrism.Pwiz;
 /// centroiding removed. The reported total is still accumulated, separately, so the gap between the
 /// two is visible rather than assumed.</para>
 ///
-/// <para><b>The unit is intensity times injection time.</b> A scan's intensity is a rate; multiplying
-/// by the ion injection time gives the ion-proportional count Skyline itself reports. Skipping that
-/// factor is the defect this replaces: measured on a real Astral file the two differ by 7.0x, the
-/// mean injection time, and the error looks like a plausible fraction rather than like a bug.</para>
+/// <para><b>The unit is intensity times injection time IN SECONDS.</b> The reported intensity is a
+/// RATE - ions per second - so the injection time has to be in seconds for the product to be a count
+/// of ions. The cvParam is specified in milliseconds, so this is a factor of 1000, and getting it
+/// wrong does not disturb the fraction at all: both sides carry the same weighting and the ratio
+/// cancels. It disturbs only the absolute totals, which is what makes it easy to ship - the check
+/// that catches it is per-scan plausibility against the AGC target, not the fraction. At one point
+/// this code multiplied by milliseconds and reported 3.7e5 ions per MS1 scan as 3.7e8.</para>
+///
+/// <para>Dropping the factor ENTIRELY is a different and larger error, and the one this feature
+/// replaces: a rate summed over scans is not a count, so dividing an intensity-time integral by it
+/// is dimensionally meaningless.</para>
 /// </remarks>
 public sealed partial class PwizMs2SignalReader
 {
@@ -145,15 +152,20 @@ public sealed partial class PwizMs2SignalReader
                 rtLast = rt;
             }
 
-            // Milliseconds, per the cvParam's own unit, and verified on a real file: 7.012 to 50.013
-            // over 1,500 spectra. A scan with none is weighted 1, on BOTH sides, so its fraction
-            // stays right while the absolute totals mix two weightings - which the record reports.
-            var injection = scan?.CvParamValueOrDefault(CVID.MS_ion_injection_time, double.NaN)
-                ?? double.NaN;
+            // SECONDS, honouring the unit the file declares - the same rule as the retention time
+            // below, and for the same reason. Measured on a real Astral file: 7.012 to 50.013
+            // milliseconds, i.e. 0.007 to 0.050 s.
+            //
+            // A scan with no injection time cannot be converted to ions at all, so it is EXCLUDED
+            // from both totals rather than given an invented weight. Weighting it 1 would make that
+            // one scan count as if it had injected for a full second - about 141x a typical scan
+            // here - which would distort the totals far more than omitting it. The fraction stays
+            // valid either way; the record reports how many were left out.
+            var injection = Seconds(scan?.CvParam(CVID.MS_ion_injection_time));
             if (!double.IsFinite(injection) || injection <= 0)
             {
-                injection = 1.0;
                 noInjection++;
+                continue;
             }
 
             var mzArray = spectrum.GetMZArray();
@@ -275,6 +287,17 @@ public sealed partial class PwizMs2SignalReader
             + $"MS2 ions {record.Ms2Acquired:E3} acquired, {record.Ms2Assigned:E3} assigned "
             + $"({Percent(record.Ms2Fraction)}).");
 
+        // Per SCAN, which is the only figure here a reader can sanity-check against something they
+        // already know: it should land near the instrument's AGC target. The absolute totals cannot
+        // be checked that way and neither can the fraction - a units error cancels out of the ratio
+        // exactly - so this line is the one that would have caught multiplying by milliseconds
+        // instead of seconds, which put these at 3.7e8 and 7.3e6.
+        var perMs1 = record.Ms1Count > 0 ? record.Ms1Acquired / record.Ms1Count : double.NaN;
+        var perMs2 = record.Ms2Count > 0 ? record.Ms2Acquired / record.Ms2Count : double.NaN;
+        log($"    mean ions per scan: MS1 {perMs1:E2}, MS2 {perMs2:E2} "
+            + "(compare with the AGC target - these are the figures a units error shows up in, "
+            + "because it cancels out of the fraction).");
+
         // The reported cvParam total, for the gap centroiding leaves. Not the denominator - see the
         // class remarks - but worth knowing, because a large gap means the peak lists are sparse
         // relative to what the detector saw.
@@ -286,9 +309,9 @@ public sealed partial class PwizMs2SignalReader
 
         if (record.SpectraMissingInjectionTime > 0)
         {
-            log($"    {record.SpectraMissingInjectionTime:N0} scans reported no ion injection time, "
-                + "so their intensity is counted unweighted on both sides. Fractions stay valid; the "
-                + "absolute totals mix two weightings.");
+            log($"    {record.SpectraMissingInjectionTime:N0} scans reported no ion injection "
+                + "time, so they could not be converted to ions and are excluded from both totals. "
+                + "The fraction stays valid; the totals cover the remaining scans.");
         }
         if (record.ScansOutsideScheme > 0)
         {
@@ -319,6 +342,31 @@ public sealed partial class PwizMs2SignalReader
 
     private static string Percent(double fraction) =>
         double.IsFinite(fraction) ? fraction.ToString("P1") : "n/a";
+
+    /// <summary>
+    /// A time cvParam in SECONDS, honouring the unit it declares.
+    /// </summary>
+    /// <remarks>
+    /// Used for the ion injection time, whose product with the intensity is only a count of ions
+    /// when the time is in seconds - the intensity being a rate. An absent unit is treated as
+    /// milliseconds, which is what the controlled vocabulary specifies for MS:1000927 and what every
+    /// file measured here declares.
+    /// </remarks>
+    private static double Seconds(CVParam? param)
+    {
+        if (param is null)
+            return double.NaN;
+
+        double value = param;
+        return param.Units switch
+        {
+            CVID.UO_second => value,
+            CVID.UO_microsecond => value / 1_000_000.0,
+            CVID.UO_nanosecond => value / 1_000_000_000.0,
+            CVID.UO_minute => value * 60.0,
+            _ => value / 1000.0,   // UO_millisecond, and the cvParam's specified default
+        };
+    }
 
     private static double Sum(ReadOnlySpan<double> values)
     {

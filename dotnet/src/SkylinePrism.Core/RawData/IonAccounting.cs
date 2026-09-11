@@ -80,13 +80,23 @@ public readonly record struct IonCycle(
 /// What one instrument data file contributes to ion accounting: how many ions reached the detector,
 /// and what fraction of them a peptide sequence explains, at each MS level.
 ///
-/// <para><b>The unit.</b> Every total here is a scan's intensity multiplied by its ion injection
-/// time in milliseconds, summed. That is the quantity Skyline reports as an ion count, and it is
-/// ion-PROPORTIONAL rather than an absolute count of ions - which is all the fraction needs, because
-/// numerator and denominator are the same quantity measured the same way. A bare intensity sum is
-/// NOT: an intensity is a rate, so summing it and dividing by an ion count gives a number that
-/// changes with the acquisition's duty cycle. On a real Astral file the two differ by 7.0x, the mean
-/// injection time.</para>
+/// <para><b>The unit: ions.</b> The reported intensity is a RATE - ions per second - so every total
+/// here is a scan's intensity multiplied by its ion injection time IN SECONDS, summed. Both factors
+/// matter and each was got wrong once:</para>
+/// <list type="bullet">
+/// <item><description>Dropping the injection time entirely leaves a rate, and a rate summed over
+/// scans is not a count. Dividing an intensity-time integral by it is dimensionally meaningless -
+/// the defect this feature replaces.</description></item>
+/// <item><description>Using MILLISECONDS makes every total 1000x too large. The fraction is
+/// untouched, because both sides carry the same weighting and the ratio cancels, so nothing about
+/// the fraction can reveal it. What reveals it is per-scan plausibility: 3.7e8 ions in one MS1 scan
+/// is impossible against any AGC target, and 3.7e5 is right.</description></item>
+/// </list>
+/// <para>The conversion assumes the vendor reports intensity as a rate, which is what makes the
+/// product a count; Thermo does, and it is the same assumption behind Skyline's own
+/// <c>LC Peak Transition Ion Count</c>. Where it does not hold the totals are ion-PROPORTIONAL
+/// rather than absolute - and the fraction, which is what the plots show, is unaffected either
+/// way.</para>
 ///
 /// <para><b>Why the reader computes both halves.</b> The assigned total is the union of the regions
 /// peptides claim, evaluated against each spectrum. It cannot be assembled from Skyline's
@@ -95,9 +105,11 @@ public readonly record struct IonCycle(
 /// </summary>
 /// <param name="Ms1ByList">Per-list MS1 assigned totals, in <see cref="IonAccountingRequest.ListNames"/> order.</param>
 /// <param name="SpectraMissingInjectionTime">
-/// Scans with no ion-injection-time cvParam. Their intensity is taken as-is, on both sides, so the
-/// fraction stays meaningful while the absolute totals mix two weightings. Non-zero is worth saying
-/// out loud; on the files measured it is zero.
+/// Scans with no ion-injection-time cvParam. They cannot be converted to ions at all, so they are
+/// EXCLUDED from both totals rather than given an invented weight - weighting one at a full second
+/// would count it as roughly 141 typical scans here and distort the totals far more than leaving it
+/// out. The fraction stays valid because both sides lose the same scans. Non-zero is worth saying
+/// out loud; on every file measured it is zero.
 /// </param>
 public sealed record IonAccountingRecord(
     string DataPath,
@@ -131,8 +143,9 @@ public sealed record IonAccountingRecord(
     /// - a units mismatch, a window index that does not line up, or claims merged too loosely.
     ///
     /// <para>Callers must refuse to display a fraction when this is set, rather than clamping it.
-    /// Clamping to 100% turns a visible bug into a plausible reading, and the earlier version of this
-    /// feature shipped a fraction that was 7x too large for exactly this reason.</para>
+    /// Clamping to 100% turns a visible bug into a plausible reading - and the earlier version of
+    /// this feature shipped a fraction computed from mismatched units for exactly that reason: it
+    /// looked like a coverage percentage, so nothing about it invited checking.</para>
     /// </summary>
     public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
 

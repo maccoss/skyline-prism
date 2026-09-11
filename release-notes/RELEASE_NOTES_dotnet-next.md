@@ -22,13 +22,14 @@ as the GitHub Release description and fails if it is missing.
   co-isolated in it, and the identified peptides' fragments account for a twentieth of the result.
   The two levels are never drawn on one axis.
 
-  **The unit is what makes this work.** A scan's intensity is a rate, so it has to be multiplied by
-  the ion injection time to become a count of ions - the same quantity Skyline reports as an ion
-  count. An earlier version of this feature divided a summed peak area, which is an intensity-time
-  integral, by a summed total ion current, which is an intensity. Measured on a real Astral file the
-  two differ by 7.0x, the mean injection time, so that fraction was about seven times too large and
-  looked entirely plausible. PRISM now refuses to draw any fraction above 100% rather than clamping
-  it, because a fraction above 100% is impossible and therefore a defect worth seeing.
+  **The unit is what makes this work.** A scan's intensity is a RATE - ions per second - so it is
+  multiplied by that scan's ion injection time in seconds to become a count of ions, the same
+  quantity Skyline reports as an ion count. An earlier version of this feature instead divided a
+  summed peak area, which is an intensity-time integral, by a summed total ion current, which is an
+  intensity: a ratio carrying units of time, which is not a fraction at all, and which looked
+  entirely plausible as a coverage percentage. PRISM now refuses to draw any fraction above 100%
+  rather than clamping it, because a fraction above 100% is impossible and therefore a defect worth
+  seeing.
 
   **Shared signal is counted once.** Two peptides whose fragments fall within the extraction
   tolerance of each other in the same isolation window extract the *same* detector counts. Summing

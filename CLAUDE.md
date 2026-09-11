@@ -111,16 +111,24 @@ Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2
 ### Ion Counts vs Signal (CRITICAL)
 
 > [!CAUTION]
-> **A scan's intensity is a RATE. Ions = intensity x ion injection time.**
+> **A scan's intensity is a RATE, in ions per SECOND. Ions = intensity x injection time in seconds.**
 >
-> This is not a unit-conversion nicety; it is the difference between a fraction and a number that
-> merely looks like one. Measured on a real Astral file, the two differ by **7.0x** - the mean ion
-> injection time - and the wrong one produced a perfectly plausible-looking coverage percentage.
+> Two separate mistakes live here and both were made:
+>
+> 1. **Dropping the injection time** leaves a rate, and a rate summed over scans is not a count.
+>    Dividing a peak area by it is dimensionally meaningless and produced a plausible-looking
+>    coverage percentage that was wrong by the mean injection time.
+> 2. **Using milliseconds** makes every total **1000x** too large. The cvParam is in milliseconds and
+>    the intensity is per second, so the conversion is required. This one cannot be caught by looking
+>    at the fraction - both sides carry the same weighting, so the ratio cancels exactly. It is
+>    caught by per-scan plausibility against the AGC target: 3.7e8 ions in one MS1 scan is
+>    impossible; 3.7e5 is right.
 >
 > | quantity | what it is | safe to divide by a TIC sum? |
 > |---|---|---|
 > | Skyline `Area` | intensity x time, **background-subtracted** | no - and the `Background` column needed to undo that is not always exported |
 > | Skyline `LC Peak Transition Ion Count` | intensity x injection time (already ions) | yes, but Skyline computes it ~29x slower per row |
+> | intensity x injection time in **ms** | 1000x an ion count | the FRACTION is right, the totals are not |
 > | a scan's TIC cvParam | a sum of intensities, i.e. a rate | only against another rate |
 > | PRISM's acquired/assigned ions | intensity x injection time, summed | yes - both sides measured identically |
 >

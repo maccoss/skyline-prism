@@ -51,14 +51,17 @@ file in the cohort, which is often a terabyte over a network share.
 
 | File | One row per | Holds |
 |---|---|---|
-| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR ion-proportional totals), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
+| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
 | `ion_cycles.parquet` | acquisition cycle | the same four totals per cycle, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
 | `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
 
-**The unit is intensity x ion injection time**, summed — the quantity Skyline reports as an ion
-count. It is ion-*proportional* rather than an absolute count of ions, which is all the fraction
-needs, because numerator and denominator are the same quantity measured the same way. A bare
-intensity sum is not: intensity is a rate, and on a real Astral file the two differ by 7.0x.
+**The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity
+is multiplied by its ion injection time **in seconds** and summed. That is the quantity Skyline
+reports as an ion count. Two ways to get it wrong, both of which have been made here — dropping the
+injection time leaves a rate, which summed over scans is not a count of anything; and using
+milliseconds makes every total 1000x too large. Neither disturbs the *fraction*, since both sides
+carry the same weighting, so the check that catches the second one is per-scan plausibility against
+the instrument's AGC target rather than anything about the ratio.
 
 `settings_key` is stored in the file and covers both extraction tolerances, the isolation scheme,
 the selected lists and a fingerprint of the instrument files and `merged_data/`. A re-run whose
