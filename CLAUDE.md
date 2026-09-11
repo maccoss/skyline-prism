@@ -116,8 +116,9 @@ Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2
 > Two separate mistakes live here and both were made:
 >
 > 1. **Dropping the injection time** leaves a rate, and a rate summed over scans is not a count.
->    Dividing a peak area by it is dimensionally meaningless and produced a plausible-looking
->    coverage percentage that was wrong by the mean injection time.
+>    Dividing a peak area by it gives a ratio carrying units of time - not a fraction at all - and it
+>    looked like a perfectly plausible coverage percentage. No single factor describes how wrong it
+>    was, because the numerator differed too; the dimensional argument is the whole of it.
 > 2. **Using milliseconds** makes every total **1000x** too large. The cvParam is in milliseconds and
 >    the intensity is per second, so the conversion is required. This one cannot be caught by looking
 >    at the fraction - both sides carry the same weighting, so the ratio cancels exactly. It is
