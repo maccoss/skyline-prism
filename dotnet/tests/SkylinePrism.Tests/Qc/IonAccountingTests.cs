@@ -118,6 +118,53 @@ public class IonAccountingTests
         Assert.Equal(2, picks.Length);
     }
 
+    /// <summary>
+    /// The per-scan ion count is the ONLY check here that can catch a units error, and it is checked
+    /// against the real numbers that motivated it.
+    /// </summary>
+    /// <remarks>
+    /// Multiplying the intensity by the injection time in milliseconds rather than seconds makes
+    /// every total 1000x too large while leaving the fraction bit-identical, because the error
+    /// scales numerator and denominator alike and cancels. Nothing built on the ratio can see it.
+    /// The values below are the real ones from a 4.44 GB Astral file, before and after the fix.
+    /// </remarks>
+    [Fact]
+    public void TheMillisecondErrorIsCaughtByPerScanIonsAndNotByTheFraction()
+    {
+        // What the milliseconds bug produced: 1,006 MS1 scans totalling 3.745e11.
+        var wrong = Scan(ms1Count: 1006, ms1Acquired: 3.745e11, ms2Count: 167914, ms2Acquired: 1.228e12);
+        // And what seconds give, exactly 1000x smaller.
+        var right = Scan(ms1Count: 1006, ms1Acquired: 3.745e8, ms2Count: 167914, ms2Acquired: 1.228e9);
+
+        Assert.True(wrong.IonScaleImplausible, "3.7e8 ions in one MS1 scan should be rejected");
+        Assert.False(right.IonScaleImplausible, "3.7e5 ions in one MS1 scan is an ordinary AGC target");
+
+        // Stated as ranges, because what matters is the ORDER of magnitude against an AGC target.
+        Assert.InRange(right.MeanMs1IonsPerScan, 3.0e5, 4.5e5);   // ~372,000 per survey scan
+        Assert.InRange(right.MeanMs2IonsPerScan, 6.0e3, 9.0e3);   // ~7,300 per 3 Th MS2 scan
+        Assert.InRange(wrong.MeanMs1IonsPerScan, 3.0e8, 4.5e8);   // the same, 1000x over
+
+        // And the point of the whole test: the FRACTION cannot tell them apart.
+        Assert.Equal(wrong.Ms1Fraction, right.Ms1Fraction, 12);
+        Assert.Equal(wrong.Ms2Fraction, right.Ms2Fraction, 12);
+    }
+
+    [Fact]
+    public void AnEmptyOrUnreadReplicateIsNotCalledImplausible()
+    {
+        // No scans at all: nothing to judge, and a NaN mean must not read as a defect.
+        var none = Scan(ms1Count: 0, ms1Acquired: 0, ms2Count: 0, ms2Acquired: 0);
+        Assert.False(none.IonScaleImplausible);
+        Assert.True(double.IsNaN(none.MeanMs1IonsPerScan));
+    }
+
+    /// <summary>A row with the given scan counts and totals, at a fixed 40%/3.4% assigned share.</summary>
+    private static IonAccountingRow Scan(
+        int ms1Count, double ms1Acquired, int ms2Count, double ms2Acquired) =>
+        new("s", "experimental", "s.raw", Ms2ReadStatus.Ok, "test", ms1Count, ms2Count,
+            ms1Acquired, ms2Acquired, ms1Acquired * 0.405, ms2Acquired * 0.034,
+            0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
+
     // ---------------------------------------------------------------- the cache
 
     /// <summary>

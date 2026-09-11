@@ -297,6 +297,13 @@ public sealed partial class PwizMs2SignalReader
         log($"    mean ions per scan: MS1 {perMs1:E2}, MS2 {perMs2:E2} "
             + "(compare with the AGC target - these are the figures a units error shows up in, "
             + "because it cancels out of the fraction).");
+        if (record.IonScaleImplausible)
+        {
+            log("    WARNING: that is outside anything an instrument can hold, so the totals are "
+                + "in the wrong UNIT rather than merely surprising - ions are intensity times the "
+                + "injection time in SECONDS. The fraction is unaffected either way, which is "
+                + "exactly why it cannot be trusted to reveal this.");
+        }
 
         // The reported cvParam total, for the gap centroiding leaves. Not the denominator - see the
         // class remarks - but worth knowing, because a large gap means the peak lists are sparse

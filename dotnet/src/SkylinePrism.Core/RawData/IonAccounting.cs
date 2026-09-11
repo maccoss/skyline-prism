@@ -155,6 +155,47 @@ public sealed record IonAccountingRecord(
     /// </summary>
     public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
 
+
+    /// <summary>
+    /// Mean ions in one MS1 scan, or NaN when none were read. The one figure here that can be
+    /// checked against something already known: the instrument's AGC target.
+    /// </summary>
+    public double MeanMs1IonsPerScan => Ms1Count > 0 ? Ms1Acquired / Ms1Count : double.NaN;
+
+    /// <inheritdoc cref="MeanMs1IonsPerScan"/>
+    public double MeanMs2IonsPerScan => Ms2Count > 0 ? Ms2Acquired / Ms2Count : double.NaN;
+
+    /// <summary>
+    /// True when the mean ions per scan is outside anything an instrument can hold, which means the
+    /// totals are in the wrong UNIT rather than merely surprising.
+    /// </summary>
+    /// <remarks>
+    /// <para>This exists because a units error on the injection time is invisible to every check
+    /// built on the fraction: it scales the numerator and the denominator identically and cancels
+    /// exactly. Fractions in range, stable across replicates, cycles summing to totals - all of them
+    /// pass while every absolute number is wrong by a constant. So the check has to be made on an
+    /// absolute quantity, and the per-scan ion count is the only one with an external reference.</para>
+    /// <para>The bounds are deliberately wide, because the point is to catch a factor of 1000 and not
+    /// to opine on anyone's method. Real AGC targets span roughly 1e3 to 1e7; anything at or above
+    /// <see cref="MaxPlausibleIonsPerScan"/> is beyond any current instrument, and a mean below one
+    /// ion per scan is not a measurement. Multiplying by milliseconds instead of seconds put a real
+    /// Astral file's MS1 mean at 3.7e8, which this catches; corrected it is 3.7e5, which it does
+    /// not.</para>
+    /// </remarks>
+    public bool IonScaleImplausible =>
+        Implausible(MeanMs1IonsPerScan) || Implausible(MeanMs2IonsPerScan);
+
+    /// <summary>Beyond any current instrument's AGC target by a wide margin. See <see cref="IonScaleImplausible"/>.</summary>
+    public const double MaxPlausibleIonsPerScan = 1e8;
+
+    /// <summary>A mean below this is not a measurement. See <see cref="IonScaleImplausible"/>.</summary>
+    public const double MinPlausibleIonsPerScan = 1.0;
+
+    private static bool Implausible(double meanPerScan) =>
+        double.IsFinite(meanPerScan)
+        && meanPerScan > 0
+        && (meanPerScan >= MaxPlausibleIonsPerScan || meanPerScan < MinPlausibleIonsPerScan);
+
     /// <summary>A record standing for a read that did not happen, so callers never see a null.</summary>
     public static IonAccountingRecord Unavailable(
         string dataPath, Ms2ReadStatus status, string reader, string? message = null) =>

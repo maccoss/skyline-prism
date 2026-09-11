@@ -40,6 +40,22 @@ public sealed record IonAccountingRow(
     /// <inheritdoc cref="IonAccountingRecord.Exceeded"/>
     public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
 
+    /// <inheritdoc cref="IonAccountingRecord.MeanMs1IonsPerScan"/>
+    public double MeanMs1IonsPerScan => Ms1Count > 0 ? Ms1Acquired / Ms1Count : double.NaN;
+
+    /// <inheritdoc cref="IonAccountingRecord.MeanMs2IonsPerScan"/>
+    public double MeanMs2IonsPerScan => Ms2Count > 0 ? Ms2Acquired / Ms2Count : double.NaN;
+
+    /// <inheritdoc cref="IonAccountingRecord.IonScaleImplausible"/>
+    public bool IonScaleImplausible =>
+        Implausible(MeanMs1IonsPerScan) || Implausible(MeanMs2IonsPerScan);
+
+    private static bool Implausible(double meanPerScan) =>
+        double.IsFinite(meanPerScan)
+        && meanPerScan > 0
+        && (meanPerScan >= IonAccountingRecord.MaxPlausibleIonsPerScan
+            || meanPerScan < IonAccountingRecord.MinPlausibleIonsPerScan);
+
     /// <summary>Whether this row carries numbers worth plotting.</summary>
     public bool IsUsable => Status == Ms2ReadStatus.Ok && (Ms1Acquired > 0 || Ms2Acquired > 0);
 }
