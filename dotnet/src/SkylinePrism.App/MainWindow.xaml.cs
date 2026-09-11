@@ -1789,9 +1789,11 @@ public partial class MainWindow : Window
     private MarkerNormalizationReport? _markerReport;
     private Dictionary<string, string> _qcTypes = new();
 
-    // PCA hover: the current PCA points (data coordinate + replicate name) and the highlight overlay
-    // (a ring marker + a text label). Recreated on every render because Plot.Clear() drops all plottables;
-    // null when the active QC plot is not PCA, which makes the hover handler a no-op.
+    // Hover state, shared by every QC plot that supports it - PCA and Marker score today: the points
+    // currently drawn (data coordinate + the replicate name to SHOW, already stripped of the merged
+    // batch suffix) and the highlight overlay (a ring marker + a text label). Recreated on every render
+    // because Plot.Clear() drops all plottables; left null by the plots that do not support hovering
+    // (CV, intensity), which makes the handler a no-op for them.
     private List<(ScottPlot.Coordinates Loc, string Name)>? _hoverPoints;
     private ScottPlot.Plottables.Marker? _hoverMarker;
     private ScottPlot.Plottables.Text? _hoverText;
@@ -2297,7 +2299,7 @@ public partial class MainWindow : Window
             {
                 case "Marker score":
                     _hoverPoints = DrawMarkerScore(
-                        plt, cols.Select(i => d.Samples[i]).ToList(), column);
+                        plt, cols.Select(i => d.Samples[i]).ToList(), sampleNames, column);
                     break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
@@ -2454,8 +2456,8 @@ public partial class MainWindow : Window
         _hoverText = text;
     }
 
-    // Show the replicate name when the cursor is within ~18 px of a PCA point. Active only while the PCA
-    // plot is shown (_hoverPoints non-null); a no-op for the CV / intensity plots.
+    // Show the replicate name when the cursor is within QcPlotChrome.HoverRadiusPx of a plotted point.
+    // Active on whichever plots populated _hoverPoints (PCA, Marker score); a no-op for the rest.
     private void QcPlot_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
         var points = _hoverPoints;
@@ -2545,8 +2547,20 @@ public partial class MainWindow : Window
     /// The jitter is why this has to come from the draw - the x of a point is not recoverable from
     /// the data, only from the Random the loop below walked.
     /// </summary>
+    /// <param name="samples">
+    /// Merged sample ids (<c>&lt;replicate&gt;__@__&lt;batch&gt;</c>). Both lookups here need these
+    /// rather than the display names: the marker report is keyed by them, and so are the replicate
+    /// annotations.
+    /// </param>
+    /// <param name="displayNames">
+    /// What to PUT on the hover label, parallel to <paramref name="samples"/> - the same list PCA
+    /// labels with, already through <see cref="StripSharedBatchSuffix"/>. Kept separate rather than
+    /// derived because the two uses genuinely differ: labelling with the merged id would show
+    /// <c>EXP25033_A__@__2026-09-Levitt</c> where the user expects <c>EXP25033_A</c>, and looking up
+    /// with the stripped name would find no score at all.
+    /// </param>
     private List<(Coordinates Loc, string Name)> DrawMarkerScore(
-        Plot plt, IReadOnlyList<string> samples, string? column)
+        Plot plt, IReadOnlyList<string> samples, IReadOnlyList<string> displayNames, string? column)
     {
         if (_markerReport is null || _markerReport.Samples.Count == 0)
         {
@@ -2564,9 +2578,12 @@ public partial class MainWindow : Window
         // QcGroupFilter.Comparer, not Ordinal: annotation spellings vary in case between source
         // documents, and splitting "Control" from "control" would invent a group, mis-colour both, and
         // count twice toward the cap - while the Group filter itself matches them as one.
-        var groups = new Dictionary<string, List<(double Score, string Name)>>(QcGroupFilter.Comparer);
-        foreach (var sample in samples)
+        // Display is what the hover shows; the id is what the two lookups above and below need. By
+        // index so the two stay paired - see the parameter docs for why they are not the same string.
+        var groups = new Dictionary<string, List<(double Score, string Display)>>(QcGroupFilter.Comparer);
+        for (var i = 0; i < samples.Count; i++)
         {
+            var sample = samples[i];
             if (!byName.TryGetValue(sample, out var score))
                 continue;
             var label = string.IsNullOrEmpty(column) ? "all samples" : SampleAnnotation(sample, column);
@@ -2574,7 +2591,7 @@ public partial class MainWindow : Window
                 label = "(none)";
             if (!groups.TryGetValue(label, out var list))
                 groups[label] = list = new List<(double, string)>();
-            list.Add((score, sample));
+            list.Add((score, i < displayNames.Count ? displayNames[i] : sample));
         }
         if (groups.Count == 0)
         {
@@ -2603,7 +2620,7 @@ public partial class MainWindow : Window
             var xs = points.Select(_ => g + (rng.NextDouble() - 0.5) * 0.35).ToArray();
             var markers = plt.Add.Markers(xs, points.Select(p => p.Score).ToArray());
             for (var i = 0; i < points.Count; i++)
-                hover.Add((new Coordinates(xs[i], points[i].Score), points[i].Name));
+                hover.Add((new Coordinates(xs[i], points[i].Score), points[i].Display));
             markers.Color = PlotRenderer.GroupColor(label, colorIndex++);
             markers.MarkerSize = 12;
             markers.LegendText = $"{label} (n={points.Count})";
