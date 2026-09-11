@@ -47,6 +47,12 @@ public sealed record IonAccountingRow(
 /// <summary>
 /// A whole cohort's ion accounting plus the settings that produced it.
 /// </summary>
+/// <param name="Cycles">
+/// Every replicate's per-cycle traces - populated by a RUN, and deliberately empty when this comes
+/// back from <see cref="IonAccountingStore.Read"/>. A cohort's cycles run to hundreds of thousands
+/// of rows and the time plots show one replicate at a time, so a reader asks for the one it needs
+/// through <see cref="IonAccountingStore.ReadCycles"/> rather than paying for all of them.
+/// </param>
 public sealed record IonAccountingResult(
     string SettingsKey,
     string ProductTolerance,

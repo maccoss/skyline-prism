@@ -104,6 +104,17 @@ public static partial class PlotRenderer
     /// </remarks>
     public static void StyleQcPlot(Plot plt, double fontScale = 1.0)
     {
+        // Undo an empty state FIRST, before anything else styles the axes.
+        //
+        // DrawEmptyState strips the frame and the grid, and Plot.Clear() does not put them back - so
+        // a pane that showed "nothing to plot" and then loaded real data rendered it with no axes at
+        // all, silently. Only the QC Plots pane was protected, through QcPlotChrome.Reset; the
+        // Spectrum density and MS2 signal panes were not. Doing it here covers every renderer
+        // including any added later, and DrawEmptyState still wins because it applies Frameless
+        // AFTER calling this.
+        plt.Axes.Frameless(false);
+        plt.ShowGrid();
+
         float Pt(double points) => (float)(points * fontScale);
 
         plt.Axes.Title.Label.FontName = PlotFontName;
