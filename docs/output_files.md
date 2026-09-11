@@ -36,10 +36,35 @@ output_dir/
 ├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
 ├── fasta/                          # Copy of the search database(s) this run used (if any)
 ├── parameters.json                 # Complete provenance and processing parameters
+├── ion_accounting.parquet          # Ions acquired/assigned per replicate (if `prism ion-accounting`)
+├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
+├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
 └── prism_run_YYYYMMDD_HHMMSS.log   # Detailed processing log
 ```
+
+### Ion accounting (`prism ion-accounting`)
+
+Written only by `prism ion-accounting`, never by `prism run`: producing them reads every instrument
+file in the cohort, which is often a terabyte over a network share.
+
+| File | One row per | Holds |
+|---|---|---|
+| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR ion-proportional totals), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
+| `ion_cycles.parquet` | acquisition cycle | the same four totals per cycle, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
+| `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
+
+**The unit is intensity x ion injection time**, summed — the quantity Skyline reports as an ion
+count. It is ion-*proportional* rather than an absolute count of ions, which is all the fraction
+needs, because numerator and denominator are the same quantity measured the same way. A bare
+intensity sum is not: intensity is a rate, and on a real Astral file the two differ by 7.0x.
+
+`settings_key` is stored in the file and covers both extraction tolerances, the isolation scheme,
+the selected lists and a fingerprint of the instrument files and `merged_data/`. A re-run whose
+settings differ recomputes rather than replotting the previous numbers under a new caption. A cache
+that is keyed for the current settings but covers only *some* replicates — what a `--max` spot check
+leaves — is topped up rather than trusted, so only the unmeasured replicates are read.
 
 ## Primary Output Files
 

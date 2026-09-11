@@ -176,6 +176,7 @@ for details.
 | `prism run` | Run the full pipeline (rollup → normalize → batch-correct → QC) |
 | `prism merge` | Merge Skyline transition reports into one peptide-partitioned parquet dataset |
 | `prism qc` | (Re)generate `qc_report.html` from an existing output directory |
+| `prism ion-accounting` | Count acquired ions from the instrument files and the fraction assigned to a peptide |
 | `prism compare` | Compare control-sample CVs between two runs |
 | `prism config-template` | Emit an annotated configuration template (`--minimal` for common options) |
 
