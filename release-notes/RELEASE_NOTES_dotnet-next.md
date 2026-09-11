@@ -6,29 +6,67 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
-- **The MS2 signal accounting can now report a fraction, not just a total.** The plot has always
-  answered "how much MS2 signal does this analysis assign to a peptide"; it can now answer "what
-  fraction of what the instrument actually acquired". The denominator is the one quantity no Skyline
-  export carries - `TicArea` is MS1 by construction and must never be substituted - so it is read
-  from the instrument data files by a new command:
+- **PRISM now counts ions, and reports what fraction of them a peptide sequence explains.** Two
+  numbers per replicate at each MS level: how many ions reached the detector, and how many of those
+  fall inside a region some peptide of your analysis claims. Both come from the instrument files, so
+  both are the same quantity measured the same way and the ratio is a genuine fraction.
 
   ```
-  prism ms2-signal -d <output-dir> -r <raw-dir> [--max 3]
+  prism ion-accounting -d <output-dir> -r <raw-dir> --product-tolerance "10 ppm" \
+      [--precursor-tolerance "10 ppm"] [--max 3] [--lanes 2]
   ```
 
-  That writes `ms2_signal.parquet`; re-run `prism qc -d` and the accounting plot gains a background
-  bar for acquired MS2, with the assigned bars sitting inside it, and both the title and the caption
-  report the median assigned/acquired.
+  On a 39-replicate Astral cohort this reports, per replicate, figures like 40.5% of acquired MS1
+  ions assigned against 3.4% of acquired MS2 ions - a gap that is the point rather than an anomaly.
+  MS1 is dominated by the precursors that were identified; each 3 Th DIA window fragments everything
+  co-isolated in it, and the identified peptides' fragments account for a twentieth of the result.
+  The two levels are never drawn on one axis.
 
-  Deliberately its own command rather than part of `prism run`: a cohort is hundreds of gigabytes of
-  raw data, usually over a network share, against a pipeline that otherwise reads one exported
-  report. `--max` reads the first N files for a spot check. Replicates are matched to files on the
-  file stem, which handles the prefixes acquisition software adds.
+  **The unit is what makes this work.** A scan's intensity is a rate, so it has to be multiplied by
+  the ion injection time to become a count of ions - the same quantity Skyline reports as an ion
+  count. An earlier version of this feature divided a summed peak area, which is an intensity-time
+  integral, by a summed total ion current, which is an intensity. Measured on a real Astral file the
+  two differ by 7.0x, the mean injection time, so that fraction was about seven times too large and
+  looked entirely plausible. PRISM now refuses to draw any fraction above 100% rather than clamping
+  it, because a fraction above 100% is impossible and therefore a defect worth seeing.
 
-  In the Skyline tool the same thing is a tickbox under **MS2 signal accounting** on the Settings
-  tab - "read the instrument files for the acquired MS2 total" - plus the directory holding them.
-  The read happens at the end of the run, just before the QC report, so that run's own report has
-  the fraction in it.
+  **Shared signal is counted once.** Two peptides whose fragments fall within the extraction
+  tolerance of each other in the same isolation window extract the *same* detector counts. Summing
+  their peak areas credits both and can push assigned past acquired; PRISM instead merges every
+  peptide's claimed region into disjoint m/z ranges before masking each spectrum, so there is only
+  one reading to count. Nothing has to detect or subtract the overlap. The geometry is the
+  document's own - the same isotopes, fragments and extraction tolerances Skyline used, and the same
+  peak boundaries it integrated - read from `merged_data/` in one pass covering both MS levels.
+
+  **It replaces the `PRISM-Ions` report, which is no longer needed for this.** Skyline computes
+  `LC Peak Transition Ion Count` about 29x slower per row - roughly four hours instead of ten
+  minutes on a 46M-row document - and even then the per-transition totals cannot be summed
+  correctly, because they count shared signal once per transition. PRISM computes the same thing
+  from the spectra in single-digit minutes per file.
+
+  Deliberately its own command rather than part of `prism run`: a cohort is often a terabyte of
+  instrument files over a network share, against a pipeline that otherwise reads one exported
+  report. `--max` reads N replicates for a spot check, and progress is written after *every*
+  replicate, so an interrupted run keeps what it measured. The isolation scheme is imported from the
+  first data file when the document does not carry one, which is the normal case - a DIA analysis
+  document stores `<isolation_scheme name="Results only" />` and Skyline keeps the windows in the
+  data files.
+
+- **An Ion accounting pane in the tool's Visualization tab, with three interactive views.** Ions per
+  replicate for the whole cohort; ions per acquisition cycle across the gradient for one replicate;
+  and the assigned *share* across the gradient. The third earns its place because the two absolute
+  traces both rise and fall with the elution envelope, so a stretch the analysis cannot explain is
+  invisible in them and obvious in the ratio - whose axis is pinned to 0-100%, since letting it
+  autoscale to a 4% maximum makes a bad run look like a full one.
+
+  Everything on the pane is a read of two cached parquet files, so switching replicate, MS level,
+  view or bin width is instant. The pane opens on the *median* replicate by assigned share rather
+  than the first one alphabetically, with the best and worst a click away.
+
+  The nav entry is hidden entirely until the output directory carries measured ion accounting. Every
+  plot on it needs a denominator, and a fraction computed against a guessed one reads as coverage
+  without being coverage - so there is nothing to offer rather than a pane that cannot draw.
+
 
 - **MS2 signal against retention time, for three replicates.** A new QC report section plots
   acquired, assigned and per-protein-list signal across the gradient for the best, median and worst
@@ -82,6 +120,32 @@ as the GitHub Release description and fails if it is missing.
   so the Spectrum density pane would plot a fraction of the cohort with nothing to say it was
   incomplete. A failed or cancelled merge now leaves the previous one untouched.
 
+- **`prism ms2-signal` reported "this build has no instrument-file reader" even in a build that had
+  one.** Nothing in the CLI referenced the reader assembly and nothing registered it, so the command
+  could never work regardless of how PRISM was built. The reflection-based bootstrap the Windows
+  tool already used now lives in one place that both entry points share, and the CLI takes the same
+  opt-in reference the tool does.
+
+- **One instrument file could serve several replicates.** Reference and QC injections are normally
+  named identically in every plate's document, so `QC_1__@__plateA` and `QC_1__@__plateB` both
+  matched a single `QC_1.raw` - giving two plates the same denominator, with which plate's numbers
+  were real decided by dictionary order. Replicates are now paired to files one-to-one; a name that
+  matches a file another replicate also matches is reported as ambiguous and neither is assigned it.
+
+- **Instrument files were found on Windows and not on Linux.** The raw directory was searched with
+  one glob per extension, and a glob pattern is matched case-insensitively on Windows but
+  case-sensitively on Linux - so a `.RAW` file was invisible there. The directory is now listed once
+  and filtered case-insensitively, and the extension list was widened to match what the readers
+  actually accept (it was narrower, so some formats were never even offered).
+
 ## Performance
+
+- **Ion accounting reads each instrument file once, and the masking is effectively free.** Measured
+  on a 4.44 GB Thermo file of 168,920 spectra: 206.7 s in total, of which 204.5 s is decoding
+  spectra and **1.0 s** is masking 465,307 claimed regions against every one of them. So the union
+  arithmetic that makes shared signal count once costs half a percent of the work, and the cost of
+  the feature is the file read - which is why it is a separate, cached step rather than part of
+  every run.
+
 
 ## Breaking Changes

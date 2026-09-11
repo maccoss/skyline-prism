@@ -1,4 +1,4 @@
-<Window x:Class="SkylinePrism.App.MainWindow"
+﻿<Window x:Class="SkylinePrism.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sp="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
@@ -290,6 +290,11 @@
                         <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
                         <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
                         <ListBoxItem x:Name="Ms2NavItem" Content="MS2 signal" Padding="10,7" />
+                        <!-- Collapsed until the output directory carries ion_accounting.parquet:
+                             every plot on it needs a measured denominator, so without one there is
+                             nothing to offer rather than an empty pane to click. -->
+                        <ListBoxItem x:Name="IonNavItem" Content="Ion accounting" Padding="10,7"
+                                     Visibility="Collapsed" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -460,6 +465,42 @@
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="Ms2Plot" />
+                        </DockPanel>
+
+                        <DockPanel x:Name="IonPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="IonViewCombo" Width="230"
+                                          SelectionChanged="OnIonViewChanged"
+                                          ToolTip="Per replicate: ions acquired and ions assigned to a peptide, for the whole cohort. Across the gradient: the same two totals per acquisition cycle for one replicate. Assigned share: the ratio of the two, which is where a stretch the analysis cannot explain becomes visible.">
+                                    <ComboBoxItem Tag="Accounting">Ions per replicate</ComboBoxItem>
+                                    <ComboBoxItem Tag="Profile">Ions across the gradient</ComboBoxItem>
+                                    <ComboBoxItem Tag="Fraction">Assigned share across the gradient</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonLevelCombo" Width="70"
+                                          SelectionChanged="OnIonLevelChanged"
+                                          ToolTip="MS1 or MS2, never both on one axis: on a real run MS2 acquires about three times the ions of MS1 while the assigned share goes the other way, 40% against 3%.">
+                                    <ComboBoxItem Tag="Ms2">MS2</ComboBoxItem>
+                                    <ComboBoxItem Tag="Ms1">MS1</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="IonReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonReplicateCombo" Width="240"
+                                          SelectionChanged="OnIonReplicateChanged"
+                                          ToolTip="Which replicate to profile. The cycles are already cached, so switching is a file read rather than a re-measurement." />
+                                <TextBlock x:Name="IonBinLabel" Text="RT bin (min):" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <TextBox x:Name="IonBinBox" Width="46" Text="1" VerticalAlignment="Center"
+                                         LostFocus="OnIonBinChanged" KeyDown="OnIonBinKeyDown"
+                                         ToolTip="Retention-time bin width. Cycles are grouped only to keep the trace readable - an hour-long run has thousands of them. Re-binning is free." />
+                                <Button x:Name="IonReloadButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
+                                        Click="OnIonReload"
+                                        ToolTip="Re-read ion_accounting.parquet and ion_cycles.parquet from the output directory above." />
+                                <TextBlock x:Name="IonStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <sp:WpfPlot x:Name="IonPlot" />
                         </DockPanel>
                     </Grid>
                 </Grid>

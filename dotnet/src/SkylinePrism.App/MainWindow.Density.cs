@@ -136,10 +136,18 @@ public partial class MainWindow
         DensityPane.Visibility = pane == VizPane.Density ? Visibility.Visible : Visibility.Collapsed;
         RangePane.Visibility = pane == VizPane.DynamicRange ? Visibility.Visible : Visibility.Collapsed;
         Ms2Pane.Visibility = pane == VizPane.Ms2Signal ? Visibility.Visible : Visibility.Collapsed;
+        IonPane.Visibility = pane == VizPane.IonAccounting ? Visibility.Visible : Visibility.Collapsed;
 
         SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
 
-        if (pane == VizPane.Ms2Signal)
+        // Re-checked on every pane change rather than once: the user can point the output box at
+        // another directory at any time, and whether that one has a measured denominator is what
+        // decides if the entry exists at all.
+        UpdateIonNavVisibility();
+
+        if (pane == VizPane.IonAccounting)
+            await LoadIonAccountingAsync();
+        else if (pane == VizPane.Ms2Signal)
             await LoadMs2SignalAsync();
         else if (pane == VizPane.Density && !_densityLoaded)
             await LoadDensitySamplesAsync();

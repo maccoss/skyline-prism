@@ -1,3 +1,4 @@
+using System;
 using SkylinePrism.App;
 using Xunit;
 
@@ -42,11 +43,32 @@ public class VizNavigationTests
     /// </summary>
     [Theory]
     [InlineData(-1)]
-    [InlineData(4)]
+    [InlineData(5)]
     [InlineData(99)]
     public void AnIndexThatNamesNoRowIsNoPane(int navIndex)
     {
         Assert.Null(VizNavigation.Current(visualizationTabSelected: true, navIndex));
+    }
+
+    /// <summary>
+    /// Every row of the rail maps to a pane, and the mapping is by INDEX - so a row added to the XAML
+    /// without an enum value silently becomes "no pane" and its plots never load. This is the
+    /// assertion that turns that into a build failure instead.
+    /// </summary>
+    [Fact]
+    public void EveryRailRowMapsToItsOwnPane()
+    {
+        var panes = Enum.GetValues<VizPane>();
+        for (var index = 0; index < panes.Length; index++)
+        {
+            Assert.Equal(
+                (VizPane)index,
+                VizNavigation.Current(visualizationTabSelected: true, index));
+        }
+
+        // And one past the last row is not a pane, which is what catches an enum value added
+        // without its row.
+        Assert.Null(VizNavigation.Current(visualizationTabSelected: true, panes.Length));
     }
 
     /// <summary>

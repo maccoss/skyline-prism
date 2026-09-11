@@ -37,6 +37,8 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 | **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
 | **Spectrum density** | How many precursors were detected in each DIA spectrum of a run |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
+| **MS2 signal** | How much MS2 signal the analysis assigns to a peptide, per replicate and across the gradient |
+| **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
 so an empty result cannot be misread as a flat measurement.
@@ -313,6 +315,15 @@ background correction applies, and it cannot be recovered from an area afterward
 data the injection time varies by two orders of magnitude within a run and anti-correlates with
 intensity). It is grayed out, with the reason as its tooltip, until every input can supply the column.
 
+> [!TIP]
+> **If what you want is the fraction of acquired ions, use [Ion accounting](#ion-accounting)
+> instead and skip this export entirely.** `prism ion-accounting` computes both the numerator and
+> the denominator from the instrument files in single-digit minutes per file, in matching units, and
+> counts shared signal once. The `PRISM-Ions` export below exists for the `ions` *measure* of the
+> MS2 signal plot; it is not needed for the ion fraction, and it costs about four hours on a 46M-row
+> document for a numerator that still cannot be summed correctly, because per-transition totals
+> count signal shared between peptides once per transition.
+
 **Export ion counts** is what makes that possible: each Skyline document is exported with the
 `PRISM-Ions` report - the standard report plus that one column - instead of `PRISM`. Expect roughly a
 **30x slower export**: measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document,
@@ -333,6 +344,70 @@ paying for the slow export there would only fail in Stage 1.
 The tool also reads the document's own product-ion extraction tolerance
 (`Transition Settings > Full-Scan`) rather than using the config default, since that is what decides
 when two fragments are the same detector counts. Every input is asked, and disagreement is a warning.
+
+## Ion accounting
+
+The question this answers is the one the MS2 signal plot above can only approximate: **of the ions
+that actually reached the detector, what fraction did this analysis put a peptide sequence to?** Two
+numbers per replicate at each MS level, both measured from the instrument files so both are the same
+quantity and the ratio is a genuine fraction.
+
+Run it from the command line:
+
+```
+prism ion-accounting -d <output-dir> -r <raw-dir> --product-tolerance "10 ppm" \
+    --precursor-tolerance "10 ppm"
+```
+
+`--product-tolerance` and `--precursor-tolerance` are the +/- windows your document states under
+**Transition Settings > Full-Scan** (`product_res` and `precursor_res`). Omit the precursor one and
+only the MS2 half is computed — a guessed extraction window changes how much fragment sharing is
+found, with nothing on the plot to say the number moved. `--max N` measures N replicates for a spot
+check; `--lanes N` sets how many files are read at once; `--force` recomputes over a valid cache.
+Progress is written after **every** replicate, so an interrupted run keeps what it measured.
+
+The isolation scheme is imported from the first data file when the document has none, which is the
+usual case: a DIA analysis document stores `<isolation_scheme name="Results only" />` and Skyline
+keeps the windows in the data files. On the cohort this was built against that import gives 167
+windows, 400.4–901.7 m/z, 3.001 Th, and it costs under a second because it reads headers only.
+
+### Reading the plots
+
+The **Ion accounting** pane has three views and an MS1/MS2 switch:
+
+| View | What it shows |
+|------|---------------|
+| **Ions per replicate** | Acquired ions as a neutral background bar, with assigned drawn inside it |
+| **Ions across the gradient** | Both totals per acquisition cycle for one replicate, acquired filled and assigned as a line over it |
+| **Assigned share across the gradient** | The ratio of the two, on a fixed 0–100% axis |
+
+The third is the one to look at when the first two look fine. Both absolute traces rise and fall with
+the elution envelope, so a stretch of the gradient the analysis cannot explain is invisible in them
+and obvious in the ratio. The axis is pinned to 0–100% rather than autoscaled, because a trace that
+fills the panel at a 4% maximum reads as a full run.
+
+Expect the two levels to differ, and by a lot. On a real Astral cohort: **40.5% of acquired MS1 ions
+assigned, against 3.4% of acquired MS2 ions.** That is not an error. MS1 is dominated by the
+precursors that were identified; each 3 Th DIA window fragments everything co-isolated in it, and the
+identified peptides' fragments account for a twentieth of what comes out. The two are never drawn on
+one axis.
+
+The pane is a pure read of `ion_accounting.parquet` and `ion_cycles.parquet`, so switching replicate,
+level, view or bin width is instant. It opens on the **median** replicate by assigned share rather
+than the first alphabetically. **The nav entry does not appear at all until those files exist** —
+every plot on it needs a measured denominator, and a fraction taken against a guessed one reads as
+coverage without being coverage.
+
+### What it costs, and why it is a separate step
+
+Reading one 4.44 GB Thermo file of 168,920 spectra takes about three and a half minutes, essentially
+all of it decoding spectra: of 206.7 s measured, 204.5 s is inside the reader and **1.0 s** is
+masking all 465,307 of that replicate's claimed regions against every spectrum. So the union
+arithmetic is half a percent of the work and the file read is the whole cost — which is why this is
+a separate, cached command rather than part of `prism run`, and why the cache is keyed on the files
+themselves as well as on the settings.
+
+---
 
 ## Spectrum density
 
