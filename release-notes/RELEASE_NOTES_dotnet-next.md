@@ -46,8 +46,16 @@ as the GitHub Release description and fails if it is missing.
 
   Deliberately its own command rather than part of `prism run`: a cohort is often a terabyte of
   instrument files over a network share, against a pipeline that otherwise reads one exported
-  report. `--max` reads N replicates for a spot check, and progress is written after *every*
-  replicate, so an interrupted run keeps what it measured. The isolation scheme is imported from the
+  report. `--max` reads N replicates for a spot check, `--lanes` (default 4) sets how many files are
+  read at once, and progress is written after *every* replicate, so an interrupted run keeps what it
+  measured.
+
+  **A partial result is topped up, not repeated and not trusted.** Re-running measures only the
+  replicates the cache does not already cover — so a `--max 6` spot check followed by a full run
+  reads the other 33 rather than all 39, an interrupted run resumes where it stopped, and adding a
+  plate to a finished cohort measures the new plate instead of re-reading every file that was
+  already done. On the cohort this was built for that is the difference between minutes and most of
+  a day. The isolation scheme is imported from the
   first data file when the document does not carry one, which is the normal case - a DIA analysis
   document stores `<isolation_scheme name="Results only" />` and Skyline keeps the windows in the
   data files.
