@@ -186,10 +186,15 @@ public partial class MainWindow
 
         if (_ionResult is null || _ionResult.Rows.Count == 0)
         {
+            // Names the ONLY way to produce it. An earlier version of this string offered "the
+            // Settings tab", which does not have a control for it - sending a user to look for
+            // something that is not there is worse than saying plainly that this is a command.
             ShowIonMessage(
-                "No ion accounting in this directory. Run it from the Settings tab, or with "
-                + "\"prism ion-accounting\", and it will appear here. It reads every instrument "
-                + "file once, which takes a few minutes per file.");
+                "No ion accounting in this directory yet. Measure it with:  prism ion-accounting "
+                + "-d <this directory> -r <raw file directory> --product-tolerance \"10 ppm\" "
+                + "--precursor-tolerance \"10 ppm\"  (use your document's own Full-Scan values). "
+                + "It reads every instrument file once, a few minutes per file, and the plots "
+                + "appear here once it has.");
             return;
         }
 
