@@ -42,8 +42,11 @@ public static class IonAccountingRun
     /// <item><description>Two lanes, files on the SMB share: 370 s each, 455 spectra/s, two files
     /// finishing together - so 185 s per file in aggregate, better than one lane locally. Per-file
     /// rate fell 1.8x for 2x the concurrency, about 0.9 scaling efficiency.</description></item>
-    /// <item><description>Working set scales at roughly 2 GB per lane, on top of the DuckDB
-    /// budget.</description></item>
+    /// <item><description>Working set was 13.4 GB at two lanes and 20.9 GB at eight, on a 64 GB
+    /// machine. Most of that is DuckDB's buffer pool for the cohort-wide ORDER BY rather than the
+    /// readers - the two points imply roughly 1 GB per extra lane on top of a large fixed cost, and
+    /// the fixed part is why the first reading (4.1 GB, taken before the sort had filled its pool)
+    /// was misleading. Do not size a machine off a per-lane figure alone.</description></item>
     /// </list>
     /// <para><b>What was not.</b> Eight lanes has never been run to completion here - the one
     /// attempt was killed before any file finished, and "no file has finished yet" is what eight
