@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -116,12 +117,21 @@ public sealed partial class PwizMs2SignalReader
         double[] sortedMz = Array.Empty<double>();
         double[] sortedIntensity = Array.Empty<double>();
 
+        // Split so the two costs can be told apart. They are both per spectrum, and the first full
+        // walk was 27x slower than a sequential copy of the same file - which is a statement about
+        // one of these two and not the other.
+        var readTicks = 0L;
+        var maskTicks = 0L;
+        var walk = Stopwatch.StartNew();
+
         for (var i = 0; i < spectra.Count; i++)
         {
             if ((i & 0x3FF) == 0)
                 ct.ThrowIfCancellationRequested();
 
+            var readStart = Stopwatch.GetTimestamp();
             var spectrum = spectra.GetSpectrum(i, getBinaryData: true);
+            readTicks += Stopwatch.GetTimestamp() - readStart;
             var level = spectrum.Params.CvParamValueOrDefault(CVID.MS_ms_level, 0);
             if (level is not (1 or 2))
                 continue;
@@ -190,9 +200,11 @@ public sealed partial class PwizMs2SignalReader
             }
 
             // The masked sum. A window index of -1 finds no lane and returns 0 without searching.
+            var maskStart = Stopwatch.GetTimestamp();
             var claimed = claims.Claimed(
                 level, windowIndex, rt, mz, intensity,
                 level == 1 ? ms1ByList : ms2ByList);
+            maskTicks += Stopwatch.GetTimestamp() - maskStart;
 
             var acquiredIons = summed * injection;
             var assignedIons = claimed * injection;
@@ -235,6 +247,11 @@ public sealed partial class PwizMs2SignalReader
             ms1 + ms2 > 0 ? null : "The file has no MS1 or MS2 spectra.");
 
         Report(record, claims, reportedMs1, reportedMs2, unsorted, log);
+        log?.Invoke(
+            $"    timing: {walk.Elapsed.TotalSeconds:F1} s total - "
+            + $"{readTicks / (double)Stopwatch.Frequency:F1} s reading spectra, "
+            + $"{maskTicks / (double)Stopwatch.Frequency:F1} s masking them "
+            + $"({(ms1 + ms2) / Math.Max(0.001, walk.Elapsed.TotalSeconds):N0} spectra/s).");
         return record;
     }
 

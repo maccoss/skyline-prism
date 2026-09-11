@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
@@ -39,6 +40,7 @@ public static class Program
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
                 "ms2-signal" => CmdMs2Signal(rest),
+                "ion-accounting" => CmdIonAccounting(rest),
                 "compare" => CmdCompare(rest),
                 "config-template" => CmdConfigTemplate(rest),
                 _ => Unknown(args[0]),
@@ -254,6 +256,201 @@ public static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Measure acquired and assigned ions from the instrument files, and cache the result.
+    /// </summary>
+    /// <remarks>
+    /// Its own command, and never part of <c>prism run</c>, for the same reason as
+    /// <c>ms2-signal</c>: the cohort this was written against is 192 files at about 6 GB each,
+    /// roughly 1.1 TB, normally over a network share. What it buys over <c>ms2-signal</c> is that
+    /// BOTH halves of the fraction are measured the same way - intensity times ion injection time,
+    /// summed from the same peak arrays - so the ratio is dimensionless. The earlier command divided
+    /// an intensity-time integral by an intensity, which on a real file is wrong by the mean
+    /// injection time, measured at 7.0x.
+    /// </remarks>
+    private static int CmdIonAccounting(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>());
+        var dir = opts.GetSingle("-d", "--dir") ?? opts.GetSingle("-o", "--output-dir");
+        var rawDir = opts.GetSingleOrNull("-r", "--raw-dir");
+        var productText = opts.GetSingleOrNull("--product-tolerance");
+        var precursorText = opts.GetSingleOrNull("--precursor-tolerance");
+        var schemeName = opts.GetSingleOrNull("--scheme");
+        var force = Array.Exists(args, a => a is "--force");
+        var max = int.TryParse(opts.GetSingleOrNull("--max"), out var m) && m > 0 ? m : 0;
+        var lanes = int.TryParse(opts.GetSingleOrNull("--lanes"), out var l) && l > 0 ? l : 0;
+
+        if (dir is null || rawDir is null || productText is null)
+        {
+            Console.Error.WriteLine(
+                "Usage: prism ion-accounting -d <output-dir> -r <raw-dir> "
+                + "--product-tolerance \"10 ppm\" [--precursor-tolerance \"10 ppm\"] "
+                + "[--scheme <name>] [--max N] [--force]");
+            return 2;
+        }
+        if (!Directory.Exists(dir))
+        {
+            Console.Error.WriteLine($"Error: no such output directory: {dir}");
+            return 2;
+        }
+        if (!Directory.Exists(rawDir))
+        {
+            Console.Error.WriteLine($"Error: no such raw directory: {rawDir}");
+            return 2;
+        }
+
+        var product = ProductMassTolerance.ParseSetting(productText);
+        if (product is null)
+        {
+            Console.Error.WriteLine(
+                $"Error: could not read --product-tolerance \"{productText}\". Write it as the +/- "
+                + "tolerance the document states, e.g. \"10 ppm\" or \"0.4 m/z\".");
+            return 2;
+        }
+
+        ProductMassTolerance? precursor = null;
+        if (precursorText is not null)
+        {
+            precursor = ProductMassTolerance.ParseSetting(precursorText);
+            if (precursor is null)
+            {
+                Console.Error.WriteLine(
+                    $"Error: could not read --precursor-tolerance \"{precursorText}\".");
+                return 2;
+            }
+        }
+
+        OptionalReaders.Register(Console.WriteLine);
+        if (!IonAccountingReaders.Available)
+        {
+            Console.Error.WriteLine(
+                "Error: this build has no instrument-file reader, so ions cannot be counted. The "
+                + "Windows Skyline tool package carries one.");
+            return 1;
+        }
+
+        var scheme = ResolveScheme(dir, schemeName)
+            ?? ImportSchemeFromData(dir, rawDir);
+        if (scheme is null)
+            return 1;
+
+        var result = IonAccountingRun.Compute(
+            dir, rawDir, scheme, product, precursor,
+            Array.Empty<ProteinList>(), sampleTypes: null, log: Console.WriteLine, force: force,
+            maxReplicates: max, lanes: lanes);
+
+        if (result is null)
+        {
+            Console.Error.WriteLine(
+                "No ion accounting was produced; the reason is above. The QC report will continue "
+                + "to plot assigned signal without a fraction.");
+            return 1;
+        }
+
+        Console.WriteLine(
+            $"Wrote {Path.Combine(dir, IonAccountingStore.FileName)} and "
+            + $"{IonAccountingStore.CyclesFile}. Re-run 'prism qc -d' to plot them.");
+        return 0;
+    }
+
+    /// <summary>
+    /// The isolation scheme to account against, from the output directory's own
+    /// <c>isolation_schemes.xml</c>. Never guessed: fragments in different isolation windows never
+    /// share signal, so the wrong scheme silently changes every number.
+    /// </summary>
+    private static IsolationScheme? ResolveScheme(string dir, string? named)
+    {
+        var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
+        var catalog = IsolationSchemeCatalog.Load(path);
+        var usable = catalog?.UsableSchemes
+            ?? (IReadOnlyList<IsolationScheme>)Array.Empty<IsolationScheme>();
+
+        // No windows is the NORMAL state of a DIA analysis document: it stores
+        // <isolation_scheme name="Results only" /> and Skyline keeps the windows in the data files.
+        // Saying nothing here lets the caller import them from a file instead of failing.
+        if (usable.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(named))
+        {
+            foreach (var candidate in usable)
+            {
+                if (string.Equals(candidate.Name, named, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+            Console.Error.WriteLine(
+                $"Error: no isolation scheme named '{named}'. Available: "
+                + string.Join(", ", usable.Select(s => s.Name)));
+            return null;
+        }
+
+        if (usable.Count > 1)
+        {
+            Console.Error.WriteLine(
+                "Error: more than one isolation scheme is available, so --scheme must name one: "
+                + string.Join(", ", usable.Select(s => s.Name)));
+            return null;
+        }
+
+        Console.WriteLine($"Isolation scheme: {usable[0].Describe()}");
+        return usable[0];
+    }
+
+    /// <summary>
+    /// Read the isolation windows out of the first data file, for the usual case where the document
+    /// does not carry them.
+    /// </summary>
+    /// <remarks>
+    /// Uses the acquired-only read, which is headers only - the windows are a property of the
+    /// ACQUISITION METHOD, so one file describes every replicate of the cohort and there is no
+    /// reason to decode a peak to find them. The result is written to isolation_schemes.xml so the
+    /// next run, and the QC report, both reuse it.
+    /// </remarks>
+    private static IsolationScheme? ImportSchemeFromData(string dir, string rawDir)
+    {
+        var files = ReplicateDataFiles.Enumerate(rawDir);
+        if (files.Count == 0)
+        {
+            Console.Error.WriteLine($"Error: no instrument data files in {rawDir}.");
+            return null;
+        }
+
+        var first = files[0];
+        Console.WriteLine(
+            "No isolation scheme with windows was cached, which is normal for a DIA analysis "
+            + $"document. Reading the windows from {Path.GetFileName(first)}.");
+
+        var record = Ms2SignalReaders.Read(first, Console.WriteLine);
+        if (record.IsolationWindows.Count == 0)
+        {
+            Console.Error.WriteLine(
+                "Error: that file reported no repeating isolation windows, so there is no scheme to "
+                + "account against. A DDA acquisition has one window per spectrum and is not "
+                + "supported here.");
+            return null;
+        }
+
+        var name = $"Imported from {Path.GetFileNameWithoutExtension(first)}";
+        var scheme = new IsolationScheme(name, record.IsolationWindows);
+        Console.WriteLine($"Isolation scheme: {scheme.Describe()}");
+
+        try
+        {
+            var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
+            var catalog = IsolationSchemeCatalog.Load(path) ?? new IsolationSchemeCatalog();
+            catalog.AddDocumentScheme(name, scheme);
+            catalog.Save(path);
+            Console.WriteLine($"Cached it in {IsolationSchemeCatalog.FileName}.");
+        }
+        catch (IOException ex)
+        {
+            // Not fatal: the scheme is in hand, and re-reading one file next time costs seconds.
+            Console.WriteLine($"Could not cache the scheme: {ex.Message}");
+        }
+
+        return scheme;
+    }
+
     private static int CmdCompare(string[] args)
     {
         var opts = ParseOptions(args, multiValue: new HashSet<string>());
@@ -317,6 +514,7 @@ public static class Program
         "merge" => MergeHelp,
         "qc" => QcHelp,
         "ms2-signal" => Ms2SignalHelp,
+        "ion-accounting" => IonAccountingHelp,
         "compare" => CompareHelp,
         "config-template" => ConfigTemplateHelp,
         _ => UsageText,
@@ -431,6 +629,42 @@ public static class Program
             -c, --config <FILE>   YAML configuration (optional; QC report settings only)
                 --no-save-plots   Embed the plots only; do not write qc_plots/*.png
             -h, --help            Show this help
+        """;
+
+    private const string IonAccountingHelp = """
+        prism ion-accounting - Count the ions acquired, and the fraction assigned to a peptide
+
+        Usage: prism ion-accounting -d <output-dir> -r <raw-dir> --product-tolerance "10 ppm" [options]
+
+        Reads each replicate's instrument file once and reports, at MS1 and at MS2, how many
+        ions reached the detector and what fraction of them fall inside a region some peptide
+        of this analysis claims. Both halves are measured the same way - a scan's intensity
+        times its ion injection time - so the ratio is a genuine fraction.
+
+        Options:
+          -d, --dir <dir>                 Output directory of a finished run (required)
+          -r, --raw-dir <dir>             Directory holding the instrument files (required)
+              --product-tolerance <tol>   The document's product extraction window, as the +/-
+                                          tolerance it states: "10 ppm" or "0.4 m/z" (required)
+              --precursor-tolerance <tol> The document's precursor extraction window. Omitted,
+                                          only the MS2 half is computed - a guessed tolerance
+                                          would change the number with nothing to show it
+              --scheme <name>             Which scheme from isolation_schemes.xml; required
+                                          only when the file holds more than one
+              --force                     Recompute even when the cache matches
+              --max <n>                   Stop after n replicates, for a first look at a cohort
+                                          whose files are a terabyte on a network share
+              --lanes <n>                 Files to read at a time (default 8). Reading is 99.5%
+                                          of the cost and it is per file, so this is the one
+                                          setting that changes how long a cohort takes
+
+        Writes ion_accounting.parquet and ion_cycles.parquet into the output directory. The
+        cache is keyed on both tolerances, the isolation scheme, the selected protein lists
+        and a fingerprint of the instrument files, so a re-run with different settings
+        recomputes rather than replotting the previous numbers under a new caption.
+
+        Not part of `prism run`: a cohort is often a terabyte of instrument files on a
+        network share, and everything else in the pipeline reads one exported report.
         """;
 
     private const string CompareHelp = """

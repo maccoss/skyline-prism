@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.RawData;
 
@@ -28,6 +29,18 @@ namespace SkylinePrism.Core.Qc;
 public static class IonAccountingRun
 {
     /// <summary>
+    /// Concurrent instrument-file reads.
+    ///
+    /// <para>Eight because the read is what costs: measured on one 4.44 GB Thermo file, 206.7 s
+    /// total of which 204.5 s is inside the reader and 1.0 s is masking 465,307 claims against
+    /// 168,920 spectra. Per-spectrum decoding runs at about 817 spectra/s cold, and that figure is
+    /// the same from local disk as over the share to within the network's 2.6x - so the limit is
+    /// the decoding, not the storage, and lanes buy close to their count until the cores run out.
+    /// Sixteen logical processors was the machine this was measured on.</para>
+    /// </summary>
+    public const int DefaultLanes = 8;
+
+    /// <summary>
     /// Compute for every replicate in <paramref name="outputDir"/>, reusing the cache unless
     /// <paramref name="force"/> or the settings have changed. Null when the inputs to do it are
     /// missing, with the reason logged.
@@ -46,7 +59,7 @@ public static class IonAccountingRun
         IReadOnlyList<ProteinList> lists,
         IReadOnlyDictionary<string, string>? sampleTypes = null,
         Action<string>? log = null, int memoryBudgetMb = 0, bool force = false,
-        CancellationToken ct = default)
+        int maxReplicates = 0, int lanes = 0, CancellationToken ct = default)
     {
         if (productTolerance is null)
             throw new ArgumentNullException(nameof(productTolerance));
@@ -143,6 +156,17 @@ public static class IonAccountingRun
         var rows = new List<IonAccountingRow>();
         var cycles = new List<IonCycleRow>();
         var clock = Stopwatch.StartNew();
+        var read = 0;
+        var effectiveLanes = Math.Max(1, lanes > 0 ? lanes : DefaultLanes);
+        log?.Invoke(
+            $"    Reading {effectiveLanes} file(s) at a time; the merged_data pass stays on one "
+            + "thread.");
+
+        // The producer is this thread and it must stay the only one touching DuckDB. The workers
+        // only read instrument files, which is 99.5% of the cost.
+        using var gate = new SemaphoreSlim(effectiveLanes);
+        var pending = new List<Task>();
+        var sync = new object();
 
         ClaimedRegionLoader.ForEachSample(
             dataset, cols, scheme, productTolerance, precursorTolerance, classified.Classes,
@@ -151,26 +175,68 @@ public static class IonAccountingRun
                 ct.ThrowIfCancellationRequested();
                 if (!resolution.Matched.TryGetValue(sample, out var path))
                     return;
+                if (maxReplicates > 0 && read >= maxReplicates)
+                    return;
+                read++;
 
-                log?.Invoke($"  {sample}: {loaded.Describe()}");
+                // Blocks BEFORE the index is built, so at most `lanes` replicates' claims exist at
+                // once. Waiting after would let the producer run ahead of the readers and hold the
+                // whole cohort's geometry.
+                gate.Wait(ct);
 
-                // Built and walked and dropped, one replicate at a time. Holding every replicate's
-                // index would be the cohort's claims in memory at once.
                 var index = new ClaimedSignalIndex(loaded.Regions, classified.ListNames.Count);
                 var request = new IonAccountingRequest(index, scheme, classified.ListNames);
-                var record = IonAccountingReaders.Read(path, request, log, ct);
 
-                rows.Add(ToRow(sample, sampleTypes, path, record, loaded, classified.ListNames.Count));
-                foreach (var cycle in record.Cycles)
-                {
-                    cycles.Add(new IonCycleRow(
-                        sample, cycle.Index, cycle.RtStartMin, cycle.RtStopMin,
-                        cycle.Ms1Count, cycle.Ms2Count,
-                        cycle.Ms1Acquired, cycle.Ms2Acquired,
-                        cycle.Ms1Assigned, cycle.Ms2Assigned));
-                }
+                pending.Add(Task.Run(
+                    () =>
+                    {
+                        try
+                        {
+                            // Each file's lines are collected and emitted together. Interleaving
+                            // eight files' multi-line reports would make the log unreadable, and
+                            // this log is how a surprising fraction gets explained.
+                            var lines = new List<string> { $"  {sample}: {loaded.Describe()}" };
+                            var record = IonAccountingReaders.Read(
+                                path, request, line => lines.Add(line), ct);
+
+                            lock (sync)
+                            {
+                                foreach (var line in lines)
+                                    log?.Invoke(line);
+
+                                rows.Add(ToRow(
+                                    sample, sampleTypes, path, record, loaded,
+                                    classified.ListNames.Count));
+                                foreach (var cycle in record.Cycles)
+                                {
+                                    cycles.Add(new IonCycleRow(
+                                        sample, cycle.Index, cycle.RtStartMin, cycle.RtStopMin,
+                                        cycle.Ms1Count, cycle.Ms2Count,
+                                        cycle.Ms1Acquired, cycle.Ms2Acquired,
+                                        cycle.Ms1Assigned, cycle.Ms2Assigned));
+                                }
+
+                                // Written after EVERY replicate, not once at the end. This is the
+                                // longest operation in the product, and the first real run of it
+                                // was interrupted after an hour and left nothing behind at all. A
+                                // partial cache carries a settings key that stops matching once
+                                // more replicates are added, so the next run recomputes rather
+                                // than trusting a short file.
+                                SaveProgress(
+                                    outputDir, settingsKey, productText, precursorText, schemeText,
+                                    classified, rows, cycles);
+                            }
+                        }
+                        finally
+                        {
+                            gate.Release();
+                        }
+                    },
+                    ct));
             },
             memoryBudgetMb);
+
+        Task.WaitAll(pending.ToArray(), ct);
 
         // Replicates with no file of their own still get a row, so the plot can show a gap rather
         // than silently omitting an injection.
@@ -196,6 +262,26 @@ public static class IonAccountingRun
         IonAccountingStore.Write(outputDir, result);
         ReportTotals(result, clock, log);
         return result;
+    }
+
+    /// <summary>
+    /// Write what has been read so far, so an interrupted run is not a wasted one.
+    /// </summary>
+    private static void SaveProgress(
+        string outputDir, string settingsKey, string productText, string precursorText,
+        string schemeText, Ms2SignalPeptides.Classified classified,
+        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles)
+    {
+        try
+        {
+            IonAccountingStore.Write(outputDir, new IonAccountingResult(
+                settingsKey, productText, precursorText, schemeText, classified.ListNames,
+                classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles));
+        }
+        catch (IOException)
+        {
+            // A cache that cannot be written is not a reason to abandon the reads already done.
+        }
     }
 
     private static IonAccountingRow ToRow(
@@ -249,8 +335,17 @@ public static class IonAccountingRun
                 if (lines.Length > 1)
                 {
                     var header = lines[0].Split(',');
+                    // sample_id FIRST. The file carries both, and they are different things:
+                    // sample_id is the merged table's own "<replicate>__@__<batch>" key, which is
+                    // what ForEachSample yields, while sample is the bare replicate name. Keying on
+                    // the bare name matches nothing and the run silently produces no rows.
                     var column = Array.FindIndex(
-                        header, h => h.Trim().Equals("sample", StringComparison.OrdinalIgnoreCase));
+                        header, h => h.Trim().Equals("sample_id", StringComparison.OrdinalIgnoreCase));
+                    if (column < 0)
+                    {
+                        column = Array.FindIndex(
+                            header, h => h.Trim().Equals("sample", StringComparison.OrdinalIgnoreCase));
+                    }
                     if (column >= 0)
                     {
                         foreach (var line in lines.Skip(1))

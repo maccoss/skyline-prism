@@ -14,7 +14,7 @@ namespace SkylinePrism.Core.Visualization;
 /// Fixed sample-type colors match the Python palette: experimental #1f77b4, qc #ff7f0e,
 /// reference #d62728, unknown #7f7f7f.
 /// </summary>
-public static class PlotRenderer
+public static partial class PlotRenderer
 {
     // Canvas for the static QC-report PNGs. Sized so the (deliberately large) fonts below stay in
     // proportion and the image is still crisp when dropped into a figure or slide.
