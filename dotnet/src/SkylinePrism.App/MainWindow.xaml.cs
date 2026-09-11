@@ -1210,6 +1210,7 @@ public partial class MainWindow : Window
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
+            InvalidateMs2Signal();    // and a new accounting / acquired read for the MS2 signal pane
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             ShowVisualization(VizPane.Qc); // land on the plots when the run finishes

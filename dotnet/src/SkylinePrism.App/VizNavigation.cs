@@ -6,6 +6,7 @@ internal enum VizPane
     Qc = 0,
     Density = 1,
     DynamicRange = 2,
+    Ms2Signal = 3,
 }
 
 /// <summary>
@@ -39,6 +40,7 @@ internal static class VizNavigation
             (int)VizPane.Qc => VizPane.Qc,
             (int)VizPane.Density => VizPane.Density,
             (int)VizPane.DynamicRange => VizPane.DynamicRange,
+            (int)VizPane.Ms2Signal => VizPane.Ms2Signal,
             _ => null,   // nothing selected yet (-1), or a row added to the XAML and not to this enum
         };
     }

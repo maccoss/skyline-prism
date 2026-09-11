@@ -135,10 +135,13 @@ public partial class MainWindow
         QcPane.Visibility = pane == VizPane.Qc ? Visibility.Visible : Visibility.Collapsed;
         DensityPane.Visibility = pane == VizPane.Density ? Visibility.Visible : Visibility.Collapsed;
         RangePane.Visibility = pane == VizPane.DynamicRange ? Visibility.Visible : Visibility.Collapsed;
+        Ms2Pane.Visibility = pane == VizPane.Ms2Signal ? Visibility.Visible : Visibility.Collapsed;
 
         SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
 
-        if (pane == VizPane.Density && !_densityLoaded)
+        if (pane == VizPane.Ms2Signal)
+            await LoadMs2SignalAsync();
+        else if (pane == VizPane.Density && !_densityLoaded)
             await LoadDensitySamplesAsync();
         else if (pane == VizPane.DynamicRange)
         {

@@ -289,6 +289,7 @@
                         <ListBoxItem x:Name="QcNavItem" Content="QC Plots" Padding="10,7" />
                         <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
                         <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
+                        <ListBoxItem x:Name="Ms2NavItem" Content="MS2 signal" Padding="10,7" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -432,6 +433,33 @@
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
+                        </DockPanel>
+                        <DockPanel x:Name="Ms2Pane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="Ms2ViewCombo" Width="210"
+                                          SelectionChanged="OnMs2ViewChanged"
+                                          ToolTip="Per replicate: how much MS2 signal the run assigns, for the whole cohort. Across the gradient: the same quantity against retention time for one replicate, over the signal the instrument acquired.">
+                                    <ComboBoxItem Tag="Accounting">Assigned per replicate</ComboBoxItem>
+                                    <ComboBoxItem Tag="Profile">Across the gradient</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="Ms2ReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="Ms2ReplicateCombo" Width="240"
+                                          SelectionChanged="OnMs2ReplicateChanged"
+                                          ToolTip="Which replicate to profile. Rebuilding one is a scan of that replicate's slice of the merged data - a second or two - so switching is not free but is not slow either." />
+                                <TextBlock x:Name="Ms2BinLabel" Text="RT bin (min):" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <TextBox x:Name="Ms2BinBox" Width="46" Text="0.25" VerticalAlignment="Center"
+                                         LostFocus="OnMs2BinChanged" KeyDown="OnMs2BinKeyDown"
+                                         ToolTip="Retention-time bin width. A few acquisition cycles wide smooths the cycle-to-cycle sawtooth without hiding a real feature. Re-binning is free once the replicate is loaded." />
+                                <Button x:Name="Ms2ReloadButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
+                                        Click="OnMs2Reload"
+                                        ToolTip="Re-read the accounting and any acquired MS2 totals from the output directory above." />
+                                <TextBlock x:Name="Ms2StatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <sp:WpfPlot x:Name="Ms2Plot" />
                         </DockPanel>
                     </Grid>
                 </Grid>
