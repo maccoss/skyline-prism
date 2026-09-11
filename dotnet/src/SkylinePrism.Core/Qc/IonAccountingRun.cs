@@ -175,8 +175,14 @@ public static class IonAccountingRun
 
                 // Read the reusable replicates' traces NOW: the first incremental save rewrites
                 // ion_cycles.parquet from what is in memory, so anything not loaded is lost.
-                foreach (var sample in reusable.Keys)
-                    reusedCycles.AddRange(IonAccountingStore.ReadCycles(outputDir, sample));
+                //
+                // One read of the whole table, filtered here, rather than one read per sample: the
+                // file holds the cohort, so per-sample reads are quadratic in the replicate count -
+                // fine for the six this was first written against, and 192 reads of a 190,000-row
+                // table for a real one.
+                reusedCycles.AddRange(
+                    IonAccountingStore.ReadCycles(outputDir)
+                        .Where(c => reusable.ContainsKey(c.Sample)));
 
                 log?.Invoke(
                     $"  Ion accounting: the cache covers {reusable.Count:N0} replicate(s) of these "
