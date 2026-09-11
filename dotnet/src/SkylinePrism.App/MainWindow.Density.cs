@@ -72,27 +72,81 @@ public partial class MainWindow
     {
         try
         {
-            // A TabControl also receives the SelectionChanged of every ComboBox inside it, so only act on
-            // the tab strip's own event.
+            // A TabControl receives the SelectionChanged of everything inside it - every ComboBox, and
+            // now the Analysis tab strip and the visualization nav rail as well - so only act on the
+            // outer strip's own event. The nav rail has its own handler below.
             if (!ReferenceEquals(e.Source, MainTabs))
                 return;
-            // Following Skyline's selection polls, so it runs only while its tab is actually on screen.
-            SetRangeFollowActive(ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab));
-
-            if (ReferenceEquals(MainTabs.SelectedItem, DensityTab) && !_densityLoaded)
-                await LoadDensitySamplesAsync();
-            else if (ReferenceEquals(MainTabs.SelectedItem, DynamicRangeTab))
-            {
-                // Marked shown before loading, so a load that FAILS still leaves the level combo live -
-                // switching level is how a user gets out of an error, and it used to be inert afterwards.
-                _rangeTabShown = true;
-                if (!_rangeLoaded)
-                    await LoadDynamicRangeAsync();
-            }
+            await ShowSelectedVizPaneAsync();
         }
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnMainTabChanged), ex);
+        }
+    }
+
+    private async void OnVizNavChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            // Nothing below the nav rail exists yet during InitializeComponent, and a Selector raises
+            // SelectionChanged from EndInit if its selection is set in XAML. The rail deliberately sets
+            // none - the constructor does it - but the guard is what makes that safe to change later.
+            // See XamlInitializationOrderTests.
+            if (!IsInitialized)
+                return;
+            await ShowSelectedVizPaneAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnVizNavChanged), ex);
+        }
+    }
+
+    /// <summary>Bring one of the Analysis tabs to the front, selecting the Analysis group first.</summary>
+    private void ShowAnalysis(TabItem tab)
+    {
+        MainTabs.SelectedItem = AnalysisTab;
+        AnalysisTabs.SelectedItem = tab;
+    }
+
+    /// <summary>
+    /// Bring one of the visualization panes to the front. The rail is set BEFORE the outer tab so the
+    /// last event raised is the one that finds both in their final state and does the pane's load;
+    /// the other order works too, but loads against a selection that is about to change.
+    /// </summary>
+    private void ShowVisualization(VizPane pane)
+    {
+        VizNav.SelectedIndex = (int)pane;
+        MainTabs.SelectedItem = VisualizationTab;
+    }
+
+    /// <summary>
+    /// Show the pane the nav rail names and start whatever it needs. Driven by both the outer tab and
+    /// the rail, because a pane is only really on screen when both agree - see <see cref="VizNavigation"/>.
+    /// </summary>
+    private async Task ShowSelectedVizPaneAsync()
+    {
+        var pane = VizNavigation.Current(
+            ReferenceEquals(MainTabs.SelectedItem, VisualizationTab), VizNav.SelectedIndex);
+
+        // Switched by visibility rather than by swapping content, so each pane keeps what the user left
+        // on it - the zoom on a plot, a ticked replicate set, the matrices already read off disk.
+        QcPane.Visibility = pane == VizPane.Qc ? Visibility.Visible : Visibility.Collapsed;
+        DensityPane.Visibility = pane == VizPane.Density ? Visibility.Visible : Visibility.Collapsed;
+        RangePane.Visibility = pane == VizPane.DynamicRange ? Visibility.Visible : Visibility.Collapsed;
+
+        SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
+
+        if (pane == VizPane.Density && !_densityLoaded)
+            await LoadDensitySamplesAsync();
+        else if (pane == VizPane.DynamicRange)
+        {
+            // Marked shown before loading, so a load that FAILS still leaves the level combo live -
+            // switching level is how a user gets out of an error, and it used to be inert afterwards.
+            _rangeTabShown = true;
+            if (!_rangeLoaded)
+                await LoadDynamicRangeAsync();
         }
     }
 
@@ -631,8 +685,7 @@ public partial class MainWindow
         DensityStatusText.Text = message;
         DensityHoverText.Text = "";
         DensityPlot.Reset();
-        DensityPlot.Plot.Title(message);
-        PlotRenderer.StyleQcPlot(DensityPlot.Plot);
+        PlotRenderer.DrawEmptyState(DensityPlot.Plot, message);
         DensityPlot.Refresh();
     }
 

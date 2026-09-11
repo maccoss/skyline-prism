@@ -14,14 +14,32 @@ an open document, and the two-way selection on the Dynamic Range plot).
 
 ## Tabs
 
+The window splits in two at the top. **Analysis** is about producing results; **Visualization** is
+about reading them. The output directory, **Run PRISM** and **Stop** sit above both, because they
+apply either way.
+
+### Analysis
+
 | Tab | What it is for |
 |-----|----------------|
 | **Inputs** | The documents/reports to process, one per batch, each with a batch label |
-| **Settings** | Pipeline options; **Run PRISM**, **Stop**, and **Show command line** |
+| **Settings** | Pipeline options; **Show command line** |
+| **Log** | The full run log — the first place to look when something is slower or emptier than expected |
+
+### Visualization
+
+Chosen from the list down the left-hand side rather than from a tab strip, because the plots are
+expected to keep arriving and a strip stops being readable at around eight of them. Each pane keeps
+its own state — zoom, ticked replicates, matrices already read — while you are on another one.
+
+| Pane | What it is for |
+|------|----------------|
 | **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
 | **Spectrum density** | How many precursors were detected in each DIA spectrum of a run |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
-| **Log** | The full run log — the first place to look when something is slower or emptier than expected |
+
+A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
+so an empty result cannot be misread as a flat measurement.
 
 ---
 

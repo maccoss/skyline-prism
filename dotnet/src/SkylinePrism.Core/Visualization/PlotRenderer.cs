@@ -140,6 +140,31 @@ public static class PlotRenderer
     }
 
     /// <summary>
+    /// A plot with nothing in it but a sentence saying why: the one empty state every panel uses.
+    /// </summary>
+    /// <remarks>
+    /// <para>The axes are removed, not merely left at their defaults. An empty panel that still shows
+    /// a numbered grid is asking to be read as data - it looks like a measurement that came out flat
+    /// or zero - and the numbers on it are whatever the axis limits happened to be, which is either
+    /// ScottPlot's default range or, worse, the range left behind by the last plot drawn on the same
+    /// reused <see cref="Plot"/>.</para>
+    ///
+    /// <para>It exists because the three panels had drifted into three different empty states: the QC
+    /// panel drew nothing at all before the first run, leaving a raw unstyled default; it used
+    /// <c>Clear()</c> plus a chrome reset, which restores tick generators and labels but never the
+    /// axis LIMITS, once a run had happened; and the density and dynamic-range panels reset the whole
+    /// control and re-applied the style. Only the last of those was deliberate.</para>
+    /// </remarks>
+    public static void DrawEmptyState(Plot plt, string message, double fontScale = 1.0)
+    {
+        plt.Clear();
+        StyleQcPlot(plt, fontScale);
+        plt.Axes.Frameless();
+        plt.HideGrid();
+        plt.Axes.Title.Label.Text = message;
+    }
+
+    /// <summary>
     /// Style a color bar to match the axes. A color bar is a plot item, not part of the axis
     /// system, so <see cref="StyleQcPlot"/> does not reach it and it would otherwise render in the
     /// backend's default family next to axes that do not.
