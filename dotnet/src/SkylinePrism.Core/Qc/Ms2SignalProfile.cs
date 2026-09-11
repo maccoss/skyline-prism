@@ -103,13 +103,19 @@ public sealed class Ms2SignalProfile
     /// read - in which case the acquired trace is absent rather than zero.</param>
     /// <param name="binWidthMin">Bin width. The default is a few acquisition cycles wide on a typical
     /// DIA method, which smooths the cycle-to-cycle sawtooth without hiding a real feature.</param>
+    /// <summary>
+    /// Default retention-time bin width. A few acquisition cycles wide on a typical DIA method,
+    /// which smooths the cycle-to-cycle sawtooth without hiding a real feature.
+    /// </summary>
+    public const double DefaultBinWidthMin = 0.25;
+
     public static Ms2SignalProfile Build(
         string sample,
         IReadOnlyList<Ms2SignalUnion.MergedRegion> merged,
         IReadOnlyList<Ms2Cycle>? cycles,
         IReadOnlyList<string> listNames,
         IReadOnlyList<string> listColors,
-        double binWidthMin = 0.25)
+        double binWidthMin = DefaultBinWidthMin)
     {
         if (binWidthMin <= 0)
             throw new ArgumentOutOfRangeException(

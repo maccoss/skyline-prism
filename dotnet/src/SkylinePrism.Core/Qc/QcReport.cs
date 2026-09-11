@@ -258,6 +258,8 @@ public static class QcReport
             // The acquired total needs the instrument files, and calling this that would turn unknown
             // coverage into apparently complete coverage.
             "Signal Skyline Integrated for This Document's Targets", images));
+
+        AddMs2ProfileSection(sections, outputDir, result, scheme, tolerance, lists, savePlots, plotsDir, log);
         return sections;
     }
 
@@ -272,6 +274,82 @@ public static class QcReport
     /// with no <c>qc_report.html</c> to show for it. Every other failure in this section logs and
     /// carries on; so does this one now, one list at a time so the resolvable ones survive.</para>
     /// </summary>
+    /// <summary>
+    /// MS2 signal against retention time, for three representative replicates rather than all of
+    /// them: 192 panels is a section nobody scrolls, and the question these answer - does the
+    /// assigned signal track the acquired signal across the gradient, or fall away somewhere - is
+    /// answered by the extremes and the middle.
+    /// </summary>
+    /// <remarks>
+    /// Each panel costs one scan of that replicate's slice of merged_data, so this is three scans,
+    /// not a cohort pass. A replicate that fails to profile is skipped with a log line rather than
+    /// failing the report - the accounting section above is unaffected by any of this.
+    /// </remarks>
+    private static void AddMs2ProfileSection(
+        List<PlotSection> sections,
+        string outputDir,
+        Ms2SignalAccounting.Result result,
+        IsolationScheme? scheme,
+        ProductMassTolerance? tolerance,
+        IReadOnlyList<ProteinList> lists,
+        bool savePlots,
+        string plotsDir,
+        Action<string>? log)
+    {
+        // Rebuilding a profile needs the same two settings the accounting needed. A cached-results
+        // replot has neither, and cannot scan merged_data anyway - so the profiles are simply absent
+        // there, while the accounting bars above still show.
+        if (scheme is null || tolerance is null)
+            return;
+
+        var chosen = Ms2SignalProfiler.ChooseRepresentatives(result);
+        if (chosen.Count == 0)
+            return;
+
+        var images = new List<PlotImage>();
+        foreach (var (sample, role) in chosen)
+        {
+            try
+            {
+                var profile = Ms2SignalProfiler.ForReplicate(
+                    outputDir, sample, scheme, tolerance, lists,
+                    measure: result.Measure, log: null);
+                if (profile is null)
+                    continue;
+
+                var replicate = RawData.ReplicateDataFiles.ReplicateOf(sample);
+                var png = PlotRenderer.Ms2RtProfilePng(profile, $"{replicate} ({role})");
+                if (savePlots && png.Length > 0)
+                {
+                    Directory.CreateDirectory(plotsDir);
+                    File.WriteAllBytes(
+                        Path.Combine(plotsDir, $"ms2_signal_profile_{role.Replace(' ', '_')}.png"), png);
+                }
+
+                var row = result.Rows.FirstOrDefault(r => r.Sample == sample);
+                var detail = row is not null && double.IsFinite(row.AcquiredFraction)
+                    ? $"{row.AcquiredFraction:P1} of acquired MS2 assigned to a peptide"
+                    : "assigned signal only - no instrument file has been read for this replicate";
+                images.Add(new PlotImage($"{replicate} ({role}): {detail}", png));
+            }
+            catch (Exception ex)
+            {
+                // One replicate that will not profile must not cost the other two, nor the report.
+                log?.Invoke($"  MS2 profile for {sample} failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        if (images.Count == 0)
+            return;
+
+        var ranked = result.HasAcquired
+            ? "ranked by the fraction of acquired MS2 they assign"
+            : "ranked by assigned signal, since no instrument files have been read - a weaker "
+              + "ordering, because a replicate can rank low simply for having been injected lighter";
+        sections.Add(new PlotSection(
+            $"MS2 Signal Across the Gradient ({ranked})", images));
+    }
+
     private static IReadOnlyList<ProteinList> ResolveMs2Lists(
         IEnumerable<string>? names, IEnumerable<string>? memberFiles, Action<string>? log)
     {

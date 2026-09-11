@@ -25,6 +25,18 @@ as the GitHub Release description and fails if it is missing.
   report. `--max` reads the first N files for a spot check. Replicates are matched to files on the
   file stem, which handles the prefixes acquisition software adds.
 
+  In the Skyline tool the same thing is a tickbox under **MS2 signal accounting** on the Settings
+  tab - "read the instrument files for the acquired MS2 total" - plus the directory holding them.
+  The read happens at the end of the run, just before the QC report, so that run's own report has
+  the fraction in it.
+
+- **MS2 signal against retention time, for three replicates.** A new QC report section plots
+  acquired, assigned and per-protein-list signal across the gradient for the best, median and worst
+  replicate - which answers the question the bar plot cannot: does the assigned signal track the
+  acquired signal all the way along, or fall away somewhere in particular. Three rather than all of
+  them, because 192 panels is a section nobody scrolls; ranked by acquired fraction when a
+  denominator exists and by assigned signal when it does not, and the heading says which.
+
   Without it nothing changes and no number is wrong - the plot shows assigned signal, and the
   caption now says explicitly that it is not a fraction of what was acquired, so the bars cannot be
   misread as full coverage. A replicate whose file could not be read keeps no denominator rather

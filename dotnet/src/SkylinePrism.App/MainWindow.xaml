@@ -247,6 +247,19 @@
                                               Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
                                               ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
                                 </StackPanel>
+                                <StackPanel x:Name="Ms2AcquiredRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
+                                    <TextBlock Text="    Acquired:" Width="230" VerticalAlignment="Center" Foreground="#444" />
+                                    <CheckBox x:Name="Ms2AcquiredCheck" VerticalAlignment="Center"
+                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
+                                              ToolTipService.ShowOnDisabled="True"
+                                              Content="read the instrument files for the acquired MS2 total"
+                                              ToolTip="Reads each replicate's raw data file to find how much MS2 the instrument actually acquired - the denominator no Skyline export carries. Without it the plot shows assigned signal only and cannot state a fraction. Reads the files after the pipeline finishes, about a second per file, and records the per-cycle trace at the same time so the retention-time profile has its acquired band." />
+                                    <TextBox x:Name="Ms2RawDirBox" Width="240" VerticalAlignment="Center" Margin="8,0,0,0"
+                                             ToolTipService.ShowOnDisabled="True"
+                                             ToolTip="Directory holding this cohort's instrument data files (.raw, .mzML, .d). Replicates are matched to files on the file stem, so the acquisition prefixes Skyline does not record are handled." />
+                                    <Button x:Name="Ms2RawDirBrowse" Content="Browse..." Padding="10,2" Margin="6,0,0,0"
+                                            Click="OnBrowseMs2RawDir" />
+                                </StackPanel>
                                 <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
