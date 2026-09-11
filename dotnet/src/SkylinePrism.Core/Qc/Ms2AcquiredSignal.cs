@@ -31,6 +31,18 @@ public static class Ms2AcquiredSignal
     /// <summary>One row per replicate that was read, successfully or not.</summary>
     public const string FileName = "ms2_signal.parquet";
 
+    /// <summary>
+    /// Acquired signal per acquisition cycle, long format: one row per cycle per replicate.
+    /// </summary>
+    /// <remarks>
+    /// Written on the same pass that computes the totals, for every replicate, even though the only
+    /// thing that reads it shows one replicate at a time. Capturing a cycle is free while the file is
+    /// already open and decoded; going back for it means re-reading the cohort, which on the one this
+    /// was written against is ~1.1 TB over a share. The cost of keeping it is about 3,000 rows per
+    /// replicate - a few MB zstd across 192 of them.
+    /// </remarks>
+    public const string CyclesFile = "ms2_cycles.parquet";
+
     /// <param name="TotalMs2Signal">Acquired MS2 total ion current over the run. LINEAR, NaN when the
     /// read did not succeed.</param>
     public sealed record Entry(
@@ -115,6 +127,7 @@ public static class Ms2AcquiredSignal
             sampleByPath[matched[sample]] = sample;
 
         var entries = new List<Entry>();
+        var cyclesBySample = new Dictionary<string, IReadOnlyList<Ms2Cycle>>(StringComparer.Ordinal);
         var gate = new object();
         Ms2SignalReaders.ReadMany(
             ordered.Select(s => matched[s]),
@@ -135,7 +148,11 @@ public static class Ms2AcquiredSignal
                     record.CycleModel.ToString());
                 // ReadMany calls this from worker threads.
                 lock (gate)
+                {
                     entries.Add(entry);
+                    if (record.Cycles.Count > 0)
+                        cyclesBySample[sample] = record.Cycles;
+                }
                 if (record.Status != Ms2ReadStatus.Ok)
                     log?.Invoke($"    {Path.GetFileName(record.DataPath)}: {record.Status} "
                         + $"({record.Message})");
@@ -148,6 +165,7 @@ public static class Ms2AcquiredSignal
         entries = entries.OrderBy(e => order.TryGetValue(e.Sample, out var i) ? i : int.MaxValue).ToList();
 
         Write(outputDir, entries);
+        WriteCycles(outputDir, entries.Select(e => e.Sample), cyclesBySample);
         var usable = entries.Count(e => e.IsUsable);
         log?.Invoke($"  Acquired MS2 signal read for {usable:N0} of {entries.Count:N0} file(s); "
             + $"wrote {FileName}.");
@@ -176,6 +194,106 @@ public static class Ms2AcquiredSignal
         ParquetWideWriter.Write(
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), entries.Count);
+    }
+
+    /// <summary>
+    /// Persist the per-cycle traces, in the caller's replicate order, as one long table.
+    /// </summary>
+    public static void WriteCycles(
+        string outputDir,
+        IEnumerable<string> sampleOrder,
+        IReadOnlyDictionary<string, IReadOnlyList<Ms2Cycle>> cyclesBySample)
+    {
+        Directory.CreateDirectory(outputDir);
+        var samples = new List<string>();
+        var index = new List<long>();
+        var rtStart = new List<double>();
+        var rtStop = new List<double>();
+        var counts = new List<long>();
+        var signal = new List<double>();
+
+        foreach (var sample in sampleOrder)
+        {
+            if (!cyclesBySample.TryGetValue(sample, out var cycles))
+                continue;
+            foreach (var cycle in cycles)
+            {
+                samples.Add(sample);
+                index.Add(cycle.Index);
+                rtStart.Add(cycle.RtStartMin);
+                rtStop.Add(cycle.RtStopMin);
+                counts.Add(cycle.Ms2Count);
+                signal.Add(cycle.Ms2Signal);
+            }
+        }
+
+        var meta = new List<ParquetWideWriter.MetaColumn>
+        {
+            ParquetWideWriter.Strings("sample", samples.ToArray()),
+            ParquetWideWriter.Longs("cycle", index.ToArray()),
+            ParquetWideWriter.Doubles("rt_start_min", rtStart.ToArray()),
+            ParquetWideWriter.Doubles("rt_stop_min", rtStop.ToArray()),
+            ParquetWideWriter.Longs("ms2_count", counts.ToArray()),
+            ParquetWideWriter.Doubles("ms2_signal", signal.ToArray()),
+        };
+        ParquetWideWriter.Write(
+            Path.Combine(outputDir, CyclesFile), meta,
+            Array.Empty<string>(), Array.Empty<double[]>(), samples.Count);
+    }
+
+    /// <summary>
+    /// The cycle trace for one replicate, in acquisition order, or empty when none was recorded.
+    /// </summary>
+    public static IReadOnlyList<Ms2Cycle> ReadCycles(string outputDir, string sample)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        if (!File.Exists(path))
+            return Array.Empty<Ms2Cycle>();
+        try
+        {
+            using var reader = ParquetColumnReader.Open(path);
+            if (reader.RowCount == 0 || !reader.HasColumn("sample"))
+                return Array.Empty<Ms2Cycle>();
+
+            var samples = reader.ReadStrings("sample");
+            var index = Longs(reader, "cycle", samples.Length);
+            var rtStart = Doubles(reader, "rt_start_min", samples.Length);
+            var rtStop = Doubles(reader, "rt_stop_min", samples.Length);
+            var counts = Longs(reader, "ms2_count", samples.Length);
+            var signal = Doubles(reader, "ms2_signal", samples.Length);
+
+            var cycles = new List<Ms2Cycle>();
+            for (var i = 0; i < samples.Length; i++)
+                if (string.Equals(samples[i], sample, StringComparison.Ordinal))
+                    cycles.Add(new Ms2Cycle(
+                        (int)index[i], rtStart[i], rtStop[i], (int)counts[i], signal[i]));
+            return cycles;
+        }
+        catch (Exception)
+        {
+            // Same contract as Read: a trace that cannot be read costs the acquired band on one
+            // plot, never the report.
+            return Array.Empty<Ms2Cycle>();
+        }
+    }
+
+    /// <summary>Replicates that have a cycle trace, for a picker that should only offer those.</summary>
+    public static IReadOnlyList<string> SamplesWithCycles(string outputDir)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        if (!File.Exists(path))
+            return Array.Empty<string>();
+        try
+        {
+            using var reader = ParquetColumnReader.Open(path);
+            if (reader.RowCount == 0 || !reader.HasColumn("sample"))
+                return Array.Empty<string>();
+            return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToList();
+        }
+        catch (Exception)
+        {
+            return Array.Empty<string>();
+        }
     }
 
     /// <summary>Every persisted entry, or an empty list when the file is absent or unreadable.</summary>

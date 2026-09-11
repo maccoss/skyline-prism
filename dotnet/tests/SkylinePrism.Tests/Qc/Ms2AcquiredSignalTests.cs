@@ -88,6 +88,57 @@ public class Ms2AcquiredSignalTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
+    /// <summary>
+    /// Cycles are captured on the same pass as the totals, for every replicate, because going back
+    /// for them means re-reading the cohort - ~1.1 TB on the one this was written against. So the
+    /// round trip has to hold, and it has to keep replicates separable.
+    /// </summary>
+    [Fact]
+    public void CyclesRoundTripAndStaySeparatedByReplicate()
+    {
+        var dir = NewDir();
+        try
+        {
+            var cycles = new Dictionary<string, IReadOnlyList<Ms2Cycle>>
+            {
+                ["A__@__p1"] = new[]
+                {
+                    new Ms2Cycle(0, 0.0, 0.5, 12, 1e6),
+                    new Ms2Cycle(1, 0.5, 1.0, 11, 2e6),
+                },
+                ["B__@__p1"] = new[] { new Ms2Cycle(0, 0.0, 0.5, 9, 3e6) },
+            };
+            Ms2AcquiredSignal.WriteCycles(dir, new[] { "A__@__p1", "B__@__p1" }, cycles);
+
+            var a = Ms2AcquiredSignal.ReadCycles(dir, "A__@__p1");
+            Assert.Equal(2, a.Count);
+            Assert.Equal(0, a[0].Index);
+            Assert.Equal(0.5, a[0].RtStopMin, 6);
+            Assert.Equal(2e6, a[1].Ms2Signal, 3);
+            Assert.Equal(11, a[1].Ms2Count);
+
+            Assert.Single(Ms2AcquiredSignal.ReadCycles(dir, "B__@__p1"));
+            Assert.Empty(Ms2AcquiredSignal.ReadCycles(dir, "C__@__p1"));
+
+            Assert.Equal(
+                new[] { "A__@__p1", "B__@__p1" },
+                Ms2AcquiredSignal.SamplesWithCycles(dir).OrderBy(x => x, StringComparer.Ordinal));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void AbsentCyclesReadAsEmptyRatherThanThrowing()
+    {
+        var dir = NewDir();
+        try
+        {
+            Assert.Empty(Ms2AcquiredSignal.ReadCycles(dir, "A__@__p1"));
+            Assert.Empty(Ms2AcquiredSignal.SamplesWithCycles(dir));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Fact]
     public void AnAbsentFileReadsAsNothingRatherThanThrowing()
     {
