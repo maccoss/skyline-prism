@@ -51,10 +51,7 @@ public sealed record IonAccountingRow(
         Implausible(MeanMs1IonsPerScan) || Implausible(MeanMs2IonsPerScan);
 
     private static bool Implausible(double meanPerScan) =>
-        double.IsFinite(meanPerScan)
-        && meanPerScan > 0
-        && (meanPerScan >= IonAccountingRecord.MaxPlausibleIonsPerScan
-            || meanPerScan < IonAccountingRecord.MinPlausibleIonsPerScan);
+        IonAccountingRecord.IsIonScaleImplausible(meanPerScan);
 
     /// <summary>Whether this row carries numbers worth plotting.</summary>
     public bool IsUsable => Status == Ms2ReadStatus.Ok && (Ms1Acquired > 0 || Ms2Acquired > 0);

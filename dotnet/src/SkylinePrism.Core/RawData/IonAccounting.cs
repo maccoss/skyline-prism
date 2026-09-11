@@ -191,10 +191,17 @@ public sealed record IonAccountingRecord(
     /// <summary>A mean below this is not a measurement. See <see cref="IonScaleImplausible"/>.</summary>
     public const double MinPlausibleIonsPerScan = 1.0;
 
-    private static bool Implausible(double meanPerScan) =>
+    /// <summary>
+    /// Whether a mean ions-per-scan is outside what an instrument can hold. One implementation,
+    /// called by both this record and the cached row - two copies of a threshold rule drift, and the
+    /// drift would be silent because neither copy fires on healthy data.
+    /// </summary>
+    public static bool IsIonScaleImplausible(double meanPerScan) =>
         double.IsFinite(meanPerScan)
         && meanPerScan > 0
         && (meanPerScan >= MaxPlausibleIonsPerScan || meanPerScan < MinPlausibleIonsPerScan);
+
+    private static bool Implausible(double meanPerScan) => IsIonScaleImplausible(meanPerScan);
 
     /// <summary>A record standing for a read that did not happen, so callers never see a null.</summary>
     public static IonAccountingRecord Unavailable(
