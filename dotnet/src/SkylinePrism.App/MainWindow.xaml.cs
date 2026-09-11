@@ -1313,6 +1313,14 @@ public partial class MainWindow : Window
         // Both plot tabs read their inputs from this directory.
         InvalidateDensity();
         InvalidateDynamicRange();
+
+        // Whether the Ion accounting pane exists AT ALL depends on this directory carrying measured
+        // ion accounting, so the rail has to be re-checked here and not only when a pane changes -
+        // otherwise pointing an already-open Visualization tab at a measured directory leaves the
+        // entry hidden with nothing to suggest it should be there. Guarded because a TextChanged can
+        // reach here before the rail exists.
+        if (IsInitialized)
+            UpdateIonNavVisibility();
     }
 
     /// <summary>
