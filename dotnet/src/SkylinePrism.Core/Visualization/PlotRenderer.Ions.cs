@@ -90,7 +90,13 @@ public static partial class PlotRenderer
             {
                 Position = i,
                 Value = Finite(assignedOf(rows[i])) / scale,
-                FillColor = GroupColor(rows[i].SampleType, i),
+                // GroupColor cycles a palette for an unrecognized type, which is right when the
+                // colours mean something and wrong here: a cohort with no sample types is one
+                // category, and a rainbow across it reads as several. Cycle only on a type that is
+                // present and unknown to GroupColor.
+                FillColor = string.IsNullOrWhiteSpace(rows[i].SampleType)
+                    ? Color.FromHex(TypeColors["experimental"])
+                    : GroupColor(rows[i].SampleType, i),
                 LineWidth = 0,
                 Size = 0.85,
             });
@@ -103,7 +109,9 @@ public static partial class PlotRenderer
             var key = plt.Add.Marker(double.NaN, double.NaN);
             key.MarkerStyle.Shape = MarkerShape.FilledSquare;
             key.MarkerStyle.Size = 14;
-            key.MarkerStyle.FillColor = GroupColor(type, 0);
+            key.MarkerStyle.FillColor = string.IsNullOrWhiteSpace(type)
+                ? Color.FromHex(TypeColors["experimental"])
+                : GroupColor(type, 0);
             key.MarkerStyle.LineWidth = 0;
             key.LegendText = string.IsNullOrWhiteSpace(type)
                 ? "assigned to a peptide"
@@ -113,7 +121,7 @@ public static partial class PlotRenderer
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel($"Replicate (n = {rows.Count:N0})");
         plt.YLabel($"{level.ToString().ToUpperInvariant()} ions{unit}");
-        HideCategoryTicks(plt, rows.Count);
+        LabelCategoryTicks(plt, rows.Select(r => r.Sample).ToArray());
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, WithIonFraction(title, result, level), fontScale);
         plt.Axes.SetLimits(-0.7, rows.Count - 0.3, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
@@ -176,10 +184,15 @@ public static partial class PlotRenderer
     /// interchangeable with their ratio.
     /// </summary>
     /// <remarks>
-    /// The absolute traces are dominated by the elution envelope - both rise and fall together - so a
-    /// stretch where the analysis explains little of what was acquired is invisible in them and
-    /// obvious here. The axis is fixed to 0-100%: a fraction is bounded, and letting the axis
-    /// autoscale to a 4% maximum makes a bad run look like a full one.
+    /// <para>The absolute traces are dominated by the elution envelope - both rise and fall together
+    /// - so a stretch where the analysis explains little of what was acquired is invisible in them
+    /// and obvious here.</para>
+    /// <para><b>The axis starts at zero and fits the data above it.</b> Pinning it to 0-100% was
+    /// tried first, on the reasoning that a fraction is bounded and an autoscaled 4% maximum makes a
+    /// bad run look like a full one. On real data that reasoning fails its own test: at 3.4% the
+    /// trace sits on the baseline and no structure is visible, which is the one thing this plot
+    /// exists to show. What deceives is a non-zero ORIGIN, not a fitted top - so the origin is fixed
+    /// at zero, the tick labels state the scale, and the dashed whole-run line carries the figure.</para>
     /// </remarks>
     public static void DrawIonFractionProfile(
         Plot plt, IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
@@ -224,8 +237,12 @@ public static partial class PlotRenderer
         plt.YLabel($"Assigned share of acquired {level.ToString().ToUpperInvariant()} ions (%)");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
+        // Zero origin always; the top fits the data, with a floor so a near-zero run does not get an
+        // absurdly magnified axis, and a ceiling because a fraction cannot exceed 100%.
+        var tallest = Math.Max(points.Max(p => p.Fraction), overall);
+        var top = Math.Min(100.0, Math.Max(MinimumFractionAxisTop, tallest * 1.25));
         plt.Axes.SetLimits(
-            points[0].RtMin - binMinutes, points[^1].RtMin + binMinutes, 0, 100);
+            points[0].RtMin - binMinutes, points[^1].RtMin + binMinutes, 0, top);
     }
 
     /// <summary>PNG of <see cref="DrawIonAccounting"/>, for the QC report.</summary>
@@ -260,6 +277,12 @@ public static partial class PlotRenderer
 
     /// <summary>One retention-time bin's totals. Internal so the conservation rule below can be
     /// asserted on its own numbers rather than read back off a rendered plot.</summary>
+    /// <summary>
+    /// The smallest top the share axis will use, in percent. Below this the plot magnifies noise: a
+    /// run assigning a fraction of a percent has nothing to show and should look like it.
+    /// </summary>
+    private const double MinimumFractionAxisTop = 5.0;
+
     internal readonly record struct CycleBin(double RtMin, double Acquired, double Assigned);
 
     /// <summary>
@@ -356,13 +379,43 @@ public static partial class PlotRenderer
     }
 
     /// <summary>
-    /// Category axes with more entries than fit: the labels are dropped rather than overlapped. A
-    /// 192-replicate cohort cannot show a name per bar, and the hover readout names them instead.
+    /// Name the bars, or label nothing at all - but never leave the numeric ticks.
     /// </summary>
-    private static void HideCategoryTicks(Plot plt, int count)
+    /// <remarks>
+    /// A bar chart's x positions are category indices, so the default generator prints -0.5, 0, 0.5
+    /// and so on: numbers that look like data and mean nothing. Few enough replicates get their own
+    /// names; too many get an empty axis, because a 192-replicate cohort cannot show a name per bar
+    /// and overlapping labels are worse than none.
+    /// </remarks>
+    private static void LabelCategoryTicks(Plot plt, IReadOnlyList<string> samples)
     {
-        if (count <= 24)
+        if (samples.Count > MaxNamedCategories)
+        {
+            plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.EmptyTickGenerator();
             return;
-        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.EmptyTickGenerator();
+        }
+
+        var ticks = new ScottPlot.Tick[samples.Count];
+        for (var i = 0; i < samples.Count; i++)
+            ticks[i] = new ScottPlot.Tick(i, ShortSampleName(samples[i]));
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(ticks);
+        plt.Axes.Bottom.TickLabelStyle.Rotation = -45;
+        plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.UpperRight;
+        // Rotated labels do not enlarge the axis on their own, so without this they are drawn up
+        // into the data area and across the bars they name.
+        plt.Axes.Bottom.MinimumSize = 150;
+    }
+
+    /// <summary>Beyond this many bars a name per bar cannot be read.</summary>
+    private const int MaxNamedCategories = 16;
+
+    /// <summary>
+    /// The replicate half of a PRISM sample id. The batch half is the same for every replicate of a
+    /// document and is what makes these labels too long to read.
+    /// </summary>
+    private static string ShortSampleName(string sample)
+    {
+        var i = sample.IndexOf("__@__", StringComparison.Ordinal);
+        return i < 0 ? sample : sample[..i];
     }
 }

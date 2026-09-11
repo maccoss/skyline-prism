@@ -304,12 +304,21 @@ public static class IonAccountingStore
 
             var lists = ReadLists(outputDir, out var listNames);
 
+            // Sample type is NOT in the settings key - it cannot change a number - so a cache
+            // measured before the types were read would keep blank ones forever, and the only way
+            // to colour a bar would be to re-read every instrument file. Filled in here instead,
+            // from the metadata every run writes. A type already in the file wins.
+            var metadataTypes = SampleTypes(outputDir);
+
             var rows = new List<IonAccountingRow>(samples.Length);
             for (var i = 0; i < samples.Length; i++)
             {
                 var perList = lists.GetValueOrDefault(samples[i]);
+                var type = string.IsNullOrWhiteSpace(types[i])
+                    ? metadataTypes.GetValueOrDefault(samples[i], "")
+                    : types[i];
                 rows.Add(new IonAccountingRow(
-                    samples[i], types[i], files[i],
+                    samples[i], type, files[i],
                     Enum.TryParse<Ms2ReadStatus>(statuses[i], out var status)
                         ? status
                         : Ms2ReadStatus.Failed,
@@ -396,6 +405,49 @@ public static class IonAccountingStore
         {
             return Array.Empty<string>();
         }
+    }
+
+    /// <summary>
+    /// Sample type per sample id, from <c>sample_metadata.csv</c>, or empty when it has none.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on <c>sample_id</c>, not <c>sample</c>: the file carries both, and they are different
+    /// things - <c>sample_id</c> is the merged table's <c>replicate__@__batch</c> key, which is what
+    /// every other table here is keyed on, while <c>sample</c> is the bare replicate name.
+    /// </remarks>
+    internal static IReadOnlyDictionary<string, string> SampleTypes(string outputDir)
+    {
+        var types = new Dictionary<string, string>(StringComparer.Ordinal);
+        var path = Path.Combine(outputDir, "sample_metadata.csv");
+        if (!File.Exists(path))
+            return types;
+
+        try
+        {
+            var lines = File.ReadAllLines(path);
+            if (lines.Length < 2)
+                return types;
+
+            var header = lines[0].Split(',');
+            var idColumn = Array.FindIndex(
+                header, h => h.Trim().Equals("sample_id", StringComparison.OrdinalIgnoreCase));
+            var typeColumn = Array.FindIndex(
+                header, h => h.Trim().Equals("sample_type", StringComparison.OrdinalIgnoreCase));
+            if (idColumn < 0 || typeColumn < 0)
+                return types;
+
+            foreach (var line in lines.Skip(1))
+            {
+                var parts = line.Split(',');
+                if (idColumn < parts.Length && typeColumn < parts.Length)
+                    types[parts[idColumn].Trim()] = parts[typeColumn].Trim();
+            }
+        }
+        catch (IOException)
+        {
+            // A label is not worth failing a report over.
+        }
+        return types;
     }
 
     private sealed record PerList(double[] Ms1, double[] Ms2);

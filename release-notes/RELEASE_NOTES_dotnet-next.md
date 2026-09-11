@@ -56,8 +56,10 @@ as the GitHub Release description and fails if it is missing.
   replicate for the whole cohort; ions per acquisition cycle across the gradient for one replicate;
   and the assigned *share* across the gradient. The third earns its place because the two absolute
   traces both rise and fall with the elution envelope, so a stretch the analysis cannot explain is
-  invisible in them and obvious in the ratio - whose axis is pinned to 0-100%, since letting it
-  autoscale to a 4% maximum makes a bad run look like a full one.
+  invisible in them and obvious in the ratio. That axis always starts at zero and fits the data
+  above it: a non-zero origin is what makes a chart lie, while a fitted top is what makes a 3%
+  trace readable at all - pinning it to 0-100% was tried first and left the line flat on the
+  baseline.
 
   Everything on the pane is a read of two cached parquet files, so switching replicate, MS level,
   view or bin width is instant. The pane opens on the *median* replicate by assigned share rather

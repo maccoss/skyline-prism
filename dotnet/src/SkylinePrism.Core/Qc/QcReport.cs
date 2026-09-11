@@ -19,7 +19,7 @@ namespace SkylinePrism.Core.Qc;
 /// peptide/protein median-CV tables (LINEAR CVs), and base64-embedded static plots.
 /// Regenerable standalone (the `prism qc` command) and called as Stage 5b.
 /// </summary>
-public static class QcReport
+public static partial class QcReport
 {
     private const string PepMetaN = "n_transitions";
     private const string PepMetaRt = "mean_rt";
@@ -86,6 +86,11 @@ public static class QcReport
 
         var signalPlots = RenderMs2SignalSection(
             outputDir, runConfig, sampleTypes, savePlots, plotsDir, log);
+
+        // Appended to the same list so the two accounting views sit together in the report. A pure
+        // file read, so `prism qc -d` shows them on any directory that has been measured and simply
+        // omits the section on one that has not.
+        signalPlots.AddRange(RenderIonAccountingSection(outputDir, savePlots, plotsDir, log));
 
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,

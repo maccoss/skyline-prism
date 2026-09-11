@@ -379,12 +379,18 @@ The **Ion accounting** pane has three views and an MS1/MS2 switch:
 |------|---------------|
 | **Ions per replicate** | Acquired ions as a neutral background bar, with assigned drawn inside it |
 | **Ions across the gradient** | Both totals per acquisition cycle for one replicate, acquired filled and assigned as a line over it |
-| **Assigned share across the gradient** | The ratio of the two, on a fixed 0–100% axis |
+| **Assigned share across the gradient** | The ratio of the two, on an axis anchored at zero |
 
 The third is the one to look at when the first two look fine. Both absolute traces rise and fall with
 the elution envelope, so a stretch of the gradient the analysis cannot explain is invisible in them
-and obvious in the ratio. The axis is pinned to 0–100% rather than autoscaled, because a trace that
-fills the panel at a 4% maximum reads as a full run.
+and obvious in the ratio. On the Levitt cohort it shows the analysis explaining about 4% of MS2 ion
+current through the main elution window and falling steadily to under 1% by the end of the gradient —
+late-eluting species are much less well assigned, which neither absolute trace reveals.
+
+Its y-axis always starts at zero and fits the data above it. A fixed 0–100% axis was the first design
+— a fraction is bounded, after all — but at 3.4% it leaves the line flat on the baseline with no
+structure visible, which defeats the plot. A non-zero origin is what makes a chart lie; a fitted top
+with the scale on the ticks does not.
 
 Expect the two levels to differ, and by a lot. On a real Astral cohort: **40.5% of acquired MS1 ions
 assigned, against 3.4% of acquired MS2 ions.** That is not an error. MS1 is dominated by the

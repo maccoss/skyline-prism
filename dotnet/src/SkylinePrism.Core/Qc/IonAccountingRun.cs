@@ -125,6 +125,10 @@ public static class IonAccountingRun
         // Pair replicates to files before anything expensive: the file set is part of the cache key,
         // and a cohort with no files at all has no work to do.
         var samples = SamplesOf(outputDir);
+
+        // sample_metadata.csv is written by every run and is right here, so a caller that passed no
+        // types still gets bars coloured by type rather than one flat colour.
+        sampleTypes ??= IonAccountingStore.SampleTypes(outputDir);
         var files = ReplicateDataFiles.Enumerate(rawDir);
         var resolution = ReplicateDataFiles.ResolveAll(samples, files);
         ReportPairing(rawDir, samples.Count, files.Count, resolution, log);
