@@ -67,6 +67,7 @@ public sealed class ClaimedSignalIndex
         public int Cursor;                               // next claim in ByStart not yet opened
         public readonly List<ClaimedRegion> Active = new();
         public double MergedAtRt = double.NaN;           // RT the merged ranges were built for
+        public double LastRt = double.NegativeInfinity;  // to notice scans arriving out of order
         public bool Dirty = true;
         public double[] Low = Array.Empty<double>();     // merged, disjoint, ascending
         public double[] High = Array.Empty<double>();
@@ -94,6 +95,18 @@ public sealed class ClaimedSignalIndex
 
     /// <summary>Total claims held, for a log line that says the geometry actually loaded.</summary>
     public int RegionCount => _lanes.Values.Sum(l => l.ByStart.Length);
+
+    /// <summary>
+    /// Scans that arrived EARLIER than the previous scan of their own lane.
+    ///
+    /// <para>The sweep is forward-only - a claim that has closed is not reopened - so this must be
+    /// zero for the assigned total to be right. It is zero on every real file measured, because
+    /// spectra come in acquisition order and each isolation window fires once per cycle. But if a
+    /// reader ever returned them otherwise the only symptom would be an assigned total that is
+    /// quietly too low, with nothing to say so. Counting it turns that into something a caller can
+    /// report.</para>
+    /// </summary>
+    public int BackwardScans { get; private set; }
 
     /// <summary>
     /// Sum the intensity of <paramref name="mz"/>/<paramref name="intensity"/> that falls inside the
@@ -157,6 +170,10 @@ public sealed class ClaimedSignalIndex
     /// </summary>
     private void Advance(Lane lane, double rt)
     {
+        if (rt < lane.LastRt)
+            BackwardScans++;
+        lane.LastRt = rt;
+
         while (lane.Cursor < lane.ByStart.Length && lane.ByStart[lane.Cursor].RtStart <= rt)
         {
             lane.Active.Add(lane.ByStart[lane.Cursor++]);

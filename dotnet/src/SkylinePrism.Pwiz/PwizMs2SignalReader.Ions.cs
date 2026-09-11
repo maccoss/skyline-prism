@@ -301,6 +301,14 @@ public sealed partial class PwizMs2SignalReader
             log($"    {unsorted:N0} spectra had a non-ascending m/z array and were sorted before "
                 + "masking.");
         }
+        if (claims.BackwardScans > 0)
+        {
+            // The sweep is forward-only, so this makes the assigned total too low - and would
+            // otherwise be invisible, because a smaller number looks exactly like less signal.
+            log($"    WARNING: {claims.BackwardScans:N0} scans arrived earlier than the previous "
+                + "scan of their own isolation window. The claim sweep only moves forward, so the "
+                + "assigned total is UNDERSTATED by whatever those scans held.");
+        }
         if (record.Exceeded)
         {
             log("    WARNING: more signal was assigned than acquired, which is impossible. The "

@@ -185,6 +185,38 @@ public class ClaimedSignalIndexTests
         Assert.Equal(11.0, Claim(index, 5.5, mz, inten), 9);   // only the late one
     }
 
+    /// <summary>
+    /// The forward-only sweep is an ASSUMPTION about the caller - that scans arrive in retention-time
+    /// order within their own lane - and a violated assumption here has no symptom: the assigned
+    /// total is simply too low, which looks exactly like less signal. So the violation is counted.
+    /// </summary>
+    [Fact]
+    public void ScansArrivingOutOfOrderAreCounted()
+    {
+        var index = new ClaimedSignalIndex(new[] { Ms2(100, 110, 0, 10) });
+        var mz = new[] { 105.0 };
+        var inten = new[] { 1.0 };
+
+        Claim(index, 5.0, mz, inten);
+        Assert.Equal(0, index.BackwardScans);
+
+        Claim(index, 6.0, mz, inten);      // forward: fine
+        Assert.Equal(0, index.BackwardScans);
+
+        Claim(index, 4.0, mz, inten);      // backward: counted
+        Assert.Equal(1, index.BackwardScans);
+
+        // Each lane is judged on its own order, so a different window going back is its own count.
+        var two = new ClaimedSignalIndex(new[]
+        {
+            Ms2(100, 110, 0, 10, window: 0),
+            Ms2(100, 110, 0, 10, window: 1),
+        });
+        Claim(two, 5.0, mz, inten, window: 0);
+        Claim(two, 1.0, mz, inten, window: 1);   // a different lane's first scan, not backward
+        Assert.Equal(0, two.BackwardScans);
+    }
+
     [Fact]
     public void NonPositiveAndNonFiniteIntensitiesAreIgnored()
     {
