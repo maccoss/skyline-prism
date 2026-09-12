@@ -54,6 +54,13 @@ public static class ClaimedRegionLoader
     /// precursor isotope envelope, which is what Skyline already extracts), so building both would
     /// double the memory for a number that cannot differ.</para>
     /// </param>
+    /// <param name="ExplainedMeasured">
+    /// Whether a theoretical claim set was BUILT - which is not the same as whether it found
+    /// anything. A replicate whose MS2 rows all fell outside the isolation scheme was measured and
+    /// explained nothing; an export with no <c>Precursor Charge</c> column was never asked. Deriving
+    /// this from the region count would collapse the two, and telling them apart is the distinction
+    /// the whole explained series rests on.
+    /// </param>
     /// <param name="Precursors">Distinct (peptide, charge) precursors seen, assigned ones only.</param>
     /// <param name="Unreconciled">
     /// Precursors whose sequence did not reproduce Skyline's own <c>Precursor Mz</c>, so no
@@ -72,10 +79,11 @@ public static class ClaimedRegionLoader
         int NoGeometry,
         IReadOnlyList<ClaimedRegion> ExplainedRegions,
         int Precursors,
-        int Unreconciled)
+        int Unreconciled,
+        bool ExplainedMeasured)
     {
-        /// <summary>Whether a theoretical claim set was built at all.</summary>
-        public bool HasExplained => ExplainedRegions.Count > 0;
+        /// <inheritdoc cref="ExplainedMeasured"/>
+        public bool HasExplained => ExplainedMeasured;
 
         /// <summary>A one-line summary for the run log, so a surprising fraction can be explained.</summary>
         public string Describe()
@@ -85,7 +93,7 @@ public static class ClaimedRegionLoader
                 + $"{DuplicateRows:N0} duplicate); skipped {Unassigned:N0} unassigned, "
                 + $"{OutsideScheme:N0} outside the scheme, {NoGeometry:N0} without geometry"
                 + (UnknownPeptides > 0 ? $"; {UnknownPeptides:N0} peptides not in the identity map" : "");
-            if (ExplainedRegions.Count > 0 || Precursors > 0)
+            if (ExplainedMeasured)
             {
                 line += $"; {ExplainedRegions.Count:N0} explained claims over {Precursors:N0} precursor(s)";
                 if (Unreconciled > 0)
@@ -161,25 +169,23 @@ public static class ClaimedRegionLoader
         var block = new Accumulator(
             scheme, productTolerance, precursorTolerance, classes, cols.PrecursorCharge is not null);
         string? current = null;
-        var keep = true;
+        var keep = false;
 
         while (reader.Read())
         {
             var sample = reader.IsDBNull(0) ? "" : reader.GetString(0);
-            if (current is not null && !string.Equals(sample, current, StringComparison.Ordinal))
+            if (!string.Equals(sample, current, StringComparison.Ordinal))
             {
-                if (keep)
+                // A sample boundary, and the first row is one: current is null, which equals no
+                // sample id. Deciding here means the predicate is consulted in exactly one place.
+                if (current is not null && keep)
                 {
                     onSample(current, block.Take());
                     block.Reset();
                 }
+                current = sample;
                 keep = wanted is null || wanted(sample);
             }
-            else if (current is null)
-            {
-                keep = wanted is null || wanted(sample);
-            }
-            current = sample;
             if (keep)
                 block.Add(reader, ordinalOffset: 1);
         }
@@ -257,6 +263,14 @@ public static class ClaimedRegionLoader
         // At roughly ten times the quantified claim count, a second hash set is memory worth saving,
         // and ClaimedSignalIndex merges overlapping ranges anyway.
         private List<ClaimedRegion> _explained = new();
+
+        /// <summary>
+        /// Theoretical ions per precursor, for pre-sizing <see cref="_explained"/>. A b/y enumeration
+        /// at 1+ and 2+ over a tryptic peptide plus three precursor isotopes lands near here; the
+        /// list still grows if it is wrong, but not through twenty doublings of a multi-hundred-
+        /// megabyte array.
+        /// </summary>
+        private const int TypicalIonsPerPrecursor = 64;
         private HashSet<(string Peptide, int Charge)> _seenPrecursors = new();
         private int _precursors, _unreconciled;
 
@@ -381,6 +395,13 @@ public static class ClaimedRegionLoader
                 return;
             }
 
+            if (_explained.Capacity < _explained.Count + TypicalIonsPerPrecursor)
+            {
+                _explained.Capacity = Math.Max(
+                    _explained.Count + TypicalIonsPerPrecursor,
+                    Math.Max(1024, _precursors * TypicalIonsPerPrecursor));
+            }
+
             foreach (var ion in PeptideFragments.Enumerate(peptide, charge))
             {
                 var w = _productTolerance!.WindowAt(ion.Mz);
@@ -392,7 +413,7 @@ public static class ClaimedRegionLoader
 
         public Loaded Take() => new(
             _claims.ToArray(), _ms1, _ms2, _duplicates, _outside, _unassigned, _unknown, _noGeometry,
-            _explained.ToArray(), _precursors, _unreconciled);
+            _explained.ToArray(), _precursors, _unreconciled, _wantExplained);
 
         public void Reset()
         {

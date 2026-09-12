@@ -247,8 +247,11 @@ public static class IonAccountingRun
                     return;
                 if (reusable.ContainsKey(sample))
                     return;   // already measured for these settings
-                if (maxReplicates > 0 && read >= maxReplicates)
-                    return;
+
+                // No second bound on maxReplicates here. `wanted` already holds exactly the samples
+                // this run should measure, chosen by ordinal sort; re-bounding on arrival order
+                // would disagree with it wherever DuckDB's collation differs from ordinal, and the
+                // symptom would be measuring fewer replicates than asked with nothing said.
                 read++;
 
                 // Blocks BEFORE the index is built, so at most `lanes` replicates' claims exist at

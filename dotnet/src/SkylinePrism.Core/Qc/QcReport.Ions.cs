@@ -204,8 +204,17 @@ public static partial class QcReport
         if (level != PlotRenderer.IonLevel.Ms2)
             return "";
 
+        var impossible = usable.Count(r => r.ExplainedImpossible);
+        if (impossible > 0)
+        {
+            return $" NOTE: {impossible:N0} replicate(s) explained more than was acquired, or less "
+                + "than they quantified - both impossible, because the explained set contains the "
+                + "quantified one by construction. No explained figure is reported; the quantified "
+                + "one above is unaffected.";
+        }
+
         var fractions = usable
-            .Where(r => r.HasExplained && !r.Exceeded)
+            .Where(r => r.HasExplained && !r.Exceeded && !r.ExplainedImpossible)
             .Select(r => r.Ms2ExplainedFraction)
             .Where(double.IsFinite)
             .OrderBy(f => f)

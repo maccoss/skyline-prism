@@ -91,17 +91,43 @@ public class ExplainedIonsTests
         var sound = Row(ms2Explained: 80, hasExplained: true, ms2Assigned: 40);
         var unmeasured = Row(ms2Explained: 0, hasExplained: false, ms2Assigned: 40);
 
-        Assert.True(broken.Exceeded is false);   // it did not exceed ACQUIRED
-        Assert.True(sound.Ms2Explained > sound.Ms2Assigned);
-        Assert.False(unmeasured.HasExplained);
+        Assert.True(broken.ExplainedImpossible);
+        Assert.False(sound.ExplainedImpossible);
+        Assert.False(unmeasured.ExplainedImpossible);
     }
 
-    /// <summary>An explained total above acquired is impossible and must refuse to be drawn.</summary>
+    /// <summary>
+    /// Both impossible states of the explained total are flagged, and NEITHER touches
+    /// <see cref="IonAccountingRow.Exceeded"/>.
+    ///
+    /// <para>That separation is the point. <c>Exceeded</c> governs whether the QUANTIFIED fraction is
+    /// reported, and the caption that withholds it also names a cause - the isolation scheme, the
+    /// extraction tolerances. A fault confined to the theoretical claim set would send a reader after
+    /// a quantified total that is perfectly sound.</para>
+    /// </summary>
     [Fact]
-    public void ExplainedAboveAcquiredCountsAsExceeded()
+    public void AnImpossibleExplainedTotalDoesNotWithholdTheQuantifiedFraction()
     {
-        var row = Row(ms2Explained: 5_000, hasExplained: true, ms2Assigned: 40);
-        Assert.True(row.Exceeded);
+        var above = Row(ms2Explained: 5_000, hasExplained: true, ms2Assigned: 40);
+        var below = Row(ms2Explained: 5, hasExplained: true, ms2Assigned: 40);
+
+        Assert.True(above.ExplainedImpossible);
+        Assert.True(below.ExplainedImpossible);
+
+        // Acquired is 1000 in both and quantified is 40, so the quantified side is sound.
+        Assert.False(above.Exceeded);
+        Assert.False(below.Exceeded);
+
+        // ...and the quantified caption still reports its median rather than withholding it.
+        var caption = QcReport.FractionCaption(
+            new[] { above, below }, PlotRenderer.IonLevel.Ms2);
+        Assert.Contains("Median", caption, StringComparison.Ordinal);
+        Assert.DoesNotContain("impossible", caption, StringComparison.OrdinalIgnoreCase);
+
+        // The explained caption is the one that withholds, and says which side is broken.
+        var explained = QcReport.ExplainedCaption(
+            new[] { above, below }, PlotRenderer.IonLevel.Ms2);
+        Assert.Contains("impossible", explained, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

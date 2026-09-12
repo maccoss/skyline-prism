@@ -83,7 +83,7 @@ public class IonAccountingReportTests
     /// mean something rather than a "median" that is also the best.
     /// </summary>
     [Fact]
-    public void RepresentativeLabellingMatchesHowManyThereAre()
+    public void RepresentativeLabelingMatchesHowManyThereAre()
     {
         Assert.Equal(
             new[] { "best", "median", "worst" },

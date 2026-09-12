@@ -97,10 +97,18 @@ public static partial class PlotRenderer
             var explainedBars = new List<Bar>(rows.Count);
             for (var i = 0; i < rows.Count; i++)
             {
+                // A replicate with no explained total is NOT drawn as zero: a zero-height bar is
+                // indistinguishable from one that was measured and explained nothing, and a cohort
+                // measured partly before this feature is exactly the mixed case that produces both.
+                // Skipping it leaves the acquired background bar alone, and the legend says how many
+                // of the replicates carry the series.
+                if (!rows[i].HasExplained)
+                    continue;
+
                 explainedBars.Add(new Bar
                 {
                     Position = i,
-                    Value = rows[i].HasExplained ? Finite(rows[i].Ms2Explained) / scale : 0,
+                    Value = Finite(rows[i].Ms2Explained) / scale,
                     FillColor = ExplainedBarColor,
                     LineWidth = 0,
                     Size = 0.85,
@@ -267,11 +275,16 @@ public static partial class PlotRenderer
             return;
         }
 
+        // The SAME filter as the quantified line above - acquired only. Excluding bins whose
+        // explained total is zero would drop real points, and ScottPlot joins across an omission:
+        // the line would sail over exactly the stretch where nothing was explained while the
+        // quantified line dipped to zero beneath it. A bin with no acquired ions has no fraction at
+        // all and is the only thing either line may skip.
         var explainedPoints = binned
-            .Where(b => b.Acquired > 0 && b.Explained > 0)
+            .Where(b => b.Acquired > 0)
             .Select(b => (b.RtMin, Fraction: b.Explained / b.Acquired * 100.0))
             .ToArray();
-        var showExplained = explainedPoints.Length > 0;
+        var showExplained = binned.Any(b => b.Explained > 0);
 
         if (showExplained)
         {

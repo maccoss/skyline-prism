@@ -48,9 +48,19 @@ public sealed record IonAccountingRow(
         HasExplained && Ms2Acquired > 0 ? Ms2Explained / Ms2Acquired : double.NaN;
 
     /// <inheritdoc cref="IonAccountingRecord.Exceeded"/>
-    public bool Exceeded =>
-        Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired
-        || (HasExplained && Ms2Explained > Ms2Acquired);
+    public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
+
+    /// <summary>
+    /// The explained total exceeded what was acquired, or fell below the quantified total. Both are
+    /// impossible and both mean a defect in claim building.
+    ///
+    /// <para>Deliberately SEPARATE from <see cref="Exceeded"/>. A fault confined to the theoretical
+    /// claim set must not blank the quantified fraction as well - the caption that withholds a
+    /// figure also names a cause, and naming the isolation scheme for a quantified total that is
+    /// perfectly sound sends a reader after the wrong thing.</para>
+    /// </summary>
+    public bool ExplainedImpossible =>
+        HasExplained && (Ms2Explained > Ms2Acquired || Ms2Explained < Ms2Assigned);
 
     /// <inheritdoc cref="IonAccountingRecord.MeanMs1IonsPerScan"/>
     public double MeanMs1IonsPerScan => Ms1Count > 0 ? Ms1Acquired / Ms1Count : double.NaN;

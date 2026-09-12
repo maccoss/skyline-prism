@@ -18,7 +18,7 @@ namespace SkylinePrism.Tests.Qc;
 /// which reconciles contributes its ions, that one which does not contributes nothing and is
 /// counted, and that an export without a charge column produces no explained set at all rather than
 /// an empty one. The last two are the same safety property seen from either side, and they are what
-/// stands between a heavy-labelled document and a peptide's worth of claims on m/z belonging to
+/// stands between a heavy-labeled document and a peptide's worth of claims on m/z belonging to
 /// nothing.</para>
 /// </summary>
 public class TheoreticalClaimTests
