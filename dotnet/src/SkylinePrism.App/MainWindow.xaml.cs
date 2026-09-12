@@ -142,6 +142,56 @@ public partial class MainWindow : Window
         Log($"Input added: {(string.IsNullOrWhiteSpace(docPath) ? "the open (unsaved) document" : docPath)}");
     }
 
+    /// <summary>
+    /// Whether the ComBat boxes are the USER's choice rather than the one that follows the inputs.
+    /// Set the moment either is clicked, and never cleared - a default that reasserted itself after
+    /// being overruled would be worse than one that is simply wrong.
+    /// </summary>
+    private bool _batchChoiceIsUsers;
+
+    /// <summary>Set while the code ticks the boxes, so doing so is not mistaken for the user doing it.</summary>
+    private bool _suppressBatchChoice;
+
+    private void OnBatchCorrectionToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_suppressBatchChoice)
+            _batchChoiceIsUsers = true;
+    }
+
+    /// <summary>
+    /// Tick ComBat only once there is something to correct BETWEEN.
+    /// </summary>
+    /// <remarks>
+    /// <para>ComBat estimates a per-batch effect and removes it, so with one batch there is nothing
+    /// to estimate and the pipeline skips it - silently, because skipping is correct. Leaving the
+    /// boxes ticked therefore advertised a correction that was not happening, and the first thing
+    /// anyone does is run a single document.</para>
+    ///
+    /// <para><b>More than one INPUT is not the only way to get batches.</b> A single document with a
+    /// Batch column naming plates has as many batches as the column has values, which is why that is
+    /// checked too - tying this to the input count alone would leave someone with one annotated
+    /// document wondering why the box would not stay ticked.</para>
+    /// </remarks>
+    private void UpdateBatchCorrectionDefault()
+    {
+        if (_batchChoiceIsUsers)
+            return;
+
+        var haveBatches = _inputs.Count > 1
+            || !string.IsNullOrWhiteSpace(BatchColumnBox.Text);
+
+        _suppressBatchChoice = true;
+        try
+        {
+            PeptideBatchCheck.IsChecked = haveBatches;
+            ProteinBatchCheck.IsChecked = haveBatches;
+        }
+        finally
+        {
+            _suppressBatchChoice = false;
+        }
+    }
+
     /// <summary>Add an input, keeping batch labels unique, and refresh the grid + Run state.</summary>
     private void AddInput(PrismInput input)
     {
@@ -156,6 +206,17 @@ public partial class MainWindow : Window
         if (RunButton is not null)
             RunButton.IsEnabled = !_isRunning && _inputs.Count > 0
                 && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
+
+        // Adding and removing an input both reach here, which makes it the one place the ComBat
+        // default has to follow.
+        UpdateBatchCorrectionDefault();
+    }
+
+    private void OnBatchColumnChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        // TextChanged fires while the window is being built, before the boxes exist.
+        if (IsInitialized)
+            UpdateBatchCorrectionDefault();
     }
 
     // Offer the documents of every running Skyline instance we can reach. Discovery relies on Skyline having
@@ -672,8 +733,12 @@ public partial class MainWindow : Window
 
         SelectCombo(PeptideNormCombo, c.GlobalNormalization.Method);
         ExcludeOutliersCheck.IsChecked = c.SampleOutlierDetection.Action == "exclude";
+        // A config says what it wants, so it counts as the user's choice and stops the boxes
+        // following the inputs - otherwise loading a config for a one-document run would have its
+        // batch settings quietly overwritten a moment later.
         PeptideBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.PeptideLevel;
         ProteinBatchCheck.IsChecked = c.BatchCorrection.Enabled && c.BatchCorrection.ProteinLevel;
+        _batchChoiceIsUsers = true;
         ReferenceAnchoredCheck.IsChecked = c.BatchCorrection.ReferenceAnchored;
         ParsimonyCheck.IsChecked = c.Parsimony.Enabled;
         SelectCombo(SharedPeptideCombo, c.Parsimony.SharedPeptideHandling);

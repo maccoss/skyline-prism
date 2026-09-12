@@ -41,7 +41,8 @@
             <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
             <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
-            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center" />
+            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
+                     TextChanged="OnBatchColumnChanged" />
             <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
                        Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
@@ -148,7 +149,9 @@
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
                                     <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" VerticalAlignment="Center"
+                                              Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. Ticking it yourself overrides that, and the choice then sticks." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -214,7 +217,9 @@
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
                                     <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" VerticalAlignment="Center"
+                                              Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. Ticking it yourself overrides that, and the choice then sticks." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -257,7 +262,7 @@
 
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
-                                           Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                                           Text="Batch correction runs only when 2+ batches are detected, so these start OFF and tick themselves once a second input is added or a Batch column is named. One document with no Batch column is one batch, and ComBat has nothing to correct between. Changing either box yourself stops it following the inputs. Sample types come from the metadata report's Sample Type column." />
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
                             </StackPanel>
