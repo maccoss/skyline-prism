@@ -247,4 +247,40 @@ public class PeptideFragmentsTests
         }
         return rows;
     }
+
+    /// <summary>
+    /// Selenocysteine, with the selenium isotope convention pinned.
+    ///
+    /// <para>These three precursors are real - selenoproteins from a plasma EV cohort - and each one
+    /// failed to reconcile before U was in the table, which is how it was found. The values are
+    /// Skyline's own exported <c>Precursor Mz</c>, so this asserts PRISM against Skyline rather than
+    /// against itself, and it fails if anyone "corrects" U to the lightest stable selenium isotope:
+    /// Se-78 is 2 Da light, about 1,300 ppm here.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("AEENITESC(unimod:4)QUR", 2, 744.270341)]
+    [InlineData("ENLPSLC(unimod:4)SUQGLR", 2, 762.822543)]
+    [InlineData("TGSAITUQC(unimod:4)K", 2, 558.716484)]
+    public void SelenocysteineReconcilesAgainstSkylinesOwnPrecursorMz(
+        string sequence, int charge, double skylineMz)
+    {
+        Assert.True(
+            PeptideFragments.Reconciles(sequence, charge, skylineMz),
+            $"{sequence} {charge}+ computed {PeptideFragments.PrecursorMz(sequence, charge)}, "
+            + $"Skyline exported {skylineMz}");
+
+        Assert.NotEmpty(PeptideFragments.Enumerate(sequence, charge));
+    }
+
+    /// <summary>
+    /// Pyrrolysine is NOT in the table, on purpose: nothing here exercises it and a guessed mass
+    /// would be a peptide's worth of claims on m/z belonging to nothing. It must fail closed.
+    /// </summary>
+    [Fact]
+    public void PyrrolysineIsUnresolvedRatherThanGuessed()
+    {
+        Assert.Null(PeptideFragments.NeutralMass("PEPTOIDEK"));
+        Assert.Empty(PeptideFragments.Enumerate("PEPTOIDEK", 2));
+    }
+
 }

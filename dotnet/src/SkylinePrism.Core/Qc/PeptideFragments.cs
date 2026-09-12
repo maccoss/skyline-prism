@@ -69,6 +69,18 @@ public static class PeptideFragments
     /// Monoisotopic residue masses. I and L are deliberately equal - they ARE equal in mass, which is
     /// why they cannot be told apart by m/z at all and why the library lookup refuses to collapse
     /// them (see <c>SpectralLibrary</c>).
+    ///
+    /// <para><b>U is selenocysteine</b>, the 21st amino acid, and its mass uses <b>Se-80</b> - the
+    /// MOST ABUNDANT selenium isotope, not the lightest stable one. That is a real choice and it was
+    /// not guessed: three selenoprotein precursors in a plasma EV cohort each give
+    /// <c>150.95364</c> when the residue mass is solved for from Skyline's own exported
+    /// <c>Precursor Mz</c>, agreeing to 1 uDa, and C3H5NOSe with Se-80 reproduces that exactly. Se-78
+    /// would be 2.0 Da light - about 1,300 ppm on a 750 m/z doubly-charged precursor, so the two
+    /// conventions are not close enough to confuse.</para>
+    ///
+    /// <para>O (pyrrolysine) is deliberately absent: no data here exercises it, and inventing a
+    /// convention for it is exactly the guess <see cref="Reconciles"/> exists to prevent. A
+    /// pyrrolysine peptide is therefore excluded and counted, which is the safe outcome.</para>
     /// </summary>
     private static readonly IReadOnlyDictionary<char, double> ResidueMass =
         new Dictionary<char, double>
@@ -78,6 +90,7 @@ public static class PeptideFragments
             ['I'] = 113.08406396, ['N'] = 114.04292744, ['D'] = 115.02694302, ['Q'] = 128.05857750,
             ['K'] = 128.09496301, ['E'] = 129.04259308, ['M'] = 131.04048508, ['H'] = 137.05891186,
             ['F'] = 147.06841390, ['R'] = 156.10111102, ['Y'] = 163.06332852, ['W'] = 186.07931294,
+            ['U'] = 150.95363555,
         };
 
     /// <summary>
