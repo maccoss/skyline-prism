@@ -101,6 +101,12 @@ public partial class MainWindow : Window
         // SelectedIndex would call into null controls from EndInit.
         VizNav.SelectedIndex = (int)VizPane.Qc;
 
+        // The analysis rail starts on Inputs, for exactly the same two reasons. InputsPane is the one
+        // pane not collapsed in XAML, so the two agree on the first frame without the handler having
+        // run - but the rail still needs a highlighted row, or the tab opens with nothing selected
+        // beside content that is plainly showing.
+        AnalysisNav.SelectedIndex = (int)AnalysisPane.Inputs;
+
         if (_session is not null)
         {
             _ = AddLaunchingDocumentAsync();
@@ -111,7 +117,7 @@ public partial class MainWindow : Window
         else
         {
             AddOpenDocButton.IsEnabled = false; // re-enabled if a running instance turns up when clicked
-            ShowAnalysis(InputsTab);  // standalone: the first thing to do is add an input
+            ShowAnalysis(AnalysisPane.Inputs);  // standalone: the first thing to do is add an input
         }
 
         // Last line of the constructor, and the ship gate's proof that the UI actually came up:
@@ -942,7 +948,7 @@ public partial class MainWindow : Window
         if (_inputs.Count == 0)
         {
             Log("No inputs. Add a document or an exported report on the Inputs tab.");
-            ShowAnalysis(InputsTab);
+            ShowAnalysis(AnalysisPane.Inputs);
             return;
         }
 
@@ -954,7 +960,7 @@ public partial class MainWindow : Window
         RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
-        ShowAnalysis(LogTab); // show progress as it runs
+        ShowAnalysis(AnalysisPane.Log); // show progress as it runs
 
         var outputDir = OutputDirBox.Text;
         var batchColumn = BatchColumnBox.Text?.Trim();

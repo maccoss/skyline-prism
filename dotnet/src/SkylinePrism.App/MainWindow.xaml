@@ -58,9 +58,28 @@
 
         <TabControl Grid.Row="5" x:Name="MainTabs" SelectionChanged="OnMainTabChanged">
             <TabItem Header="Analysis" x:Name="AnalysisTab">
-                <TabControl x:Name="AnalysisTabs">
-                    <TabItem Header="Inputs" x:Name="InputsTab">
-                        <DockPanel Margin="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" MinWidth="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- The same rail as the Visualization tab. A strip of three is readable, but
+                         the two halves of the window behaving differently is not, and the panes here
+                         keep their own state the way those do. SelectedIndex is set in CODE, never
+                         here: Selector raises SelectionChanged from EndInit, which would run the
+                         handler against half-built controls. -->
+                    <ListBox Grid.Column="0" x:Name="AnalysisNav" Width="170"
+                             SelectionChanged="OnAnalysisNavChanged"
+                             BorderThickness="0,0,1,0" BorderBrush="#dfe6ef"
+                             Background="#fbfcfe">
+                        <ListBoxItem x:Name="InputsNavItem" Content="Inputs" Padding="10,7" />
+                        <ListBoxItem x:Name="SettingsNavItem" Content="Settings" Padding="10,7" />
+                        <ListBoxItem x:Name="LogNavItem" Content="Log" Padding="10,7" />
+                    </ListBox>
+
+                    <Grid Grid.Column="1">
+                        <DockPanel x:Name="InputsPane" Margin="8">
                             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
                                 <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
                                         Click="OnAddOpenDocument"
@@ -87,9 +106,9 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
-                    </TabItem>
-                    <TabItem Header="Settings">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+
+                        <ScrollViewer x:Name="SettingsPane" VerticalScrollBarVisibility="Auto"
+                                      Visibility="Collapsed">
                             <StackPanel Margin="14">
                                 <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
 
@@ -243,13 +262,13 @@
                                            Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
                             </StackPanel>
                         </ScrollViewer>
-                    </TabItem>
-                    <TabItem Header="Log" x:Name="LogTab">
+
                         <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                                 Visibility="Collapsed"
                                  VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                                  HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
-                    </TabItem>
-                </TabControl>
+                    </Grid>
+                </Grid>
             </TabItem>
             <TabItem Header="Visualization" x:Name="VisualizationTab">
                 <Grid>

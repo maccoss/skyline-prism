@@ -103,11 +103,40 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Bring one of the Analysis tabs to the front, selecting the Analysis group first.</summary>
-    private void ShowAnalysis(TabItem tab)
+    /// <summary>Bring one of the Analysis panes to the front, selecting the Analysis group first.</summary>
+    private void ShowAnalysis(AnalysisPane pane)
     {
         MainTabs.SelectedItem = AnalysisTab;
-        AnalysisTabs.SelectedItem = tab;
+        AnalysisNav.SelectedIndex = (int)pane;
+        ShowAnalysisPane(pane);
+    }
+
+    /// <summary>
+    /// Which Analysis pane is visible. One <see cref="UIElement.Visibility"/> flip per pane rather
+    /// than a TabControl, matching the Visualization rail - and like it, each pane keeps its state
+    /// (the grid's rows, the settings, the log's scroll position) while another is shown.
+    /// </summary>
+    private void ShowAnalysisPane(AnalysisPane pane)
+    {
+        InputsPane.Visibility = pane == AnalysisPane.Inputs ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPane.Visibility = pane == AnalysisPane.Settings ? Visibility.Visible : Visibility.Collapsed;
+        LogBox.Visibility = pane == AnalysisPane.Log ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnAnalysisNavChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Guarded because Selector raises this from EndInit while the window is still being built,
+        // before the panes it wants to touch exist. Same reason the rail's index is set in code.
+        if (!IsInitialized || AnalysisNav.SelectedIndex < 0)
+            return;
+        try
+        {
+            ShowAnalysisPane((AnalysisPane)AnalysisNav.SelectedIndex);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnAnalysisNavChanged), ex);
+        }
     }
 
     /// <summary>
