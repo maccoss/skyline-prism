@@ -36,6 +36,8 @@ public partial class MainWindow
     private string? _ionOutputDir;
     private IonAccountingResult? _ionResult;
     private int _ionRequest;                  // newest query wins if the user clicks ahead of it
+    private string? _ionNavProbedDir;         // directory whose measured-or-not is already known
+    private int _ionNavProbe;                 // newest nav probe wins
 
     /// <summary>
     /// Cycle traces already read, by sample. The file holds the whole cohort's cycles in one table,
@@ -53,6 +55,9 @@ public partial class MainWindow
         _ionLoaded = false;
         _ionResult = null;
         _ionCycles.Clear();
+        // The nav entry's answer is cached against the directory, so a run that has just WRITTEN
+        // the accounting has to be able to make it appear.
+        _ionNavProbedDir = null;
     }
 
     /// <summary>
@@ -162,18 +167,51 @@ public partial class MainWindow
     /// Whether the output directory carries measured ion accounting. Drives the nav entry: every plot
     /// on the pane needs the denominator, so with no cache there is nothing to show.
     /// </summary>
-    private void UpdateIonNavVisibility()
+    /// <remarks>
+    /// <para><b>The probe runs off the UI thread, and its answer is cached against the directory.</b>
+    /// It is a file system call, the output directory is normally a network share, and this is
+    /// called from the output box's <c>TextChanged</c> - so it used to be one blocking SMB round
+    /// trip per keystroke, plus one per pane change. Against a healthy share that is a millisecond
+    /// and invisible; against one that is slow, disconnected, or holding a stale credential, every
+    /// one of those blocks the dispatcher for the SMB timeout and the whole window stops responding
+    /// with nothing on screen to say why.</para>
+    /// </remarks>
+    private async void UpdateIonNavVisibility()
     {
-        var dir = OutputDirBox.Text?.Trim();
-        var available = !string.IsNullOrWhiteSpace(dir)
-            && File.Exists(Path.Combine(dir, IonAccountingStore.FileName));
-        IonNavItem.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        try
+        {
+            var dir = OutputDirBox.Text?.Trim();
+            if (string.Equals(_ionNavProbedDir, dir, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var request = ++_ionNavProbe;
+            var available = !string.IsNullOrWhiteSpace(dir)
+                && await Task.Run(() => File.Exists(Path.Combine(dir!, IonAccountingStore.FileName)));
+            // The box moved on while the share was thinking.
+            if (request != _ionNavProbe)
+                return;
+
+            _ionNavProbedDir = dir;
+            IonNavItem.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(UpdateIonNavVisibility), ex);
+        }
     }
 
+    /// <remarks>
+    /// <b>Every file system call this pane makes to open is in the one background read below.</b>
+    /// The replicate list used to be read on the UI thread, from <c>PopulateIonReplicates</c>, AFTER
+    /// this method had already awaited - so the window froze for the length of a second read of a
+    /// file that is normally on a network share, showing "Reading the ion accounting..." and
+    /// responding to nothing. Anything added here that touches the disk belongs inside the
+    /// <c>Task.Run</c>, not after it.
+    /// </remarks>
     private async Task LoadIonAccountingAsync()
     {
         var outputDir = OutputDirBox.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
+        if (string.IsNullOrWhiteSpace(outputDir))
         {
             ShowIonMessage("Set the output directory above to a finished PRISM run.");
             return;
@@ -184,9 +222,33 @@ public partial class MainWindow
         ShowIonMessage("Reading the ion accounting...");
         var dir = outputDir;
 
-        var loaded = await Task.Run(() => IonAccountingStore.Read(dir));
+        var probe = await Task.Run(() =>
+        {
+            if (!Directory.Exists(dir))
+            {
+                return (Exists: false, Result: (IonAccountingResult?)null,
+                        Samples: (IReadOnlyList<string>)Array.Empty<string>());
+            }
+            var read = IonAccountingStore.Read(dir);
+            // The replicate list is a second trip to the same share, and only the profile views
+            // need it - so it is skipped entirely when there is nothing to plot.
+            var samples = read is null || read.Rows.Count == 0
+                ? (IReadOnlyList<string>)Array.Empty<string>()
+                : IonAccountingStore.SamplesWithCycles(dir);
+            return (Exists: true, Result: read, Samples: samples);
+        });
 
-        _ionResult = loaded;
+        // The output directory can have moved on while a slow share was read.
+        if (!string.Equals(OutputDirBox.Text?.Trim(), dir, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (!probe.Exists)
+        {
+            ShowIonMessage("Set the output directory above to a finished PRISM run.");
+            return;
+        }
+
+        _ionResult = probe.Result;
         _ionOutputDir = dir;
         _ionLoaded = true;
         _ionCycles.Clear();
@@ -221,7 +283,7 @@ public partial class MainWindow
             _suppressIonRender = false;
         }
 
-        PopulateIonReplicates();
+        PopulateIonReplicates(probe.Samples);
         UpdateIonControls();
         await RenderIonAsync();
     }
@@ -230,12 +292,12 @@ public partial class MainWindow
     /// The replicate picker, holding only replicates that HAVE cycles cached. A replicate whose file
     /// could not be read has a row in the summary and no trace, so offering it would be an empty plot.
     /// </summary>
-    private void PopulateIonReplicates()
+    /// <param name="withCycles">
+    /// Read by the caller's background pass. Passed in rather than read here: this runs on the UI
+    /// thread, and reading it here blocked the dispatcher on a network file.
+    /// </param>
+    private void PopulateIonReplicates(IReadOnlyList<string> withCycles)
     {
-        var withCycles = _ionOutputDir is null
-            ? Array.Empty<string>()
-            : IonAccountingStore.SamplesWithCycles(_ionOutputDir);
-
         _suppressIonRender = true;
         try
         {
