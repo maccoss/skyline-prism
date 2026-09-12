@@ -92,7 +92,7 @@ public static partial class PlotRenderer
                 Position = i,
                 Value = Finite(assignedOf(rows[i])) / scale,
                 // GroupColor cycles a palette for an unrecognized type, which is right when the
-                // colours mean something and wrong here: a cohort with no sample types is one
+                // colors mean something and wrong here: a cohort with no sample types is one
                 // category, and a rainbow across it reads as several. Cycle only on a type that is
                 // present and unknown to GroupColor.
                 FillColor = string.IsNullOrWhiteSpace(rows[i].SampleType)

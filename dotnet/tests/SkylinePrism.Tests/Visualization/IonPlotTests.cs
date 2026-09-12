@@ -115,7 +115,7 @@ public class IonPlotTests
 
         // 97 cycles a quarter-minute apart span 24 minutes, so a 1-minute bin gives 25 bins.
         Assert.Equal(25, bins.Count);
-        // Ascending, and each bin centred in its own minute.
+        // Ascending, and each bin centered in its own minute.
         Assert.Equal(bins.OrderBy(b => b.RtMin).Select(b => b.RtMin), bins.Select(b => b.RtMin));
     }
 

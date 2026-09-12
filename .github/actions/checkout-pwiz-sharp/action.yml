@@ -44,7 +44,7 @@ runs:
           git remote add origin https://github.com/ProteoWizard/pwiz.git
           # Sparse set determined by building against it, not by reading the layout: pwiz-sharp
           # reaches OUTSIDE its own directory into the parent repository for the PSI-MS controlled
-          # vocabulary (pwiz/data/common), 7za.exe (libraries) and the licence-gated vendor archives
+          # vocabulary (pwiz/data/common), 7za.exe (libraries) and the license-gated vendor archives
           # (pwiz_aux). Narrowing further breaks the build; widening pulls in the whole 3.4 GB tree.
           SPARSE="pwiz-sharp/pwiz/src pwiz-sharp/vendor-archives pwiz-sharp/Tools pwiz-sharp/build"
           SPARSE="$SPARSE pwiz/data/common libraries pwiz_aux"

@@ -219,7 +219,7 @@ public static class ClaimedRegionLoader
             }
 
             // The tolerance for this level. Precursor rows carry the ISOTOPE's own m/z in the product
-            // column - each isotope is its own row - so both levels centre on the same column.
+            // column - each isotope is its own row - so both levels center on the same column.
             var tolerance = isPrecursor ? _precursorTolerance : _productTolerance;
             if (tolerance is null)
             {

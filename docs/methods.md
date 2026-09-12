@@ -12,6 +12,7 @@ This document provides detailed descriptions of all computational methods implem
 6. [Peptide → Protein Rollup](#peptide--protein-rollup)
 7. [Marker-Protein Normalization](#marker-protein-normalization)
 8. [Quality Control and Outlier Detection](#quality-control-and-outlier-detection)
+9. [Ion Accounting](#ion-accounting)
 
 ---
 
@@ -901,6 +902,140 @@ Methods for identifying problematic samples:
 - **Median intensity:** Per-sample and per-peptide
 - **Missing rate:** Fraction of zero/missing values
 - **PCA coordinates:** First N principal components for visualization
+
+## Ion Accounting
+
+Run separately from the pipeline, by `prism ion-accounting -d <output-dir> -r <raw-dir>`. It reads the
+instrument data files, which no other stage does, so it is neither part of `prism run` nor a config
+section; results are cached and `prism qc -d` renders them.
+
+### The question it answers
+
+**Of the ions that actually reached the detector, what fraction did this analysis put a peptide
+sequence to?** Reported at MS1 and at MS2 separately, per replicate and per acquisition cycle.
+
+It is a coverage question, not a quantification one: nothing here feeds an abundance. What it tells you
+is how much of the acquisition the target list explains, and where across the gradient it does not.
+
+### Why no Skyline export can answer it
+
+Two of the three quantities you would reach for are the wrong kind of number.
+
+| Quantity | What it is | Why it fails as a denominator |
+|---|---|---|
+| `TicArea` | one value per replicate | MS1 by construction. On the committed cohort fixture, the *precursor* areas of 327 of 75,202 peptides alone come to 45.6% of it |
+| summed per-scan TIC | a sum of **intensities** | an intensity is a rate; a peak `Area` is an intensity-time integral. Their ratio carries units of time and is not a fraction |
+| `LC Peak Transition Ion Count` | genuinely ions | correct per transition, but Skyline computes it about 29x slower per row, and per-transition counts cannot be summed (see *The union*) |
+
+So both halves are measured from the spectra, on the same walk, in the same unit.
+
+### The unit
+
+**A scan's reported intensity is a rate — ions per second — so a count of ions is**
+
+$$\text{ions} = \Big(\sum_{p \in \text{peaks}} I_p\Big) \times t_{\text{inj}}$$
+
+with $t_{\text{inj}}$ the scan's ion injection time **in seconds**. The `MS:1000927` cvParam is
+specified in milliseconds, so the conversion is required and is a factor of 1000.
+
+Two distinct errors live here, and both have been made in this codebase:
+
+- **Dropping $t_{\text{inj}}$ entirely** leaves a rate. A rate summed over scans is not a count, and
+  dividing an intensity-time integral by it is dimensionally meaningless. This is the error the
+  removed MS2 signal accounting made.
+- **Using milliseconds** makes every absolute total 1000x too large. This one **cannot be caught from
+  the fraction**: both numerator and denominator carry the same weighting, so the ratio cancels
+  exactly. It is caught only by per-scan plausibility against the AGC target — $3.7 \times 10^8$ ions
+  in one MS1 scan is impossible, $3.7 \times 10^5$ is right — which is why `IonAccountingRecord`
+  reports mean ions per scan alongside every total.
+
+A scan with no injection time is **excluded from both totals** rather than given an invented weight:
+weighting it 1 would count it as a full second of injection, roughly 141x a typical scan here. The
+count of excluded scans is reported per file.
+
+### Acquired
+
+$$A_{\ell} = \sum_{s\,:\,\text{level}(s)=\ell} \Big(\sum_p I_{sp}\Big)\, t_{\text{inj},s}, \qquad \ell \in \{1, 2\}$$
+
+Summed from the spectrum's **own peak array**, not from the `total ion current` cvParam. That cvParam
+is the instrument's pre-centroiding total and includes signal absent from the centroided peak list, so
+dividing a centroided numerator by it would understate the fraction by however much centroiding
+removed. The reported total is accumulated separately and printed beside the computed one, so the gap
+between them is visible rather than assumed - on the Thermo files measured here the two agree to the
+four significant figures the log prints, at both levels, which says centroiding removed little on this
+instrument and not that the distinction is unnecessary.
+
+### Assigned: the union, not a sum
+
+A peptide claims a **region of signal space** — an m/z extraction window over a retention-time span,
+within one isolation window:
+
+$$R = (\ell,\; w,\; [m_{\text{lo}}, m_{\text{hi}}],\; [t_{\text{start}}, t_{\text{stop}}])$$
+
+At MS2, $w$ is the isolation window the precursor was fragmented in and $[m_{\text{lo}}, m_{\text{hi}}]$
+is the product m/z ± the product tolerance. At MS1 there is no window — a survey scan covers the whole
+range, so every MS1 claim competes with every other — and the window is the precursor m/z ± the
+precursor tolerance, one claim per isotope.
+
+**Summing over regions would double-count.** In a DIA isolation window, two co-isolated peptides whose
+fragments fall within the extraction tolerance of each other extract the *same detector counts*.
+Crediting both can push the assigned total past the acquired one, which is impossible. `ClaimedSignalIndex`
+therefore merges the active claims into **disjoint** m/z ranges *before* reading any peak, so a peak
+lying inside two peptides' windows is counted once — because there is only one detector reading of it.
+Nothing has to detect or subtract an overlap afterwards.
+
+For a spectrum $s$ at level $\ell$ in window $w$, with $\mathcal{M}_s$ the merged disjoint ranges of
+the claims active at $t_s$:
+
+$$\text{assigned}_s = \Big(\sum_{p\,:\,m_{sp} \in \mathcal{M}_s} I_{sp}\Big)\, t_{\text{inj},s}$$
+
+Working from the spectrum rather than from peak areas also removes two corrections the area route
+needed and could not always make: no background is subtracted from a spectrum, so none has to be added
+back (Skyline's `Area` is background-subtracted and the `Background` column is not always exported);
+and both sides end in the same unit, so $\text{assigned}/\text{acquired}$ is a genuine dimensionless
+fraction.
+
+**Cost.** A replicate claims on the order of half a million regions, far too many to test against every
+scan. Scans within one isolation window arrive in retention-time order, so each (level, window) lane
+keeps a cursor: claims open as their peak begins and close as it ends, and only the few hundred active
+at that moment are merged, with the merged ranges rebuilt only when the active set changes. Measured on
+a 4.44 GB Thermo file of 168,920 spectra: **1.0 s of 206.7 s** is masking 465,307 claimed regions
+against every spectrum. The other 99.5% is decoding spectra, which is why this is a separate cached
+step and not part of every run.
+
+### Protein lists
+
+Each selected list gets its own total, carried as a bit per list on the claim (`ListMask`) and
+accumulated in the same pass. Lists **nest inside** the assigned total and may overlap each other: the
+question is what portion of the signal a panel accounts for, not which panel owns a peptide. A region
+claimed by two lists counts in full for both, and once for `assigned`.
+
+### Cycles
+
+A cycle opens at each MS1 scan and closes at the next, giving the four totals across the gradient. There
+is deliberately no isolation-wrap fallback for an MS2-only file: ion accounting needs MS1 totals, so a
+file with no MS1 has nothing to bound a cycle with, and one cycle spanning the run is the honest answer.
+
+### What it refuses to do
+
+| Situation | Behavior | Why |
+|---|---|---|
+| A computed fraction exceeds 1 | reported as `Exceeded`; callers refuse to draw it | impossible, so it means a defect — a unit mismatch, a scheme that does not match the acquisition, or claims merged too loosely. Clamping turns a visible bug into a plausible reading |
+| Mean ions per scan outside $[1, 10^8]$ | flagged `IonScaleImplausible` | the only check that catches a unit error, since the fraction cancels it |
+| An MS2 scan outside the isolation scheme | its ions are still counted as acquired; no claim can match | the scan did acquire ions. Counted per file, because a nonzero count means the scheme is wrong |
+| A spectrum with a non-ascending m/z array | sorted before masking, and counted | the sweep is forward-only, so an unsorted array would silently under-count. Zero across 39 files of one cohort; 236–593 per file across all 82 of another |
+| A file that cannot be read | that replicate has no denominator; it is not counted as zero | a zero would read as "acquired nothing", which is a measurement, not a failure |
+
+### Caching
+
+Written as `ion_accounting.parquet` and `ion_cycles.parquet` (plus `ion_accounting_lists.parquet` when
+lists are selected), keyed on a settings string covering both tolerances, the isolation scheme, the
+selected lists, and a fingerprint of the instrument files and `merged_data/`. Progress is saved after
+every replicate, so an interrupted run keeps what it measured.
+
+**A keyed cache is not necessarily a complete one.** `--max N` measures N replicates and writes a
+perfectly valid file, so reuse is decided by which replicates the cache *covers*, never by the key
+alone.
 
 ---
 

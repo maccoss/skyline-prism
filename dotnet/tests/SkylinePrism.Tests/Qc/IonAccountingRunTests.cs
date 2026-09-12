@@ -150,7 +150,7 @@ public class IonAccountingRunTests : IDisposable
     }
 
     /// <summary>
-    /// The behaviour that a <c>--max</c> spot check made necessary: a cache keyed for these settings
+    /// The behavior that a <c>--max</c> spot check made necessary: a cache keyed for these settings
     /// is reused only for the replicates it actually covers, and the rest are measured.
     /// </summary>
     [Fact]

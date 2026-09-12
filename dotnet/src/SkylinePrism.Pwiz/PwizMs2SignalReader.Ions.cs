@@ -21,8 +21,12 @@ namespace SkylinePrism.Pwiz;
 /// read from scan headers, or from the file's own TIC chromatogram. Assigned cannot: it needs each
 /// spectrum's peak arrays masked against the regions peptides claim. A cohort is a terabyte on a
 /// network share, so the file is opened once and both halves and every cycle come off the same walk.
-/// Measured on a 3.18 GB Thermo file: 165,003 spectra, about 20,000 spectra/s with peaks decoded,
-/// roughly 8 s per file.</para>
+///
+/// <para><b>Cost, measured over the share rather than out of the page cache:</b> 600-820 spectra/s,
+/// which is 200-290 s for a typical 4-5 GB Thermo file of 160,000-170,000 spectra. An early figure of
+/// 20,000 spectra/s and "roughly 8 s per file" was a warm-cache artifact - the probe re-read a file
+/// the previous run had just pulled across, so it measured local RAM. Quote a throughput here only
+/// from a cold file on the share.</para>
 ///
 /// <para><b>Both sides are summed from the SAME array.</b> The denominator is the sum of the
 /// spectrum's own peak intensities, not the reported total-ion-current cvParam. The cvParam is the
@@ -119,8 +123,12 @@ public sealed partial class PwizMs2SignalReader
             cycleStop = double.NaN;
         }
 
-        // Reused across spectra, grown as needed: only touched for a spectrum whose m/z array is not
-        // ascending, which the mzML specification forbids and no measured file has done.
+        // Reused across spectra, grown as needed: only touched for a spectrum whose m/z array is
+        // not ascending. The mzML specification requires ascending m/z, and vendor readers do not
+        // always deliver it - zero spectra across 39 Thermo files of one cohort, but 236-593 per
+        // file across all 82 of another acquired on a different instrument. The masking sweep is
+        // forward-only, so an unsorted array would silently under-count; this path is load-bearing,
+        // not theoretical, and the count is reported per file.
         double[] sortedMz = Array.Empty<double>();
         double[] sortedIntensity = Array.Empty<double>();
 
@@ -152,7 +160,7 @@ public sealed partial class PwizMs2SignalReader
                 rtLast = rt;
             }
 
-            // SECONDS, honouring the unit the file declares - the same rule as the retention time
+            // SECONDS, honoring the unit the file declares - the same rule as the retention time
             // below, and for the same reason. Measured on a real Astral file: 7.012 to 50.013
             // milliseconds, i.e. 0.007 to 0.050 s.
             //
@@ -351,7 +359,7 @@ public sealed partial class PwizMs2SignalReader
         double.IsFinite(fraction) ? fraction.ToString("P1") : "n/a";
 
     /// <summary>
-    /// A time cvParam in SECONDS, honouring the unit it declares.
+    /// A time cvParam in SECONDS, honoring the unit it declares.
     /// </summary>
     /// <remarks>
     /// Used for the ion injection time, whose product with the intensity is only a count of ions

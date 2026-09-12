@@ -131,7 +131,7 @@ public static class IonAccountingRun
         var samples = SamplesOf(outputDir);
 
         // sample_metadata.csv is written by every run and is right here, so a caller that passed no
-        // types still gets bars coloured by type rather than one flat colour.
+        // types still gets bars colored by type rather than one flat color.
         sampleTypes ??= IonAccountingStore.SampleTypes(outputDir);
         var files = ReplicateDataFiles.Enumerate(rawDir);
         var resolution = ReplicateDataFiles.ResolveAll(samples, files);

@@ -144,7 +144,7 @@ public static class AssignedPeptides
         hasGroupColumns = true;
 
         // One matcher per list, never a combined one: every shipped panel ships Visible = false, and a
-        // combined matcher honours visibility - so it would match nothing at all.
+        // combined matcher honors visibility - so it would match nothing at all.
         var matchers = new ProteinListMatcher[lists.Count];
         for (var l = 0; l < lists.Count; l++)
             matchers[l] = ProteinListSet.MatcherFor(lists[l]);

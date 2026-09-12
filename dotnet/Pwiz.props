@@ -15,7 +15,7 @@
 
         dotnet build -p:PwizSharpDir=<path-to>/pwiz/pwiz-sharp
 
-    Vendor SDKs are licence-gated. Without -p:IAgreeToVendorLicenses=true the archives are not
+    Vendor SDKs are license-gated. Without -p:IAgreeToVendorLicenses=true the archives are not
     extracted and the readers compile to something that recognizes a .raw but refuses to read
     it, which PRISM reports as an unreadable file rather than as missing signal.
   -->

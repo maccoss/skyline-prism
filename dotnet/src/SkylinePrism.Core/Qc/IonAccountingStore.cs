@@ -324,7 +324,7 @@ public static class IonAccountingStore
 
             // Sample type is NOT in the settings key - it cannot change a number - so a cache
             // measured before the types were read would keep blank ones forever, and the only way
-            // to colour a bar would be to re-read every instrument file. Filled in here instead,
+            // to color a bar would be to re-read every instrument file. Filled in here instead,
             // from the metadata every run writes. A type already in the file wins.
             var metadataTypes = SampleTypes(outputDir);
 
