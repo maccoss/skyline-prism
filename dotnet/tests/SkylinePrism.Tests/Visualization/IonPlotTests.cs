@@ -58,6 +58,74 @@ public class IonPlotTests
     }
 
     /// <summary>
+    /// Drawing again on the same plot REPLACES what was there. The GUI keeps one Plot for the whole
+    /// pane and redraws it every time the view, level, replicate or bin width changes, so anything
+    /// that accumulates does so once per interaction.
+    ///
+    /// <para>Reported from a real run: a legend carrying the bar chart's series, then two more
+    /// copies of the gradient profile's, all at once. ScottPlot's <c>Add</c> methods append, and the
+    /// legend entries ride on the plottables - so the earlier renders' data was still on the plot
+    /// underneath, not merely named in the legend.</para>
+    /// </summary>
+    [Fact]
+    public void RedrawingReplacesTheLastRenderRatherThanStackingOnIt()
+    {
+        var result = Result(Row("s1", 40), Row("s2", 30), Row("s3", 35));
+        var cycles = Cycles("s1", count: 240);
+        const PlotRenderer.IonLevel ms2 = PlotRenderer.IonLevel.Ms2;
+
+        // One plot, every view in turn, twice round - which is what a user does in a few clicks.
+        var plt = new Plot();
+        PlotRenderer.DrawIonAccounting(plt, result, ms2, "bars");
+        var afterOneBarDraw = plt.GetPlottables().Count();
+        var legendAfterOneBarDraw = LegendEntries(plt);
+
+        PlotRenderer.DrawIonProfile(plt, cycles, ms2, 1.0, "profile");
+        PlotRenderer.DrawIonFractionProfile(plt, cycles, ms2, 1.0, "share");
+        PlotRenderer.DrawIonAccounting(plt, result, ms2, "bars");
+
+        Assert.Equal(afterOneBarDraw, plt.GetPlottables().Count());
+        Assert.Equal(legendAfterOneBarDraw, LegendEntries(plt));
+
+        // And each of the other two views, reached from a different one, is its own render only.
+        var fresh = new Plot();
+        PlotRenderer.DrawIonProfile(fresh, cycles, ms2, 1.0, "profile");
+        var profileOnly = plt.GetPlottables().Count();
+        PlotRenderer.DrawIonProfile(plt, cycles, ms2, 1.0, "profile");
+        Assert.Equal(fresh.GetPlottables().Count(), plt.GetPlottables().Count());
+        Assert.NotEqual(0, profileOnly);
+
+        var share = new Plot();
+        PlotRenderer.DrawIonFractionProfile(share, cycles, ms2, 1.0, "share");
+        PlotRenderer.DrawIonFractionProfile(plt, cycles, ms2, 1.0, "share");
+        Assert.Equal(share.GetPlottables().Count(), plt.GetPlottables().Count());
+    }
+
+    /// <summary>
+    /// An empty state drawn over a real render leaves nothing of it behind - a message with the
+    /// previous plot's bars still under it is worse than either on its own.
+    /// </summary>
+    [Fact]
+    public void AnEmptyStateReplacesWhateverWasDrawnBefore()
+    {
+        var plt = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            plt, Result(Row("s1", 40), Row("s2", 30)), PlotRenderer.IonLevel.Ms2, "bars");
+        Assert.NotEmpty(plt.GetPlottables());
+
+        PlotRenderer.DrawIonAccounting(plt, Result(), PlotRenderer.IonLevel.Ms2, "nothing");
+
+        Assert.Empty(plt.GetPlottables());
+        Assert.Equal(0, LegendEntries(plt));
+    }
+
+    /// <summary>Legend entries come from the plottables, so this counts what a reader would see.</summary>
+    private static int LegendEntries(Plot plt) =>
+        plt.GetPlottables()
+            .SelectMany(p => p.LegendItems)
+            .Count(item => !string.IsNullOrEmpty(item.LabelText));
+
+    /// <summary>
     /// The median fraction goes in the title, so a reader gets the headline number without reading
     /// bars off an axis.
     /// </summary>

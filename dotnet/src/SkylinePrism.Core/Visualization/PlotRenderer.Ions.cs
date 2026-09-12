@@ -44,6 +44,16 @@ public static partial class PlotRenderer
         Plot plt, IonAccountingResult result, IonLevel level, string? title = null,
         double fontScale = 1.0)
     {
+        // Start from an empty plot. ScottPlot's Add methods APPEND - they do not replace, and
+        // neither the plottables nor the legend entries they carry go away on their own - so a
+        // caller that draws twice on one Plot stacks the second render on the first. That is what
+        // the GUI does every time the view, level or replicate changes, and the visible symptom was
+        // a legend that grew another copy of every series each time, with the earlier renders' data
+        // still underneath. Clearing HERE rather than at the call site because three of the four
+        // call sites remembered and one did not; DrawEmptyState has always done it. Safe because
+        // every path below sets its own axis limits, so nothing stale survives.
+        plt.Clear();
+
         var rows = result.Rows;
         if (rows.Count == 0)
         {
@@ -188,6 +198,8 @@ public static partial class PlotRenderer
         Plot plt, IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
         string? title = null, double fontScale = 1.0)
     {
+        plt.Clear();   // see DrawIonAccounting: these append, so a redraw stacks without this
+
         var binned = BinCycles(cycles, level, binMinutes);
         if (binned.Count == 0)
         {
@@ -256,6 +268,8 @@ public static partial class PlotRenderer
         Plot plt, IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
         string? title = null, double fontScale = 1.0)
     {
+        plt.Clear();   // see DrawIonAccounting: these append, so a redraw stacks without this
+
         var binned = BinCycles(cycles, level, binMinutes);
         if (binned.Count == 0)
         {
