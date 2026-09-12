@@ -1406,6 +1406,7 @@ public partial class MainWindow : Window
                 + "will use them once it finishes.");
         isolationTask.Wait(TimeSpan.FromSeconds(20));
         RecordIsolationProvenance(outputDir);
+        RecordAcquisitionProvenance(inputs, outputDir, ionRawDir);
 
         RunIonAccounting(inputs, outputDir, ionRawDir, cancellationToken);
     }
@@ -1436,6 +1437,39 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log("Could not record the isolation windows in the provenance file: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Write down what the inputs said about the acquisition, whether or not ions are measured.
+    /// </summary>
+    /// <remarks>
+    /// Recorded on EVERY run, because the run that can answer and the run that needs the answer are
+    /// usually not the same one. A pre-exported report carries no Full-Scan settings and no file
+    /// paths - including the report PRISM itself writes into <c>skyline-reports/</c> - so measuring
+    /// ions against a previous run's own export had to ask for a tolerance the first run already
+    /// knew and threw away.
+    /// </remarks>
+    private void RecordAcquisitionProvenance(
+        IReadOnlyList<PrismInput> inputs, string outputDir, string? rawDir)
+    {
+        try
+        {
+            var (product, precursor, _) = ResolveIonTolerances(inputs);
+            var directory = !string.IsNullOrWhiteSpace(rawDir)
+                ? rawDir
+                : DensityRawDirectory(null, inputs);
+
+            if (Provenance.RecordAcquisition(
+                    outputDir, product?.Describe(), precursor?.Describe(), directory))
+            {
+                Log($"Recorded the extraction tolerances and data location in {Provenance.FileName}, "
+                    + "so a later run on this directory does not have to ask.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("Could not record the acquisition settings in the provenance file: " + ex.Message);
         }
     }
 
@@ -1575,6 +1609,28 @@ public partial class MainWindow : Window
             Log($"Ion accounting: using the {typedProduct.Describe()} you entered rather than the "
                 + $"{product.Describe()} the document states.");
         }
+
+        // Nothing here can say, so ask what a previous run on this directory wrote down. That run
+        // had the document; this one may only have the report it exported.
+        if (typedProduct is null && product is null)
+        {
+            var dir = OutputDirBox.Text?.Trim();
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                var recorded = Provenance.ReadAcquisition(dir!);
+                var fromFile = ProductMassTolerance.ParseSetting(recorded.ProductTolerance);
+                if (fromFile is not null)
+                {
+                    Log($"Ion accounting: no input could state the extraction window, so using the "
+                        + $"{fromFile.Describe()} recorded in {Provenance.FileName} by an earlier run "
+                        + "of this directory.");
+                    return (fromFile,
+                        ProductMassTolerance.ParseSetting(recorded.PrecursorTolerance),
+                        $"from {Provenance.FileName}");
+                }
+            }
+        }
+
         return IonToleranceChoice.Pick(typedProduct, typedPrecursor, product, precursor);
     }
 
@@ -1608,15 +1664,24 @@ public partial class MainWindow : Window
             if (inputs.Length == 0)
                 return;
 
+            var outputDir = OutputDirBox.Text?.Trim();
             var found = await Task.Run(() =>
             {
                 foreach (var input in inputs)
                 {
                     var dir = input.GuessRawDirectory(App.WriteLog);
                     if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
-                        return (Input: input, Dir: dir);
+                        return (Input: (PrismInput?)input, Dir: (string?)dir);
                 }
-                return (Input: (PrismInput?)null, Dir: (string?)null);
+                // No document among the inputs to ask - but a previous run of this output directory
+                // may have had one and written down where its files were.
+                if (!string.IsNullOrWhiteSpace(outputDir))
+                {
+                    var recorded = Provenance.ReadAcquisition(outputDir!).InstrumentFiles;
+                    if (!string.IsNullOrWhiteSpace(recorded) && Directory.Exists(recorded))
+                        return (Input: null, Dir: recorded);
+                }
+                return (Input: null, Dir: null);
             });
 
             if (!string.IsNullOrWhiteSpace(IonRawDirText.Text))
@@ -1625,9 +1690,13 @@ public partial class MainWindow : Window
             if (found.Dir is not null)
             {
                 IonRawDirText.Text = found.Dir;
-                Log($"Ion accounting: {found.Input!.DisplayName} imported its data from {found.Dir}, "
-                    + "so that is where the files will be read from. Change it above if they have "
-                    + "moved.");
+                Log(found.Input is not null
+                    ? $"Ion accounting: {found.Input.DisplayName} imported its data from {found.Dir}, "
+                      + "so that is where the files will be read from. Change it above if they have "
+                      + "moved."
+                    : $"Ion accounting: an earlier run of this output directory recorded its data in "
+                      + $"{found.Dir}, so that is where the files will be read from. Change it above "
+                      + "if they have moved.");
                 return;
             }
 
