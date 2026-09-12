@@ -557,7 +557,10 @@ Additional utility commands:
 ```bash
 # Count acquired ions and the fraction assigned to a peptide, from the instrument files
 prism ion-accounting -d output_dir/ -r raw_dir/ --product-tolerance "10 ppm" \
-    --precursor-tolerance "10 ppm" [--max 3] [--lanes 2]
+    --precursor-tolerance "10 ppm" [--max 3] [--lanes N]
+
+# How many files to read at once is a property of YOUR STORAGE, not of PRISM. Measure it:
+prism ion-accounting -d output_dir/ -r raw_dir/ --probe-lanes
 
 # Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv

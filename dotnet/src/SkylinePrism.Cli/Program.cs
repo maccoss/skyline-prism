@@ -196,13 +196,27 @@ public static class Program
         var force = Array.Exists(args, a => a is "--force");
         var max = int.TryParse(opts.GetSingleOrNull("--max"), out var m) && m > 0 ? m : 0;
         var lanes = int.TryParse(opts.GetSingleOrNull("--lanes"), out var l) && l > 0 ? l : 0;
+        var probeLanes = Array.Exists(args, a => a is "--probe-lanes");
+
+        // The probe measures reading, so it needs no tolerances, no scheme and no output directory
+        // content - only files to read. Checking it before the usage block keeps that honest.
+        if (probeLanes && rawDir is not null)
+        {
+            var slice = int.TryParse(opts.GetSingleOrNull("--probe-spectra"), out var ps) && ps > 0
+                ? ps
+                : LaneProbe.DefaultSliceSpectra;
+            return CmdProbeLanes(rawDir, slice);
+        }
 
         if (dir is null || rawDir is null || productText is null)
         {
             Console.Error.WriteLine(
                 "Usage: prism ion-accounting -d <output-dir> -r <raw-dir> "
                 + "--product-tolerance \"10 ppm\" [--precursor-tolerance \"10 ppm\"] "
-                + "[--scheme <name>] [--max N] [--force]");
+                + "[--scheme <name>] [--max N] [--lanes N] [--force]");
+            Console.Error.WriteLine(
+                "       prism ion-accounting -r <raw-dir> --probe-lanes    "
+                + "(how many files this storage is worth reading at once)");
             return 2;
         }
         if (!Directory.Exists(dir))
@@ -311,6 +325,77 @@ public static class Program
 
         Console.WriteLine($"Isolation scheme: {usable[0].Describe()}");
         return usable[0];
+    }
+
+    /// <summary>
+    /// Measure how many instrument files this storage is worth reading at once, and say so.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the measurement run because the answer belongs to the STORAGE. Baking a number
+    /// into the binary means one lab's share decides everybody's default, which is how that constant
+    /// came to say 2 and then 4 on no better evidence than which share had been measured last.
+    /// </remarks>
+    private static int CmdProbeLanes(string rawDir, int sliceSpectra)
+    {
+        if (!Directory.Exists(rawDir))
+        {
+            Console.Error.WriteLine($"Error: no such raw directory: {rawDir}");
+            return 2;
+        }
+
+        OptionalReaders.Register(Console.WriteLine);
+        var files = ReplicateDataFiles.Enumerate(rawDir);
+        if (files.Count == 0)
+        {
+            Console.Error.WriteLine($"Error: no instrument data files in {rawDir}.");
+            return 2;
+        }
+
+        Console.WriteLine(
+            $"Probing {rawDir} with the first {sliceSpectra:N0} spectra of up to "
+            + $"{Math.Min(8, files.Count):N0} of its {files.Count:N0} file(s).");
+        Console.WriteLine(
+            "  Each arm re-reads the same files, so later arms benefit from the page cache - the "
+            + "comparison is biased slightly IN FAVOUR of more lanes.");
+
+        // No scheme is needed: with no claims there is nothing to place in a window.
+        var scheme = new IsolationScheme("probe", Array.Empty<IsolationWindow>());
+        var arms = LaneProbe.Run(
+            files, scheme, arms: null, sliceSpectra: sliceSpectra, log: Console.WriteLine);
+        if (arms.Count == 0)
+        {
+            Console.Error.WriteLine("Nothing was measured.");
+            return 1;
+        }
+
+        var recommended = LaneProbe.Recommend(arms);
+        var fastest = arms.OrderByDescending(a => a.SpectraPerSecond).First();
+
+        Console.WriteLine();
+        Console.WriteLine($"Recommended: --lanes {recommended}");
+        if (recommended != fastest.Lanes)
+        {
+            Console.WriteLine(
+                $"  {fastest.Lanes} lanes was faster ({fastest.SpectraPerSecond:N0} vs "
+                + $"{arms.First(a => a.Lanes == recommended).SpectraPerSecond:N0} spectra/s) by less "
+                + "than 10%, which does not pay for the extra memory: every lane holds another "
+                + "file's decode buffers, and running out here does not degrade, it faults.");
+        }
+        Console.WriteLine();
+        Console.WriteLine("  What this measured, and what it did not:");
+        Console.WriteLine(
+            "  - It RANKS lane counts for this storage. It does not predict runtime: the slice is "
+            + "read from the middle of each file, where seeking costs more than streaming, so the "
+            + "rates above run about 3x below a whole-file read on the share this was built for.");
+        Console.WriteLine(
+            "  - The GB column is the probe's own memory, which is NOT the run's. The probe carries "
+            + "no claim sets; a real run at 8 lanes reached 32 GB of 64 where the probe showed 6. "
+            + "Memory is the reason to stop short of the fastest arm, and this cannot tell you "
+            + "about it - budget roughly 4 GB per lane for the run itself.");
+        Console.WriteLine(
+            "  - It measures THIS directory, now. A share busy with someone else's run answers for "
+            + "that load, so re-probe if the answer looks unlike the storage you think you have.");
+        return 0;
     }
 
     /// <summary>

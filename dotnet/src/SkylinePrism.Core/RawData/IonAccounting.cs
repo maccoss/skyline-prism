@@ -33,11 +33,26 @@ namespace SkylinePrism.Core.RawData;
 /// bookkeeping needed to keep two overlapping claim sets straight inside one merge, in the one piece
 /// of arithmetic here where a mistake yields a plausible wrong number rather than a crash.</para>
 /// </param>
+/// <param name="SliceFromMiddle">
+/// Centre the <paramref name="MaxSpectra"/> slice in the file instead of taking it from the start.
+/// The head of a gradient is early-eluting and sparse, so decoding it is cheaper per spectrum than
+/// the peak-dense middle - a head slice measured a FLARE file at 4,204 spectra/s where the whole
+/// file runs at about 650. Only the probe sets this, and only because it wants a rate that
+/// generalises to the rest of the file.
+/// </param>
+/// <param name="MaxSpectra">
+/// Stop after this many spectra, or 0 for the whole file. Only the storage probe sets it: reading a
+/// bounded slice measures read throughput in seconds rather than the ten minutes a whole file takes,
+/// and throughput is all the probe is after. A record produced under this bound is NOT a measurement
+/// of the file and must never reach the cache.
+/// </param>
 public sealed record IonAccountingRequest(
     ClaimedSignalIndex Claims,
     IsolationScheme Scheme,
     IReadOnlyList<string> ListNames,
-    ClaimedSignalIndex? Explained = null)
+    ClaimedSignalIndex? Explained = null,
+    int MaxSpectra = 0,
+    bool SliceFromMiddle = false)
 {
     /// <summary>How many per-list totals the reader should accumulate.</summary>
     public int ListCount => ListNames?.Count ?? 0;

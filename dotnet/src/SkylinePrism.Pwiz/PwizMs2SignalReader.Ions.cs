@@ -142,7 +142,16 @@ public sealed partial class PwizMs2SignalReader
         var maskTicks = 0L;
         var walk = Stopwatch.StartNew();
 
-        for (var i = 0; i < spectra.Count; i++)
+        // The probe's bound. Counted in spectra CONSIDERED, not spectra of a usable level, so the
+        // slice is a fixed amount of read work regardless of the file's MS1/MS2 mix - which is what
+        // makes two arms of a throughput comparison comparable.
+        var slice = request.MaxSpectra > 0
+            ? Math.Min(request.MaxSpectra, spectra.Count)
+            : spectra.Count;
+        var from = request.SliceFromMiddle ? Math.Max(0, (spectra.Count - slice) / 2) : 0;
+        var limit = Math.Min(spectra.Count, from + slice);
+
+        for (var i = from; i < limit; i++)
         {
             if ((i & 0x3FF) == 0)
                 ct.ThrowIfCancellationRequested();

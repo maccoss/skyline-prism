@@ -30,34 +30,44 @@ public static class IonAccountingRun
 {
     /// <summary>
     /// Concurrent instrument-file reads. Reading is what costs, so this is the one setting that
-    /// changes how long a cohort takes - and past two lanes it changes it for the worse.
+    /// changes how long a cohort takes - and the choice it presents is speed against MEMORY, not
+    /// speed against nothing.
     /// </summary>
     /// <remarks>
     /// <para>Measured on 4.44 GB Thermo files of about 168,920 spectra each, over an SMB share, on a
     /// 16-processor machine:</para>
+    /// <para>Measured on FLARE Extended over a network share, same files, <c>--force</c> each time,
+    /// nothing else running. A FLARE file is about 166,000 spectra.</para>
     /// <list type="table">
-    /// <listheader><term>lanes</term><description>per file / concurrent / AGGREGATE</description></listheader>
-    /// <item><term>1 (local disk)</term><description>206.7 s, 817 spectra/s</description></item>
-    /// <item><term>2</term><description>370 s each, 2 at once, <b>185 s per file</b></description></item>
-    /// <item><term>4</term><description>~800 s each, 4 at once, <b>~205 s per file</b></description></item>
+    /// <listheader><term>lanes</term><description>wall clock / per-file rate / AGGREGATE / peak working set</description></listheader>
+    /// <item><term>2</term><description>9.1 min for 4 files, 591-708 spectra/s each, <b>~1,220 spectra/s</b></description></item>
+    /// <item><term>4</term><description>6.9 min for 4 files, 430-438 each, <b>~1,600 spectra/s</b>, 15.4 GB</description></item>
+    /// <item><term>8</term><description>11.1 min for 8 files, 262-269 each, <b>~1,990 spectra/s</b>, 32.1 GB</description></item>
     /// </list>
-    /// <para>So doubling the lanes halved the per-file rate (455 to ~230 spectra/s) and bought
-    /// nothing: four lanes is marginally WORSE than two, at twice the memory. The limit is not the
-    /// CPU - each reader uses about 0.64 of a core at four lanes with sixteen available - so it is
-    /// the share's throughput, and more readers only divide it more finely.</para>
-    /// <para><b>The lever is locality, not concurrency.</b> One lane against a local copy of the
-    /// file ran at 817 spectra/s against 455 at two lanes over the share; those two differ in both
-    /// locality and lane count, so the split between the two causes is not yet measured - but a
-    /// sequential copy of the same file runs at 212 MB/s, twenty-odd times faster than the walk
-    /// reads it, so staging a file locally before reading it is the thing worth trying next.</para>
-    /// <para>Working set was 13.4 GB at two lanes and 27.8 GB at four, on 64 GB - mostly DuckDB's
-    /// buffer pool for the cohort-wide ORDER BY rather than the readers, so do not size a machine
-    /// from a per-lane figure.</para>
-    /// <para>Two, then, because two is what measured best. Raise it with --lanes if your storage
-    /// behaves differently, and measure rather than assuming - and do not read a stall out of a
-    /// quiet log, because a file only reports when it is done.</para>
+    /// <para>Aggregate throughput keeps climbing - eight lanes is 64% faster than two - while the
+    /// per-file rate falls from ~650 to ~265 spectra/s, which is the share saturating. So the choice
+    /// is not speed against nothing; it is speed against MEMORY.</para>
+    /// <para><b>Four, because a default has to be safe on a working machine.</b> Eight reached
+    /// 32.1 GB of 64 and was still climbing when the run ended. On 2026-09-11 two ion-accounting
+    /// processes died with a native access violation inside DuckDB's allocator, 13 and 16 minutes
+    /// into a 6.5 GB Skyline document being opened beside them (see the DuckDB caution in
+    /// CLAUDE.md) - so a default that needs half the machine to itself is a default that fails the
+    /// first time someone works while it runs. Four takes 31 of the available 64 percentage points
+    /// at half the memory. Pass <c>--lanes 8</c> when the machine is idle and has the RAM.</para>
+    /// <para><b>An earlier measurement said four was WORSE than two</b> (205 vs 185 s per file, at
+    /// 27.8 GB). That was before <c>ForEachSample</c> took a <c>wanted</c> predicate: the loader was
+    /// building a claim set for every sample in the cohort and the caller was discarding all but
+    /// <c>--max</c> of them, so the high-lane arms were memory-bound rather than share-bound. The
+    /// conditions the old number described no longer exist, which is why it was re-measured rather
+    /// than trusted.</para>
+    /// <para>Still unmeasured: one share, one file size. The lever of LOCALITY is also untested
+    /// against lane count - a local copy read at 1,077 spectra/s on one lane against ~650 over the
+    /// share, and a sequential copy of the same file runs at 212 MB/s, twenty-odd times faster than
+    /// the walk reads it. Staging a file locally before reading it is still the thing worth trying
+    /// next. Measure rather than assuming - and do not read a stall out of a quiet log, because a
+    /// file only reports when it is done.</para>
     /// </remarks>
-    public const int DefaultLanes = 2;
+    public const int DefaultLanes = 4;
 
     /// <summary>
     /// Compute for every replicate in <paramref name="outputDir"/>, reusing the cache unless
