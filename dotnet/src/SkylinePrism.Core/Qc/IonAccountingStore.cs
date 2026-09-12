@@ -81,9 +81,10 @@ public sealed record IonAccountingResult(
     public IReadOnlyList<IonAccountingRow> Usable => Rows.Where(r => r.IsUsable).ToArray();
 
     /// <summary>
-    /// Whether these cached numbers answer the question the settings now ask. Same reasoning as
-    /// <see cref="Ms2SignalAccounting.Result.MatchesSettings"/>: the file is keyed on its name alone,
-    /// so without this a re-run replots the previous run's numbers under the new run's caption.
+    /// Whether these cached numbers answer the question the settings now ask. The file is keyed on
+    /// its name alone, so without this a re-run replots the previous run's numbers under the new
+    /// run's caption - and nothing fails loudly, because both the plot and the caption read as
+    /// correct.
     /// </summary>
     public bool MatchesSettings(string settingsKey) =>
         string.Equals(SettingsKey, settingsKey, StringComparison.Ordinal);

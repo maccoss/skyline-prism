@@ -46,21 +46,7 @@ public partial class MainWindow : Window
         // start the picker sat empty and the shipped panels looked as though they had not been installed.
         RefreshMarkerListCombo();
         InputsGrid.ItemsSource = _inputs;
-        _inputs.CollectionChanged += (_, _) =>
-        {
-            UpdateRunEnabled();
-            UpdateMs2SignalRow(); // a pre-exported report decides whether "ions" can be offered
-        };
-        _suppressMs2Update = true;   // one pass for the whole initial write, not one per control
-        try
-        {
-            Ms2MeasureCombo.SelectedIndex = 0; // set here, not in XAML: see XamlInitializationOrderTests
-        }
-        finally
-        {
-            _suppressMs2Update = false;
-        }
-        UpdateMs2SignalRow();
+        _inputs.CollectionChanged += (_, _) => UpdateRunEnabled();
 
         // Run stays disabled until there is an output directory AND at least one input. When connected to a
         // saved document, SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the
@@ -431,161 +417,13 @@ public partial class MainWindow : Window
             MarkerNormListCombo.IsEnabled = MarkerNormCheck?.IsChecked == true;
     }
 
-    /// <summary>
-    /// Protein lists named by a loaded config, honored as written until the user opens the list editor -
-    /// from then on the lists ticked visible there are used, as they are for the Dynamic Range plot. A
-    /// name this machine has no list for is passed through rather than dropped: it came from a config
-    /// written elsewhere, and silently dropping it would change the run without saying so.
-    /// </summary>
-    private List<string>? _ms2ListsFromConfig;
-
-    /// <summary>
-    /// The extraction tolerance a loaded config carried, kept because no GUI control edits it and a
-    /// cohort of pre-exported reports has no document to read it from - so without this a provenance
-    /// that said "0.4 m/z" ran at the built-in 10 ppm, and the plot said 10 ppm too. A document that
-    /// can answer still wins: it is what Skyline actually extracted.
-    /// </summary>
-    private string? _ms2ToleranceFromConfig;
-
-    /// <summary>
-    /// Set while the MS2 controls are written programmatically, so one user action - or one config
-    /// load - is ONE update pass rather than one per control write. Same convention as
-    /// <c>_suppressDensityRender</c> / <c>_suppressRangeRender</c>.
-    /// </summary>
-    private bool _suppressMs2Update;
-
-    /// <summary>The protein lists the MS2 signal accounting draws a line for.</summary>
-    private List<string> Ms2SignalListNames() =>
-        _ms2ListsFromConfig?.ToList()
-        ?? _proteinLists.WithBuiltIns().Where(l => l.Visible).Select(l => l.Name).ToList();
-
     // One handler for the checkbox, the export option and the measure picker: they constrain each
     // other, so any change re-derives the whole row. RoutedEventArgs also accepts SelectionChanged's
     // arguments (delegate parameter contravariance), which is what lets one method serve all three.
-    private void OnMs2SignalChanged(object sender, RoutedEventArgs e) => UpdateMs2SignalRow();
-
-    /// <summary>
-    /// Keep the MS2 signal controls consistent with each other and with the inputs. The measure picker
-    /// and the export option mean nothing with the accounting off. And <c>ions</c> is offered only when
-    /// every input will carry Skyline's ion-count column - a Skyline document needs the export option,
-    /// a pre-exported report has to have the column already - because ions asked for on an export
-    /// without them silently falls back to summing areas, and the two numbers look alike.
-    /// </summary>
-    private void UpdateMs2SignalRow()
-    {
-        // Fires from XAML initialization before the later controls exist, and re-entrantly while a
-        // programmatic write of these same controls is in flight.
-        if (_suppressMs2Update
-            || Ms2SignalCheck is null || Ms2MeasureCombo is null || Ms2MeasureIonsItem is null
-            || Ms2IonExportRow is null || Ms2IonExportCheck is null || Ms2SignalHint is null
-            || Ms2AcquiredRow is null || Ms2AcquiredCheck is null || Ms2RawDirBox is null
-            || Ms2RawDirBrowse is null)
-            return;
-
-        var on = Ms2SignalCheck.IsChecked == true;
-        Ms2MeasureCombo.IsEnabled = on;
-        Ms2IonExportRow.IsEnabled = on;
-        Ms2AcquiredRow.IsEnabled = on;
-        // The directory only means anything if the read is going to happen.
-        Ms2RawDirBox.IsEnabled = on && Ms2AcquiredCheck.IsChecked == true;
-        Ms2RawDirBrowse.IsEnabled = Ms2RawDirBox.IsEnabled;
-        if (!on)
-        {
-            Ms2SignalHint.Text = "Off. On, the QC report gains a section showing per replicate how much "
-                + "MS2 signal the run assigns to a peptide, and how much of that belongs to each visible "
-                + "protein list.";
-            return;
-        }
-
-        // Whether a pre-exported report carries the ion counts is a question about a FILE, so it is
-        // asked off this thread and lands back here. Reading a parquet footer from a mapped share or a
-        // OneDrive placeholder on the dispatcher froze the window on the click that added the file.
-        foreach (var input in _inputs)
-            input.ProbeIonCountsInBackground(
-                () => Dispatcher.BeginInvoke(new Action(UpdateMs2SignalRow)));
-
-        var why = IonCountsUnavailableReason();
-        Ms2MeasureIonsItem.IsEnabled = why is null;
-        Ms2MeasureIonsItem.ToolTip = why;
-        if (why is not null && ComboText(Ms2MeasureCombo, "signal") == "ions")
-        {
-            _suppressMs2Update = true;
-            try
-            {
-                Ms2MeasureCombo.SelectedIndex = 0;
-            }
-            finally
-            {
-                _suppressMs2Update = false;
-            }
-        }
-
-        var ions = ComboText(Ms2MeasureCombo, "signal") == "ions";
-        var lists = Ms2SignalListNames();
-        var parts = new List<string>
-        {
-            ions
-                ? "Ions: sums Skyline's LC Peak Transition Ion Count - intensity x injection time per "
-                  + "spectrum, across the peak - so the total is a count of ions and needs no unit or "
-                  + "background correction."
-                : "Signal: sums each transition's gross peak area (Area + Background) over the regions of "
-                  + "MS2 signal space the run's peptides occupy, each counted once.",
-        };
-        if (Ms2IonExportCheck.IsChecked == true)
-        {
-            // Only a Skyline document is exported. Claiming a 30x export for a cohort of
-            // pre-exported reports sends the user off to wait for something that never runs.
-            parts.Add(HasInputToExport()
-                ? "Each Skyline document is exported with the PRISM-Ions report: "
-                  + PrismReport.IonCountCostNote
-                  + " An export Skyline has started cannot be recalled, so Stop will not shorten it."
-                : "Nothing here is exported - every input is a report file already - so this option "
-                  + "changes nothing for this cohort.");
-        }
-        if (why is not null)
-            parts.Add(why);
-        parts.Add(lists.Count == 0
-            ? "No protein list is ticked visible, so only the assigned total is plotted."
-            : "Lists plotted: " + string.Join(", ", lists) + ".");
-        Ms2SignalHint.Text = string.Join(" ", parts);
-    }
 
     /// <summary>Whether any input is exported from Skyline (rather than a report file used in place).</summary>
     private bool HasInputToExport() =>
         _inputs.Count == 0 || _inputs.Any(i => i.Kind != PrismInputKind.ReportFile);
-
-    /// <summary>
-    /// Null when every input will carry the ion-count column; otherwise why not, for the hint and for
-    /// the tooltip on the disabled <c>ions</c> item.
-    ///
-    /// <para>Reads only what has already been probed, never the disk - see
-    /// <see cref="PrismInput.IonCounts"/>. An input still being read is reported as such rather than
-    /// as missing the column, because those want different actions from the user.</para>
-    /// </summary>
-    private string? IonCountsUnavailableReason()
-    {
-        // A Skyline document carries whatever the export is asked for, so the export option alone
-        // decides for it - and, with no inputs yet, for the document about to be added.
-        if (Ms2IonExportCheck?.IsChecked != true && HasInputToExport())
-        {
-            return "'ions' is unavailable until the export includes Skyline's ion counts (tick the "
-                + "Export option below, then choose ions here).";
-        }
-
-        foreach (var input in _inputs.Where(i => i.Kind == PrismInputKind.ReportFile))
-        {
-            switch (input.IonCounts)
-            {
-                case PrismInput.IonCountState.Absent:
-                    return $"'ions' is unavailable: the pre-exported report {input.DisplayName} has no "
-                        + "LC Peak Transition Ion Count column. Export it from Skyline with the "
-                        + "PRISM-Ions report.";
-                case PrismInput.IonCountState.Unknown:
-                    return $"'ions' is unavailable while {input.DisplayName} is being read.";
-            }
-        }
-        return null;
-    }
 
     /// <summary>
     /// Shared-peptide handling only means something once proteins are grouped: with parsimony off every
@@ -818,31 +656,6 @@ public partial class MainWindow : Window
         RefreshMarkerListCombo(c.MarkerNormalization.ProteinList);
         MarkerNormListCombo.IsEnabled = c.MarkerNormalization.Enabled;
 
-        _suppressMs2Update = true;
-        try
-        {
-            Ms2SignalCheck.IsChecked = c.QcReport.Ms2Signal.Enabled;
-            // A config that MEASURED ions was run on an export carrying them, so reproducing it means
-            // exporting them again. Gated on Enabled as well: a disabled section can carry a leftover
-            // measure, and reading that as "this run exported ion counts" pre-armed a 30x export from
-            // a provenance whose run never did one. UpdateMs2SignalRow then checks the inputs can
-            // supply them and falls back to signal - saying so in the hint - if one cannot.
-            var wantsIons = c.QcReport.Ms2Signal.Enabled
-                && string.Equals(
-                    c.QcReport.Ms2Signal.Measure, "ions", StringComparison.OrdinalIgnoreCase);
-            Ms2IonExportCheck.IsChecked = wantsIons;
-            SelectCombo(Ms2MeasureCombo, wantsIons ? "ions" : "signal");
-            _ms2ListsFromConfig = c.QcReport.Ms2Signal.ProteinLists.Count > 0
-                ? c.QcReport.Ms2Signal.ProteinLists.ToList()
-                : null;
-            _ms2ToleranceFromConfig = c.QcReport.Ms2Signal.ExtractionTolerance;
-        }
-        finally
-        {
-            _suppressMs2Update = false;
-        }
-        UpdateMs2SignalRow();
-
         if (!string.IsNullOrWhiteSpace(c.TransitionRollup.LibraryPath))
         {
             if (!LibraryCombo.Items.Contains(c.TransitionRollup.LibraryPath))
@@ -936,21 +749,6 @@ public partial class MainWindow : Window
 
         c.QcReport.Enabled = true;
         c.QcReport.SavePlots = false;
-
-        c.QcReport.Ms2Signal.Enabled = Ms2SignalCheck.IsChecked == true;
-        // Normalized when the section is off, like ProteinLists below. A leftover "ions" on a disabled
-        // section is not a record of anything, and it was read back on the next load as a reason to
-        // re-arm the expensive export.
-        c.QcReport.Ms2Signal.Measure = c.QcReport.Ms2Signal.Enabled
-            ? ComboText(Ms2MeasureCombo, "signal")
-            : "signal";
-        // Carried through from a loaded config, never invented here - no control edits it. RunPipeline
-        // overrides it from the document when one can say what Skyline extracted; for a cohort of
-        // pre-exported reports nothing can, and this is then the only thing standing between the
-        // accounting and the built-in default.
-        c.QcReport.Ms2Signal.ExtractionTolerance =
-            _ms2ToleranceFromConfig ?? c.QcReport.Ms2Signal.ExtractionTolerance;
-        c.QcReport.Ms2Signal.ProteinLists = c.QcReport.Ms2Signal.Enabled ? Ms2SignalListNames() : new List<string>();
         return c;
     }
 
@@ -1001,28 +799,6 @@ public partial class MainWindow : Window
             dir = Path.GetDirectoryName(dir);
         }
         return null;
-    }
-
-    private void OnBrowseMs2RawDir(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var dialog = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Directory holding this cohort's instrument data files",
-            };
-            if (!string.IsNullOrWhiteSpace(Ms2RawDirBox.Text) && Directory.Exists(Ms2RawDirBox.Text))
-                dialog.InitialDirectory = Ms2RawDirBox.Text;
-            if (dialog.ShowDialog(this) == true)
-            {
-                Ms2RawDirBox.Text = dialog.FolderName;
-                UpdateMs2SignalRow();
-            }
-        }
-        catch (Exception ex)
-        {
-            ReportHandlerFailure(nameof(OnBrowseMs2RawDir), ex);
-        }
     }
 
     private void OnBrowse(object sender, RoutedEventArgs e)
@@ -1183,17 +959,8 @@ public partial class MainWindow : Window
             _runCancellation = new CancellationTokenSource();
             StopButton.IsEnabled = true;
             var token = _runCancellation.Token;
-            // What was ASKED for. Whether it can be honoured depends on the inputs' columns, which is
-            // file I/O, so RunPipeline decides that on its own thread.
-            var wantsIonCounts = Ms2SignalCheck.IsChecked == true && Ms2IonExportCheck.IsChecked == true;
-            // Read here, not inside RunPipeline: that runs on a worker thread, where touching a WPF
-            // control throws. Same reason wantsIonCounts is captured here.
-            var acquiredRawDir = Ms2SignalCheck.IsChecked == true && Ms2AcquiredCheck.IsChecked == true
-                ? Ms2RawDirBox.Text?.Trim()
-                : null;
             await Task.Run(
-                () => RunPipeline(
-                    inputs, outputDir, metadataReport, config, wantsIonCounts, acquiredRawDir, token),
+                () => RunPipeline(inputs, outputDir, metadataReport, config, token),
                 token);
             // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
@@ -1210,7 +977,6 @@ public partial class MainWindow : Window
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
-            InvalidateMs2Signal();    // and a new accounting / acquired read for the MS2 signal pane
             InvalidateIonAccounting(); // and a new ion_accounting.parquet for the Ion accounting pane
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
@@ -1266,11 +1032,7 @@ public partial class MainWindow : Window
         Log("Stopping...");
         if (_inputs.Any(i => i.Kind == PrismInputKind.RunningSkyline))
             Log("  NOTE: a report export already running inside Skyline cannot be recalled - Skyline "
-                + "will finish writing that file. PRISM will not use it."
-                + (Ms2IonExportCheck?.IsChecked == true
-                    ? " With ion counts, that export can run for hours; the only way to end it early "
-                      + "is to close Skyline, which loses any unsaved changes to the document."
-                    : ""));
+                + "will finish writing that file. PRISM will not use it.");
         _runCancellation.Cancel();
     }
 
@@ -1287,10 +1049,7 @@ public partial class MainWindow : Window
                 "A PRISM run is in progress. Close anyway and stop it?"
                 + Environment.NewLine + Environment.NewLine
                 + "A report export already running inside Skyline cannot be recalled and will finish "
-                + "writing its file"
-                + (Ms2IonExportCheck?.IsChecked == true
-                    ? ", which with ion counts can take hours."
-                    : "."),
+                + "writing its file.",
                 "PRISM is running", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes)
             {
@@ -1323,73 +1082,6 @@ public partial class MainWindow : Window
             UpdateIonNavVisibility();
     }
 
-    /// <summary>
-    /// Export every input, then run the pipeline once over all of them. Each input is exported under its own
-    /// batch label, and the labels become the merge's Source Document labels - so several Skyline documents
-    /// (one per batch/plate) are processed as a single cohort with ComBat correcting between them.
-    /// Runs on a background thread; <see cref="Log"/> marshals to the UI.
-    /// </summary>
-    /// <param name="wantsIonCounts">
-    /// The user asked to export each Skyline document with the PRISM-Ions report (Skyline's
-    /// per-transition ion count added) rather than PRISM. An export option, not a pipeline setting:
-    /// the exported file either has the column or not, and <c>qc_report.ms2_signal.measure</c> is what
-    /// decides whether it is read. Honoured only when every input can carry the column - see below.
-    /// </param>
-    /// <summary>
-    /// Read the acquired MS2 total for each replicate, so the accounting can report a fraction.
-    /// </summary>
-    /// <remarks>
-    /// <para>Runs at the Stage 5b hook rather than after the pipeline, so the QC report generated by
-    /// this very run picks the numbers up. sample_metadata.csv is written by Stage 5, so the
-    /// replicate list exists by the time this runs - and using it rather than the accounting's rows
-    /// avoids depending on a cache the report has not written yet.</para>
-    ///
-    /// <para>Never fatal. A missing directory, an unreadable file or no reader in this build all
-    /// leave the run intact and the plot showing assigned signal without a denominator, which is
-    /// exactly what it shows when the box is unticked.</para>
-    /// </remarks>
-    private void ReadAcquiredMs2Signal(
-        string outputDir, string? rawDir, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(rawDir))
-            return;
-        try
-        {
-            if (!Directory.Exists(rawDir))
-            {
-                Log($"Acquired MS2 signal: no such directory {rawDir} - skipping. The accounting will "
-                    + "plot assigned signal without a denominator.");
-                return;
-            }
-            if (Ms2SignalReaders.All.Count == 0)
-            {
-                Log("Acquired MS2 signal: this build carries no instrument-file reader, so the "
-                    + "denominator cannot be read.");
-                return;
-            }
-
-            var samples = ReadSampleIds(Path.Combine(outputDir, "sample_metadata.csv"));
-            if (samples.Count == 0)
-            {
-                Log("Acquired MS2 signal: no replicates in sample_metadata.csv - skipping.");
-                return;
-            }
-
-            Log($"Reading acquired MS2 signal from {rawDir}...");
-            var populated = Ms2AcquiredSignal.Populate(
-                outputDir, rawDir, samples, Log, ct: cancellationToken);
-            if (!populated.AnyUsable)
-                Log("  No data file could be read, so the accounting has no denominator.");
-        }
-        catch (Exception ex) when (!IsCancellation(ex))
-        {
-            // The denominator is an enhancement to one plot. Nothing else in the run depends on it,
-            // so a failure here must not lose a pipeline that has already done all its work.
-            Log($"Acquired MS2 signal could not be read ({ex.GetType().Name}: {ex.Message}). "
-                + "The accounting will plot assigned signal without a denominator.");
-        }
-    }
-
     /// <summary>Sample ids from sample_metadata.csv, in file order.</summary>
     private static List<string> ReadSampleIds(string path)
     {
@@ -1418,7 +1110,7 @@ public partial class MainWindow : Window
     /// </param>
     private void RunPipeline(
         IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config,
-        bool wantsIonCounts, string? acquiredRawDir, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
@@ -1433,41 +1125,6 @@ public partial class MainWindow : Window
                 continue;
             config.Parsimony.Enzyme = enzyme;
             break;
-        }
-
-        // Likewise the product-ion extraction tolerance, for the MS2 signal accounting: it decides when two
-        // co-isolated peptides' fragments are the same detector counts, and the document knows exactly
-        // what Skyline used. The CLI takes it from the config; the tool reads it from the data.
-        if (config.QcReport.Ms2Signal.Enabled)
-            ResolveExtractionTolerance(inputs, config);
-
-        // Ion counts are exported only where EVERY input can carry the column. A cohort mixing a
-        // PRISM-Ions export with a pre-exported standard report has two different column sets, which
-        // the merge cannot union at all - so honouring the tick there would kill the run in Stage 1,
-        // after paying the ~30x export. Deciding it here keeps the file I/O off the UI thread.
-        var includeIonCounts = wantsIonCounts;
-        if (includeIonCounts)
-        {
-            var blocked = inputs.FirstOrDefault(
-                i => i.Kind == PrismInputKind.ReportFile && i.HasIonCounts() != true);
-            if (blocked is not null)
-            {
-                Log($"MS2 signal accounting: NOT exporting ion counts. {blocked.DisplayName} is a "
-                    + "pre-exported report with no LC Peak Transition Ion Count column, and inputs "
-                    + "with different columns cannot be merged into one cohort. Re-export it with the "
-                    + "PRISM-Ions report, or leave the measure at signal.");
-                includeIonCounts = false;
-            }
-            else if (inputs.All(i => i.Kind == PrismInputKind.ReportFile))
-            {
-                Log("MS2 signal accounting: ion counts requested, and every input is already a report "
-                    + "file - nothing is exported, and they already carry the column.");
-            }
-            else
-            {
-                Log("MS2 signal accounting: ion counts requested, so each Skyline document is exported "
-                    + "with the PRISM-Ions report. " + PrismReport.IonCountCostNote);
-            }
         }
 
         // batchAnnotation ensures the user's batch column reaches the generated Replicates report. For a
@@ -1496,7 +1153,7 @@ public partial class MainWindow : Window
                 {
                     var exported = input.Prepare(
                         reportsDir, metadataReport, batchAnnotation, SkylineCmdPathOverride, Log,
-                        cancellationToken, includeIonCounts);
+                        cancellationToken);
                     exports[i] = exported;
                     var size = File.Exists(exported.InputPath) ? new FileInfo(exported.InputPath).Length : 0;
                     SetInputStatus(input,
@@ -1582,13 +1239,7 @@ public partial class MainWindow : Window
             + string.Join(", ", reportPaths.Select(Path.GetFileName)));
         var result = PrismPipeline.Run(
             reportPaths, outputDir, config, metadata, Log, cancellationToken: cancellationToken,
-            // The MS2 signal accounting needs the isolation windows, and it runs inside the QC report -
-            // so the wait belongs at Stage 5b, not in front of Stage 1. See WaitForIsolationWindows.
-            beforeQcReport: () =>
-            {
-                WaitForIsolationWindows(isolationTask, config, cancellationToken);
-                ReadAcquiredMs2Signal(outputDir, acquiredRawDir, cancellationToken);
-            });
+            beforeQcReport: null);
         Log($"Pipeline complete: {result.NPeptides} peptides, {result.NProteins} proteins, "
             + $"{result.NSamples} samples, {result.Batches.Count} batch(es).");
 
@@ -1606,87 +1257,6 @@ public partial class MainWindow : Window
     /// rather than the whole run.
     /// </summary>
     private const int IsolationWaitSeconds = 120;
-
-    /// <summary>
-    /// Hold the QC REPORT - and only the report - until the isolation windows have landed, since the
-    /// MS2 signal accounting cannot resolve a scheme without them and skips its section.
-    ///
-    /// <para>Bounded, and placed at Stage 5b rather than in front of Stage 1. The window read asks
-    /// Skyline to open a raw data file per input, sequentially, normally ~10 s each but minutes on a
-    /// slow share and up to five minutes each before it times out; waiting for all of that before the
-    /// merge started spent it on a value the LAST stage uses. The cap matters as much as the
-    /// placement: a share that has gone away must cost the section, never the run - and the section
-    /// comes back from `prism qc -d` later without reprocessing anything.</para>
-    /// </summary>
-    private void WaitForIsolationWindows(
-        Task isolationTask, PrismConfig config, CancellationToken cancellationToken)
-    {
-        if (!config.QcReport.Ms2Signal.Enabled || isolationTask.IsCompleted)
-            return;
-        Log("MS2 signal accounting needs the acquisition's isolation windows; waiting up to "
-            + $"{IsolationWaitSeconds} s for the window read to finish...");
-        if (isolationTask.Wait(TimeSpan.FromSeconds(IsolationWaitSeconds), cancellationToken))
-            return;
-        Log("  The window read has not finished, so the MS2 signal section will be skipped. Run "
-            + "`prism qc -d` on this output directory once it has, and the section appears without "
-            + "reprocessing.");
-    }
-
-    /// <summary>
-    /// Take the product-ion extraction tolerance from the documents, the way the digestion enzyme is
-    /// taken. It decides when two co-isolated peptides' fragments are the same detector counts, so
-    /// the document that Skyline extracted with is the authority - not a config default.
-    ///
-    /// <para><b>Every input is asked, not just the first.</b> The accounting applies ONE tolerance to
-    /// the whole cohort, so plates acquired with different product settings cannot all be right;
-    /// taking the first answer and stopping picked one of them silently, and stopped even at a
-    /// document whose window the setting cannot express (a resolving-power analyzer), so a later
-    /// document that could have answered never got the chance. Disagreement is a WARNING naming every
-    /// value, because the alternative is changing every number on the plot with nothing to show it.</para>
-    /// </summary>
-    private void ResolveExtractionTolerance(IReadOnlyList<PrismInput> inputs, PrismConfig config)
-    {
-        var answers = new List<(string Setting, string Described, string Input)>();
-        foreach (var input in inputs)
-        {
-            var tolerance = input.TryGetExtractionTolerance(Log);
-            if (tolerance is null)
-                continue;   // a pre-exported report, or a document with no full-scan settings
-            var setting = tolerance.ToSetting();
-            if (setting is null)
-            {
-                // A resolving-power window, or a selective-extraction QIT one: real, but not a single
-                // +/- number, so extraction_tolerance cannot carry it. Keep asking the others.
-                Log($"MS2 signal accounting: {input.DisplayName} extracts product ions at "
-                    + $"{tolerance.Describe()}, which the extraction_tolerance setting cannot express.");
-                continue;
-            }
-            answers.Add((setting, tolerance.Describe(), input.DisplayName));
-        }
-
-        if (answers.Count == 0)
-        {
-            Log("MS2 signal accounting: no input could supply the product-ion extraction tolerance, so "
-                + $"'{config.QcReport.Ms2Signal.ExtractionTolerance}' is used. Set "
-                + "qc_report.ms2_signal.extraction_tolerance to match the acquisition - it decides "
-                + "when two co-isolated peptides' fragments count as the same detector signal.");
-            return;
-        }
-
-        config.QcReport.Ms2Signal.ExtractionTolerance = answers[0].Setting;
-        if (answers.Select(a => a.Setting).Distinct(StringComparer.Ordinal).Count() == 1)
-        {
-            Log($"MS2 signal accounting: extraction tolerance {answers[0].Described}, from the document.");
-            return;
-        }
-
-        Log("MS2 signal accounting WARNING: the documents disagree about the product-ion extraction "
-            + "tolerance ("
-            + string.Join("; ", answers.Select(a => $"{a.Input}: {a.Described}"))
-            + $"). The whole cohort is accounted at {answers[0].Described}, which is wrong for the "
-            + "others - their fragment sharing is measured in the wrong window. Set "
-            + "qc_report.ms2_signal.extraction_tolerance deliberately, or account each plate on its own.");
-    }
 
     /// <summary>Optional explicit SkylineCmd.exe path; null means auto-discover (see SkylineCmdLocator).</summary>
     private string? SkylineCmdPathOverride { get; set; }
@@ -1900,7 +1470,6 @@ public partial class MainWindow : Window
     /// slow the run down, it wedges a Skyline permanently.
     /// </summary>
     internal const double SkyToMemoryFactor = 2.0;
-
 
     private void SetInputStatus(PrismInput input, string status)
     {

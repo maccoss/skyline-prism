@@ -19,7 +19,7 @@ public class VizNavigationTests
         Assert.Equal(VizPane.Qc, VizNavigation.Current(visualizationTabSelected: true, navIndex: 0));
         Assert.Equal(VizPane.Density, VizNavigation.Current(visualizationTabSelected: true, navIndex: 1));
         Assert.Equal(VizPane.DynamicRange, VizNavigation.Current(visualizationTabSelected: true, navIndex: 2));
-        Assert.Equal(VizPane.Ms2Signal, VizNavigation.Current(visualizationTabSelected: true, navIndex: 3));
+        Assert.Equal(VizPane.IonAccounting, VizNavigation.Current(visualizationTabSelected: true, navIndex: 3));
     }
 
     /// <summary>
@@ -81,7 +81,7 @@ public class VizNavigationTests
         Assert.True(VizNavigation.ShouldFollowSkylineSelection(VizPane.DynamicRange));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Qc));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Density));
-        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Ms2Signal));
+        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.IonAccounting));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(null));
     }
 
@@ -96,6 +96,6 @@ public class VizNavigationTests
         Assert.Equal(0, (int)VizPane.Qc);
         Assert.Equal(1, (int)VizPane.Density);
         Assert.Equal(2, (int)VizPane.DynamicRange);
-        Assert.Equal(3, (int)VizPane.Ms2Signal);
+        Assert.Equal(3, (int)VizPane.IonAccounting);
     }
 }

@@ -79,18 +79,6 @@ as the GitHub Release description and fails if it is missing.
   without being coverage - so there is nothing to offer rather than a pane that cannot draw.
 
 
-- **MS2 signal against retention time, for three replicates.** A new QC report section plots
-  acquired, assigned and per-protein-list signal across the gradient for the best, median and worst
-  replicate - which answers the question the bar plot cannot: does the assigned signal track the
-  acquired signal all the way along, or fall away somewhere in particular. Three rather than all of
-  them, because 192 panels is a section nobody scrolls; ranked by acquired fraction when a
-  denominator exists and by assigned signal when it does not, and the heading says which.
-
-  Without it nothing changes and no number is wrong - the plot shows assigned signal, and the
-  caption now says explicitly that it is not a fraction of what was acquired, so the bars cannot be
-  misread as full coverage. A replicate whose file could not be read keeps no denominator rather
-  than being counted as zero, and the plot says how many replicates the fraction covers.
-
 - **The tool window is split into Analysis and Visualization.** Inputs, Settings and Log are about
   producing results and now sit under **Analysis**; QC Plots, Spectrum density and Dynamic Range are
   about reading them and sit under **Visualization**, chosen from a list down the left rather than
@@ -131,11 +119,13 @@ as the GitHub Release description and fails if it is missing.
   so the Spectrum density pane would plot a fraction of the cohort with nothing to say it was
   incomplete. A failed or cancelled merge now leaves the previous one untouched.
 
-- **`prism ms2-signal` reported "this build has no instrument-file reader" even in a build that had
-  one.** Nothing in the CLI referenced the reader assembly and nothing registered it, so the command
-  could never work regardless of how PRISM was built. The reflection-based bootstrap the Windows
-  tool already used now lives in one place that both entry points share, and the CLI takes the same
-  opt-in reference the tool does.
+- **No published `prism` CLI could read an instrument file.** Nothing in the CLI referenced the
+  reader assembly and nothing registered it, so any command that needed one answered "this build has
+  no instrument-file reader" regardless of how PRISM was built. The reflection-based bootstrap the
+  Windows tool already used now lives in one place both entry points share, every published CLI is
+  built with the reader, and the release workflow fails if a published archive does not contain it -
+  the failure was silent before, and a CLI that cannot read a file looks exactly like a cohort with
+  nothing to measure.
 
 - **One instrument file could serve several replicates.** Reference and QC injections are normally
   named identically in every plate's document, so `QC_1__@__plateA` and `QC_1__@__plateB` both
@@ -160,3 +150,23 @@ as the GitHub Release description and fails if it is missing.
 
 
 ## Breaking Changes
+
+- **MS2 signal accounting is removed, and with it `qc_report.ms2_signal`, `prism ms2-signal` and the
+  `PRISM-Ions` report.** It shipped in dotnet-v26.24.0 as a first attempt at the question ion
+  accounting now answers, and it could not answer it: its numerator was a sum of Skyline peak areas
+  (an intensity-time integral, background-subtracted) and its denominator a summed total ion current
+  (an intensity, not background-subtracted), so the ratio was never a fraction of anything - and it
+  needed an export that took about four hours on a 46M-row document to offer the better of its two
+  measures. Ion accounting measures both sides from the instrument files in the same units, in
+  single-digit minutes per file.
+
+  What this means in practice:
+
+  - A config carrying `qc_report.ms2_signal` still runs; the key is reported as unrecognized rather
+    than silently ignored, and every other setting is unaffected.
+  - `prism ms2-signal` is gone. Use `prism ion-accounting -d <output-dir> -r <raw-dir>`, which needs
+    the same raw directory and writes `ion_accounting.parquet` / `ion_cycles.parquet`.
+  - `Skyline-PRISM-Ions.skyr` is no longer in the tool zip, and the tool's **Export ion counts**
+    option is gone. Exports are the standard `PRISM` report again - the fast one.
+  - `ms2_signal_accounting.parquet`, `ms2_signal_lists.parquet` and `ms2_signal.parquet` left in an
+    output directory by an earlier release are ignored, not read and not deleted. They can be removed.

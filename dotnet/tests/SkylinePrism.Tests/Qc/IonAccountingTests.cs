@@ -367,7 +367,7 @@ public class IonAccountingTests
             });
 
             var dataset = MergedDataset.Open(parquet);
-            var cols = Ms2SignalRegions.Resolve(
+            var cols = SignalColumns.Resolve(
                 ParquetTable.ReadColumnNames(parquet).ToList());
             Assert.NotNull(cols);
 
@@ -375,7 +375,7 @@ public class IonAccountingTests
             var tolerance = ProductMassTolerance.ParseSetting("10 ppm");
             Assert.NotNull(tolerance);
 
-            var classes = new Dictionary<string, Ms2SignalRegions.PeptideClass>(StringComparer.Ordinal)
+            var classes = new Dictionary<string, PeptideClass>(StringComparer.Ordinal)
             {
                 ["PEPTIDEK"] = new(true, 0b01),
                 ["OTHERPEPK"] = new(true, 0b10),
@@ -440,12 +440,12 @@ public class IonAccountingTests
 
             var loaded = ClaimedRegionLoader.ForReplicate(
                 MergedDataset.Open(parquet),
-                Ms2SignalRegions.Resolve(ParquetTable.ReadColumnNames(parquet).ToList())!,
+                SignalColumns.Resolve(ParquetTable.ReadColumnNames(parquet).ToList())!,
                 "r1",
                 IsolationScheme.Cycle("c", 400, 4, 4, 2),
                 ProductMassTolerance.ParseSetting("10 ppm"),
                 precursorTolerance: null,
-                new Dictionary<string, Ms2SignalRegions.PeptideClass>(StringComparer.Ordinal)
+                new Dictionary<string, PeptideClass>(StringComparer.Ordinal)
                 {
                     ["PEPTIDEK"] = new(true, 0),
                 });

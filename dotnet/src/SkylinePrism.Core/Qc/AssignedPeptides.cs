@@ -9,11 +9,11 @@ namespace SkylinePrism.Core.Qc;
 /// Which peptides the run kept, and which selected protein lists claim them.
 ///
 /// <para><b>Identity only.</b> Pipeline outputs are read here for their ROW SET and their protein-group
-/// columns, never for a value: the magnitudes all come from <c>merged_data/</c>'s raw areas. Reading a
-/// number out of <c>corrected_peptides.parquet</c> would make the signal accounting move with
-/// normalization and ComBat settings that have nothing to do with what the instrument acquired.</para>
+/// columns, never for a value: every magnitude comes from the instrument files. Reading a number out
+/// of <c>corrected_peptides.parquet</c> would make the accounting move with normalization and ComBat
+/// settings that have nothing to do with what the instrument acquired.</para>
 /// </summary>
-public static class Ms2SignalPeptides
+public static class AssignedPeptides
 {
     /// <summary>Group columns the peptide output carries, in the order the matcher wants them.</summary>
     private const string AccessionColumn = "leading_protein";
@@ -24,14 +24,13 @@ public static class Ms2SignalPeptides
 
     /// <param name="Classes">Keyed by the peptide string as <c>merged_data/</c> spells it.</param>
     /// <param name="ListNames">Selected lists, aligned with the bits of every
-    /// <see cref="Ms2SignalRegions.PeptideClass.ListMask"/> and with
-    /// <see cref="Ms2SignalUnion.Result.ListArea"/>.</param>
+    /// <see cref="PeptideClass.ListMask"/>, and with the per-list totals the reader accumulates.</param>
     /// <param name="PerListPeptides">How many peptides each list claimed. A list that claimed none
     /// produces a zero bar, which is a real answer and has to be distinguishable from a missing one.</param>
     /// <param name="HasGroupColumns">False for a peptide output written before the protein-group columns
     /// existed, in which case no list can be matched and only the assigned total is meaningful.</param>
     public sealed record Classified(
-        IReadOnlyDictionary<string, Ms2SignalRegions.PeptideClass> Classes,
+        IReadOnlyDictionary<string, PeptideClass> Classes,
         IReadOnlyList<string> ListNames,
         int AssignedPeptides,
         IReadOnlyList<int> PerListPeptides,
@@ -46,12 +45,12 @@ public static class Ms2SignalPeptides
     /// and zero, so every cell is positive and a value test would mark everything present.</para>
     /// </summary>
     /// <param name="lists">Selected lists, in the order their bars should appear. More than
-    /// <see cref="Ms2SignalUnion.MaxLists"/> is rejected rather than silently truncated.</param>
+    /// <see cref="SignalColumns.MaxLists"/> is rejected rather than silently truncated.</param>
     public static Classified Classify(string outputDir, IReadOnlyList<ProteinList> lists)
     {
-        if (lists.Count > Ms2SignalUnion.MaxLists)
+        if (lists.Count > SignalColumns.MaxLists)
             throw new ArgumentOutOfRangeException(nameof(lists), lists.Count,
-                $"At most {Ms2SignalUnion.MaxLists} protein lists can be accounted for at once.");
+                $"At most {SignalColumns.MaxLists} protein lists can be accounted for at once.");
 
         var rollup = Path.Combine(outputDir, "peptides_rollup.parquet");
         var assigned = ReadPeptideKeys(rollup);
@@ -63,13 +62,13 @@ public static class Ms2SignalPeptides
         var masks = ReadListMasks(
             Path.Combine(outputDir, "corrected_peptides.parquet"), lists, out var hasGroupColumns);
 
-        var classes = new Dictionary<string, Ms2SignalRegions.PeptideClass>(
+        var classes = new Dictionary<string, PeptideClass>(
             assigned.Count, StringComparer.Ordinal);
         var perList = new int[lists.Count];
         foreach (var peptide in assigned)
         {
             var mask = masks.GetValueOrDefault(peptide, 0u);
-            classes[peptide] = new Ms2SignalRegions.PeptideClass(true, mask);
+            classes[peptide] = new PeptideClass(true, mask);
             for (var l = 0; l < lists.Count; l++)
                 if ((mask & (1u << l)) != 0)
                     perList[l]++;

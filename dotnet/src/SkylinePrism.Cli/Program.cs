@@ -39,7 +39,6 @@ public static class Program
                 "run" => CmdRun(rest),
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
-                "ms2-signal" => CmdMs2Signal(rest),
                 "ion-accounting" => CmdIonAccounting(rest),
                 "compare" => CmdCompare(rest),
                 "config-template" => CmdConfigTemplate(rest),
@@ -176,97 +175,15 @@ public static class Program
     }
 
     /// <summary>
-    /// Read the instrument data files for a finished run and record how much MS2 each acquired.
-    /// </summary>
-    /// <remarks>
-    /// Its own command, and never part of <c>prism run</c>, because of what it costs: the cohort this
-    /// was written against is 192 files at ~6 GB each - about 1.1 TB, normally over a network share -
-    /// against a pipeline that otherwise reads one exported report. The accounting is perfectly
-    /// useful without it; this is what turns "how much signal was assigned" into "what fraction of
-    /// what the instrument acquired was assigned".
-    /// </remarks>
-    private static int CmdMs2Signal(string[] args)
-    {
-        var opts = ParseOptions(args, multiValue: new HashSet<string>());
-        var dir = opts.GetSingle("-d", "--dir") ?? opts.GetSingle("-o", "--output-dir");
-        var rawDir = opts.GetSingleOrNull("-r", "--raw-dir");
-        if (dir is null || rawDir is null)
-        {
-            Console.Error.WriteLine(
-                "Usage: prism ms2-signal -d <output-dir> -r <raw-dir> [--lanes N] [--max N]");
-            return 2;
-        }
-        if (!Directory.Exists(dir))
-        {
-            Console.Error.WriteLine($"Error: no such output directory: {dir}");
-            return 2;
-        }
-        if (!Directory.Exists(rawDir))
-        {
-            Console.Error.WriteLine($"Error: no such raw directory: {rawDir}");
-            return 2;
-        }
-
-        var lanes = int.TryParse(opts.GetSingleOrNull("--lanes"), out var l)
-            ? l
-            : Ms2SignalReaders.DefaultLanes;
-        var max = int.TryParse(opts.GetSingleOrNull("--max"), out var m) ? m : 0;
-
-        if (Ms2SignalReaders.All.Count == 0)
-        {
-            // Said plainly rather than reported as "0 files readable": this build simply has no
-            // reader, which is the normal state of the cross-platform CLI, and no raw directory can
-            // fix it.
-            Console.Error.WriteLine(
-                "Error: this build has no instrument-file reader, so acquired MS2 signal cannot be "
-                + "read. The Windows Skyline tool package carries one.");
-            return 1;
-        }
-
-        // The replicates to resolve come from the accounting itself, so the two halves of the
-        // fraction are keyed the same way and in the same order.
-        var accounting = Ms2SignalAccounting.ReadCached(dir);
-        if (accounting is null || accounting.IsEmpty)
-        {
-            Console.Error.WriteLine(
-                $"Error: no {Ms2SignalAccounting.AccountingFile} in {dir}. Run the MS2 signal "
-                + "accounting first (qc_report.ms2_signal.enabled), then this.");
-            return 1;
-        }
-
-        var result = Ms2AcquiredSignal.Populate(
-            dir, rawDir, accounting.Rows.Select(r => r.Sample),
-            Console.WriteLine, lanes, max);
-
-        if (!result.AnyUsable)
-        {
-            Console.Error.WriteLine(
-                "No data file could be read, so no denominator was recorded. The QC report will "
-                + "continue to plot assigned signal without a fraction.");
-            return 1;
-        }
-
-        var joined = accounting.WithAcquired(Ms2AcquiredSignal.ReadTotals(dir));
-        Console.WriteLine(
-            $"Median assigned/acquired over {result.Usable:N0} replicate(s): "
-            + $"{joined.MedianAcquiredFraction():P1}");
-        Console.WriteLine(
-            $"Wrote {Path.Combine(dir, Ms2AcquiredSignal.FileName)}. "
-            + "Re-run 'prism qc -d' to put the acquired bar on the plot.");
-        return 0;
-    }
-
-    /// <summary>
     /// Measure acquired and assigned ions from the instrument files, and cache the result.
     /// </summary>
     /// <remarks>
-    /// Its own command, and never part of <c>prism run</c>, for the same reason as
-    /// <c>ms2-signal</c>: the cohort this was written against is 192 files at about 6 GB each,
-    /// roughly 1.1 TB, normally over a network share. What it buys over <c>ms2-signal</c> is that
-    /// BOTH halves of the fraction are measured the same way - intensity times ion injection time in
-    /// seconds, summed from the same peak arrays - so the ratio is dimensionless. The earlier command
-    /// divided an intensity-time integral by an intensity: a ratio with units of time, which is not a
-    /// fraction at all.
+    /// Its own command, and never part of <c>prism run</c>, because of what it costs: the cohort
+    /// this was written against is 192 files at about 6 GB each, roughly 1.1 TB, normally over a
+    /// network share, against a pipeline that otherwise reads one exported report.
+    ///
+    /// <para>BOTH halves of the fraction are measured the same way - intensity times ion injection
+    /// time in seconds, summed from the same peak arrays - so the ratio is dimensionless.</para>
     /// </remarks>
     private static int CmdIonAccounting(string[] args)
     {
@@ -513,7 +430,6 @@ public static class Program
         "run" => RunHelp,
         "merge" => MergeHelp,
         "qc" => QcHelp,
-        "ms2-signal" => Ms2SignalHelp,
         "ion-accounting" => IonAccountingHelp,
         "compare" => CompareHelp,
         "config-template" => ConfigTemplateHelp,
@@ -588,31 +504,6 @@ public static class Program
 
         EXAMPLES:
             prism merge plate1.csv plate2.csv -o merged.parquet
-        """;
-
-    private const string Ms2SignalHelp = """
-        prism ms2-signal - Read acquired MS2 signal from the instrument data files
-
-        Records how much MS2 each replicate's data file actually acquired, which is the
-        denominator the MS2 signal accounting cannot get from any Skyline export. Writes
-        ms2_signal.parquet into the output directory; re-run 'prism qc -d' afterwards and
-        the accounting plot gains its acquired bar and reports assigned/acquired.
-
-        Separate from 'prism run' on purpose: a cohort is hundreds of gigabytes of raw
-        data, usually over a network share, where the rest of the pipeline reads one
-        exported report. Run it when you want the fraction, not on every analysis.
-
-        Replicates are matched to files on the file stem - an exact match first, then the
-        longest stem ending in the replicate name, which is what handles the prefixes
-        acquisition software adds.
-
-        Usage: prism ms2-signal -d <output-dir> -r <raw-dir> [options]
-
-        Options:
-            -d, --dir <DIR>       Output directory from a prior 'prism run'
-            -r, --raw-dir <DIR>   Directory holding that cohort's instrument data files
-                --lanes <N>       Concurrent reads (default 8; measured to plateau there)
-                --max <N>         Stop after N files - a spot check rather than the cohort
         """;
 
     private const string QcHelp = """

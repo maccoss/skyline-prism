@@ -33,15 +33,9 @@ public sealed class SkylineReportDriver
     /// file stem. Defaults to "PRISM" (the single-document case); pass the document name when several
     /// documents are being combined, so their replicates stay distinguishable.
     /// </param>
-    /// <param name="includeIonCounts">
-    /// Export the <see cref="PrismReport.IonsName"/> report - the standard one plus Skyline's
-    /// per-transition LC Peak ion count - instead of <see cref="PrismReport.Name"/>. Much slower: Skyline
-    /// computes that column per spectrum for every transition. Needed for
-    /// <c>qc_report.ms2_signal.measure: ions</c>, and for nothing else.
-    /// </param>
     public ExportedReports Export(
         string workDir, string? metadataReportName = null, string? batchAnnotation = null,
-        string? documentLabel = null, bool includeIonCounts = false)
+        string? documentLabel = null)
     {
         Directory.CreateDirectory(workDir);
 
@@ -53,17 +47,13 @@ public sealed class SkylineReportDriver
 
         var label = string.IsNullOrWhiteSpace(documentLabel) ? "PRISM" : documentLabel!;
 
-        var reportName = PrismReport.NameFor(includeIonCounts);
-        EnsureReportsInstalled(includeIonCounts);
+        var reportName = PrismReport.Name;
+        EnsureReportsInstalled();
 
         // Preferred path: export the report directly as parquet. Skyline determines the format
         // from the file extension, the same mechanism that produced the CSV.
         var prismParquet = Path.Combine(workDir, label + ".parquet");
         _log($"Exporting the {reportName} report as parquet (this can take a while on large documents)...");
-        if (includeIonCounts)
-        {
-            _log("  Ion counts requested: " + PrismReport.IonCountCostNote);
-        }
         // Delete the destination FIRST, so what is validated afterwards can only be what this export
         // wrote. PAR1 magic says the bytes are parquet, not that this run produced them, and the
         // export goes to a stable path that nothing clears - so a thrown ExportReport used to leave
@@ -432,14 +422,13 @@ public sealed class SkylineReportDriver
         return names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().ToList();
     }
 
-    private void EnsureReportsInstalled(bool includeIonCounts)
+    private void EnsureReportsInstalled()
     {
-        // Only the transition report is always needed - the standard PRISM one, or PRISM-Ions when ion
-        // counts were asked for; they are separate saved reports so the fast one is never replaced by
-        // the slow one. The replicate metadata comes from the Replicates document grid (read
-        // dynamically), so the PRISM-Replicates saved report is installed on demand only if that grid
-        // read fails - keeping it out of the document's saved-report list.
-        InstallReport(PrismReport.FileFor(includeIonCounts), PrismReport.NameFor(includeIonCounts));
+        // Only the transition report is always needed. The replicate metadata comes from the
+        // Replicates document grid (read dynamically), so the PRISM-Replicates saved report is
+        // installed on demand only if that grid read fails - keeping it out of the document's
+        // saved-report list.
+        InstallReport(PrismReport.FileName, PrismReport.Name);
     }
 
     /// <summary>

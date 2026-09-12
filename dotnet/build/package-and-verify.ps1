@@ -19,11 +19,12 @@ Write-Host '== 2/4  Package SkylinePrism.zip ==' -ForegroundColor Cyan
 dotnet msbuild (Join-Path $root 'build\package.proj') "/p:Configuration=$Configuration"
 if ($LASTEXITCODE -ne 0) { Write-Host 'ABORT: packaging failed.' -ForegroundColor Red; exit 1 }
 
-# The reader is what makes acquired ion counts measurable at all, and the tool zip is the only
-# artifact that ships one (the published CLIs do not). package.proj forces PrismWithPwiz=true, so a
-# zip without it means the pwiz checkout was missing or the reference stopped resolving - and the
-# symptom would be silent: the tool launches, passes the smoke test below, and the Ion accounting
-# pane simply never appears, because it hides itself when nothing has been measured.
+# The reader is what makes acquired ion counts measurable at all, and every published artifact
+# carries one - the tool zip here, and each `prism` CLI via dotnet-release.yml. package.proj forces
+# PrismWithPwiz=true, so a zip without it means the pwiz checkout was missing or the reference
+# stopped resolving - and the symptom would be silent: the tool launches, passes the smoke test
+# below, and the Ion accounting pane simply never appears, because it hides itself when nothing has
+# been measured.
 Write-Host '== 3/4  Check the packaged tool carries the instrument-file reader ==' -ForegroundColor Cyan
 $zip = Join-Path $root 'publish\SkylinePrism.zip'
 Add-Type -AssemblyName System.IO.Compression.FileSystem

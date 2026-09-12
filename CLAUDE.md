@@ -135,8 +135,9 @@ Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2
 >
 > Rules that follow, all of them learned the hard way:
 >
-> - **Never divide a peak area by a summed TIC.** `Ms2SignalMeasure` documents this on the enum
->   itself, and it was still done.
+> - **Never divide a peak area by a summed TIC.** The removed MS2 signal accounting did exactly
+>   this, with the hazard documented on its own enum, and produced a plausible-looking coverage
+>   percentage that was a ratio carrying units of time. Documenting a trap does not stop it.
 > - **Never sum per-transition areas or ion counts to get "assigned".** Two peptides whose fragments
 >   fall within the extraction tolerance of each other in one isolation window extract the SAME
 >   detector counts, so summing credits both and can push assigned past acquired. `ClaimedSignalIndex`
@@ -465,21 +466,23 @@ Key sections:
 
 ### Core/Qc/
 - `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory
-- `Ms2SignalAccounting`: the MS2 signal accounting, cached as `ms2_signal_accounting.parquet`.
-  **That cache is keyed on `SettingsKeyFor(measure, tolerance, isolation scheme, list names)`, and the
-  key is stored in the file** - add a `qc_report.ms2_signal` setting that changes the numbers and it
-  must go into that key too, or a re-run replots the previous run's numbers under the new run's
-  caption. Nothing fails loudly if you forget: both plots look right, and the caption comes from the
-  cache. The key records what was REQUESTED, never what was computed - asking for `ions` on an export
-  with no ion column falls back to signal, and keying on the fallback would recompute forever.
-- `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex`: ion
-  accounting - how many ions reached the detector and what fraction a peptide sequence explains, at
-  each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
-  **The same cache-key rule as `Ms2SignalAccounting` applies, and for the same reason:** the key
-  (`IonAccountingStore.SettingsKeyFor`) covers both extraction tolerances, the isolation scheme, the
-  selected lists AND a fingerprint of the instrument files and `merged_data/`. Add anything that
-  changes the numbers and it must go in that key, or a re-run replots the previous run's numbers
-  under the new run's caption with nothing failing loudly.
+- `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
+  `AssignedPeptides`: ion accounting - how many ions reached the detector and what fraction a peptide
+  sequence explains, at each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
+  **The cache is keyed on `IonAccountingStore.SettingsKeyFor`, and the key is stored in the file:**
+  it covers both extraction tolerances, the isolation scheme, the selected lists AND a fingerprint of
+  the instrument files and `merged_data/`. Add anything that changes the numbers and it must go in
+  that key, or a re-run replots the previous run's numbers under the new run's caption with nothing
+  failing loudly - both plots look right, and the caption comes from the cache.
+  **A keyed cache is not necessarily a complete one:** `--max` measures a few replicates and writes a
+  valid file, so reuse is decided by which replicates it covers, never by the key alone.
+
+  > [!NOTE]
+  > This replaced `Ms2SignalAccounting`, removed in dotnet-vNEXT along with `qc_report.ms2_signal`,
+  > `prism ms2-signal` and the `PRISM-Ions` report. It divided a sum of Skyline peak areas by a
+  > summed total ion current - an intensity-time integral over an intensity - so its "fraction" was
+  > never one. Do not reintroduce any part of it; an output directory from dotnet-v26.24.x may still
+  > hold `ms2_signal*.parquet`, which nothing reads.
 - `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
 - `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
 - `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs
@@ -546,12 +549,6 @@ prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 
 # Regenerate QC report from existing output (without reprocessing)
 prism qc -d output_dir/
-
-# Read acquired MS2 signal from the instrument files - the denominator no Skyline
-# export carries. Writes ms2_signal.parquet; re-run `prism qc -d` and the MS2
-# accounting plot gains its acquired bar and reports assigned/acquired.
-# Deliberately NOT part of `prism run`: a cohort is hundreds of GB of raw data.
-prism ms2-signal -d output_dir/ -r /path/to/raw --max 3
 
 # Compare control-sample CVs between two runs
 prism compare -1 run1/ -2 run2/ -o comparison.html
@@ -688,16 +685,16 @@ tool's Skyline integration. Key points (mirrored in the code under `dotnet/src/S
 > `ReplicatesReportBuilder`, which applies the quoting — go through it rather than hand-rolling XML.
 
 > [!NOTE]
-> **Two transition report definitions ship, and they must stay in lockstep.** `Reports/Skyline-PRISM.skyr`
-> (view `PRISM`) is the standard export; `Reports/Skyline-PRISM-Ions.skyr` (view `PRISM-Ions`) is the same
-> columns in the same order plus exactly one more, `Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount`,
-> which `qc_report.ms2_signal.measure: ions` reads. It is a separate report because Skyline is slow to compute
-> that column (measured at 29x slower per row on a 46M-row document - about 4 hours instead of 9.5 minutes -
-> and one column costs half of what five do, so the cost is per-transition chromatogram access) and because a report is
-> installed into the user's Skyline settings by view name - two names mean the fast report is never silently
-> replaced by the slow one. Both exporters choose through `PrismReport.NameFor/FileFor(includeIonCounts)`;
-> the headless export stamp records which report produced a cached export. `PrismReportDefinitionTests`
-> fails the build if the two files drift, so add a column to BOTH or to neither.
+> **One transition report definition ships**, `Reports/Skyline-PRISM.skyr` (view `PRISM`), named by
+> `PrismReport.Name`/`FileName` so the file, the view and the report Skyline is asked to export cannot
+> disagree. There used to be a second, `PRISM-Ions` - the same columns plus
+> `Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount` - and it is gone with
+> `qc_report.ms2_signal`. **Do not add that column back.** Skyline computes it by reading every
+> transition's chromatogram points inside the peak, measured at 29x slower per row on a 46M-row
+> document (about 4 hours against 9.5 minutes), and per-transition counts still cannot be summed to
+> get an assigned total, because co-isolated peptides sharing a fragment extract the same detector
+> counts. `prism ion-accounting` measures the same quantity from the instrument files in single-digit
+> minutes per file and merges claims before counting.
 
 ### Inputs: multiple documents, open or closed (`PrismInput`)
 

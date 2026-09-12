@@ -55,6 +55,13 @@ public partial class MainWindow
         _ionCycles.Clear();
     }
 
+    /// <summary>
+    /// The <c>Tag</c> of a combo's selected item, which is how these combos carry a stable key
+    /// independent of the text shown. Lived beside the MS2 signal pane until that was removed.
+    /// </summary>
+    private static string? ComboTag(ComboBox combo) =>
+        (combo?.SelectedItem as ComboBoxItem)?.Tag as string;
+
     private string IonView => ComboTag(IonViewCombo) ?? "Accounting";
 
     private bool IonProfileSelected =>

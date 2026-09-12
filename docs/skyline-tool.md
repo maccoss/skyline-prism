@@ -37,7 +37,6 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 | **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
 | **Spectrum density** | How many precursors were detected in each DIA spectrum of a run |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
-| **MS2 signal** | How much MS2 signal the analysis assigns to a peptide, per replicate and across the gradient |
 | **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
@@ -295,62 +294,16 @@ this - it was extracted on the way in - and PRISM handles the closed case itself
 An archive with no `.sky` inside, or with several, is refused by name with the reason; PRISM will not
 guess which document you meant.
 
-## MS2 signal accounting
-
-Settings row **9** adds a QC-report section answering "how much of the MS2 signal does this analysis
-actually put a name to?" - per replicate, the signal the run assigns to a peptide, with a line per
-protein list ticked visible in **Protein lists...** (the same set the Dynamic Range tab highlights).
-Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted
-once, so two co-isolated peptides sharing a fragment mass are not both credited with it.
-
-**measure** picks what to total:
-
-| | What it sums | Needs |
-|---|---|---|
-| `signal` | Each transition's gross peak area (`Area + Background`) | Any export |
-| `ions` | Skyline's `LC Peak Transition Ion Count` - intensity x injection time per spectrum, summed across the peak | An export carrying that column |
-
-`ions` is the better measure: both it and an acquired total are then counts of ions, so no unit or
-background correction applies, and it cannot be recovered from an area afterwards (on AGC-controlled
-data the injection time varies by two orders of magnitude within a run and anti-correlates with
-intensity). It is grayed out, with the reason as its tooltip, until every input can supply the column.
-
-> [!TIP]
-> **If what you want is the fraction of acquired ions, use [Ion accounting](#ion-accounting)
-> instead and skip this export entirely.** `prism ion-accounting` computes both the numerator and
-> the denominator from the instrument files in single-digit minutes per file, in matching units, and
-> counts shared signal once. The `PRISM-Ions` export below exists for the `ions` *measure* of the
-> MS2 signal plot; it is not needed for the ion fraction, and it costs about four hours on a 46M-row
-> document for a numerator that still cannot be summed correctly, because per-transition totals
-> count signal shared between peptides once per transition.
-
-**Export ion counts** is what makes that possible: each Skyline document is exported with the
-`PRISM-Ions` report - the standard report plus that one column - instead of `PRISM`. Expect roughly a
-**30x slower export**: measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document,
-because Skyline reads every transition's chromatogram points to compute it. Three things follow:
-
-- **The option and the measure are separate.** Once ion counts are exported, both measures are
-  available, so a later re-run can plot either without exporting again.
-- **A closed document is exported once per variant** (into `skyline-reports/with-ion-counts/`), so
-  switching the measure back and forth does not repeat the four hours. A document open in Skyline has
-  no such cache - a live document can hold unsaved edits - so it re-exports on every run.
-- **An export Skyline has started cannot be recalled.** Stop ends PRISM's run, not Skyline's export;
-  the only way to end that early is to close Skyline, which loses unsaved changes to the document.
-
-The option is ignored for an input that is already an exported report, and PRISM refuses it outright
-when one of those lacks the column - inputs whose columns differ cannot be merged into one cohort, so
-paying for the slow export there would only fail in Stage 1.
-
-The tool also reads the document's own product-ion extraction tolerance
-(`Transition Settings > Full-Scan`) rather than using the config default, since that is what decides
-when two fragments are the same detector counts. Every input is asked, and disagreement is a warning.
-
 ## Ion accounting
 
-The question this answers is the one the MS2 signal plot above can only approximate: **of the ions
-that actually reached the detector, what fraction did this analysis put a peptide sequence to?** Two
-numbers per replicate at each MS level, both measured from the instrument files so both are the same
-quantity and the ratio is a genuine fraction.
+**Of the ions that actually reached the detector, what fraction did this analysis put a peptide
+sequence to?** Two numbers per replicate at each MS level, both measured from the instrument files,
+so both are the same quantity and the ratio is a genuine fraction.
+
+No Skyline export can answer this. `TicArea` is one value per replicate and is MS1 by construction,
+and a peak area is an intensity-time integral where a summed total ion current is an intensity - so
+their ratio carries units of time rather than being a fraction. Both sides have to come from the
+instrument files, which is why this is a separate, cached command rather than part of `prism run`.
 
 Run it from the command line:
 

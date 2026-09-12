@@ -19,8 +19,8 @@ public readonly record struct ExtractionWindow(double Start, double End)
 
     /// <summary>
     /// Do these two ranges share any m/z, and therefore any detector counts? Strict, so windows that
-    /// merely touch are separate - matching the retention-time rule in <see cref="Ms2SignalUnion"/>,
-    /// where a peak ending exactly where the next begins shares no scan.
+    /// merely touch are separate: a fragment extracted up to exactly where the next begins shares no
+    /// detector counts with it.
     /// </summary>
     public bool Overlaps(ExtractionWindow other) => Start < other.End && other.Start < End;
 }
@@ -91,7 +91,7 @@ public sealed record ProductMassTolerance(
     /// <summary>
     /// The m/z range Skyline extracted a product ion at <paramref name="mz"/> over. Two product ions
     /// in one isolation window are the same detector signal when their windows
-    /// <see cref="ExtractionWindow.Overlaps">overlap</see>.
+    /// overlap.
     /// </summary>
     public ExtractionWindow WindowAt(double mz)
     {
@@ -174,9 +174,10 @@ public sealed record ProductMassTolerance(
     }
 
     /// <summary>
-    /// The config spelling of this tolerance - <c>"10 ppm"</c> or <c>"0.7 m/z"</c> - chosen so that
-    /// <see cref="ParseSetting"/> gives back an equal tolerance; this is how the Skyline tool hands a
-    /// document's own extraction setting to <c>qc_report.ms2_signal.extraction_tolerance</c>.
+    /// The written spelling of this tolerance - <c>"10 ppm"</c> or <c>"0.7 m/z"</c> - chosen so that
+    /// <see cref="ParseSetting"/> gives back an equal tolerance. That is the form
+    /// <c>prism ion-accounting --product-tolerance</c> takes, so a document's own extraction setting
+    /// can be handed straight to it rather than retyped as a number that means something else.
     ///
     /// <para>Null whenever the setting cannot express this window, so a caller keeps the configured
     /// value and says so rather than writing a number that means something else:</para>

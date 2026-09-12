@@ -71,9 +71,9 @@ public static class ClaimedRegionLoader
     /// nothing on the plot to show it.
     /// </param>
     public static Loaded ForReplicate(
-        MergedDataset dataset, Ms2SignalRegions.Columns cols, string sample, IsolationScheme scheme,
+        MergedDataset dataset, SignalColumns cols, string sample, IsolationScheme scheme,
         ProductMassTolerance? productTolerance, ProductMassTolerance? precursorTolerance,
-        IReadOnlyDictionary<string, Ms2SignalRegions.PeptideClass> classes, int memoryBudgetMb = 0)
+        IReadOnlyDictionary<string, PeptideClass> classes, int memoryBudgetMb = 0)
     {
         using var conn = Connect(dataset, memoryBudgetMb);
         using var cmd = DuckDbTuning.StreamingCommand(conn, Sql(cols, dataset.ScanTarget, sample));
@@ -92,9 +92,9 @@ public static class ClaimedRegionLoader
     /// the cohort's.
     /// </summary>
     public static void ForEachSample(
-        MergedDataset dataset, Ms2SignalRegions.Columns cols, IsolationScheme scheme,
+        MergedDataset dataset, SignalColumns cols, IsolationScheme scheme,
         ProductMassTolerance? productTolerance, ProductMassTolerance? precursorTolerance,
-        IReadOnlyDictionary<string, Ms2SignalRegions.PeptideClass> classes,
+        IReadOnlyDictionary<string, PeptideClass> classes,
         Action<string, Loaded> onSample, int memoryBudgetMb = 0)
     {
         if (onSample is null)
@@ -138,7 +138,7 @@ public static class ClaimedRegionLoader
     /// The projection. The precursor flag is selected as a COLUMN rather than filtered on, which is
     /// what makes this one pass over both levels.
     /// </summary>
-    internal static string Sql(Ms2SignalRegions.Columns cols, string scanTarget, string? sample)
+    internal static string Sql(SignalColumns cols, string scanTarget, string? sample)
     {
         var samp = sample is null
             ? $@"""{cols.Sample}"" AS samp,"
@@ -171,7 +171,7 @@ public static class ClaimedRegionLoader
         private readonly IsolationScheme _scheme;
         private readonly ProductMassTolerance? _productTolerance;
         private readonly ProductMassTolerance? _precursorTolerance;
-        private readonly IReadOnlyDictionary<string, Ms2SignalRegions.PeptideClass> _classes;
+        private readonly IReadOnlyDictionary<string, PeptideClass> _classes;
 
         // A set, not a list: identical geometry claimed by identical lists is one claim, and Skyline
         // exports a shared peptide once per protein assignment, so the repeats are routine. Merging
@@ -182,7 +182,7 @@ public static class ClaimedRegionLoader
         public Accumulator(
             IsolationScheme scheme, ProductMassTolerance? productTolerance,
             ProductMassTolerance? precursorTolerance,
-            IReadOnlyDictionary<string, Ms2SignalRegions.PeptideClass> classes)
+            IReadOnlyDictionary<string, PeptideClass> classes)
         {
             _scheme = scheme;
             _productTolerance = productTolerance;
@@ -270,8 +270,8 @@ public static class ClaimedRegionLoader
     /// <summary>
     /// The isolation window a precursor was fragmented in. Overlapping schemes (staggered DIA) can
     /// cover one m/z with several windows; the narrowest is taken, matching how
-    /// <see cref="Ms2SignalRegions"/> and <see cref="PrecursorDensityMap"/> resolve the same
-    /// ambiguity, so the three views agree about which spectrum a precursor belongs to.
+    /// <see cref="PrecursorDensityMap"/> resolves the same ambiguity, so the two views agree about
+    /// which spectrum a precursor belongs to.
     /// </summary>
     internal static int WindowIndexFor(
         IsolationScheme scheme, double mz, double rtStart, double rtStop)

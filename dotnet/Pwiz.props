@@ -20,7 +20,7 @@
     it, which PRISM reports as an unreadable file rather than as missing signal.
   -->
   <PropertyGroup>
-    <!-- Default to a sibling organisation checkout: three levels up from dotnet/ is the
+    <!-- Default to a sibling organization checkout: three levels up from dotnet/ is the
          directory holding the org folders, so skyline-prism/ and ProteoWizard/ sit side by side. -->
     <PwizSharpDir Condition="'$(PwizSharpDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\ProteoWizard\pwiz\pwiz-sharp</PwizSharpDir>
     <PwizMsDataProject>$(PwizSharpDir)\pwiz\src\MsData\MsData.csproj</PwizMsDataProject>

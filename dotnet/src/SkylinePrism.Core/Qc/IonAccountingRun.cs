@@ -102,7 +102,7 @@ public static class IonAccountingRun
 
         var dataset = MergedDataset.Open(mergedRoot);
         var representative = dataset.RepresentativeFile();
-        var cols = Ms2SignalRegions.Resolve(ParquetTable.ReadColumnNames(representative).ToList());
+        var cols = SignalColumns.Resolve(ParquetTable.ReadColumnNames(representative).ToList());
         if (cols is null)
         {
             log?.Invoke(
@@ -111,7 +111,7 @@ public static class IonAccountingRun
             return null;
         }
 
-        var classified = Ms2SignalPeptides.Classify(outputDir, lists);
+        var classified = AssignedPeptides.Classify(outputDir, lists);
         if (classified.AssignedPeptides == 0)
         {
             log?.Invoke(
@@ -331,7 +331,7 @@ public static class IonAccountingRun
     /// </summary>
     private static void SaveProgress(
         string outputDir, string settingsKey, string productText, string precursorText,
-        string schemeText, Ms2SignalPeptides.Classified classified,
+        string schemeText, AssignedPeptides.Classified classified,
         IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles)
     {
         try
@@ -447,7 +447,7 @@ public static class IonAccountingRun
 
     /// <summary>
     /// Columns of a wide peptide parquet that are not replicates. Kept beside
-    /// <see cref="Ms2SignalPeptides"/>'s own list deliberately: both read the same file, and a column
+    /// <see cref="AssignedPeptides"/>'s own list deliberately: both read the same file, and a column
     /// added to one and not the other would surface as a phantom replicate with no data file.
     /// </summary>
     private static readonly string[] NonSampleColumns =

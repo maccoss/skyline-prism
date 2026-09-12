@@ -221,46 +221,6 @@
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
 
-                                <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
-                                    <TextBlock Text="9. MS2 signal accounting:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="Ms2SignalCheck" VerticalAlignment="Center" Margin="0,0,8,0"
-                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                              Content="Plot how much of the MS2 signal the run assigns"
-                                              ToolTip="Adds a QC report section: per replicate, the MS2 signal the run assigns to a peptide, with a line per visible protein list. Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted once, so shared fragments are not double counted. Off by default because it costs one extra pass over the merged table, comparable to Stage 2." />
-                                    <TextBlock Text="measure:" VerticalAlignment="Center" Margin="12,0,6,0" />
-                                    <ComboBox x:Name="Ms2MeasureCombo" Width="90" IsEnabled="False"
-                                              SelectionChanged="OnMs2SignalChanged"
-                                              ToolTip="What to total. signal: gross peak areas (Area + Background), available from any export. ions: Skyline's LC Peak Transition Ion Count - intensity x injection time per spectrum, summed across the peak - the better measure, available only when the export carries that column.">
-                                        <ComboBoxItem>signal</ComboBoxItem>
-                                        <ComboBoxItem x:Name="Ms2MeasureIonsItem" ToolTipService.ShowOnDisabled="True">ions</ComboBoxItem>
-                                    </ComboBox>
-                                    <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
-                                            Click="OnManageProteinLists"
-                                            ToolTip="Which lists get a line on the plot: the ones ticked visible in the editor - the same set the Dynamic Range tab highlights." />
-                                </StackPanel>
-
-                                <StackPanel x:Name="Ms2IonExportRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
-                                    <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                                    <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
-                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                              ToolTipService.ShowOnDisabled="True"
-                                              Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
-                                              ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
-                                </StackPanel>
-                                <StackPanel x:Name="Ms2AcquiredRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
-                                    <TextBlock Text="    Acquired:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                                    <CheckBox x:Name="Ms2AcquiredCheck" VerticalAlignment="Center"
-                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                              ToolTipService.ShowOnDisabled="True"
-                                              Content="read the instrument files for the acquired MS2 total"
-                                              ToolTip="Reads each replicate's raw data file to find how much MS2 the instrument actually acquired - the denominator no Skyline export carries. Without it the plot shows assigned signal only and cannot state a fraction. Reads the files after the pipeline finishes, about a second per file, and records the per-cycle trace at the same time so the retention-time profile has its acquired band." />
-                                    <TextBox x:Name="Ms2RawDirBox" Width="240" VerticalAlignment="Center" Margin="8,0,0,0"
-                                             ToolTipService.ShowOnDisabled="True"
-                                             ToolTip="Directory holding this cohort's instrument data files (.raw, .mzML, .d). Replicates are matched to files on the file stem, so the acquisition prefixes Skyline does not record are handled." />
-                                    <Button x:Name="Ms2RawDirBrowse" Content="Browse..." Padding="10,2" Margin="6,0,0,0"
-                                            Click="OnBrowseMs2RawDir" />
-                                </StackPanel>
-                                <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
                                            Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
@@ -289,7 +249,6 @@
                         <ListBoxItem x:Name="QcNavItem" Content="QC Plots" Padding="10,7" />
                         <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
                         <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
-                        <ListBoxItem x:Name="Ms2NavItem" Content="MS2 signal" Padding="10,7" />
                         <!-- Collapsed until the output directory carries ion_accounting.parquet:
                              every plot on it needs a measured denominator, so without one there is
                              nothing to offer rather than an empty pane to click. -->
@@ -438,33 +397,6 @@
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
-                        </DockPanel>
-                        <DockPanel x:Name="Ms2Pane" Visibility="Collapsed">
-                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
-                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                                <ComboBox x:Name="Ms2ViewCombo" Width="210"
-                                          SelectionChanged="OnMs2ViewChanged"
-                                          ToolTip="Per replicate: how much MS2 signal the run assigns, for the whole cohort. Across the gradient: the same quantity against retention time for one replicate, over the signal the instrument acquired.">
-                                    <ComboBoxItem Tag="Accounting">Assigned per replicate</ComboBoxItem>
-                                    <ComboBoxItem Tag="Profile">Across the gradient</ComboBoxItem>
-                                </ComboBox>
-                                <TextBlock x:Name="Ms2ReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
-                                           Margin="16,0,4,0" />
-                                <ComboBox x:Name="Ms2ReplicateCombo" Width="240"
-                                          SelectionChanged="OnMs2ReplicateChanged"
-                                          ToolTip="Which replicate to profile. Rebuilding one is a scan of that replicate's slice of the merged data - a second or two - so switching is not free but is not slow either." />
-                                <TextBlock x:Name="Ms2BinLabel" Text="RT bin (min):" VerticalAlignment="Center"
-                                           Margin="16,0,4,0" />
-                                <TextBox x:Name="Ms2BinBox" Width="46" Text="0.25" VerticalAlignment="Center"
-                                         LostFocus="OnMs2BinChanged" KeyDown="OnMs2BinKeyDown"
-                                         ToolTip="Retention-time bin width. A few acquisition cycles wide smooths the cycle-to-cycle sawtooth without hiding a real feature. Re-binning is free once the replicate is loaded." />
-                                <Button x:Name="Ms2ReloadButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
-                                        Click="OnMs2Reload"
-                                        ToolTip="Re-read the accounting and any acquired MS2 totals from the output directory above." />
-                                <TextBlock x:Name="Ms2StatusText" VerticalAlignment="Center" Margin="12,0,0,0"
-                                           Foreground="#888" TextWrapping="Wrap" />
-                            </WrapPanel>
-                            <sp:WpfPlot x:Name="Ms2Plot" />
                         </DockPanel>
 
                         <DockPanel x:Name="IonPane" Visibility="Collapsed">

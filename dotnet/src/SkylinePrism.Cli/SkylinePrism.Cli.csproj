@@ -19,7 +19,7 @@
       it. Nothing in this project names a type from it: OptionalReaders loads it by assembly name,
       so a build without it compiles and runs unchanged and the reader-dependent commands say so.
       Without this reference such a build could never have one - the assembly was simply not there,
-      which is why `prism ms2-signal` always reported no reader.
+      which is why `prism ion-accounting` always reported no reader.
     -->
     <ProjectReference Include="..\SkylinePrism.Pwiz\SkylinePrism.Pwiz.csproj"
                       Condition="'$(PwizAvailable)' == 'true' and '$(PrismWithPwiz)' == 'true'" />
