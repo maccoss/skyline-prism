@@ -299,12 +299,12 @@
                              BorderThickness="0,0,1,0" BorderBrush="#dfe6ef"
                              Background="#fbfcfe">
                         <ListBoxItem x:Name="QcNavItem" Content="QC Plots" Padding="10,7" />
-                        <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
+                        <ListBoxItem x:Name="DensityNavItem" Content="Spectrum Density" Padding="10,7" />
                         <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
                         <!-- Collapsed until the output directory carries ion_accounting.parquet:
                              every plot on it needs a measured denominator, so without one there is
                              nothing to offer rather than an empty pane to click. -->
-                        <ListBoxItem x:Name="IonNavItem" Content="Ion accounting" Padding="10,7"
+                        <ListBoxItem x:Name="IonNavItem" Content="Ion Accounting" Padding="10,7"
                                      Visibility="Collapsed" />
                     </ListBox>
                     <Grid Grid.Column="1">
