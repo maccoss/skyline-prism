@@ -52,8 +52,8 @@ file in the cohort, which is often a terabyte over a network share.
 
 | File | One row per | Holds |
 |---|---|---|
-| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. Also scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
-| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained`, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
+| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. The same four totals **unweighted** as `ms1_signal`, `ms2_signal`, `ms1_signal_assigned`, `ms2_signal_assigned`, `ms2_signal_explained` with a `has_signal` flag - see below. Also `acquired_utc` (when the instrument started the run), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
+| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
 | `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
 
 **The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity
@@ -63,6 +63,21 @@ injection time leaves a rate, which summed over scans is not a count of anything
 milliseconds makes every total 1000x too large. Neither disturbs the *fraction*, since both sides
 carry the same weighting, so the check that catches the second one is per-scan plausibility against
 the instrument's AGC target rather than anything about the ratio.
+
+**Ions and signal are two different quantities, not two units for one.** The `*_acquired` /
+`*_assigned` columns are ion counts, as above. The `*_signal*` columns are the same sums with the
+injection-time weighting left out - a sum of rates, which is what an instrument reports as TIC.
+Both are worth having: the ion count is the physical quantity and the only one of the two that may
+be compared between scans acquired at different injection times, while the TIC is what the
+instrument is read in, and the pair together says what the AGC was doing. Their assigned fractions
+are different numbers too, and neither is wrong - the ion fraction weights each scan by its
+injection time and the signal fraction does not, so they agree only where the assigned share happens
+to be constant across injection times. **Never add, subtract or compare across the two.** Both are
+accumulated over exactly the same scans, so a scan with no injection time is excluded from both.
+
+`has_signal` is false for a cache written before these columns existed; the tool then plots ions and
+says plainly that it has no TIC rather than drawing zeros. `acquired_utc` is likewise empty for an
+older cache, and the Ion Accounting pane's run-order sorting falls back to file name and says so.
 
 `settings_key` is stored in the file and covers both extraction tolerances, the isolation scheme,
 the selected lists and a fingerprint of the instrument files and `merged_data/`. A re-run whose

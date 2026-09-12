@@ -103,6 +103,45 @@ as the GitHub Release description and fails if it is missing.
   without being coverage - so there is nothing to offer rather than a pane that cannot draw.
 
 
+- **The Ion Accounting pane plots ions or signal, names the bar under the cursor, and lets you
+  choose the order of them.** Three things that were missing from a plot with one bar per replicate
+  and no room to label any of them.
+
+  **Quantity: Ions or Signal (TIC).** These are two different quantities, not two units for one. A
+  scan's intensity is a RATE, in ions per second: the ion count multiplies it by that scan's ion
+  injection time and the TIC does not, leaving a sum of rates - which is what the instrument reports
+  and what a mass spectrometrist reads it in. Both are measured in the same pass over the same
+  scans. Their assigned fractions are different numbers too, and neither is wrong: the ion fraction
+  weights each scan by its injection time and the signal fraction does not, so they agree only where
+  the assigned share happens to be constant across injection times. Where they diverge, the AGC was
+  working. The axis, legend, title, median and hover readout all name the quantity actually drawn.
+
+  **Hover** reads out the replicate: name, sample type, acquired and quantified totals, the fraction
+  (or the reason there is none), the explained share, when it was acquired and which file it came
+  from.
+
+  **Order**: run order, file name, or grouped by sample type. Run order comes from each data file's
+  own acquisition start timestamp, now recorded in `ion_accounting.parquet` - the only honest source
+  for it, since neither the file name nor the order files were read in is the order they were
+  acquired in. A cache written before that column falls back to file name and the status line says
+  so, rather than presenting an arbitrary order as an acquisition one. File-name order compares
+  digits as numbers, so a 48-well plate reads A1, A2, A10 rather than A1, A10, A11, A12, A2.
+
+  The ion accounting cache key moves to `ions-v4` for the signal columns, so the next measurement of
+  an existing output directory re-reads its files once and comes back with ions, signal and run
+  order together.
+
+- **The tool can be told the extraction tolerance when no document can state it.** Ion accounting
+  refused to run against a guessed tolerance - rightly, since the extraction window decides how much
+  fragment sharing is found between co-isolated peptides and every figure would move with nothing
+  saying it had - but a PRE-EXPORTED REPORT carries no Full-Scan settings, so there was no way to
+  supply one. That included the report PRISM itself writes into `skyline-reports/`, so re-running
+  against a previous run's export could never measure ions.
+
+  Settings now has **Product tolerance** and **Precursor tolerance** boxes beside the data
+  directory. What you type wins, a document fills in when they are blank, and with neither there is
+  still no tolerance rather than a plausible default. The run log names which source was used.
+
 - **The tool window is split into Analysis and Visualization.** Inputs, Settings and Log are about
   producing results and now sit under **Analysis**; QC Plots, Spectrum density and Dynamic Range are
   about reading them and sit under **Visualization**, chosen from a list down the left rather than
@@ -163,6 +202,30 @@ as the GitHub Release description and fails if it is missing.
   Dynamic Range reset the whole control. All three now show one sentence saying why the panel is
   empty, on a panel with no axes at all - so an empty result cannot be misread as a flat measurement,
   and the numbers on it cannot be read as data that was never there.
+
+- **The Ion Accounting and Spectrum Density panes did file system I/O on the UI thread.** The
+  output directory is normally a network share, and against one that is slow, disconnected or
+  holding a stale credential every one of these stopped the whole window for the SMB timeout with
+  nothing on screen to say why:
+
+  - the Ion Accounting nav probe ran a `File.Exists` from the output box's `TextChanged` - one
+    blocking round trip **per keystroke**, plus one on every pane change;
+  - the replicate list read the whole sample column of `ion_cycles.parquet` on the UI thread, after
+    the load had already awaited its background read, so the window froze on a second read showing
+    "Reading the ion accounting...";
+  - Spectrum Density located `merged_data` on the UI thread before the background read it belongs
+    in, and its isolation-window read probed paths a DOCUMENT recorded - which on a machine that is
+    not the one the data was imported on are exactly the paths that no longer resolve, and a dead
+    UNC path does not fail fast.
+
+  All of it now runs in one background pass per pane. On a healthy share none of it was visible: the
+  same reads measure 135 ms, 50 ms and 80 ms on a real 48-replicate cohort over SMB.
+
+- **The ion accounting plots stacked every redraw instead of replacing it.** ScottPlot's `Add`
+  methods append, and legend entries ride on the plottables, so each change of view, level,
+  replicate or bin width drew on top of the last - a legend that grew another copy of every series
+  each time, with the earlier renders' data still underneath. The clear now lives in the three draw
+  functions rather than at the call site, where three of four callers remembered it and one did not.
 
 - **Re-running an analysis onto a network share could fail Stage 1, and a stopped run could destroy
   the previous merge.** Both came from the same thing: the merge deleted `merged_data/` and then had
