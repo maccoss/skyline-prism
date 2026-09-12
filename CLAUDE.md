@@ -380,6 +380,21 @@ dotnet test --filter "FullyQualifiedName~QcReportTests.MedianCv_MatchesHandCompu
 - `dotnet build` must be **warning-free**; do not silence a warning you can fix
 - XML doc comments on public types/members, especially the scale a matrix argument expects
 
+> [!CAUTION]
+> **`dotnet build SkylinePrism.sln` does NOT build `SkylinePrism.Pwiz`.** The reader is opt-in
+> (`-p:PrismWithPwiz=true`), so a warning in it - or a break in it - is invisible to the ordinary
+> solution build, to `dotnet test`, and to the cross-platform CI jobs. It surfaces only in the ship
+> gate, `dotnet-release.yml`, and the `cli-reader` CI job, and **none of those fail on a warning**, so
+> it can ship silently. A malformed XML doc comment reached a packaged zip this way. After touching
+> anything under `dotnet/src/SkylinePrism.Pwiz/`, build it explicitly:
+>
+> ```bash
+> dotnet build src/SkylinePrism.Pwiz/SkylinePrism.Pwiz.csproj -p:PrismWithPwiz=true -p:IAgreeToVendorLicenses=true
+> ```
+>
+> Expect 0 warnings from PRISM's own files. pwiz-sharp itself brings 58 of its own; those are not ours
+> and are why the reference is off by default.
+
 ### Documentation Updates
 
 **Keep README.md updated:**

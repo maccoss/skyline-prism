@@ -1023,7 +1023,7 @@ file with no MS1 has nothing to bound a cycle with, and one cycle spanning the r
 | A computed fraction exceeds 1 | reported as `Exceeded`; callers refuse to draw it | impossible, so it means a defect — a unit mismatch, a scheme that does not match the acquisition, or claims merged too loosely. Clamping turns a visible bug into a plausible reading |
 | Mean ions per scan outside $[1, 10^8]$ | flagged `IonScaleImplausible` | the only check that catches a unit error, since the fraction cancels it |
 | An MS2 scan outside the isolation scheme | its ions are still counted as acquired; no claim can match | the scan did acquire ions. Counted per file, because a nonzero count means the scheme is wrong |
-| A spectrum with a non-ascending m/z array | sorted before masking, and counted | the sweep is forward-only, so an unsorted array would silently under-count. Zero across 39 files of one cohort; 236–593 per file across all 82 of another |
+| A spectrum with a non-ascending m/z array | sorted before masking, and counted | the sweep is forward-only, so an unsorted array would silently under-count. Zero across all 39 files of one cohort; a few hundred in every file of another, on a different instrument |
 | A file that cannot be read | that replicate has no denominator; it is not counted as zero | a zero would read as "acquired nothing", which is a measurement, not a failure |
 
 ### Caching

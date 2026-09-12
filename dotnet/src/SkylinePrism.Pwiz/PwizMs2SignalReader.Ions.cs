@@ -20,7 +20,8 @@ namespace SkylinePrism.Pwiz;
 /// <para><b>Why one pass matters here and not for the TIC total.</b> The acquired total alone can be
 /// read from scan headers, or from the file's own TIC chromatogram. Assigned cannot: it needs each
 /// spectrum's peak arrays masked against the regions peptides claim. A cohort is a terabyte on a
-/// network share, so the file is opened once and both halves and every cycle come off the same walk.
+/// network share, so the file is opened once and both halves and every cycle come off the same
+/// walk.</para>
 ///
 /// <para><b>Cost, measured over the share rather than out of the page cache:</b> 600-820 spectra/s,
 /// which is 200-290 s for a typical 4-5 GB Thermo file of 160,000-170,000 spectra. An early figure of
@@ -125,8 +126,8 @@ public sealed partial class PwizMs2SignalReader
 
         // Reused across spectra, grown as needed: only touched for a spectrum whose m/z array is
         // not ascending. The mzML specification requires ascending m/z, and vendor readers do not
-        // always deliver it - zero spectra across 39 Thermo files of one cohort, but 236-593 per
-        // file across all 82 of another acquired on a different instrument. The masking sweep is
+        // always deliver it - zero spectra across all 39 Thermo files of one cohort, and a few
+        // hundred in EVERY file of another acquired on a different instrument. The masking sweep is
         // forward-only, so an unsorted array would silently under-count; this path is load-bearing,
         // not theoretical, and the count is reported per file.
         double[] sortedMz = Array.Empty<double>();
