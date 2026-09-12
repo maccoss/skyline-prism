@@ -81,9 +81,11 @@ public class IonPlotTests
         PlotRenderer.DrawIonAccounting(
             signal, result, PlotRenderer.IonLevel.Ms2, "t", 1.0, PlotRenderer.IonQuantity.Signal);
 
-        // 10% of the ions, 25% of the TIC - the titles must not agree.
-        Assert.Contains("10.0%", ions.Axes.Title.Label.Text);
-        Assert.Contains("25.0%", signal.Axes.Title.Label.Text);
+        // 10% of the ions, 25% of the TIC - the titles must not agree. Asserted without the percent
+        // SIGN: P1 renders it as "10.0 %" under the invariant culture and "10.0%" under en-US, so a
+        // test that included it passed on the Windows and macOS runners and failed on Linux.
+        Assert.Contains("10.0", ions.Axes.Title.Label.Text);
+        Assert.Contains("25.0", signal.Axes.Title.Label.Text);
         Assert.NotEqual(ions.Axes.Title.Label.Text, signal.Axes.Title.Label.Text);
     }
 
