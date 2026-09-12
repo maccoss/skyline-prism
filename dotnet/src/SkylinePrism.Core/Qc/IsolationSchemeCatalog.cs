@@ -130,11 +130,16 @@ public sealed class IsolationSchemeCatalog
         _measured.Insert(0, new MeasuredScheme(
             scheme, dataFile ?? "",
             (measuredUtc ?? DateTime.UtcNow).ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
-        if (!_library.Any(s => s.LayoutKey == scheme.LayoutKey
-                && string.Equals(s.Name, scheme.Name, StringComparison.OrdinalIgnoreCase)))
-        {
-            _library.Add(scheme);
-        }
+
+        // The library is pruned on the LAYOUT, matching _measured above, and NOT on the layout plus
+        // the name. The name is derived from the file the windows were read from, so re-reading the
+        // same acquisition from a different plate's folder produces a second name for one layout:
+        // guarding on both left the first name orphaned in the library, and since IsMeasured matches
+        // on the layout alone BOTH then counted as measured. The resolver's "the measured one wins"
+        // tie-break saw two and gave up, so a directory could no longer resolve its own cached
+        // scheme without being told which one by name.
+        _library.RemoveAll(s => s.LayoutKey == scheme.LayoutKey);
+        _library.Add(scheme);
     }
 
     public void AddDocumentScheme(string batchLabel, IsolationScheme scheme)

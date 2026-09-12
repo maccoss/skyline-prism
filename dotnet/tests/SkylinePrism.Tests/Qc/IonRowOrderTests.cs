@@ -132,6 +132,44 @@ public class IonRowOrderTests
         Assert.Equal(new[] { "A1", "A2", "A3" }, Names(sorted).OrderBy(n => n).ToArray());
     }
 
+    /// <summary>
+    /// A replicate with no data file cannot state when it was acquired and never will - reference
+    /// and QC injections named identically in every plate are routinely left unpaired, which is a
+    /// documented normal case. Counting their silence disabled run order for the whole cohort
+    /// forever, and the fallback message blamed a cache that a re-measure cannot fix.
+    /// </summary>
+    [Fact]
+    public void AnUnpairedReplicateDoesNotDisableRunOrderForTheCohort()
+    {
+        var t0 = new DateTime(2026, 5, 20, 8, 0, 0, DateTimeKind.Utc);
+        var rows = new[]
+        {
+            Row("A1", acquired: t0.AddHours(2)),
+            Unpaired("QC-shared"),
+            Row("A2", acquired: t0),
+        };
+
+        Assert.True(IonRowOrder.CanOrderByRun(rows));
+
+        // And it sorts LAST rather than at the epoch: it has no place in an acquisition order, and
+        // first would read as one.
+        Assert.Equal(
+            new[] { "A2", "A1", "QC-shared" },
+            Names(IonRowOrder.Sort(rows, IonRowOrder.By.RunOrder)));
+    }
+
+    /// <summary>A cohort of nothing but unpaired replicates still cannot state a run order.</summary>
+    [Fact]
+    public void WithNoPairedReplicateThereIsNoRunOrder()
+    {
+        Assert.False(IonRowOrder.CanOrderByRun(new[] { Unpaired("a"), Unpaired("b") }));
+    }
+
+    private static IonAccountingRow Unpaired(string sample) =>
+        new(sample, "qc", "", Ms2ReadStatus.NotFound, "none",
+            0, 0, 0, 0, 0, 0, 0, false, double.NaN, double.NaN, 0, 0, 0, 0,
+            Array.Empty<double>(), Array.Empty<double>(), null);
+
     /// <summary>Sorting never loses or duplicates a replicate, whichever key is used.</summary>
     [Theory]
     [InlineData(IonRowOrder.By.RunOrder)]

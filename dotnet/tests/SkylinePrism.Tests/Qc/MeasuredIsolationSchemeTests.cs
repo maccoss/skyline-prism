@@ -94,6 +94,44 @@ public class MeasuredIsolationSchemeTests
         Assert.Single(catalog.UsableSchemes);
     }
 
+    /// <summary>
+    /// Re-reading the SAME acquisition from a different plate's folder names the scheme after that
+    /// folder's file, so one layout acquires a second name. The library used to be guarded on the
+    /// layout AND the name, which left the first name orphaned - and since a measured scheme is
+    /// recognized by its layout alone, BOTH then counted as measured. The resolver's "the measured
+    /// one wins" tie-break saw two and gave up, so the directory could no longer resolve its own
+    /// cached scheme without being told which by name.
+    /// </summary>
+    [Fact]
+    public void ReReadingOneLayoutUnderASecondNameDoesNotOrphanTheFirst()
+    {
+        var dir = TempDir();
+        try
+        {
+            var windows = Measured().Windows;
+            var catalog = new IsolationSchemeCatalog();
+            catalog.AddMeasuredScheme(
+                new IsolationScheme("Imported from plateA-run01", windows), @"R:\plateA\run01.raw");
+            catalog.AddMeasuredScheme(
+                new IsolationScheme("Imported from plateB-run50", windows), @"R:\plateB\run50.raw");
+
+            Assert.Single(catalog.Measured);
+            Assert.Single(catalog.UsableSchemes);
+
+            catalog.Save(Path.Combine(dir, IsolationSchemeCatalog.FileName));
+            var log = new System.Collections.Generic.List<string>();
+            var resolved = IsolationSchemeResolver.Resolve(dir, rawDir: null, log.Add);
+
+            Assert.NotNull(resolved);
+            Assert.Equal("Imported from plateB-run50", resolved!.Name);
+            Assert.DoesNotContain(log, l => l.Contains("must be named", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     /// <summary>A scheme with no windows is not a measurement - there is nothing in it to keep.</summary>
     [Fact]
     public void AWindowlessSchemeIsNotRecordedAsMeasured()

@@ -80,8 +80,37 @@ public sealed record IonAccountingRow(
     public double Ms2ExplainedFraction =>
         HasExplained && Ms2Acquired > 0 ? Ms2Explained / Ms2Acquired : double.NaN;
 
-    /// <inheritdoc cref="IonAccountingRecord.Exceeded"/>
+    /// <summary>
+    /// More ions were assigned than acquired, which is impossible and therefore a defect. Callers
+    /// must refuse to show a fraction rather than clamping it.
+    /// </summary>
+    /// <remarks>
+    /// Narrower than <see cref="IonAccountingRecord.Exceeded"/>, which folds the explained total in;
+    /// here that is <see cref="ExplainedImpossible"/>'s job, so a fault confined to the theoretical
+    /// claim set does not blank a quantified fraction that is perfectly sound.
+    /// </remarks>
     public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
+
+    /// <summary>
+    /// The same impossibility for the summed TIC. <b>Not implied by <see cref="Exceeded"/>:</b> the
+    /// ion totals weight each scan by its injection time and the signal totals do not, so a fault
+    /// confined to short-injection scans can leave the ion fraction under 1 while the signal
+    /// fraction is over it. Whichever quantity is being drawn has to be the one that is checked.
+    /// </summary>
+    public bool SignalExceeded =>
+        HasSignal && (Ms1SignalAssigned > Ms1Signal || Ms2SignalAssigned > Ms2Signal);
+
+    /// <inheritdoc cref="SignalExceeded"/>
+    public bool SignalExplainedImpossible =>
+        HasSignal && HasExplained
+        && (Ms2SignalExplained > Ms2Signal || Ms2SignalExplained < Ms2SignalAssigned);
+
+    /// <summary>The impossibility check for the quantity actually being shown.</summary>
+    public bool ExceededIn(bool signal) => signal ? SignalExceeded : Exceeded;
+
+    /// <inheritdoc cref="ExceededIn"/>
+    public bool ExplainedImpossibleIn(bool signal) =>
+        signal ? SignalExplainedImpossible : ExplainedImpossible;
 
     /// <summary>
     /// The explained total exceeded what was acquired, or fell below the quantified total. Both are
@@ -522,11 +551,11 @@ public static class IonAccountingStore
             var ms2e = reader.HasColumn("ms2_explained")
                 ? reader.ReadDoubles("ms2_explained")
                 : new double[samples.Length];
-            var ms1sig = CycleNums(reader, "ms1_signal", samples.Length);
-            var ms2sig = CycleNums(reader, "ms2_signal", samples.Length);
-            var ms1sigA = CycleNums(reader, "ms1_signal_assigned", samples.Length);
-            var ms2sigA = CycleNums(reader, "ms2_signal_assigned", samples.Length);
-            var ms2sigE = CycleNums(reader, "ms2_signal_explained", samples.Length);
+            var ms1sig = Nums(reader, "ms1_signal", samples.Length);
+            var ms2sig = Nums(reader, "ms2_signal", samples.Length);
+            var ms1sigA = Nums(reader, "ms1_signal_assigned", samples.Length);
+            var ms2sigA = Nums(reader, "ms2_signal_assigned", samples.Length);
+            var ms2sigE = Nums(reader, "ms2_signal_explained", samples.Length);
 
             var rows = new List<IonCycleRow>();
             for (var i = 0; i < samples.Length; i++)
@@ -663,13 +692,6 @@ public static class IonAccountingStore
     /// too: an instant guessed from a malformed stamp would put a replicate somewhere specific in
     /// run order with nothing to say it was a guess.
     /// </summary>
-    /// <summary>
-    /// A cycles column, or zeros when the file predates it. Separate from <see cref="Nums"/> because
-    /// the cycles table is read column-wise against its own row count.
-    /// </summary>
-    private static double[] CycleNums(ParquetColumnReader reader, string name, int count) =>
-        reader.HasColumn(name) ? reader.ReadDoubles(name) : new double[count];
-
     private static DateTime? ParseUtc(string? text) =>
         !string.IsNullOrWhiteSpace(text)
         && DateTime.TryParse(

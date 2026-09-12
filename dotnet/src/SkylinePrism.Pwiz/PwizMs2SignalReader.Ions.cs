@@ -96,6 +96,14 @@ public sealed partial class PwizMs2SignalReader
         var listCount = request.ListCount;
         var ms1ByList = new double[listCount];
         var ms2ByList = new double[listCount];
+        // One scan's per-list claims, reused. ClaimedSignalIndex fills this with RAW INTENSITY -
+        // the same thing it returns as its scalar, which the caller then multiplies by the
+        // injection time - so the per-list arrays have to be weighted here too. Accumulating them
+        // straight out of Claimed left them a sum of rates under columns named ms1_assigned /
+        // ms2_assigned and documented as ion counts: a panel's "share of the assigned total" then
+        // carried units of 1/time, which is the same class of error as the accounting this feature
+        // replaced. Weighted per scan and not at the end, because the injection time varies.
+        var scanByList = listCount > 0 ? new double[listCount] : Array.Empty<double>();
 
         var explained = request.Explained;
         var cycles = new List<IonCycle>();
@@ -243,9 +251,10 @@ public sealed partial class PwizMs2SignalReader
 
             // The masked sum. A window index of -1 finds no lane and returns 0 without searching.
             var maskStart = Stopwatch.GetTimestamp();
+            if (listCount > 0)
+                Array.Clear(scanByList);
             var claimed = claims.Claimed(
-                level, windowIndex, rt, mz, intensity,
-                level == 1 ? ms1ByList : ms2ByList);
+                level, windowIndex, rt, mz, intensity, scanByList);
 
             // The second mask, against everything the peptides can account for. MS2 only: the
             // explained index carries no MS1 lane, because at MS1 the theoretical claim IS the
@@ -264,6 +273,12 @@ public sealed partial class PwizMs2SignalReader
 
             var acquiredIons = summed * injection;
             var assignedIons = claimed * injection;
+            if (listCount > 0)
+            {
+                var byList = level == 1 ? ms1ByList : ms2ByList;
+                for (var l = 0; l < listCount; l++)
+                    byList[l] += scanByList[l] * injection;
+            }
             var reportedIons = double.IsFinite(reported) && reported > 0 ? reported * injection : 0;
 
             if (level == 1)

@@ -92,6 +92,9 @@ public static partial class PlotRenderer
 
         var acquiredOf = Selector(level, acquired: true, quantity);
         var assignedOf = Selector(level, acquired: false, quantity);
+        var explainedOf = quantity == IonQuantity.Signal
+            ? new Func<IonAccountingRow, double>(r => r.Ms2SignalExplained)
+            : r => r.Ms2Explained;
 
         // Drawn only where it exists and can differ: MS2, and a cache that actually measured it. An
         // export with no precursor charge column measures none, and a bar of height zero would read
@@ -148,7 +151,12 @@ public static partial class PlotRenderer
                 explainedBars.Add(new Bar
                 {
                     Position = i,
-                    Value = Finite(rows[i].Ms2Explained) / scale,
+                    // Through the selector like every other series. Hard-coding Ms2Explained here
+                    // drew the ion count against a scale derived from the TIC totals, so in Signal
+                    // mode the explained bar came out ~50x short at typical injection times - below
+                    // the quantified bar it is required to nest ABOVE, which the report elsewhere
+                    // calls impossible - while the title on the same image quoted the right share.
+                    Value = Finite(explainedOf(rows[i])) / scale,
                     FillColor = ExplainedBarColor,
                     LineWidth = 0,
                     Size = 0.85,
@@ -531,10 +539,14 @@ public static partial class PlotRenderer
 
         // A replicate that assigned more than it acquired taints the median it is in, so the whole
         // figure is withheld and named as a defect rather than quietly excluded.
-        if (usable.Any(r => r.Exceeded))
+        // Checked against the quantity being DRAWN. The ion totals weight each scan by its
+        // injection time and the signal totals do not, so one can be under 1 while the other is
+        // over it, and withholding on the wrong one shows an impossible fraction with no warning.
+        var signalDrawn = quantity == IonQuantity.Signal;
+        if (usable.Any(r => r.ExceededIn(signalDrawn)))
         {
             var suffix = "assigned exceeds acquired in "
-                + $"{usable.Count(r => r.Exceeded):N0} replicate(s); fraction not shown";
+                + $"{usable.Count(r => r.ExceededIn(signalDrawn)):N0} replicate(s); fraction not shown";
             return string.IsNullOrEmpty(title) ? suffix : $"{title}{NewLine}{suffix}";
         }
 

@@ -417,13 +417,24 @@ public sealed partial class PwizMs2SignalReader
         try
         {
             var stamp = msd.Run?.StartTimeStamp;
-            return string.IsNullOrWhiteSpace(stamp)
-                ? null
-                : DateTime.TryParse(
+            if (string.IsNullOrWhiteSpace(stamp)
+                || !DateTime.TryParse(
                     stamp, CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal, out var value)
-                    ? value
-                    : null;
+                    DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal, out var value))
+            {
+                return null;
+            }
+
+            // A stamp with no timezone marker parses as Unspecified, and the store writes
+            // ToUniversalTime(), which assumes LOCAL for an Unspecified value and shifts it. An
+            // incremental top-up then mixes rows shifted by the machine's offset with rows that are
+            // not, and DateTime comparison ignores Kind - so the run order would be wrong across the
+            // reused/new boundary, on a plot whose entire axis is the order. Pinned to Utc here so
+            // the instant survives the round trip unchanged; what matters is that every replicate of
+            // a cohort is on one clock, not which clock it is.
+            return value.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+                : value;
         }
         catch (Exception)
         {

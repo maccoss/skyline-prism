@@ -157,12 +157,17 @@ public static class IonAccountingRun
         var productText = productTolerance.Describe();
         var precursorText = precursorTolerance?.Describe() ?? "not read";
         var schemeText = scheme.Describe();
+        // Describe() is for a caption: it rounds the range to 0.05 Th and the width to 0.001 Th and
+        // drops the name, so two different layouts can produce the same sentence - the same grid
+        // shifted slightly, or a built-in template against the real windows it approximates. The
+        // cache key has to answer identity, which is what LayoutKey is for.
+        var schemeKey = scheme.LayoutKey;
         var sources = resolution.Matched.Values
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .Append(representative)
             .ToList();
         var settingsKey = IonAccountingStore.SettingsKeyFor(
-            productText, precursorText, schemeText, classified.ListNames, sources);
+            productText, precursorText, schemeKey, classified.ListNames, sources);
 
         // What the cache already holds for THESE settings. A keyed cache is not automatically
         // complete: the key covers the files that could be measured, not the ones that were, so a
@@ -176,9 +181,18 @@ public static class IonAccountingRun
             var cached = IonAccountingStore.Read(outputDir);
             if (cached is not null && cached.MatchesSettings(settingsKey))
             {
+                // Reuse needs BOTH files to carry the replicate. The summary and the cycles are
+                // written as two separate files after every replicate, so a process that dies
+                // between them - which has happened here, twice, to a native memory fault - leaves
+                // a replicate summarized with no trace. Trusting the summary alone marked it
+                // measured, so it was never read again, and the next incremental save rewrote the
+                // cycles file from memory and made the gap permanent: its gradient panel simply
+                // vanished from the report with nothing logged.
+                var haveCycles = IonAccountingStore.SamplesWithCycles(outputDir)
+                    .ToHashSet(StringComparer.Ordinal);
                 foreach (var row in cached.Rows)
                 {
-                    if (row.IsUsable)
+                    if (row.IsUsable && (row.CycleCount == 0 || haveCycles.Contains(row.Sample)))
                         reusable[row.Sample] = row;
                 }
 

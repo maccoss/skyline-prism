@@ -1157,9 +1157,13 @@ public partial class MainWindow : Window
     private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         UpdateRunEnabled();
-        // Both plot tabs read their inputs from this directory.
+        // Every plot pane reads its inputs from this directory. Ion accounting was missing here,
+        // so pointing the box at another run left the previous one's bars, status line and hover
+        // readouts on screen under the new path - and nothing re-enters the pane on a text change,
+        // so it only corrected itself on the next tab switch.
         InvalidateDensity();
         InvalidateDynamicRange();
+        InvalidateIonAccounting();
 
         // Whether the Ion accounting pane exists AT ALL depends on this directory carrying measured
         // ion accounting, so the rail has to be re-checked here and not only when a pane changes -
@@ -1464,7 +1468,7 @@ public partial class MainWindow : Window
         IonPrecursorTolText.IsEnabled = on;
 
         if (on && string.IsNullOrWhiteSpace(IonRawDirText.Text))
-            FillIonRawDirFromDocuments();
+            _ = FillIonRawDirFromDocumentsAsync();
     }
 
     /// <summary>
@@ -1525,25 +1529,55 @@ public partial class MainWindow : Window
     /// <para>Only ever fills an EMPTY box, and only on ticking - never overwrites a path that is
     /// already there, and never re-asserts itself if you clear it deliberately.</para>
     /// </remarks>
-    private void FillIonRawDirFromDocuments()
+    /// <remarks>
+    /// <para><b>Off the UI thread.</b> <see cref="PrismInput.GuessRawDirectory"/> makes a
+    /// named-pipe round trip into Skyline, stream-parses the document header, and then probes every
+    /// recorded sample-file path plus up to three ancestors each. On a machine that is not the one
+    /// the data was imported on those paths are exactly the ones that no longer resolve, and a dead
+    /// UNC path does not fail fast - it blocks for the SMB timeout, several hundred times, on a
+    /// single click of the checkbox. The Spectrum Density pane learned this first; see
+    /// <c>DensityRawDirectory</c>, which is static for the same reason.</para>
+    /// </remarks>
+    private async Task FillIonRawDirFromDocumentsAsync()
     {
-        foreach (var input in _inputs)
+        try
         {
-            var dir = input.GuessRawDirectory(Log);
-            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
-                continue;
+            // Snapshotted on the UI thread; nothing below touches a control until the await
+            // returns, and the box is only filled if it is still the empty one we set out to fill.
+            var inputs = _inputs.ToArray();
+            if (inputs.Length == 0)
+                return;
 
-            IonRawDirText.Text = dir;
-            Log($"Ion accounting: {input.DisplayName} imported its data from {dir}, so that is "
-                + "where the files will be read from. Change it above if they have moved.");
-            return;
-        }
+            var found = await Task.Run(() =>
+            {
+                foreach (var input in inputs)
+                {
+                    var dir = input.GuessRawDirectory(App.WriteLog);
+                    if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+                        return (Input: input, Dir: dir);
+                }
+                return (Input: (PrismInput?)null, Dir: (string?)null);
+            });
 
-        if (_inputs.Count > 0)
-        {
+            if (!string.IsNullOrWhiteSpace(IonRawDirText.Text))
+                return;   // the user typed or browsed one while the share was being probed
+
+            if (found.Dir is not null)
+            {
+                IonRawDirText.Text = found.Dir;
+                Log($"Ion accounting: {found.Input!.DisplayName} imported its data from {found.Dir}, "
+                    + "so that is where the files will be read from. Change it above if they have "
+                    + "moved.");
+                return;
+            }
+
             Log("Ion accounting: none of the inputs could say where its data files are - a "
                 + "pre-exported report records no paths, and a document whose files have moved "
                 + "records the old ones. Browse to the directory instead.");
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(FillIonRawDirFromDocumentsAsync), ex);
         }
     }
 

@@ -852,6 +852,10 @@ public partial class MainWindow
             if (!_densityLoaded
                 || !string.Equals(OutputDirBox.Text?.Trim(), outputDir, StringComparison.OrdinalIgnoreCase))
             {
+                // Restored like every other exit. Leaving the transient text behind stranded
+                // "Reading the acquisition's isolation windows..." above a map from the previous
+                // directory, indefinitely.
+                DensityStatusText.Text = previousStatus;
                 return;
             }
             if (scheme is null)

@@ -35,12 +35,22 @@ public static class IonRowOrder
     private static readonly string[] TypeOrder = { "experimental", "reference", "qc" };
 
     /// <summary>
-    /// Whether every row can state when it was acquired. Run order is only offered when they all
-    /// can: a cohort where some rows carry a timestamp and some do not would silently interleave
-    /// the ones that cannot, which reads as an acquisition order and is not one.
+    /// Whether every replicate that COULD state when it was acquired does. Run order is only
+    /// offered when they all can: a cohort where some carry a timestamp and some do not would
+    /// silently interleave the ones that cannot, which reads as an acquisition order and is not one.
     /// </summary>
-    public static bool CanOrderByRun(IEnumerable<IonAccountingRow> rows) =>
-        rows is not null && rows.Any() && rows.All(r => r.AcquiredUtc is not null);
+    /// <remarks>
+    /// Rows with no data file are excluded from the question rather than answering no. A replicate
+    /// whose file could not be paired - the normal fate of reference and QC injections named
+    /// identically in every plate - has no file to read a timestamp from and never will, so
+    /// counting its silence would disable run order for the whole cohort forever, and the fallback
+    /// message would blame a cache that a re-measure cannot fix.
+    /// </remarks>
+    public static bool CanOrderByRun(IEnumerable<IonAccountingRow> rows)
+    {
+        var answerable = rows?.Where(r => !string.IsNullOrWhiteSpace(r.DataFile)).ToList();
+        return answerable is { Count: > 0 } && answerable.All(r => r.AcquiredUtc is not null);
+    }
 
     /// <summary>Re-order the rows. Stable, and never drops or duplicates one.</summary>
     public static IReadOnlyList<IonAccountingRow> Sort(IReadOnlyList<IonAccountingRow> rows, By by)
@@ -52,8 +62,11 @@ public static class IonRowOrder
         {
             // Falls back to file name when the cache predates the timestamp, so the plot is still
             // ordered by something a reader can follow rather than by measurement order.
+            // Rows with no timestamp sort last rather than at the epoch - an unpaired replicate
+            // has no place in an acquisition order, and putting it first would read as one.
             By.RunOrder when CanOrderByRun(rows) =>
-                rows.OrderBy(r => r.AcquiredUtc!.Value).ThenBy(FileKey, NaturalOrder.Comparer).ToList(),
+                rows.OrderBy(r => r.AcquiredUtc ?? DateTime.MaxValue)
+                    .ThenBy(FileKey, NaturalOrder.Comparer).ToList(),
             By.RunOrder => Sort(rows, By.FileName),
 
             By.SampleType => rows

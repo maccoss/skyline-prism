@@ -61,6 +61,10 @@ public partial class MainWindow
     /// <summary>Drop the cached result so the pane reloads next time it is shown.</summary>
     private void InvalidateIonAccounting()
     {
+        // Retires any cycles read still in flight. Without this, Reload clears _ionCycles and the
+        // pending continuation then re-inserts the PRE-reload trace under the same key, so a
+        // replicate re-measured on disk keeps serving the old numbers from cache.
+        _ionRequest++;
         _ionLoaded = false;
         _ionResult = null;
         _ionCycles.Clear();
@@ -235,9 +239,16 @@ public partial class MainWindow
             var request = ++_ionNavProbe;
             var available = !string.IsNullOrWhiteSpace(dir)
                 && await Task.Run(() => File.Exists(Path.Combine(dir!, IonAccountingStore.FileName)));
-            // The box moved on while the share was thinking.
-            if (request != _ionNavProbe)
+            // The box moved on while the share was thinking. Re-READ it rather than trusting the
+            // counter alone: typing B and then undoing back to A short-circuits on the line above
+            // without bumping the counter, so B's answer would still be applied - hiding the entry
+            // for a directory that has ion accounting, and leaving _ionNavProbedDir naming a
+            // directory the box no longer shows.
+            if (request != _ionNavProbe
+                || !string.Equals(OutputDirBox.Text?.Trim(), dir, StringComparison.OrdinalIgnoreCase))
+            {
                 return;
+            }
 
             _ionNavProbedDir = dir;
             IonNavItem.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
@@ -506,12 +517,13 @@ public partial class MainWindow
             + $"{assigned:0.###e+0}";
         // Exceeded means a defect, and no fraction is shown anywhere else either - see
         // IonAccountingRow.Exceeded.
-        text += row.Exceeded
+        var exceeded = row.ExceededIn(signal);
+        text += exceeded
             ? " (assigned exceeds acquired - no fraction shown)"
             : double.IsFinite(fraction) ? $" = {fraction * 100:0.##}%" : "";
 
         if (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained
-            && double.IsFinite(explainedFraction) && !row.Exceeded)
+            && double.IsFinite(explainedFraction) && !exceeded)
         {
             text += $"; explained {explained:0.###e+0} = {explainedFraction * 100:0.##}%";
         }
@@ -533,8 +545,29 @@ public partial class MainWindow
         var level = IonLevel;
         var result = _ionResult;
 
+        // Asked for the summed TIC on a cache that carries none. Every series would be zero-height,
+        // which reads as a run that acquired nothing - the one thing these plots must never say -
+        // so nothing is drawn and the message says what to do instead. A warning appended to the
+        // status line was not enough: the zeros were still on screen above it.
+        if (IonQuantity == PlotRenderer.IonQuantity.Signal && !result.Rows.Any(r => r.HasSignal))
+        {
+            ShowIonMessage(
+                "This ion accounting was measured before the summed TIC was recorded, so there is "
+                + "no signal to plot. Switch Quantity back to Ions, or re-measure with "
+                + "prism ion-accounting to add it.");
+            return;
+        }
+
         if (!IonProfileSelected)
         {
+            // This path redraws the plot, so it retires any cycles read still in flight. It used to
+            // return without touching the token: a slow profile read then landed AFTER the bars
+            // were drawn and replaced them with a retention-time trace, while _ionDrawn still held
+            // the bar rows - so hovering at 7.2 minutes printed a full, plausible readout for
+            // whichever replicate happened to be seventh. That is the exact misattribution
+            // _ionDrawn exists to prevent.
+            _ionRequest++;
+
             // Sorted HERE and not in the renderer: the pane has to keep the order it drew to
             // answer the hover, and a renderer that sorted privately would leave it guessing.
             var ordered = IonRowOrder.Sort(result.Rows, IonSort);
@@ -608,10 +641,6 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// The status line for the cohort view. Names the settings the numbers were computed with,
-    /// because the cache is keyed on them and a reader has no other way to know.
-    /// </summary>
-    /// <summary>
     /// The bar plot's title. The renderer appends the medians; this is the noun phrase above them,
     /// and it has to stop saying "assigned" the moment there are two numerators to tell apart.
     /// </summary>
@@ -643,7 +672,11 @@ public partial class MainWindow
             : $"{sample}: share of acquired {name} {noun} assigned";
     }
 
-    private static string DescribeIon(IonAccountingResult result, PlotRenderer.IonLevel level)
+    /// <summary>
+    /// The status line for the cohort view. Names the settings the numbers were computed with,
+    /// because the cache is keyed on them and a reader has no other way to know.
+    /// </summary>
+    private string DescribeIon(IonAccountingResult result, PlotRenderer.IonLevel level)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
         var parts = new List<string>
@@ -665,7 +698,7 @@ public partial class MainWindow
                 + "so the totals are in the wrong unit (the fractions are unaffected)");
         }
 
-        var exceeded = usable.Count(r => r.Exceeded);
+        var exceeded = usable.Count(r => r.ExceededIn(IonQuantity == PlotRenderer.IonQuantity.Signal));
         if (exceeded > 0)
         {
             parts.Add(
@@ -761,6 +794,7 @@ public partial class MainWindow
     /// </summary>
     private void ShowIonMessage(string message)
     {
+        _ionRequest++;   // this replaces the plot too - see RenderIonAsync
         _ionDrawn = Array.Empty<IonAccountingRow>();
         PlotRenderer.DrawEmptyState(IonPlot.Plot, message);
         IonPlot.Refresh();
