@@ -41,6 +41,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // The build, beside the name. PrismVersion.Current is the same string prism --version and
+        // the QC report footer print, so a user reporting a problem and the artifacts they attach
+        // cannot disagree about which build produced them.
+        VersionText.Text = "v" + PrismVersion.Current;
         QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
         // Here, not only in ApplyConfigToUi: that runs when a provenance file is opened, so on a fresh
         // start the picker sat empty and the shipped panels looked as though they had not been installed.
@@ -213,8 +217,39 @@ public partial class MainWindow : Window
                 && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
 
         // Adding and removing an input both reach here, which makes it the one place the ComBat
-        // default has to follow.
+        // default and the tolerance row have to follow.
         UpdateBatchCorrectionDefault();
+        UpdateIonToleranceVisibility();
+
+        // Adding a document with ion accounting already ticked has to fill the folder too, not just
+        // ticking it with a document already added - the box was left empty depending on which order
+        // the two were done in.
+        if (IonAccountingCheck?.IsChecked == true && string.IsNullOrWhiteSpace(IonRawDirText?.Text))
+            _ = FillIonRawDirFromDocumentsAsync();
+    }
+
+    /// <summary>
+    /// The extraction-tolerance boxes are on screen only when nothing else can state the tolerance.
+    /// </summary>
+    /// <remarks>
+    /// <para>A Skyline document - running or on disk - declares its own extraction window in
+    /// Transition Settings &gt; Full-Scan, and PRISM reads it from there. Leaving the boxes visible
+    /// alongside one asks the user for something already known, and an empty box beside a required
+    /// setting reads as an omission.</para>
+    ///
+    /// <para>Decided by input KIND rather than by reading each document, because this runs on every
+    /// input change and reading is a file-system round trip. A document that turns out to be
+    /// unreadable is reported in the run log, which names the box - the row reappears as soon as the
+    /// document is removed.</para>
+    /// </remarks>
+    private void UpdateIonToleranceVisibility()
+    {
+        if (IonTolerancePanel is null)
+            return;
+        var anyDocument = _inputs.Any(i => i.Kind != PrismInputKind.ReportFile);
+        IonTolerancePanel.Visibility = _inputs.Count > 0 && !anyDocument
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void OnBatchColumnChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
