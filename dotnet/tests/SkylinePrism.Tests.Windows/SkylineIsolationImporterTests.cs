@@ -158,6 +158,52 @@ public class SkylineIsolationImporterTests
         }
     }
 
+    /// <summary>
+    /// The layout a shared archive produces: the data sits beside the .sky.zip, and the document
+    /// PRISM extracted from it is one directory deeper.
+    /// </summary>
+    /// <remarks>
+    /// <c>PrismInput.ResolveDocumentForExport</c> unpacks into <c>prism-extracted/&lt;stem&gt;/</c>
+    /// beside the archive, so "next to the document" is the wrong directory and "one above it" is the
+    /// right one. The same hop covers a .sky kept in a subfolder of its acquisition directory, which
+    /// is the other layout people actually use.
+    /// </remarks>
+    [Fact]
+    public void ResolveDataFile_LooksOneDirectoryAboveTheDocument()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "prism_iso_up_" + Guid.NewGuid().ToString("N"));
+        var extracted = Path.Combine(root, "prism-extracted", "cohort");
+        Directory.CreateDirectory(extracted);
+        try
+        {
+            var document = Path.Combine(extracted, "cohort.sky");
+            File.WriteAllText(document, "<srm_settings />");
+
+            // The data is beside the archive - one level ABOVE the extracted document.
+            var beside = Path.Combine(root, "run.raw");
+            File.WriteAllText(beside, "data");
+
+            Assert.Equal(
+                beside,
+                SkylineIsolationImporter.ResolveDataFile(new[] { @"Y:\gone\run.raw" }, document));
+
+            // A Bruker/Agilent acquisition is a DIRECTORY, and must resolve the same way.
+            var dotD = Path.Combine(root, "run.d");
+            Directory.CreateDirectory(dotD);
+            Assert.Equal(
+                dotD,
+                SkylineIsolationImporter.ResolveDataFile(new[] { @"Y:\gone\run.d" }, document));
+
+            // Still null when it is nowhere, rather than inventing a path from the parent.
+            Assert.Null(
+                SkylineIsolationImporter.ResolveDataFile(new[] { @"Y:\gone\absent.raw" }, document));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void ResolveDataFile_FallsBackToTheDocumentFolderWhenPathsGoStale()
     {

@@ -1,4 +1,4 @@
-<Window x:Class="SkylinePrism.App.MainWindow"
+﻿<Window x:Class="SkylinePrism.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sp="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
@@ -41,7 +41,8 @@
             <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
             <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
-            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center" />
+            <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
+                     TextChanged="OnBatchColumnChanged" />
             <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
                        Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
         </Grid>
@@ -58,9 +59,28 @@
 
         <TabControl Grid.Row="5" x:Name="MainTabs" SelectionChanged="OnMainTabChanged">
             <TabItem Header="Analysis" x:Name="AnalysisTab">
-                <TabControl x:Name="AnalysisTabs">
-                    <TabItem Header="Inputs" x:Name="InputsTab">
-                        <DockPanel Margin="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" MinWidth="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- The same rail as the Visualization tab. A strip of three is readable, but
+                         the two halves of the window behaving differently is not, and the panes here
+                         keep their own state the way those do. SelectedIndex is set in CODE, never
+                         here: Selector raises SelectionChanged from EndInit, which would run the
+                         handler against half-built controls. -->
+                    <ListBox Grid.Column="0" x:Name="AnalysisNav" Width="170"
+                             SelectionChanged="OnAnalysisNavChanged"
+                             BorderThickness="0,0,1,0" BorderBrush="#dfe6ef"
+                             Background="#fbfcfe">
+                        <ListBoxItem x:Name="InputsNavItem" Content="Inputs" Padding="10,7" />
+                        <ListBoxItem x:Name="SettingsNavItem" Content="Settings" Padding="10,7" />
+                        <ListBoxItem x:Name="LogNavItem" Content="Log" Padding="10,7" />
+                    </ListBox>
+
+                    <Grid Grid.Column="1">
+                        <DockPanel x:Name="InputsPane" Margin="8">
                             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
                                 <Button x:Name="AddOpenDocButton" Content="Add open document..." Padding="10,4" Margin="0,0,6,0"
                                         Click="OnAddOpenDocument"
@@ -87,9 +107,9 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
-                    </TabItem>
-                    <TabItem Header="Settings">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+
+                        <ScrollViewer x:Name="SettingsPane" VerticalScrollBarVisibility="Auto"
+                                      Visibility="Collapsed">
                             <StackPanel Margin="14">
                                 <TextBlock Text="Pipeline settings" FontWeight="Bold" Foreground="#1a3c6e" Margin="0,0,0,8" />
 
@@ -129,7 +149,9 @@
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
                                     <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" IsChecked="True" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" VerticalAlignment="Center"
+                                              Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. Ticking it yourself overrides that, and the choice then sticks." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -195,7 +217,9 @@
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
                                     <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" IsChecked="True" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" VerticalAlignment="Center"
+                                              Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. Ticking it yourself overrides that, and the choice then sticks." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -221,47 +245,48 @@
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
 
-                                <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
-                                    <TextBlock Text="9. MS2 signal accounting:" Width="230" VerticalAlignment="Center" />
-                                    <CheckBox x:Name="Ms2SignalCheck" VerticalAlignment="Center" Margin="0,0,8,0"
-                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                              Content="Plot how much of the MS2 signal the run assigns"
-                                              ToolTip="Adds a QC report section: per replicate, the MS2 signal the run assigns to a peptide, with a line per visible protein list. Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted once, so shared fragments are not double counted. Off by default because it costs one extra pass over the merged table, comparable to Stage 2." />
-                                    <TextBlock Text="measure:" VerticalAlignment="Center" Margin="12,0,6,0" />
-                                    <ComboBox x:Name="Ms2MeasureCombo" Width="90" IsEnabled="False"
-                                              SelectionChanged="OnMs2SignalChanged"
-                                              ToolTip="What to total. signal: gross peak areas (Area + Background), available from any export. ions: Skyline's LC Peak Transition Ion Count - intensity x injection time per spectrum, summed across the peak - the better measure, available only when the export carries that column.">
-                                        <ComboBoxItem>signal</ComboBoxItem>
-                                        <ComboBoxItem x:Name="Ms2MeasureIonsItem" ToolTipService.ShowOnDisabled="True">ions</ComboBoxItem>
-                                    </ComboBox>
-                                    <Button Content="Protein lists..." Padding="10,2" Margin="8,0,0,0"
-                                            Click="OnManageProteinLists"
-                                            ToolTip="Which lists get a line on the plot: the ones ticked visible in the editor - the same set the Dynamic Range tab highlights." />
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <TextBlock Text="9. Ion accounting:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="IonAccountingCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                              Checked="OnIonAccountingOptionChanged" Unchecked="OnIonAccountingOptionChanged"
+                                              Content="Measure ions from the instrument files"
+                                              ToolTip="After the pipeline, read every replicate's data file and count the ions that reached the detector, and the part of them this analysis accounts for - at MS1 and MS2 separately. Both halves are measured the same way, so the ratio is a genuine fraction. This is the only thing PRISM does that reads the instrument files, and it is what fills the Ion accounting pane." />
+                                    <TextBox x:Name="IonRawDirText" Width="300" IsEnabled="False" VerticalAlignment="Center"
+                                             ToolTip="The directory holding the .raw / .mzML / .d files for these replicates. They are paired to replicates by file name, one-to-one; a replicate matching a file another replicate also matches is reported as ambiguous and neither is given it." />
+                                    <Button x:Name="IonRawDirBrowse" Content="Browse..." Padding="10,2" Margin="8,0,0,0"
+                                            IsEnabled="False" Click="OnBrowseIonRawDir" />
                                 </StackPanel>
 
-                                <StackPanel x:Name="Ms2IonExportRow" Orientation="Horizontal" Margin="0,2,0,2" IsEnabled="False">
-                                    <TextBlock Text="    Export:" Width="230" VerticalAlignment="Center" Foreground="#444" />
-                                    <CheckBox x:Name="Ms2IonExportCheck" VerticalAlignment="Center"
-                                              Checked="OnMs2SignalChanged" Unchecked="OnMs2SignalChanged"
-                                              ToolTipService.ShowOnDisabled="True"
-                                              Content="include Skyline's ion counts (PRISM-Ions report - roughly a 30x slower export)"
-                                              ToolTip="Exports each Skyline document with the PRISM-Ions report: the standard PRISM report plus LC Peak Transition Ion Count. Skyline computes that column per spectrum for every transition, so the export takes roughly 30x longer - measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document. An export Skyline has already started cannot be recalled, so Stop will not shorten it. Once exported, both measures are available; without it, ions is not." />
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <TextBlock Text="" Width="230" />
+                                    <TextBlock Text="Product tolerance:" VerticalAlignment="Center"
+                                               Margin="0,0,6,0" />
+                                    <TextBox x:Name="IonProductTolText" Width="90" IsEnabled="False"
+                                             VerticalAlignment="Center" ToolTip="The +/- extraction window this analysis used, as your document's Transition Settings &gt; Full-Scan states it - e.g. &quot;10 ppm&quot; or &quot;0.4 m/z&quot;. Leave blank when an input is a Skyline document: PRISM reads it from the document. It is REQUIRED for a pre-exported report, which carries no settings, and typing one here overrides a document that states a different value. The tolerance decides how much fragment sharing is found, so it is never guessed." />
+                                    <TextBlock Text="Precursor tolerance:" VerticalAlignment="Center"
+                                               Margin="16,0,6,0" />
+                                    <TextBox x:Name="IonPrecursorTolText" Width="90" IsEnabled="False"
+                                             VerticalAlignment="Center"
+                                             ToolTip="The MS1 half's extraction window. Optional - left blank, only the MS2 half is measured. Same rules as the product tolerance beside it." />
                                 </StackPanel>
-                                <TextBlock x:Name="Ms2SignalHint" Foreground="#888" Margin="0,2,0,0" TextWrapping="Wrap" />
+
+                                <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="Reads each data file once, which is single-digit minutes per file - comparable to what Skyline spends pulling the same numbers out of a .skyd, and cheaper than exporting its per-transition ion counts. Extraction tolerances come from the document's own Transition Settings > Full-Scan where it can be read; a PRE-EXPORTED REPORT carries no settings, so state them in the boxes above or the measurement is skipped rather than run against a guess. Results are cached, so the pane and 'prism qc -d' replot for free, and a re-run measures only the replicates the cache does not already cover." />
+
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
-                                           Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />
+                                           Text="Batch correction runs only when 2+ batches are detected, so these start OFF and tick themselves once a second input is added or a Batch column is named. One document with no Batch column is one batch, and ComBat has nothing to correct between. Changing either box yourself stops it following the inputs. Sample types come from the metadata report's Sample Type column." />
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="Anchoring on the Standard samples is the better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. It needs Standard replicates in each batch; a batch without any is corrected on its own average (location only) and said so in the log." />
                             </StackPanel>
                         </ScrollViewer>
-                    </TabItem>
-                    <TabItem Header="Log" x:Name="LogTab">
+
                         <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                                 Visibility="Collapsed"
                                  VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                                  HorizontalScrollBarVisibility="Auto" Background="#fbfbfb" Foreground="#222222" />
-                    </TabItem>
-                </TabControl>
+                    </Grid>
+                </Grid>
             </TabItem>
             <TabItem Header="Visualization" x:Name="VisualizationTab">
                 <Grid>
@@ -274,8 +299,13 @@
                              BorderThickness="0,0,1,0" BorderBrush="#dfe6ef"
                              Background="#fbfcfe">
                         <ListBoxItem x:Name="QcNavItem" Content="QC Plots" Padding="10,7" />
-                        <ListBoxItem x:Name="DensityNavItem" Content="Spectrum density" Padding="10,7" />
+                        <ListBoxItem x:Name="DensityNavItem" Content="Spectrum Density" Padding="10,7" />
                         <ListBoxItem x:Name="RangeNavItem" Content="Dynamic Range" Padding="10,7" />
+                        <!-- Collapsed until the output directory carries ion_accounting.parquet:
+                             every plot on it needs a measured denominator, so without one there is
+                             nothing to offer rather than an empty pane to click. -->
+                        <ListBoxItem x:Name="IonNavItem" Content="Ion Accounting" Padding="10,7"
+                                     Visibility="Collapsed" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -419,6 +449,60 @@
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="RangePlot" MouseLeftButtonUp="OnRangePlotClick" />
+                        </DockPanel>
+
+                        <DockPanel x:Name="IonPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="IonViewCombo" Width="230"
+                                          SelectionChanged="OnIonViewChanged"
+                                          ToolTip="Per replicate: ions acquired, the part quantified on the document&apos;s transitions, and the part any b/y or precursor ion of those peptides could account for. Across the gradient: the same totals per acquisition cycle for one replicate. Share: those totals as fractions of acquired, which is where a stretch the analysis cannot explain becomes visible.">
+                                    <ComboBoxItem Tag="Accounting">Ions per replicate</ComboBoxItem>
+                                    <ComboBoxItem Tag="Profile">Ions across the gradient</ComboBoxItem>
+                                    <ComboBoxItem Tag="Fraction">Share across the gradient</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonLevelCombo" Width="70"
+                                          SelectionChanged="OnIonLevelChanged"
+                                          ToolTip="MS1 or MS2, never both on one axis: on a real run MS2 acquires about three times the ions of MS1 while the assigned share goes the other way, 40% against 3%.">
+                                    <ComboBoxItem Tag="Ms2">MS2</ComboBoxItem>
+                                    <ComboBoxItem Tag="Ms1">MS1</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Quantity:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonQuantityCombo" Width="120"
+                                          SelectionChanged="OnIonQuantityChanged"
+                                          ToolTip="Two different quantities, not two units for one. A scan's intensity is a RATE, in ions per second: Ions multiplies it by that scan's ion injection time to get a count, Signal does not and leaves a sum of rates - what the instrument reports as TIC. Their assigned fractions differ too, and neither is wrong: the ion fraction weights each scan by its injection time and the signal fraction does not. Where the two diverge, the AGC was working.">
+                                    <ComboBoxItem Tag="Ions">Ions</ComboBoxItem>
+                                    <ComboBoxItem Tag="Signal">Signal (TIC)</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="IonSortLabel" Text="Order:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonSortCombo" Width="150"
+                                          SelectionChanged="OnIonSortChanged"
+                                          ToolTip="The bar plot has one bar per replicate and no room to label them, so the order is the axis. By run order it shows drift over a batch; by sample type it shows whether the controls sit where the experimental samples do. Run order comes from each data file's own start timestamp - a cache measured before that was recorded falls back to file name and says so.">
+                                    <ComboBoxItem Tag="RunOrder">Run order</ComboBoxItem>
+                                    <ComboBoxItem Tag="FileName">File name</ComboBoxItem>
+                                    <ComboBoxItem Tag="SampleType">Sample type</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="IonReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonReplicateCombo" Width="240"
+                                          SelectionChanged="OnIonReplicateChanged"
+                                          ToolTip="Which replicate to profile. The cycles are already cached, so switching is a file read rather than a re-measurement." />
+                                <TextBlock x:Name="IonBinLabel" Text="RT bin (min):" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <TextBox x:Name="IonBinBox" Width="46" Text="1" VerticalAlignment="Center"
+                                         LostFocus="OnIonBinChanged" KeyDown="OnIonBinKeyDown"
+                                         ToolTip="Retention-time bin width. Cycles are grouped only to keep the trace readable - an hour-long run has thousands of them. Re-binning is free." />
+                                <Button x:Name="IonReloadButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
+                                        Click="OnIonReload"
+                                        ToolTip="Re-read ion_accounting.parquet and ion_cycles.parquet from the output directory above." />
+                                <TextBlock x:Name="IonStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                                <TextBlock x:Name="IonHoverText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#333" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <sp:WpfPlot x:Name="IonPlot" MouseMove="OnIonPlotMouseMove" />
                         </DockPanel>
                     </Grid>
                 </Grid>

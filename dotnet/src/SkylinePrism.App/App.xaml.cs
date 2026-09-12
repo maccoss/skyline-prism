@@ -116,34 +116,11 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Registers the pwiz-backed reader when the build has one. Reflection rather than a direct
-    /// call: SkylinePrism.Pwiz is referenced only when a pwiz-sharp checkout was present at build
-    /// time, so naming its types here would stop a pwiz-less build compiling - and that build is
-    /// what a developer without the checkout, and the cross-platform CLI, both use.
+    /// Registers the optional instrument-file reader. The loading itself lives in
+    /// <see cref="OptionalReaders"/> so the CLI uses the same code path - it had none, so every
+    /// reader-dependent command there reported no reader even in a build that carried one.
     /// </summary>
-    private static void RegisterRawReader()
-    {
-        try
-        {
-            var type = Type.GetType(
-                "SkylinePrism.Pwiz.PwizReaderRegistration, SkylinePrism.Pwiz", throwOnError: false);
-            if (type is null)
-            {
-                WriteLog("Instrument-file reader: not in this build; acquired MS2 signal will read "
-                    + "as unknown.");
-                return;
-            }
-
-            type.GetMethod("Register")?.Invoke(null, null);
-            WriteLog("Instrument-file reader: registered ("
-                + string.Join(", ", Ms2SignalReaders.All.Select(r => r.Describe())) + ").");
-        }
-        catch (Exception ex)
-        {
-            // A reader that cannot load is a missing denominator, not a reason to fail startup.
-            WriteLog("Instrument-file reader: could not be registered - " + ex.Message);
-        }
-    }
+    private static void RegisterRawReader() => OptionalReaders.Register(WriteLog);
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {

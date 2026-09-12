@@ -108,6 +108,48 @@ var cv = stdDev(linear) / mean(linear) * 100.0;   // CV as a percentage
 
 Rationale: On log scale, variance is artificially compressed. A CV of 5% on log2 data would be meaningless - true biological CVs for proteomics control samples typically range from 10-30%.
 
+### Ion Counts vs Signal (CRITICAL)
+
+> [!CAUTION]
+> **A scan's intensity is a RATE, in ions per SECOND. Ions = intensity x injection time in seconds.**
+>
+> Two separate mistakes live here and both were made:
+>
+> 1. **Dropping the injection time** leaves a rate, and a rate summed over scans is not a count.
+>    Dividing a peak area by it gives a ratio carrying units of time - not a fraction at all - and it
+>    looked like a perfectly plausible coverage percentage. No single factor describes how wrong it
+>    was, because the numerator differed too; the dimensional argument is the whole of it.
+> 2. **Using milliseconds** makes every total **1000x** too large. The cvParam is in milliseconds and
+>    the intensity is per second, so the conversion is required. This one cannot be caught by looking
+>    at the fraction - both sides carry the same weighting, so the ratio cancels exactly. It is
+>    caught by per-scan plausibility against the AGC target: 3.7e8 ions in one MS1 scan is
+>    impossible; 3.7e5 is right.
+>
+> | quantity | what it is | safe to divide by a TIC sum? |
+> |---|---|---|
+> | Skyline `Area` | intensity x time, **background-subtracted** | no - and the `Background` column needed to undo that is not always exported |
+> | Skyline `LC Peak Transition Ion Count` | intensity x injection time (already ions) | yes, but Skyline computes it ~29x slower per row |
+> | intensity x injection time in **ms** | 1000x an ion count | the FRACTION is right, the totals are not |
+> | a scan's TIC cvParam | a sum of intensities, i.e. a rate | only against another rate |
+> | PRISM's acquired/assigned ions | intensity x injection time, summed | yes - both sides measured identically |
+>
+> Rules that follow, all of them learned the hard way:
+>
+> - **Never divide a peak area by a summed TIC.** The removed MS2 signal accounting did exactly
+>   this, with the hazard documented on its own enum, and produced a plausible-looking coverage
+>   percentage that was a ratio carrying units of time. Documenting a trap does not stop it.
+> - **Never sum per-transition areas or ion counts to get "assigned".** Two peptides whose fragments
+>   fall within the extraction tolerance of each other in one isolation window extract the SAME
+>   detector counts, so summing credits both and can push assigned past acquired. `ClaimedSignalIndex`
+>   merges the claims into disjoint m/z ranges *first*, so there is one reading to count and nothing
+>   to correct afterwards.
+> - **Never clamp a fraction over 1.** It is impossible, so it means a defect - a units mismatch, an
+>   isolation scheme that does not match the acquisition, or claims merged too loosely. Clamping turns
+>   a visible bug into a plausible reading; `IonAccountingRow.Exceeded` exists so callers refuse to
+>   draw it.
+> - **`TicArea` is MS1 by construction** and must never be an MS2 denominator. On the committed
+>   cohort fixture the *precursor* areas of 327 of 75,202 peptides alone come to 45.6% of it.
+
 ### Peptide Modification Format (CRITICAL)
 
 > [!CAUTION]
@@ -338,6 +380,21 @@ dotnet test --filter "FullyQualifiedName~QcReportTests.MedianCv_MatchesHandCompu
 - `dotnet build` must be **warning-free**; do not silence a warning you can fix
 - XML doc comments on public types/members, especially the scale a matrix argument expects
 
+> [!CAUTION]
+> **`dotnet build SkylinePrism.sln` does NOT build `SkylinePrism.Pwiz`.** The reader is opt-in
+> (`-p:PrismWithPwiz=true`), so a warning in it - or a break in it - is invisible to the ordinary
+> solution build, to `dotnet test`, and to the cross-platform CI jobs. It surfaces only in the ship
+> gate, `dotnet-release.yml`, and the `cli-reader` CI job, and **none of those fail on a warning**, so
+> it can ship silently. A malformed XML doc comment reached a packaged zip this way. After touching
+> anything under `dotnet/src/SkylinePrism.Pwiz/`, build it explicitly:
+>
+> ```bash
+> dotnet build src/SkylinePrism.Pwiz/SkylinePrism.Pwiz.csproj -p:PrismWithPwiz=true -p:IAgreeToVendorLicenses=true
+> ```
+>
+> Expect 0 warnings from PRISM's own files. pwiz-sharp itself brings 58 of its own; those are not ours
+> and are why the reference is off by default.
+
 ### Documentation Updates
 
 **Keep README.md updated:**
@@ -424,16 +481,37 @@ Key sections:
 
 ### Core/Qc/
 - `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory
-- `Ms2SignalAccounting`: the MS2 signal accounting, cached as `ms2_signal_accounting.parquet`.
-  **That cache is keyed on `SettingsKeyFor(measure, tolerance, isolation scheme, list names)`, and the
-  key is stored in the file** - add a `qc_report.ms2_signal` setting that changes the numbers and it
-  must go into that key too, or a re-run replots the previous run's numbers under the new run's
-  caption. Nothing fails loudly if you forget: both plots look right, and the caption comes from the
-  cache. The key records what was REQUESTED, never what was computed - asking for `ions` on an export
-  with no ion column falls back to signal, and keying on the fallback would recompute forever.
+- `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
+  `AssignedPeptides`: ion accounting - how many ions reached the detector and what fraction a peptide
+  sequence explains, at each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
+  **The cache is keyed on `IonAccountingStore.SettingsKeyFor`, and the key is stored in the file:**
+  it covers both extraction tolerances, the isolation scheme, the selected lists AND a fingerprint of
+  the instrument files and `merged_data/`. Add anything that changes the numbers and it must go in
+  that key, or a re-run replots the previous run's numbers under the new run's caption with nothing
+  failing loudly - both plots look right, and the caption comes from the cache.
+  **A keyed cache is not necessarily a complete one:** `--max` measures a few replicates and writes a
+  valid file, so reuse is decided by which replicates it covers, never by the key alone.
+
+  > [!NOTE]
+  > This replaced `Ms2SignalAccounting`, removed in dotnet-vNEXT along with `qc_report.ms2_signal`,
+  > `prism ms2-signal` and the `PRISM-Ions` report. It divided a sum of Skyline peak areas by a
+  > summed total ion current - an intensity-time integral over an intensity - so its "fraction" was
+  > never one. Do not reintroduce any part of it; an output directory from dotnet-v26.24.x may still
+  > hold `ms2_signal*.parquet`, which nothing reads.
 - `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
 - `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
 - `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs
+- `IsolationSchemeCatalog` / `IsolationSchemeResolver` / `RawData/IsolationWindowProbe`: the
+  acquisition's DIA isolation windows - where they come from and where they are kept.
+  **A DIA analysis document declares none of its own** (`<isolation_scheme name="Results only" />`):
+  Skyline reads them from the data at import and does not write them down, so the instrument files
+  are the only original and the analysis outlives them. Two copies are therefore written beside the
+  outputs and both matter: `isolation_schemes.xml` (what the density picker reloads, and the only
+  place a per-batch document scheme is kept) and `parameters.json` -> `isolation_schemes` (window
+  edges included, so a result archived on its own can still be re-binned). `IsolationWindowProbe`
+  reads the windows for the cost of opening ONE file - they are scan headers in the first two
+  acquisition cycles - so never reach for `Ms2SignalReaders.Read` to get them: that measures the
+  whole run to use one field of the answer.
 - `Visualization/PlotRenderer`: every plot (ScottPlot/SkiaSharp), rendered headlessly
 
 ### dotnet/Directory.Build.props
@@ -488,6 +566,16 @@ and inputs of the run that produced the numbers.
 Additional utility commands:
 
 ```bash
+# Count acquired ions and the fraction assigned to a peptide, from the instrument files
+prism ion-accounting -d output_dir/ -r raw_dir/ --product-tolerance "10 ppm" \
+    --precursor-tolerance "10 ppm" [--max 3] [--lanes N]
+
+# How many files to read at once is a property of YOUR STORAGE, not of PRISM. Measure it:
+prism ion-accounting -d output_dir/ -r raw_dir/ --probe-lanes
+
+# Read the acquisition's DIA isolation windows from a data file and record them beside the outputs
+prism isolation-scheme -d output_dir/ -r raw_dir/ [--force]
+
 # Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
 
@@ -629,16 +717,16 @@ tool's Skyline integration. Key points (mirrored in the code under `dotnet/src/S
 > `ReplicatesReportBuilder`, which applies the quoting — go through it rather than hand-rolling XML.
 
 > [!NOTE]
-> **Two transition report definitions ship, and they must stay in lockstep.** `Reports/Skyline-PRISM.skyr`
-> (view `PRISM`) is the standard export; `Reports/Skyline-PRISM-Ions.skyr` (view `PRISM-Ions`) is the same
-> columns in the same order plus exactly one more, `Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount`,
-> which `qc_report.ms2_signal.measure: ions` reads. It is a separate report because Skyline is slow to compute
-> that column (measured at 29x slower per row on a 46M-row document - about 4 hours instead of 9.5 minutes -
-> and one column costs half of what five do, so the cost is per-transition chromatogram access) and because a report is
-> installed into the user's Skyline settings by view name - two names mean the fast report is never silently
-> replaced by the slow one. Both exporters choose through `PrismReport.NameFor/FileFor(includeIonCounts)`;
-> the headless export stamp records which report produced a cached export. `PrismReportDefinitionTests`
-> fails the build if the two files drift, so add a column to BOTH or to neither.
+> **One transition report definition ships**, `Reports/Skyline-PRISM.skyr` (view `PRISM`), named by
+> `PrismReport.Name`/`FileName` so the file, the view and the report Skyline is asked to export cannot
+> disagree. There used to be a second, `PRISM-Ions` - the same columns plus
+> `Results!*.Value.TransitionIonMetrics.LcPeakTransitionIonCount` - and it is gone with
+> `qc_report.ms2_signal`. **Do not add that column back.** Skyline computes it by reading every
+> transition's chromatogram points inside the peak, measured at 29x slower per row on a 46M-row
+> document (about 4 hours against 9.5 minutes), and per-transition counts still cannot be summed to
+> get an assigned total, because co-isolated peptides sharing a fragment extract the same detector
+> counts. `prism ion-accounting` measures the same quantity from the instrument files in single-digit
+> minutes per file and merges claims before counting.
 
 ### Inputs: multiple documents, open or closed (`PrismInput`)
 
@@ -827,6 +915,24 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >   database) tearing an instance down under a live reader - but the later configurations rule that
 >   out, because they fail with no teardown possible and no shared instance at all. Parallel partition
 >   readers were built, crashed, and were reverted; see `TransitionRollup.RunParallel`.
+> - **A long read can die of memory pressure that arrived AFTER it started, and the symptom is a
+>   native access violation, not an exception.** `AutoMemoryBudgetMb()` bounds the pool against FREE
+>   RAM, which is right - but it is evaluated ONCE, when the connection opens. A run that starts on an
+>   idle machine takes a large budget and keeps it; if free memory later collapses, the native pool
+>   cannot get what it was promised and DuckDB.NET faults inside
+>   `DuckDBStreamFetchChunk`/`InitChunkData` with `0xC0000005`. Nothing managed sees it - no
+>   `OutOfMemoryException`, no catch block, just `Fatal error.` and exit 139.
+>
+>   Observed on 2026-09-11: two independent `prism ion-accounting` processes, on different shares,
+>   built from different commits, died three minutes apart with identical stacks - 13 and 16 minutes
+>   into a 6.5 GB Skyline document being opened alongside them. One of them had run nine hours and 71
+>   replicates successfully on the same data before the machine filled up.
+>
+>   Two practical consequences. **Do not run two cohort-scale reads at once**, and do not start one
+>   beside something that will take many gigabytes later. And **save progress per unit of work**:
+>   ion accounting writes its cache after every replicate, which is the only reason 72 of 82
+>   replicates survived that crash instead of nine hours being lost.
+>
 > - **`memory_limit` is a *database*-level setting, not a connection one.** Connections sharing an
 >   instance - which, per the above, means every `":memory:"` connection in the process - share one
 >   budget. Setting it per connection does not give each its own pool.

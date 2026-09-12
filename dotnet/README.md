@@ -12,7 +12,7 @@ reproduced numerically and has since replaced — that engine was retired after 
 | `SkylinePrism.Cli` (`prism`) | `net10.0` | the CLI (cross-platform) |
 | `SkylinePrism.Skyline` | `net10.0-windows` | Skyline JSON-RPC + report driver (Windows) |
 | `SkylinePrism.App` (`SkylinePrism.exe`) | `net10.0-windows` | WPF external tool (Windows) |
-| `SkylinePrism.Pwiz` | `net10.0` | reads acquired MS2 signal from instrument files, through pwiz-sharp (optional) |
+| `SkylinePrism.Pwiz` | `net10.0` | reads instrument files through pwiz-sharp: acquired and assigned ions per spectrum, and the isolation windows |
 | `SkylinePrism.Tests` | `net10.0` | unit + cross-language parity tests |
 | `SkylinePrism.Tests.Windows` | `net10.0-windows` | RPC / WPF smoke tests |
 
@@ -214,9 +214,18 @@ Skyline (`GetSettingsListNames`/`GetSettingsListItem` on `IsolationSchemeList`) 
 Picking the wrong scheme is visible rather than silent: precursors that fall outside every window are
 counted (never clamped into the nearest one) and the status line warns with the percentage.
 
-**Timing: this all happens when the user clicks Run PRISM**, before the pipeline starts - deliberately, as
+**Timing: this all happens when the user clicks Run PRISM**, alongside the pipeline - deliberately, as
 that is when the raw data is most likely still where the document says it is. The windows are resolved once
 and written to the output directory; nothing later depends on the data files still being reachable.
+
+Since dotnet-vNEXT the tool no longer needs Skyline for this. `IsolationWindowProbe` reads the windows
+through PRISM's own ProteoWizard reader in about the time it takes to open the file (~4 s on a 3.3 GB
+Thermo file over SMB, against a ~10 s Skyline launch per input), and the Spectrum density tab does it
+itself when it opens on a directory whose windows are not known - after the map is already drawn, so a
+slow share delays an improvement rather than the plot. Verified against the same acquisition Skyline
+imported: 167 windows, every edge identical. The resolved scheme is also summarized into
+`parameters.json`, edges included, because `isolation_schemes.xml` and the data files are otherwise the
+only two copies and the second is the first thing to be deleted.
 
 ### DIA only, and why
 
@@ -331,11 +340,16 @@ from the dummy arg is expected and ignored - only dependency/XAML load failures 
 
 ### The bundled instrument-file reader
 
-The tool zip carries an instrument-file reader so it can measure **acquired** MS2 signal - the
-denominator for the QC report's MS2 signal accounting, which no Skyline export provides (`TicArea` is
-MS1 by construction). It is built from
-[pwiz-sharp](https://github.com/ProteoWizard/pwiz/pull/4619), which has no package feed, so the
-reference is optional and external:
+**Every published artifact carries one** - the tool zip and all six `prism` CLI archives. Without it
+`prism ion-accounting` cannot run at all, and it is the documented way to measure acquired ions, so a
+build without a reader answers "this build has no instrument-file reader" to the very command the docs
+tell people to type. Neither half of that measurement can come from a Skyline export: `TicArea` is one
+value per replicate and MS1 by construction, and a peak area divided by a summed TIC is a ratio
+carrying units of time rather than a fraction.
+
+The reader is built from [pwiz-sharp](https://github.com/ProteoWizard/pwiz/pull/4619), which has no
+package feed, so the reference is optional and external - a developer without a checkout still builds
+and tests everything else:
 
 ```bash
 # pwiz-sharp cloned beside this repo (../../ProteoWizard/pwiz/pwiz-sharp) is found automatically
@@ -352,9 +366,17 @@ Two switches, and both are needed:
 
 `build/package.proj` sets both and **refuses to package without a checkout** (override with
 `/p:AllowNoPwiz=true`) - a zip that looks complete while quietly unable to open a raw file is worse
-than a build that stops. `dotnet-ci.yml` packages with `AllowNoPwiz=true` on purpose, so its artifact
-is named `SkylinePrism-zip-no-raw-reader`; `dotnet-release.yml` does the real checkout, pinned to a
-commit.
+than a build that stops. `dotnet-ci.yml` packages the tool zip with `AllowNoPwiz=true` on purpose, so
+its artifact is named `SkylinePrism-zip-no-raw-reader`; `dotnet-release.yml` does the real checkout,
+pinned to a commit by `.github/actions/checkout-pwiz-sharp`, for the tool zip **and** for every CLI in
+the release matrix.
+
+**Both are asserted, not assumed**, because the failure is silent: a publish that quietly dropped the
+reference produces a CLI that builds, runs, and cannot count ions. The release workflow checks each
+published CLI directory for `SkylinePrism.Pwiz.dll` and `Pwiz.Data.MsData.dll` and fails if either is
+missing; `package-and-verify.ps1` checks the same for the zip, where the symptom would be a tool that
+launches, passes its smoke test, and never shows the Ion accounting pane - it hides itself when
+nothing has been measured.
 
 **Thermo only, for now.** Bruker's native staging reaches across four more directories of the pwiz
 tree and adds ~20 MB to the zip; a Bruker `.d` reports "no registered reader recognized the file",
@@ -376,7 +398,13 @@ which then fails to load; reinstalling with the tool closed fixes it.
 ## CI
 
 - `.github/workflows/dotnet-ci.yml` — builds + runs the parity suite on ubuntu/macos/windows
-  (cross-platform subset) and packages the tool zip on Windows. Scoped to `dotnet/**`.
+  (cross-platform subset) and packages the tool zip on Windows. Scoped to `dotnet/**`. Two jobs are
+  worth knowing about:
+  - **Coverage gate (Core + CLI)** — `line,branch` at `75` on the `total` statistic. It fails the
+    build, so a feature of any size needs its own tests rather than relying on the floor moving.
+  - **CLI carries the instrument-file reader (all release targets)** — publishes all six release RIDs
+    with pwiz-sharp and fails if the reader assemblies are absent from any of them. This is the one
+    that would have caught a published CLI that could not read a file, which is what shipped before.
 - `.github/workflows/dotnet-release.yml` — on a `dotnet-v*` tag, verifies both version sources
   (`Directory.Build.props` and the tool-inf manifest) match the tag, tests, and publishes a GitHub
   Release with the Skyline tool zip (`SkylinePrism.zip`) plus framework-dependent `prism` CLI

@@ -8,8 +8,21 @@
     <RootNamespace>SkylinePrism.Cli</RootNamespace>
   </PropertyGroup>
 
+  <!-- PwizAvailable / PrismWithPwiz, which gate the optional reader reference below. -->
+  <Import Project="..\..\Pwiz.props" />
+
   <ItemGroup>
     <ProjectReference Include="..\SkylinePrism.Core\SkylinePrism.Core.csproj" />
+
+    <!--
+      The instrument-file reader, OPT-IN via -p:PrismWithPwiz=true, exactly as the WPF tool takes
+      it. Nothing in this project names a type from it: OptionalReaders loads it by assembly name,
+      so a build without it compiles and runs unchanged and the reader-dependent commands say so.
+      Without this reference such a build could never have one - the assembly was simply not there,
+      which is why `prism ion-accounting` always reported no reader.
+    -->
+    <ProjectReference Include="..\SkylinePrism.Pwiz\SkylinePrism.Pwiz.csproj"
+                      Condition="'$(PwizAvailable)' == 'true' and '$(PrismWithPwiz)' == 'true'" />
   </ItemGroup>
 
 </Project>

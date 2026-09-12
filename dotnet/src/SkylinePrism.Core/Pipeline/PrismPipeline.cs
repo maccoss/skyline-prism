@@ -202,9 +202,11 @@ public sealed class PrismPipeline
         var multiBatch = batches.Count >= 2;
         var peptideCombat = config.BatchCorrection.Enabled && config.BatchCorrection.PeptideLevel && multiBatch;
         var proteinCombat = config.BatchCorrection.Enabled && config.BatchCorrection.ProteinLevel && multiBatch;
-        var combatNote = !multiBatch ? "skipped (needs >= 2 batches)"
-            : !config.BatchCorrection.Enabled ? "disabled"
-            : $"peptide={(peptideCombat ? "on" : "off")}, protein={(proteinCombat ? "on" : "off")}";
+        var combatNote = BatchCorrectionNote.For(
+            config.BatchCorrection.Enabled,
+            config.BatchCorrection.PeptideLevel,
+            config.BatchCorrection.ProteinLevel,
+            batches.Count);
         // Which source supplied the batch labels (metadata Batch column > per-file Source Document >
         // acquisition-time estimation > a single default label).
         var metaProvidedBatch = metadata is not null

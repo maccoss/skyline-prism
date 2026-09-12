@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -99,6 +99,32 @@ public sealed class SkyDocumentInfo
     /// </summary>
     public ProductMassTolerance? ProductTolerance => ProductMassTolerance.Parse(
         ProductMassAnalyzer, ProductResolution, ProductResolutionMz, SelectiveExtraction);
+
+    /// <summary>
+    /// Precursor extraction settings, verbatim from <c>&lt;transition_full_scan&gt;</c>:
+    /// <c>precursor_mass_analyzer</c>, <c>precursor_res</c> and <c>precursor_res_mz</c>. The MS1 half
+    /// of the ion accounting needs these for the same reason the MS2 half needs the product trio -
+    /// two precursor isotopes within a tolerance of each other are one detector reading.
+    /// </summary>
+    public string? PrecursorMassAnalyzer { get; private init; }
+
+    /// <inheritdoc cref="PrecursorMassAnalyzer"/>
+    public string? PrecursorResolution { get; private init; }
+
+    /// <inheritdoc cref="PrecursorMassAnalyzer"/>
+    public string? PrecursorResolutionMz { get; private init; }
+
+    /// <summary>
+    /// The m/z range Skyline extracted each precursor isotope over, or null when the document does
+    /// not say enough to know.
+    ///
+    /// <para><see cref="SelectiveExtraction"/> is deliberately shared with
+    /// <see cref="ProductTolerance"/>: it is one document-level attribute on
+    /// <c>&lt;transition_full_scan&gt;</c>, not a per-level one, and Skyline applies it to both
+    /// sides.</para>
+    /// </summary>
+    public ProductMassTolerance? PrecursorTolerance => ProductMassTolerance.Parse(
+        PrecursorMassAnalyzer, PrecursorResolution, PrecursorResolutionMz, SelectiveExtraction);
 
     private string? _isolationSchemeXml;
     private bool _isolationSchemeRead;
@@ -209,6 +235,7 @@ public sealed class SkyDocumentInfo
         string? formatVersion = null, softwareVersion = null, documentGuid = null, enzymeXml = null;
         string? acquisitionMethod = null;
         string? productMassAnalyzer = null, productRes = null, productResMz = null;
+        string? precursorMassAnalyzer = null, precursorRes = null, precursorResMz = null;
         string? selectiveExtraction = null;
         var annotationNames = new List<string>();
         var replicates = new List<SkyReplicate>();
@@ -250,6 +277,9 @@ public sealed class SkyDocumentInfo
                     productMassAnalyzer ??= reader.GetAttribute("product_mass_analyzer");
                     productRes ??= reader.GetAttribute("product_res");
                     productResMz ??= reader.GetAttribute("product_res_mz");
+                    precursorMassAnalyzer ??= reader.GetAttribute("precursor_mass_analyzer");
+                    precursorRes ??= reader.GetAttribute("precursor_res");
+                    precursorResMz ??= reader.GetAttribute("precursor_res_mz");
                     selectiveExtraction ??= reader.GetAttribute("selective_extraction");
                     break;
 
@@ -299,6 +329,9 @@ public sealed class SkyDocumentInfo
             ProductMassAnalyzer = productMassAnalyzer,
             ProductResolution = productRes,
             ProductResolutionMz = productResMz,
+            PrecursorMassAnalyzer = precursorMassAnalyzer,
+            PrecursorResolution = precursorRes,
+            PrecursorResolutionMz = precursorResMz,
             SelectiveExtraction = selectiveExtraction,
             ReplicateAnnotationNames = annotationNames,
             Replicates = replicates,

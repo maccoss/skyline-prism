@@ -9,6 +9,7 @@ using System.Windows.Input;
 using ScottPlot;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
+using SkylinePrism.Core.RawData;
 using SkylinePrism.Core.Visualization;
 
 namespace SkylinePrism.App;
@@ -42,6 +43,10 @@ public partial class MainWindow
     private int _densityRequest;                   // newest query wins if the user clicks ahead of it
     private IsolationSchemeCatalog? _densitySchemes;
     private List<IsolationScheme?> _densitySchemeChoices = new(); // parallel to DensitySchemeCombo; null = uniform
+    // The picker only ever suggests. Once the user has named a scheme, nothing chooses one for them
+    // again - a default that reasserted itself would silently re-bin the map they were reading.
+    private bool _densitySchemeChosen;
+    private string? _densityMeasuredFor;   // output directory a data-file read has already been tried for
 
     /// <summary>Label of the "no real windows available" entry - the only approximate option.</summary>
     private const string UniformSchemeItem = "(uniform bins - approximate)";
@@ -54,6 +59,10 @@ public partial class MainWindow
     {
         _densityLoaded = false;
         _densityPrecursors = null;
+        // A different output directory is a different acquisition until proved otherwise, so both the
+        // user's pick and the "already looked" mark belong to the directory that was showing.
+        _densitySchemeChosen = false;
+        _densityMeasuredFor = null;
         SetDensityMap(null);
     }
 
@@ -103,11 +112,40 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Bring one of the Analysis tabs to the front, selecting the Analysis group first.</summary>
-    private void ShowAnalysis(TabItem tab)
+    /// <summary>Bring one of the Analysis panes to the front, selecting the Analysis group first.</summary>
+    private void ShowAnalysis(AnalysisPane pane)
     {
         MainTabs.SelectedItem = AnalysisTab;
-        AnalysisTabs.SelectedItem = tab;
+        AnalysisNav.SelectedIndex = (int)pane;
+        ShowAnalysisPane(pane);
+    }
+
+    /// <summary>
+    /// Which Analysis pane is visible. One <see cref="UIElement.Visibility"/> flip per pane rather
+    /// than a TabControl, matching the Visualization rail - and like it, each pane keeps its state
+    /// (the grid's rows, the settings, the log's scroll position) while another is shown.
+    /// </summary>
+    private void ShowAnalysisPane(AnalysisPane pane)
+    {
+        InputsPane.Visibility = pane == AnalysisPane.Inputs ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPane.Visibility = pane == AnalysisPane.Settings ? Visibility.Visible : Visibility.Collapsed;
+        LogBox.Visibility = pane == AnalysisPane.Log ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnAnalysisNavChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Guarded because Selector raises this from EndInit while the window is still being built,
+        // before the panes it wants to touch exist. Same reason the rail's index is set in code.
+        if (!IsInitialized || AnalysisNav.SelectedIndex < 0)
+            return;
+        try
+        {
+            ShowAnalysisPane((AnalysisPane)AnalysisNav.SelectedIndex);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnAnalysisNavChanged), ex);
+        }
     }
 
     /// <summary>
@@ -135,10 +173,18 @@ public partial class MainWindow
         QcPane.Visibility = pane == VizPane.Qc ? Visibility.Visible : Visibility.Collapsed;
         DensityPane.Visibility = pane == VizPane.Density ? Visibility.Visible : Visibility.Collapsed;
         RangePane.Visibility = pane == VizPane.DynamicRange ? Visibility.Visible : Visibility.Collapsed;
+        IonPane.Visibility = pane == VizPane.IonAccounting ? Visibility.Visible : Visibility.Collapsed;
 
         SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
 
-        if (pane == VizPane.Density && !_densityLoaded)
+        // Re-checked on every pane change rather than once: the user can point the output box at
+        // another directory at any time, and whether that one has a measured denominator is what
+        // decides if the entry exists at all.
+        UpdateIonNavVisibility();
+
+        if (pane == VizPane.IonAccounting)
+            await LoadIonAccountingAsync();
+        else if (pane == VizPane.Density && !_densityLoaded)
             await LoadDensitySamplesAsync();
         else if (pane == VizPane.DynamicRange)
         {
@@ -164,42 +210,51 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Find the merged dataset under the current output directory and list its runs. Both the schema probe
-    /// and the DISTINCT scan touch the (possibly very large) dataset, so they run off the UI thread.
+    /// Find the merged dataset under the current output directory and list its runs.
     /// </summary>
+    /// <remarks>
+    /// <b>Every file system call is inside the one background read.</b> Locating <c>merged_data</c>
+    /// probes for two candidate paths and used to do it on the UI thread, before the read it belongs
+    /// in - which against a share that is slow or disconnected is the window stopped for the SMB
+    /// timeout with nothing yet on screen to say why. Anything added here that touches the disk goes
+    /// inside the <c>Task.Run</c>.
+    /// </remarks>
     private async Task LoadDensitySamplesAsync()
     {
         var outputDir = OutputDirBox.Text?.Trim();
-        // Either layout: the partitioned directory this release writes, or the single file older ones did.
-        var root = string.IsNullOrWhiteSpace(outputDir)
-            ? null
-            : new[] { MergedName, LegacyMergedName }
-                .Select(n => Path.Combine(outputDir, n))
-                .FirstOrDefault(MergedDataset.Exists);
-
-        if (root is null)
-        {
-            _densityLoaded = false;
-            SetDensitySamples(new List<string>());
-            ShowDensityMessage($"No {MergedName} in the output directory. Run PRISM, or point the "
-                + "output directory at a previous run.");
-            return;
-        }
-
         DensityStatusText.Text = "Reading " + MergedName + "...";
         try
         {
-            var schemePath = Path.Combine(outputDir!, IsolationSchemeCatalog.FileName);
+            var schemePath = string.IsNullOrWhiteSpace(outputDir)
+                ? null
+                : Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
             var (dataset, columns, samples, schemes) = await Task.Run(() =>
             {
+                // Either layout: the partitioned directory this release writes, or the single file
+                // older ones did.
+                var root = MergedDataset.Locate(outputDir);
+                if (root is null || schemePath is null)
+                {
+                    return ((MergedDataset?)null, (PrecursorDensity.Columns?)null,
+                            new List<string>(), (IsolationSchemeCatalog?)null);
+                }
                 var ds = MergedDataset.Open(root);
                 var cols = PrecursorDensity.Resolve(
                     ParquetTable.ReadColumnNames(ds.RepresentativeFile()).ToHashSet());
                 var ids = cols is null
                     ? new List<string>()
                     : MergedParquetReader.GetSortedSamples(ds, cols.Sample);
-                return (ds, cols, ids, IsolationSchemeCatalog.Load(schemePath));
+                return ((MergedDataset?)ds, cols, ids, IsolationSchemeCatalog.Load(schemePath));
             });
+
+            if (dataset is null)
+            {
+                _densityLoaded = false;
+                SetDensitySamples(new List<string>());
+                ShowDensityMessage($"No {MergedName} in the output directory. Run PRISM, or point the "
+                    + "output directory at a previous run.");
+                return;
+            }
 
             _densityDataset = dataset;
             _densityColumns = columns;
@@ -223,6 +278,7 @@ public partial class MainWindow
             }
             PopulateSchemeCombo();
             await RenderDensityAsync();
+            await MeasureIsolationSchemeAsync(outputDir!);
         }
         catch (Exception ex)
         {
@@ -261,6 +317,9 @@ public partial class MainWindow
             _densityPrecursors = null; // different run -> re-query
             PopulateSchemeCombo();     // a different batch may declare a different scheme
             await RenderDensityAsync();
+            // The batch just switched to may be one whose document declares no windows, which is the
+            // case worth reading the data for. Cheap after the first attempt - it is marked.
+            await MeasureIsolationSchemeAsync(OutputDirBox.Text?.Trim() ?? "");
         }
         catch (Exception ex)
         {
@@ -314,48 +373,47 @@ public partial class MainWindow
             {
                 DensitySchemeCombo.Items.Add(scheme.Name
                     + (ambiguous.Contains(scheme.Name) ? $" ({scheme.Windows.Count} windows)" : "")
-                    + (scheme.IsScheduled ? " (scheduled)" : ""));
+                    + (scheme.IsScheduled ? " (scheduled)" : "")
+                    // Where a scheme came from is the whole basis for trusting it: windows read out of
+                    // the acquisition are what it really ran, where every other entry is a guess that
+                    // happens to be available. Say which is which in the list itself.
+                    + (_densitySchemes?.IsMeasured(scheme) == true ? " (from the data files)" : ""));
                 _densitySchemeChoices.Add(scheme);
             }
             // The built-in schemes: modern narrow-window cycles. Enumerated from IsolationScheme.BuiltIns
             // rather than named here, so adding one there is the only edit needed. Each is offered unless
             // the document already declares a scheme by that name, so the fallback is a realistic grid
-            // rather than uniform bins or a 25 Th SWATH template from a different era. The first is
-            // marked "(default)" - it is what gets preselected below.
+            // rather than uniform bins or a 25 Th SWATH template from a different era.
+            //
+            // The first is marked "(default)" only when it really is the one preselected. A scheme read
+            // from the data files outranks it (see DensitySchemeDefault), and a built-in still calling
+            // itself the default while something else is selected reads as a bug in the picker.
+            var builtInIsDefault = !offered.Any(s => _densitySchemes?.IsMeasured(s) == true);
             for (var i = 0; i < IsolationScheme.BuiltIns.Count; i++)
             {
                 var builtIn = IsolationScheme.BuiltIns[i];
                 if (documentScheme is not null && documentScheme.Name.Equals(
                         builtIn.Name, StringComparison.OrdinalIgnoreCase))
                     continue;
-                DensitySchemeCombo.Items.Add(builtIn.Name + (i == 0 ? " (default)" : ""));
+                DensitySchemeCombo.Items.Add(
+                    builtIn.Name + (i == 0 && builtInIsDefault ? " (default)" : ""));
                 _densitySchemeChoices.Add(builtIn);
             }
 
             DensitySchemeCombo.Items.Add(UniformSchemeItem);
             _densitySchemeChoices.Add(null);
 
-            // The document's scheme wins; otherwise keep the user's previous pick across runs (they are
-            // usually all the same acquisition), else the built-in Astral default - which is a far
-            // better guess for narrow-window DIA than a uniform grid.
-            var index = 0;
-            if (documentScheme is null)
-            {
-                var keep = previous is null ? -1 : DensitySchemeCombo.Items.IndexOf(previous);
-                if (keep >= 0)
-                {
-                    index = keep;
-                }
-                else
-                {
-                    // Whichever built-in is first in the list, found by the marker rather than by name
-                    // so reordering BuiltIns changes the default with no edit here.
-                    var preferred = _densitySchemeChoices.FindIndex(
-                        s => s is not null && ReferenceEquals(s, IsolationScheme.BuiltIns[0]));
-                    index = preferred >= 0 ? preferred : DensitySchemeCombo.Items.Count - 1;
-                }
-            }
-            DensitySchemeCombo.SelectedIndex = index;
+            // Which one to start on is DensitySchemeDefault's rule, which is where the order is
+            // documented and tested. The built-in is found by the marker rather than by name, so
+            // reordering IsolationScheme.BuiltIns changes the default with no edit here.
+            DensitySchemeCombo.SelectedIndex = DensitySchemeDefault.Choose(
+                documentIndex: documentScheme is null ? -1 : 0,
+                keptIndex: previous is null ? -1 : DensitySchemeCombo.Items.IndexOf(previous),
+                measuredIndex: _densitySchemeChoices.FindIndex(
+                    s => s is not null && _densitySchemes?.IsMeasured(s) == true),
+                builtInIndex: _densitySchemeChoices.FindIndex(
+                    s => s is not null && ReferenceEquals(s, IsolationScheme.BuiltIns[0])),
+                fallbackIndex: DensitySchemeCombo.Items.Count - 1);
             DensitySchemeCombo.IsEnabled = documentScheme is null && DensitySchemeCombo.Items.Count > 1;
             UpdateSchemeControls();
         }
@@ -379,9 +437,10 @@ public partial class MainWindow
         // 901.66, because 167 windows of ~3.0014 Th from a forbidden-zone edge do not end on a round
         // number (Skyline's own "SWATH (25 m/z)" is the same kind of label). Put the true extents where
         // the choice is made, so the m/z axis never disagrees with the name for no visible reason.
-        DensitySchemeCombo.ToolTip = scheme?.Describe()
-            ?? "No real isolation windows available - the map is binned on a uniform m/z grid, which is "
-             + "approximate: a cell is not one spectrum.";
+        DensitySchemeCombo.ToolTip = scheme is null
+            ? "No real isolation windows available - the map is binned on a uniform m/z grid, which is "
+              + "approximate: a cell is not one spectrum."
+            : scheme.Describe() + WhereFrom(scheme);
     }
 
     private IsolationScheme? SelectedIsolationScheme()
@@ -406,6 +465,7 @@ public partial class MainWindow
     {
         if (_suppressDensityRender)
             return;
+        _densitySchemeChosen = true;
         UpdateSchemeControls();
         RebinAndDraw(); // the scheme only changes the binning, not the query
     }
@@ -708,6 +768,139 @@ public partial class MainWindow
             return v;
         box.Text = fallback.ToString("0.###");
         return fallback;
+    }
+
+    /// <summary>Where a scheme's windows came from, for the picker's tooltip.</summary>
+    private string WhereFrom(IsolationScheme scheme)
+    {
+        if (_densitySchemes?.IsMeasured(scheme) == true)
+        {
+            var file = _densitySchemes.Measured
+                .FirstOrDefault(m => m.Scheme.LayoutKey == scheme.LayoutKey)?.DataFile;
+            return string.IsNullOrWhiteSpace(file)
+                ? "\nRead from the instrument data files."
+                : $"\nRead from {Path.GetFileName(file)}.";
+        }
+        return IsolationScheme.BuiltIns.Any(b => ReferenceEquals(b, scheme))
+            ? "\nA built-in layout, not this data's - check the out-of-window count below."
+            : "";
+    }
+
+    /// <summary>
+    /// Read the acquisition's real isolation windows out of one data file, when the run has not been
+    /// asked yet and nothing better is already known.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why the tab does this at all.</b> A DIA analysis document stores
+    /// <c>isolation_scheme name="Results only"</c> with no windows - Skyline reads them from the data
+    /// at import and does not write them down - so without this the map was binned on a built-in
+    /// layout that merely looks like a modern DIA cycle. The files are the only place the real answer
+    /// lives, and reading it costs one file open: the windows are scan headers in the first two
+    /// cycles.</para>
+    ///
+    /// <para><b>After the first render, never before it.</b> The map is already on screen binned on
+    /// the fallback by the time this starts, so a share that takes ten seconds to open a file delays
+    /// an improvement rather than the plot. And it runs once per output directory
+    /// (<c>_densityMeasuredFor</c>): a cohort's replicates share one acquisition, so a second read
+    /// would return the same windows.</para>
+    /// </remarks>
+    private async Task MeasureIsolationSchemeAsync(string outputDir)
+    {
+        if (string.IsNullOrWhiteSpace(outputDir))
+            return;
+        if (string.Equals(_densityMeasuredFor, outputDir, StringComparison.OrdinalIgnoreCase))
+            return;
+        // Nothing to improve on: the data has already been read, or this batch's own document declares
+        // the windows, which is authoritative and locks the picker.
+        if (_densitySchemes?.Measured.Count > 0)
+            return;
+        if (BatchOfSelectedRun() is { } batch && _densitySchemes?.DocumentSchemeFor(batch) is not null)
+            return;
+
+        // Snapshotted on the UI thread; everything that touches the disk happens off it. Finding the
+        // raw directory PROBES PATHS A DOCUMENT RECORDED, which on a machine that is not the one the
+        // data was imported on are exactly the paths that no longer resolve - and a dead UNC path
+        // does not fail fast, it blocks for the SMB timeout.
+        var named = IonRawDirText.Text?.Trim();
+        var inputs = _inputs.ToArray();
+
+        _densityMeasuredFor = outputDir;
+        var previousStatus = DensityStatusText.Text;
+        DensityStatusText.Text = "Reading the acquisition's isolation windows from the data files...";
+        try
+        {
+            var (scheme, catalog) = await Task.Run(() =>
+            {
+                if (!Directory.Exists(outputDir))
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+                var rawDir = DensityRawDirectory(named, inputs);
+                if (rawDir is null)
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+
+                OptionalReaders.Register(Log);
+                if (!IsolationWindowProbe.Available)
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+
+                var read = IsolationSchemeResolver.FromData(outputDir, rawDir, Log);
+                return (read, read is null
+                    ? null
+                    : IsolationSchemeCatalog.Load(
+                        Path.Combine(outputDir, IsolationSchemeCatalog.FileName)));
+            });
+
+            // The user can have moved on while a file opened over a share.
+            if (!_densityLoaded
+                || !string.Equals(OutputDirBox.Text?.Trim(), outputDir, StringComparison.OrdinalIgnoreCase))
+            {
+                // Restored like every other exit. Leaving the transient text behind stranded
+                // "Reading the acquisition's isolation windows..." above a map from the previous
+                // directory, indefinitely.
+                DensityStatusText.Text = previousStatus;
+                return;
+            }
+            if (scheme is null)
+            {
+                DensityStatusText.Text = previousStatus;
+                return;
+            }
+
+            _densitySchemes = catalog ?? _densitySchemes;
+            PopulateSchemeCombo();
+            // Only re-bin when the picker actually moved to the measured scheme. If the user had
+            // already named one, PopulateSchemeCombo kept it and the map on screen is still theirs.
+            if (!_densitySchemeChosen)
+                RebinAndDraw();
+            else
+                DensityStatusText.Text = previousStatus;
+        }
+        catch (Exception ex)
+        {
+            App.WriteLog("Reading isolation windows from the data files failed: " + ex);
+            DensityStatusText.Text = previousStatus;
+        }
+    }
+
+    /// <summary>
+    /// Where the instrument files are, for the window read: the directory the Settings tab names, else
+    /// wherever an input document says it imported from. Null when neither answers.
+    /// </summary>
+    /// <remarks>
+    /// Static, taking its inputs by argument, because it runs on a background thread - it probes the
+    /// file system several times and must not do that on the dispatcher. Nothing here may touch a
+    /// control.
+    /// </remarks>
+    private static string? DensityRawDirectory(string? named, IReadOnlyList<PrismInput> inputs)
+    {
+        if (!string.IsNullOrWhiteSpace(named) && Directory.Exists(named))
+            return named;
+
+        foreach (var input in inputs)
+        {
+            var guess = input.GuessRawDirectory(App.WriteLog);
+            if (!string.IsNullOrWhiteSpace(guess) && Directory.Exists(guess))
+                return guess;
+        }
+        return null;
     }
 
     // Viridis matches Cadenza. Turbo is the high-contrast option for picking out fine structure; Magma,

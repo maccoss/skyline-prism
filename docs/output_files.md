@@ -36,10 +36,54 @@ output_dir/
 ├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
 ├── fasta/                          # Copy of the search database(s) this run used (if any)
 ├── parameters.json                 # Complete provenance and processing parameters
+├── isolation_schemes.xml           # The acquisition's DIA isolation windows, if any were learned
+├── ion_accounting.parquet          # Ions acquired/assigned/explained per replicate (if `prism ion-accounting`)
+├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
+├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
 └── prism_run_YYYYMMDD_HHMMSS.log   # Detailed processing log
 ```
+
+### Ion accounting (`prism ion-accounting`)
+
+Written only by `prism ion-accounting`, never by `prism run`: producing them reads every instrument
+file in the cohort, which is often a terabyte over a network share.
+
+| File | One row per | Holds |
+|---|---|---|
+| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. The same four totals **unweighted** as `ms1_signal`, `ms2_signal`, `ms1_signal_assigned`, `ms2_signal_assigned`, `ms2_signal_explained` with a `has_signal` flag - see below. Also `acquired_utc` (when the instrument started the run), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
+| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
+| `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
+
+**The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity
+is multiplied by its ion injection time **in seconds** and summed. That is the quantity Skyline
+reports as an ion count. Two ways to get it wrong, both of which have been made here — dropping the
+injection time leaves a rate, which summed over scans is not a count of anything; and using
+milliseconds makes every total 1000x too large. Neither disturbs the *fraction*, since both sides
+carry the same weighting, so the check that catches the second one is per-scan plausibility against
+the instrument's AGC target rather than anything about the ratio.
+
+**Ions and signal are two different quantities, not two units for one.** The `*_acquired` /
+`*_assigned` columns are ion counts, as above. The `*_signal*` columns are the same sums with the
+injection-time weighting left out - a sum of rates, which is what an instrument reports as TIC.
+Both are worth having: the ion count is the physical quantity and the only one of the two that may
+be compared between scans acquired at different injection times, while the TIC is what the
+instrument is read in, and the pair together says what the AGC was doing. Their assigned fractions
+are different numbers too, and neither is wrong - the ion fraction weights each scan by its
+injection time and the signal fraction does not, so they agree only where the assigned share happens
+to be constant across injection times. **Never add, subtract or compare across the two.** Both are
+accumulated over exactly the same scans, so a scan with no injection time is excluded from both.
+
+`has_signal` is false for a cache written before these columns existed; the tool then plots ions and
+says plainly that it has no TIC rather than drawing zeros. `acquired_utc` is likewise empty for an
+older cache, and the Ion Accounting pane's run-order sorting falls back to file name and says so.
+
+`settings_key` is stored in the file and covers both extraction tolerances, the isolation scheme,
+the selected lists and a fingerprint of the instrument files and `merged_data/`. A re-run whose
+settings differ recomputes rather than replotting the previous numbers under a new caption. A cache
+that is keyed for the current settings but covers only *some* replicates — what a `--max` spot check
+leaves — is topped up rather than trusted, so only the unmeasured replicates are read.
 
 ## Primary Output Files
 
@@ -325,9 +369,44 @@ output reflects whatever version you ran (the example below is illustrative).
     "n_transitions": 67974,
     "n_proteins": 3643,
     "n_protein_groups": 3648
-  }
+  },
+  "isolation_schemes": [
+    {
+      "source": "measured",
+      "data_file": "R:\\cohort\\2026-extended-FLARE-001-1-B1-013.raw",
+      "recorded": "2026-09-12T19:50:30.4715664Z",
+      "name": "Imported from 2026-extended-FLARE-001-1-B1-013",
+      "summary": "167 windows, 400.4-901.7 m/z, 3.001 Th",
+      "window_count": 167,
+      "mz_start": 400.43189,
+      "mz_end": 901.65971,
+      "scheduled": false,
+      "windows": [
+        { "start": 400.43189, "end": 403.43329 },
+        { "start": 403.43331, "end": 406.43461 }
+      ]
+    }
+  ]
 }
 ```
+
+**`isolation_schemes`**: the DIA isolation windows the data was acquired with, when the run managed to
+learn them. `source` is `measured` for windows read out of an instrument data file (`data_file` names
+which one, `recorded` says when) and `document` for windows a Skyline document declared, in which case
+`batch` names the input.
+
+This is recorded because the windows are otherwise only in two places, both of which go away. A DIA
+analysis document stores `<isolation_scheme name="Results only" />` and **no windows** - Skyline reads
+them from the data at import and does not write them down - so the instrument files are the only
+original, and they are routinely moved off a share or deleted once an analysis is finished. After that
+nothing can say what the acquisition was, and the Spectrum density map falls back to a built-in layout
+that looks exactly as plausible as the right one. `isolation_schemes.xml` beside the outputs is what
+the tool reads back; this is the same thing in the file that travels with a result, window edges
+included, so the grid can be reconstructed from provenance alone.
+
+Written by `prism isolation-scheme`, by `prism ion-accounting`, and by the Skyline tool when it
+resolves the windows for a run. `--from-provenance` ignores it - it is a record of the acquisition,
+not a processing parameter.
 
 **Re-running with provenance**: You can use `parameters.json` to re-run PRISM with identical
 parameters:

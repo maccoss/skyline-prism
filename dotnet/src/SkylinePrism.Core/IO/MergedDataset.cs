@@ -70,6 +70,36 @@ public sealed class MergedDataset
     /// </summary>
     public const int MaxPartitions = 256;
 
+    /// <summary>The name this release writes: a directory of <c>_pep_bucket=N</c> partitions.</summary>
+    public const string DirectoryName = "merged_data";
+
+    /// <summary>The single file earlier releases wrote instead.</summary>
+    public const string LegacyFileName = "merged_data.parquet";
+
+    /// <summary>
+    /// The merged data inside an output directory, whichever layout is there, or null when neither
+    /// is.
+    /// </summary>
+    /// <remarks>
+    /// Every caller must go through this rather than composing the path itself. Composing
+    /// <c>Path.Combine(dir, "merged_data")</c> silently misses the legacy file - it is not a
+    /// directory and does not carry that name - so a feature written that way reports "no merged
+    /// data" on a directory that plainly has some. All three QC features did exactly that until a
+    /// real 82-replicate directory from an older release was pointed at them.
+    /// </remarks>
+    public static string? Locate(string? outputDir)
+    {
+        if (string.IsNullOrWhiteSpace(outputDir))
+            return null;
+        foreach (var name in new[] { DirectoryName, LegacyFileName })
+        {
+            var candidate = Path.Combine(outputDir, name);
+            if (Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
     /// <summary>Directory holding the <c>_pep_bucket=N</c> subdirectories, or a legacy single file.</summary>
     public string Root { get; }
 

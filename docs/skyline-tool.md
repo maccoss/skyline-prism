@@ -37,6 +37,7 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 | **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
 | **Spectrum density** | How many precursors were detected in each DIA spectrum of a run |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
+| **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
 so an empty result cannot be misread as a flat measurement.
@@ -293,46 +294,91 @@ this - it was extracted on the way in - and PRISM handles the closed case itself
 An archive with no `.sky` inside, or with several, is refused by name with the reason; PRISM will not
 guess which document you meant.
 
-## MS2 signal accounting
+## Ion accounting
 
-Settings row **9** adds a QC-report section answering "how much of the MS2 signal does this analysis
-actually put a name to?" - per replicate, the signal the run assigns to a peptide, with a line per
-protein list ticked visible in **Protein lists...** (the same set the Dynamic Range tab highlights).
-Each region of MS2 signal space - isolation window, extraction window, integration bounds - is counted
-once, so two co-isolated peptides sharing a fragment mass are not both credited with it.
+**Of the ions that actually reached the detector, what fraction did this analysis put a peptide
+sequence to?** Measured from the instrument files at each MS level, so both sides of the ratio are the
+same quantity and the fraction is a genuine one.
 
-**measure** picks what to total:
+At MS2 the question is asked twice, because it has two honest answers:
 
-| | What it sums | Needs |
+| | what it counts | what it tells you |
 |---|---|---|
-| `signal` | Each transition's gross peak area (`Area + Background`) | Any export |
-| `ions` | Skyline's `LC Peak Transition Ion Count` - intensity x injection time per spectrum, summed across the peak | An export carrying that column |
+| **quantified** | the transitions the document carries - the fragments Skyline integrates | what your quantification is standing on |
+| **explained** | every theoretical b and y ion at 1+ and 2+, plus the surviving precursor and its first two isotopes | what the peptide can account for at all |
 
-`ions` is the better measure: both it and an acquired total are then counts of ions, so no unit or
-background correction applies, and it cannot be recovered from an area afterwards (on AGC-controlled
-data the injection time varies by two orders of magnitude within a run and anti-correlates with
-intensity). It is grayed out, with the reason as its tooltip, until every input can supply the column.
+The gap between them is signal the peptide genuinely produced that no transition in the document
+integrates. Low-m/z fragments and unfragmented precursor are poor quantifiers - which is why Skyline
+does not pick them - and they are still part of the mass balance. Both appear on every plot: a third
+bar per replicate, a third trace across the gradient, and a second line on the share profile.
 
-**Export ion counts** is what makes that possible: each Skyline document is exported with the
-`PRISM-Ions` report - the standard report plus that one column - instead of `PRISM`. Expect roughly a
-**30x slower export**: measured at about 4 hours instead of 9.5 minutes on a 6.5 GB, 46M-row document,
-because Skyline reads every transition's chromatogram points to compute it. Three things follow:
+No Skyline export can answer this. `TicArea` is one value per replicate and is MS1 by construction,
+and a peak area is an intensity-time integral where a summed total ion current is an intensity - so
+their ratio carries units of time rather than being a fraction. Both sides have to come from the
+instrument files, which is why this is a separate, cached command rather than part of `prism run`.
 
-- **The option and the measure are separate.** Once ion counts are exported, both measures are
-  available, so a later re-run can plot either without exporting again.
-- **A closed document is exported once per variant** (into `skyline-reports/with-ion-counts/`), so
-  switching the measure back and forth does not repeat the four hours. A document open in Skyline has
-  no such cache - a live document can hold unsaved edits - so it re-exports on every run.
-- **An export Skyline has started cannot be recalled.** Stop ends PRISM's run, not Skyline's export;
-  the only way to end that early is to close Skyline, which loses unsaved changes to the document.
+Run it from the command line:
 
-The option is ignored for an input that is already an exported report, and PRISM refuses it outright
-when one of those lacks the column - inputs whose columns differ cannot be merged into one cohort, so
-paying for the slow export there would only fail in Stage 1.
+```
+prism ion-accounting -d <output-dir> -r <raw-dir> --product-tolerance "10 ppm" \
+    --precursor-tolerance "10 ppm"
+```
 
-The tool also reads the document's own product-ion extraction tolerance
-(`Transition Settings > Full-Scan`) rather than using the config default, since that is what decides
-when two fragments are the same detector counts. Every input is asked, and disagreement is a warning.
+`--product-tolerance` and `--precursor-tolerance` are the +/- windows your document states under
+**Transition Settings > Full-Scan** (`product_res` and `precursor_res`). Omit the precursor one and
+only the MS2 half is computed — a guessed extraction window changes how much fragment sharing is
+found, with nothing on the plot to say the number moved. `--max N` measures N replicates for a spot
+check; `--lanes N` sets how many files are read at once; `--force` recomputes over a valid cache.
+Progress is written after **every** replicate, so an interrupted run keeps what it measured.
+
+The isolation scheme is imported from the first data file when the document has none, which is the
+usual case: a DIA analysis document stores `<isolation_scheme name="Results only" />` and Skyline
+keeps the windows in the data files. On the cohort this was built against that import gives 167
+windows, 400.4–901.7 m/z, 3.001 Th, and it costs under a second because it reads headers only.
+
+### Reading the plots
+
+The **Ion accounting** pane has three views and an MS1/MS2 switch:
+
+| View | What it shows |
+|------|---------------|
+| **Ions per replicate** | Acquired ions as a neutral background bar, with assigned drawn inside it |
+| **Ions across the gradient** | Both totals per acquisition cycle for one replicate, acquired filled and assigned as a line over it |
+| **Assigned share across the gradient** | The ratio of the two, on an axis anchored at zero |
+
+The third is the one to look at when the first two look fine. Both absolute traces rise and fall with
+the elution envelope, so a stretch of the gradient the analysis cannot explain is invisible in them
+and obvious in the ratio. On the Levitt cohort it shows the analysis explaining about 4% of MS2 ion
+current through the main elution window and falling steadily to under 1% by the end of the gradient —
+late-eluting species are much less well assigned, which neither absolute trace reveals.
+
+Its y-axis always starts at zero and fits the data above it. A fixed 0–100% axis was the first design
+— a fraction is bounded, after all — but at 3.4% it leaves the line flat on the baseline with no
+structure visible, which defeats the plot. A non-zero origin is what makes a chart lie; a fitted top
+with the scale on the ticks does not.
+
+Expect the two levels to differ, and by a lot. On a real Astral cohort: **40.5% of acquired MS1 ions
+assigned, against 3.4% of acquired MS2 ions.** That is not an error. MS1 is dominated by the
+precursors that were identified; each 3 Th DIA window fragments everything co-isolated in it, and the
+identified peptides' fragments account for a twentieth of what comes out. The two are never drawn on
+one axis.
+
+The pane is a pure read of `ion_accounting.parquet` and `ion_cycles.parquet`, so switching replicate,
+level, view or bin width is instant. It opens on the **median** replicate by assigned share rather
+than the first alphabetically. **The nav entry does not appear at all until those files exist** —
+every plot on it needs a measured denominator, and a fraction taken against a guessed one reads as
+coverage without being coverage.
+
+### What it costs, and why it is a separate step
+
+Reading one 4.44 GB Thermo file of 168,920 spectra takes about three and a half minutes, essentially
+all of it decoding spectra: of 206.7 s measured, 204.5 s is inside the reader and **1.0 s** is
+masking all 465,307 of that replicate's claimed regions against every spectrum. So the union
+arithmetic is half a percent of the work and the file read is the whole cost — which is why this is
+a separate, cached command rather than part of `prism run`, and why the cache is keyed on the files
+themselves as well as on the settings.
+
+---
 
 ## Spectrum density
 
@@ -348,14 +394,28 @@ at 400 sits ~14% of a window off and cuts through the very precursor clusters th
 intact.
 
 PRISM gets those windows from the document's Full-Scan settings when it defines a scheme, and otherwise —
-the usual `Results only` case, where Skyline keeps the windows only inside the raw files — by having
-Skyline read them from one of the run's data files. That read happens when you click **Run PRISM**, while
-the raw data is most likely still where the document says it is, and the result is saved to
-`isolation_schemes.xml` in the output directory so the map still bins correctly when the tab is reopened
-later with no Skyline running.
+the usual `Results only` case, where Skyline keeps the windows only inside the raw files — by reading
+them out of one of the run's data files. Two routes do that, and the tab prefers whichever answers:
 
-It runs **alongside** the pipeline, not before it, so a slow or unreachable data file delays nothing. If
-it does not finish, the map falls back to clearly-labeled uniform bins and the log says so.
+- **PRISM's own reader**, when the build carries one. The windows are scan headers in the first two
+  acquisition cycles, so the whole cost is opening the file: about 4 s on a 3.3 GB Thermo file over an
+  SMB share, no Skyline launch involved. The Spectrum density tab does this itself when it opens on a
+  directory whose windows are not already known, *after* the map is already drawn on the fallback grid,
+  and defaults the picker to the result — labeled **(from the data files)** so it is clear which entry
+  is the acquisition's own answer and which are guesses.
+- **Skyline**, asked to import a repeating cycle from a data file. This happens when you click **Run
+  PRISM**, while the raw data is most likely still where the document says it is. It runs **alongside**
+  the pipeline, not before it, so a slow or unreachable data file delays nothing.
+
+Either way the result is saved to `isolation_schemes.xml` in the output directory, and summarized with
+its window edges in `parameters.json`, so the map still bins correctly when the tab is reopened later
+with no Skyline running **and no data files left** — which is the normal state of a finished analysis.
+Headless, `prism isolation-scheme -d <output-dir> -r <raw-dir>` does the same thing and prints the
+scheme. If nothing can read the windows, the map falls back to clearly-labeled uniform bins or a
+built-in layout, and says which.
+
+The picker never overrules you: once you have named a scheme, a later data-file read records what it
+found and leaves your choice alone.
 
 **The tab is for DIA.** Skyline's importer can only read a repeating isolation cycle out of a data file,
 so targeted methods (PRM, MTM) have no route to their real windows — getting them means walking the file's

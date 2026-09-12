@@ -105,4 +105,49 @@ public class QcReportProvenanceTests : IDisposable
         Assert.Equal(Environment.MachineName, info!.Host);
         Assert.Contains(Environment.MachineName, Generate(new PrismConfig()));
     }
+
+    /// <summary>
+    /// The acquisition's window layout reaches the page that gets kept. Once the instrument files are
+    /// deleted - the normal end of an analysis - the report and the provenance file beside it are the
+    /// only things left that can say what the data was acquired with.
+    /// </summary>
+    [Fact]
+    public void NamesTheAcquisitionWhenTheRunRecordedOne()
+    {
+        var saved = File.ReadAllText(ProvenancePath);
+        try
+        {
+            var catalog = new IsolationSchemeCatalog();
+            catalog.AddMeasuredScheme(
+                new IsolationScheme("Imported from run01", new[]
+                {
+                    new IsolationWindow(400.0, 403.0014),
+                    new IsolationWindow(403.0014, 406.0028),
+                }),
+                @"R:\cohort\run01.raw");
+            Assert.True(Provenance.RecordIsolationSchemes(_dir, catalog));
+
+            var html = Generate(new PrismConfig());
+
+            Assert.Contains("Isolation scheme", html);
+            Assert.Contains("2 windows", html);
+            // Where the windows came from is the basis for trusting them, so it is on the page too.
+            Assert.Contains("measured from the data", html);
+        }
+        finally
+        {
+            File.WriteAllText(ProvenancePath, saved);
+        }
+    }
+
+    /// <summary>
+    /// A run whose data files were never reachable records no scheme, and the report must not grow an
+    /// empty row implying one was found.
+    /// </summary>
+    [Fact]
+    public void SaysNothingAboutTheAcquisitionWhenNoneWasRecorded()
+    {
+        Assert.Empty(Provenance.IsolationSchemeSummaries(ProvenancePath));
+        Assert.DoesNotContain("Isolation scheme", Generate(new PrismConfig()));
+    }
 }

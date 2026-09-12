@@ -222,16 +222,9 @@ public sealed class HeadlessSkylineExporter
     /// Replicate annotation carrying the batch/plate, forced into the metadata report even if it is not one
     /// of the document's declared annotations.
     /// </param>
-    /// <param name="includeIonCounts">
-    /// Export the <see cref="PrismReport.IonsName"/> report - the standard one plus Skyline's
-    /// per-transition LC Peak ion count - instead of <see cref="PrismReport.Name"/>. Much slower: Skyline
-    /// computes that column per spectrum for every transition. Needed for
-    /// <c>qc_report.ms2_signal.measure: ions</c>, and for nothing else.
-    /// </param>
     public ExportedReports Export(
         string skyPath, string workDir, string? documentLabel = null,
-        string? batchAnnotation = null, CancellationToken cancellationToken = default,
-        bool includeIonCounts = false)
+        string? batchAnnotation = null, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(skyPath))
             throw new FileNotFoundException($"Skyline document not found: {skyPath}", skyPath);
@@ -248,7 +241,7 @@ public sealed class HeadlessSkylineExporter
         // Safe here because the document is CLOSED: a file cannot change without its size or
         // last-write-time changing. The running-Skyline path deliberately has no equivalent, because a
         // live document can hold unsaved edits that the .sky on disk knows nothing about.
-        var reportName = PrismReport.NameFor(includeIonCounts);
+        var reportName = PrismReport.Name;
         if (TryReuseExport(skyPath, workDir, label, batchAnnotation, reportName) is { } reused)
             return reused;
 
@@ -274,7 +267,7 @@ public sealed class HeadlessSkylineExporter
         var metadataCsv = Path.Combine(workDir, SkylineReportDriver.MetadataFileName(label));
 
         // 1. Transition report (the bundled .skyr is fixed, so install and export in one load).
-        var prismSkyr = Path.Combine(_reportsDir, PrismReport.FileFor(includeIonCounts));
+        var prismSkyr = Path.Combine(_reportsDir, PrismReport.FileName);
         if (!File.Exists(prismSkyr))
         {
             // Not bundled next to the executable: fall back to whatever report of that name is already in
@@ -392,11 +385,6 @@ public sealed class HeadlessSkylineExporter
     {
         _log($"Exporting the {reportName} transition report via {_runner.Description} "
              + "(this can take a while on a large document)...");
-        if (reportName == PrismReport.IonsName)
-        {
-            _log("  Ion counts requested: " + PrismReport.IonCountCostNote);
-        }
-
         var parquet = Path.Combine(workDir, label + ".parquet");
         if (_runner.SupportsParquet)
         {

@@ -156,6 +156,12 @@ public static class SkylineIsolationImporter
     /// beside the document itself before giving up - that alone rescued a real cohort whose .sky pointed
     /// at a mapped drive the files had since left.
     /// </summary>
+    /// <summary>
+    /// How far above the document to look for a data file named in it. See the loop below for why
+    /// two is the case that matters and why this stops at three.
+    /// </summary>
+    private const int MaxAncestorsSearched = 3;
+
     public static string? ResolveDataFile(IEnumerable<string> recordedPaths, string? documentPath)
     {
         var documentDir = string.IsNullOrWhiteSpace(documentPath)
@@ -176,9 +182,32 @@ public static class SkylineIsolationImporter
 
             if (documentDir is null)
                 continue;
-            var beside = Path.Combine(documentDir, Path.GetFileName(path));
+            var name = Path.GetFileName(path);
+
+            var beside = Path.Combine(documentDir, name);
             if (File.Exists(beside) || Directory.Exists(beside))
                 return beside;
+
+            // Then the ancestors, because the document is often NOT beside its data.
+            //
+            // Two levels is the case that forced this: PrismInput extracts a .sky.zip into
+            // prism-extracted/<stem>/ beside the archive, so a document unpacked from
+            // <dir>/cohort.sky.zip lives at <dir>/prism-extracted/cohort/cohort.sky while the data
+            // sits in <dir> - two directories up, not one. One level covers the other common layout,
+            // a .sky kept in a subfolder of its acquisition directory.
+            //
+            // Bounded at three: each level up widens the search, and a file matched by name alone
+            // far from the document is as likely to be the wrong cohort's as the right one.
+            var ancestor = documentDir;
+            for (var up = 0; up < MaxAncestorsSearched; up++)
+            {
+                ancestor = Path.GetDirectoryName(ancestor);
+                if (ancestor is null)
+                    break;
+                var above = Path.Combine(ancestor, name);
+                if (File.Exists(above) || Directory.Exists(above))
+                    return above;
+            }
         }
         return null; // nothing reachable; the caller falls back to asking the user
     }

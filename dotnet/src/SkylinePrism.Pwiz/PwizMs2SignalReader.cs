@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -33,7 +34,8 @@ namespace SkylinePrism.Pwiz;
 /// back to summing and says so in <see cref="Describe"/>, so a cohort that mixes the two is visible
 /// rather than silently averaged over.</para>
 /// </remarks>
-public sealed class PwizMs2SignalReader : IMs2SignalReader
+public sealed partial class PwizMs2SignalReader
+    : IMs2SignalReader, IIonAccountingReader, IIsolationWindowReader
 {
     /// <summary>Extensions pwiz can open here. A directory-shaped format (.d) counts as a path.</summary>
     private static readonly string[] Extensions =
@@ -293,6 +295,83 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
             cycles, windows);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>The whole cost of this is the OPEN - ~2.2 s of a 2.7 s read on a 3.3 GB Thermo file over
+    /// SMB - because the windows themselves are scan headers and come back in ~0.05 s. That is what
+    /// makes it affordable to ask while a tab is loading, where a full signal read is not.</para>
+    /// <para>How far to walk is decided by the data rather than by a spectrum count: a cycle is
+    /// bounded by MS1 survey scans, so stopping after the THIRD one has seen two complete cycles
+    /// whether the scheme has 8 windows or 800. <see cref="MaxProbeSpectra"/> is the backstop for an
+    /// MS2-only acquisition, which has no MS1 to count.</para>
+    /// </remarks>
+    public IReadOnlyList<PrismIsolationWindow> ReadIsolationWindows(
+        string dataPath, Action<string>? log = null, CancellationToken ct = default)
+    {
+        if (!File.Exists(dataPath) && !Directory.Exists(dataPath))
+            return Array.Empty<PrismIsolationWindow>();
+
+        try
+        {
+            using var msd = new MSData();
+            ReaderList.Default.Read(
+                dataPath, msd, new ReaderConfig { CombineIonMobilitySpectra = true });
+            return ProbeIsolationWindows(msd, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<PrismIsolationWindow>();
+        }
+        catch (Exception ex)
+        {
+            // Never throws, by contract. A missing scheme costs the density map its real windows;
+            // it must not cost the caller its window.
+            log?.Invoke($"  Could not read isolation windows from {Path.GetFileName(dataPath)}: {ex.Message}");
+            return Array.Empty<PrismIsolationWindow>();
+        }
+    }
+
+    /// <summary>Spectra the window probe will look at before giving up on finding a repeating cycle.</summary>
+    private const int MaxProbeSpectra = 4_000;
+
+    /// <summary>
+    /// Walk scan headers until two complete acquisition cycles have gone by, collecting the distinct
+    /// isolation windows. Empty when there are no spectra, no MS2, or so many distinct windows that
+    /// this is not a repeating cycle at all (see <see cref="MaxSchemeWindows"/>).
+    /// </summary>
+    private static IReadOnlyList<PrismIsolationWindow> ProbeIsolationWindows(
+        MSData msd, CancellationToken ct)
+    {
+        var spectra = msd.Run.SpectrumList;
+        if (spectra is null || spectra.Count == 0)
+            return Array.Empty<PrismIsolationWindow>();
+
+        var windows = new Dictionary<(long, long), PrismIsolationWindow>();
+        var surveys = 0;
+        var limit = Math.Min(spectra.Count, MaxProbeSpectra);
+        for (var i = 0; i < limit; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var spectrum = spectra.GetSpectrum(i, DetailLevel.FullMetadata);
+            var level = spectrum.Params.CvParamValueOrDefault(CVID.MS_ms_level, 0);
+            if (level == 1)
+            {
+                // Two cycles are in hand once the third survey scan opens, and only then - stopping
+                // at the second would truncate the last cycle of a scheme whose windows are not
+                // acquired in m/z order.
+                if (++surveys >= 3 && windows.Count > 0)
+                    break;
+                continue;
+            }
+            if (level != 2 || spectrum.Precursors.Count == 0)
+                continue;
+            AddWindow(windows, spectrum.Precursors[0].IsolationWindow);
+            if (windows.Count > MaxSchemeWindows)
+                return Array.Empty<PrismIsolationWindow>();
+        }
+        return windows.Values.OrderBy(w => w.Start).ToList();
+    }
+
     /// <summary>
     /// Isolation windows from the first couple of acquisition cycles. A DIA cycle sweeps the whole
     /// m/z range and starts over, so two of them contain every window and reading more would re-read
@@ -320,6 +399,49 @@ public sealed class PwizMs2SignalReader : IMs2SignalReader
             AddWindow(windows, spectrum.Precursors[0].IsolationWindow);
         }
         return windows.Values.OrderBy(w => w.Start).ToList();
+    }
+
+    /// <summary>
+    /// When the instrument began acquiring this run, from the file's own start timestamp.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is what "run order" means on the ion accounting plot, and it is the only honest
+    /// source for it: neither the file name nor the order the files happen to be read in is the
+    /// order they were acquired in, and a plot sorted by either while calling itself run order
+    /// invites reading drift into an ordering that has none.</para>
+    /// <para>Null when the format declares none, or when what it declares cannot be parsed. The
+    /// caller keeps that as "unknown" rather than substituting a time.</para>
+    /// </remarks>
+    internal static DateTime? RunStart(MSData msd)
+    {
+        try
+        {
+            var stamp = msd.Run?.StartTimeStamp;
+            if (string.IsNullOrWhiteSpace(stamp)
+                || !DateTime.TryParse(
+                    stamp, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal, out var value))
+            {
+                return null;
+            }
+
+            // A stamp with no timezone marker parses as Unspecified, and the store writes
+            // ToUniversalTime(), which assumes LOCAL for an Unspecified value and shifts it. An
+            // incremental top-up then mixes rows shifted by the machine's offset with rows that are
+            // not, and DateTime comparison ignores Kind - so the run order would be wrong across the
+            // reused/new boundary, on a plot whose entire axis is the order. Pinned to Utc here so
+            // the instant survives the round trip unchanged; what matters is that every replicate of
+            // a cohort is on one clock, not which clock it is.
+            return value.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+                : value;
+        }
+        catch (Exception)
+        {
+            // A vendor SDK that throws reading a header field is not a reason to lose the file's
+            // measurement; the run simply has no recorded start.
+            return null;
+        }
     }
 
     /// <summary>One isolation window, keyed on rounded edges so float noise cannot multiply it.</summary>
