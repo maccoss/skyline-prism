@@ -74,6 +74,73 @@ jobs:
   # Note when comparing against an older number: coverlet 10 finds ~2 points MORE uncovered branches
   # than 6.0.2 did on the identical commit (81.11% -> 79.14%, line and method unchanged), so a small
   # branch drop across that upgrade is the tool getting stricter, not the tests getting worse.
+  # The published CLIs carry the instrument-file reader, and this is where that is checked.
+  #
+  # It matters because dotnet-release.yml only runs on a TAG: a mistake there is invisible until a
+  # release is already building, which is how dotnet-v26.24.0 shipped a pwiz path that could not
+  # resolve. Six release jobs now depend on this working, so it is worth one job here.
+  #
+  # All six release RIDs from one Linux runner. Cross-publishing is what the release does anyway,
+  # and it exercises what actually breaks - the optional reference resolving and the reader landing
+  # in the output. It cannot prove the native bits load on a foreign OS; nothing but that OS can.
+  cli-reader:
+    name: CLI carries the instrument-file reader (all release targets)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Install SkiaSharp native deps (Linux)
+        run: |
+          sudo apt-get update \
+            || echo "apt-get update reported errors; continuing - the install below is the real check"
+          sudo apt-get install -y libfontconfig1 libfreetype6
+
+      - name: Check out pwiz-sharp
+        uses: ./.github/actions/checkout-pwiz-sharp
+
+      - name: Publish every release target with the reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rid in win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64; do
+            echo "--- $rid"
+            dotnet publish src/SkylinePrism.Cli/SkylinePrism.Cli.csproj \
+              -c Release -r "$rid" --self-contained false -p:PublishSingleFile=false \
+              -p:PrismWithPwiz=true -p:PwizSharpDir="$PWIZ_SHARP_DIR" \
+              -p:IAgreeToVendorLicenses=true \
+              -o "dist/$rid" --nologo -v q
+            for dll in SkylinePrism.Pwiz.dll Pwiz.Data.MsData.dll Pwiz.Vendor.Thermo.dll; do
+              if [ ! -f "dist/$rid/$dll" ]; then
+                echo "::error::$dll missing from $rid; ion accounting would be unavailable there."
+                exit 1
+              fi
+            done
+            echo "    reader present."
+          done
+
+      # The reader has to actually register at runtime, not merely be on disk - it is loaded by
+      # assembly name through reflection, so a publish that lands the file but breaks the load
+      # would pass every file check above and still leave the command unusable.
+      - name: The reader registers at run time
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$(dist/linux-x64/prism ion-accounting -d . -r . --product-tolerance "10 ppm" 2>&1 || true)
+          echo "$out"
+          # Assert the POSITIVE. Checking only that the error is absent would also pass if the
+          # command failed earlier for an unrelated reason and never reached the reader at all.
+          if ! echo "$out" | grep -q "Instrument-file reader: registered"; then
+            echo "::error::the published CLI did not register a reader despite shipping one."
+            exit 1
+          fi
+          echo "reader registered."
+
   coverage:
     name: Coverage gate (Core + CLI)
     runs-on: ubuntu-latest

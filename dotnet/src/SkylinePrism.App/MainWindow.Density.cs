@@ -182,11 +182,7 @@ public partial class MainWindow
     {
         var outputDir = OutputDirBox.Text?.Trim();
         // Either layout: the partitioned directory this release writes, or the single file older ones did.
-        var root = string.IsNullOrWhiteSpace(outputDir)
-            ? null
-            : new[] { MergedName, LegacyMergedName }
-                .Select(n => Path.Combine(outputDir, n))
-                .FirstOrDefault(MergedDataset.Exists);
+        var root = MergedDataset.Locate(outputDir);
 
         if (root is null)
         {

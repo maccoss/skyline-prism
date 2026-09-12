@@ -217,7 +217,7 @@ public static class Ms2SignalAccounting
         // What was ASKED FOR. `measure` is reassigned below when the export cannot supply it, and the
         // cache has to be keyed on the request so the fallback does not miss the cache forever.
         var requested = measure;
-        var mergedRoot = Path.Combine(outputDir, "merged_data");
+        var mergedRoot = MergedDataset.Locate(outputDir) ?? string.Empty;
         if (!MergedDataset.Exists(mergedRoot))
         {
             log?.Invoke("  MS2 signal accounting skipped: no merged_data/ in the output directory.");

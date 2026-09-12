@@ -91,10 +91,12 @@ public static class IonAccountingRun
             return null;
         }
 
-        var mergedRoot = Path.Combine(outputDir, "merged_data");
-        if (!MergedDataset.Exists(mergedRoot))
+        var mergedRoot = MergedDataset.Locate(outputDir);
+        if (mergedRoot is null)
         {
-            log?.Invoke("  Ion accounting skipped: no merged_data/ in the output directory.");
+            log?.Invoke(
+                $"  Ion accounting skipped: no {MergedDataset.DirectoryName}/ or "
+                + $"{MergedDataset.LegacyFileName} in the output directory.");
             return null;
         }
 

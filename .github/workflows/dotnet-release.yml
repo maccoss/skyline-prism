@@ -46,53 +46,10 @@ jobs:
       - name: Test
         run: dotnet test SkylinePrism.sln --configuration Release
 
-      # pwiz-sharp, for the instrument-file reader the tool zip carries. The tool measures ACQUIRED
-      # MS2 signal by reading the data files directly - no Skyline export carries an MS2 total - and
-      # build/package.proj REFUSES to package without this, rather than shipping a zip that silently
-      # cannot open a .raw.
-      #
-      # Sparse and blob-filtered: the pwiz repository is ~3.4 GB, the pwiz-sharp subtree ~243 MB.
-      # Pinned to a commit because pwiz-sharp lives on a draft-PR branch (ProteoWizard/pwiz#4619,
-      # branch chambem2/pwiz-sharp) and a moving ref would change what a tagged release contains.
-      #
-      # TEMPORARY. Skyline is being ported to C# and will install pwiz itself; PRISM is a Skyline
-      # external tool, so once that ships the tool should resolve these assemblies from Skyline's
-      # own installation and this whole step, the ~4 MB it adds to the zip, and the vendor-SDK
-      # redistribution below all go away.
+      # The instrument-file reader. build/package.proj REFUSES to package without it, rather than
+      # shipping a zip that silently cannot open a .raw.
       - name: Check out pwiz-sharp
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        env:
-          # Bump deliberately. pwiz-sharp lives on a draft-PR branch, so the tip moves and a
-          # tagged PRISM release has to keep containing what it was tested against.
-          PWIZ_SHARP_COMMIT: 1d26ed967ba701d3c090ee882c4e526aa72c4126
-        run: |
-          set -euo pipefail
-          mkdir pwiz && cd pwiz
-          git init -q .
-          # pwiz-sharp carries test-data paths past MAX_PATH; without this the checkout reports
-          # "Filename too long" for each and leaves them missing.
-          git config core.longpaths true
-          git remote add origin https://github.com/ProteoWizard/pwiz.git
-          # Sparse set determined by building against it, not by reading the layout: pwiz-sharp
-          # reaches OUTSIDE its own directory into the parent repository for the PSI-MS controlled
-          # vocabulary (pwiz/data/common), 7za.exe (libraries) and the licence-gated vendor archives
-          # (pwiz_aux). Narrowing further breaks the build; widening pulls in the whole 3.4 GB tree.
-          # pwiz-sharp itself, plus the three parent-repository directories it reaches into.
-          SPARSE="pwiz-sharp/pwiz/src pwiz-sharp/vendor-archives pwiz-sharp/Tools pwiz-sharp/build"
-          SPARSE="$SPARSE pwiz/data/common libraries pwiz_aux"
-          git sparse-checkout set --cone $SPARSE
-          # Fetching the SHA itself, rather than a branch tip, is what makes this a pin.
-          git fetch -q --filter=blob:none --depth 1 origin "$PWIZ_SHARP_COMMIT"
-          git checkout -q FETCH_HEAD
-          # pwd -W, NOT pwd: this step is bash and the packaging step below is pwsh, so the path
-          # has to be one MSBuild can resolve on Windows. Git Bash's pwd prints "/d/a/_temp/pwiz",
-          # which MSBuild cannot, and dotnet-v26.24.0's first attempt failed on exactly that -
-          # RequirePwiz reported "No pwiz-sharp checkout at /d/a/_temp/pwiz/pwiz-sharp" for a
-          # checkout that was there. CI never caught it because it packages with AllowNoPwiz=true,
-          # so this line only runs when a release is actually cut.
-          echo "PWIZ_SHARP_DIR=$(pwd -W)/pwiz-sharp" >> "$GITHUB_ENV"
-          du -sh pwiz-sharp
+        uses: ./.github/actions/checkout-pwiz-sharp
 
       # Assert the path in the form the PACKAGING step will see it, not the form bash sees. A bash
       # test would have passed on the broken POSIX path above; this is the check that catches it, in
@@ -148,11 +105,34 @@ jobs:
         with:
           global-json-file: global.json
 
+      # Every CLI carries the reader. Without it `prism ion-accounting` cannot run at all, and that
+      # is the documented way to measure acquired ions - so a CLI without one answers "this build
+      # has no instrument-file reader" to the very command the docs tell people to type.
+      - name: Check out pwiz-sharp
+        uses: ./.github/actions/checkout-pwiz-sharp
+
       - name: Publish prism (${{ matrix.rid }})
         run: >
           dotnet publish src/SkylinePrism.Cli/SkylinePrism.Cli.csproj
           -c Release -r ${{ matrix.rid }} --self-contained false -p:PublishSingleFile=false
+          -p:PrismWithPwiz=true -p:PwizSharpDir="$PWIZ_SHARP_DIR"
+          -p:IAgreeToVendorLicenses=true
           -o dist/prism-${{ matrix.rid }}
+        shell: bash
+
+      # The whole point of the step above, asserted rather than assumed: a publish that quietly
+      # dropped the reference would produce a CLI that builds, runs, and cannot count ions.
+      - name: Check the reader shipped
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dll in SkylinePrism.Pwiz.dll Pwiz.Data.MsData.dll; do
+            if [ ! -f "dist/prism-${{ matrix.rid }}/$dll" ]; then
+              echo "::error::$dll missing from prism-${{ matrix.rid }}; ion accounting would be unavailable."
+              exit 1
+            fi
+          done
+          echo "reader present in prism-${{ matrix.rid }}."
 
       - name: Archive (zip)
         if: matrix.archive == 'zip'

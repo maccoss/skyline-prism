@@ -46,7 +46,7 @@ public static class Ms2SignalProfiler
         int memoryBudgetMb = 0,
         Ms2SignalMeasure measure = Ms2SignalMeasure.Signal)
     {
-        var mergedRoot = Path.Combine(outputDir, "merged_data");
+        var mergedRoot = MergedDataset.Locate(outputDir) ?? string.Empty;
         if (!MergedDataset.Exists(mergedRoot))
         {
             log?.Invoke("  No merged_data/ in the output directory, so no MS2 profile can be built.");

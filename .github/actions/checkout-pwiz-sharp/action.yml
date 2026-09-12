@@ -1,0 +1,71 @@
+name: Check out pwiz-sharp
+description: >
+  Sparse-checkout the pwiz-sharp subtree and export PWIZ_SHARP_DIR, for any job that needs the
+  instrument-file reader. One copy, because the commit below is a PIN and three copies of a pin
+  drift - a tagged release would then contain something other than what CI tested.
+
+outputs:
+  directory:
+    description: Absolute path to the pwiz-sharp checkout, in a form MSBuild can resolve.
+    value: ${{ steps.checkout.outputs.directory }}
+
+runs:
+  using: composite
+  steps:
+    # pwiz-sharp is the .NET port of the ProteoWizard core. It has no package feed and lives on a
+    # draft-PR branch (ProteoWizard/pwiz#4619, branch chambem2/pwiz-sharp), which is why this is a
+    # source checkout pinned to a commit rather than a PackageReference.
+    #
+    # Sparse and blob-filtered: the pwiz repository is ~3.4 GB, the pwiz-sharp subtree ~243 MB.
+    #
+    # TEMPORARY, with a specific exit condition: when pwiz formally releases a .NET 10 build,
+    # PRISM should resolve these assemblies from an installed Skyline or Skyline-daily rather than
+    # carrying its own copy - PRISM is a Skyline external tool, so Skyline is already there. Until
+    # BOTH of those hold (a released .NET 10 pwiz, and it being resolvable from the installation),
+    # every PRISM release has to package the reader itself. When they do, this action, the few MB it
+    # adds to each artifact, and the vendor-SDK redistribution all go away together.
+    - id: checkout
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        # Bump deliberately, in this one place. A tagged PRISM release has to keep containing what
+        # it was tested against.
+        PWIZ_SHARP_COMMIT: 1d26ed967ba701d3c090ee882c4e526aa72c4126
+      run: |
+        set -euo pipefail
+        if [ -d pwiz/pwiz-sharp ]; then
+          echo "pwiz-sharp already checked out for this job."
+        else
+          mkdir -p pwiz && cd pwiz
+          git init -q .
+          # pwiz-sharp carries test-data paths past MAX_PATH; without this the checkout reports
+          # "Filename too long" for each and leaves them missing.
+          git config core.longpaths true
+          git remote add origin https://github.com/ProteoWizard/pwiz.git
+          # Sparse set determined by building against it, not by reading the layout: pwiz-sharp
+          # reaches OUTSIDE its own directory into the parent repository for the PSI-MS controlled
+          # vocabulary (pwiz/data/common), 7za.exe (libraries) and the licence-gated vendor archives
+          # (pwiz_aux). Narrowing further breaks the build; widening pulls in the whole 3.4 GB tree.
+          SPARSE="pwiz-sharp/pwiz/src pwiz-sharp/vendor-archives pwiz-sharp/Tools pwiz-sharp/build"
+          SPARSE="$SPARSE pwiz/data/common libraries pwiz_aux"
+          git sparse-checkout set --cone $SPARSE
+          # Fetching the SHA itself, rather than a branch tip, is what makes this a pin.
+          git fetch -q --filter=blob:none --depth 1 origin "$PWIZ_SHARP_COMMIT"
+          git checkout -q FETCH_HEAD
+          cd ..
+        fi
+
+        # MSBuild has to be able to resolve this path, and the consuming step may be pwsh. On
+        # Windows, Git Bash's pwd prints "/d/a/_temp/pwiz", which MSBuild cannot resolve - that
+        # exact mistake shipped in dotnet-v26.24.0's first attempt, reporting "No pwiz-sharp
+        # checkout" for a checkout that was there. pwd -W prints the Windows form; it does not
+        # exist on Linux or macOS, where pwd is already right.
+        cd pwiz
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          dir="$(pwd -W)/pwiz-sharp"
+        else
+          dir="$(pwd)/pwiz-sharp"
+        fi
+        echo "PWIZ_SHARP_DIR=$dir" >> "$GITHUB_ENV"
+        echo "directory=$dir" >> "$GITHUB_OUTPUT"
+        du -sh pwiz-sharp
