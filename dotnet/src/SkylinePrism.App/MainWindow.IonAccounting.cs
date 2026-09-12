@@ -426,8 +426,7 @@ public partial class MainWindow
     /// </summary>
     private string IonOrderNote(IonAccountingResult result) =>
         IonSort == IonRowOrder.By.RunOrder && !IonRowOrder.CanOrderByRun(result.Rows)
-            ? "; ordered by file name - this cache does not record when each replicate was acquired, "
-              + "which a re-measure would add"
+            ? " | by file name: no acquisition times in this cache"
             : "";
 
     /// <summary>
@@ -658,8 +657,7 @@ public partial class MainWindow
     /// </summary>
     private string IonQuantityNote(IonAccountingResult result) =>
         IonQuantity == PlotRenderer.IonQuantity.Signal && !result.Rows.Any(r => r.HasSignal)
-            ? "; WARNING: this cache carries no summed TIC - it was measured before signal was "
-              + "recorded, so re-measure it or switch back to Ions"
+            ? " | WARNING: no summed TIC in this cache"
             : "";
 
     /// <inheritdoc cref="IonBarTitle"/>
@@ -673,19 +671,31 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// The status line for the cohort view. Names the settings the numbers were computed with,
-    /// because the cache is keyed on them and a reader has no other way to know.
+    /// The status line for the cohort view: what a reader needs at a glance, and nothing else.
     /// </summary>
+    /// <remarks>
+    /// <para>The settings the numbers were computed with - both tolerances, the isolation scheme,
+    /// the peptide count - are on the line's TOOLTIP rather than in it. They matter, which is why
+    /// they are still one hover away, but they do not change while someone is reading the plot and
+    /// printing them permanently turned the status line into a wrapping paragraph that buried the
+    /// warnings underneath it.</para>
+    /// </remarks>
     private string DescribeIon(IonAccountingResult result, PlotRenderer.IonLevel level)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
+
+        // The settings, out of the way but not gone.
+        IonStatusText.ToolTip =
+            $"product {result.ProductTolerance}\nprecursor {result.PrecursorTolerance}\n"
+            + $"scheme {result.IsolationScheme}\n"
+            + $"{result.AssignedPeptides:N0} peptides claiming signal";
+
         var parts = new List<string>
         {
-            $"{usable.Length:N0} of {result.Rows.Count:N0} replicate(s) measured",
-            $"product {result.ProductTolerance}",
-            $"precursor {result.PrecursorTolerance}",
-            $"scheme {result.IsolationScheme}",
-            $"{result.AssignedPeptides:N0} peptides claiming signal",
+            // Only worth saying how many of how many when they differ.
+            usable.Length == result.Rows.Count
+                ? $"{usable.Length:N0} replicates"
+                : $"{usable.Length:N0} of {result.Rows.Count:N0} replicates measured",
         };
 
         var offScale = usable.Count(r => r.IonScaleImplausible);
@@ -722,30 +732,26 @@ public partial class MainWindow
 
                 // "quantified" only once there is a second number to tell it apart from; on its own
                 // the old wording says the same thing and is what every earlier report used.
+                var range = $"{IonAccountingStore.Percent(fractions.Min())}-"
+                    + $"{IonAccountingStore.Percent(fractions.Max())}";
                 parts.Add(
-                    (level == PlotRenderer.IonLevel.Ms2 && explained.Length > 0
-                        ? $"{name} quantified share "
-                        : $"{name} assigned share ")
-                    + $"{IonAccountingStore.Percent(fractions.Min())} to "
-                    + $"{IonAccountingStore.Percent(fractions.Max())}");
-
-                if (level == PlotRenderer.IonLevel.Ms2 && explained.Length > 0)
-                {
-                    parts.Add(
-                        $"explained share {IonAccountingStore.Percent(explained.Min())} to "
-                        + $"{IonAccountingStore.Percent(explained.Max())}");
-                }
+                    level == PlotRenderer.IonLevel.Ms2 && explained.Length > 0
+                        ? $"{name} quantified {range}, explained "
+                          + $"{IonAccountingStore.Percent(explained.Min())}-"
+                          + $"{IonAccountingStore.Percent(explained.Max())}"
+                        : $"{name} assigned {range}");
             }
         }
 
         var noFile = result.Rows.Count(r => string.IsNullOrEmpty(r.DataFile));
         if (noFile > 0)
-            parts.Add($"{noFile:N0} replicate(s) had no data file of their own");
+            parts.Add($"{noFile:N0} with no data file");
 
         return string.Join(" | ", parts);
     }
 
-    private static string DescribeIonReplicate(
+    /// <inheritdoc cref="DescribeIon"/>
+    private string DescribeIonReplicate(
         IonAccountingResult result, string sample, PlotRenderer.IonLevel level, int cycles)
     {
         var row = result.Rows.FirstOrDefault(
@@ -753,13 +759,14 @@ public partial class MainWindow
         if (row is null)
             return $"{cycles:N0} cycles";
 
+        IonStatusText.ToolTip =
+            $"{row.Ms1Count:N0} MS1 and {row.Ms2Count:N0} MS2 spectra\n"
+            + $"{row.Claims:N0} claimed regions\n"
+            + $"product {result.ProductTolerance}\nprecursor {result.PrecursorTolerance}\n"
+            + $"scheme {result.IsolationScheme}";
+
         var fraction = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Fraction : row.Ms2Fraction;
-        var parts = new List<string>
-        {
-            $"{cycles:N0} cycles",
-            $"{row.Ms1Count:N0} MS1 and {row.Ms2Count:N0} MS2 spectra",
-            $"{row.Claims:N0} claimed regions",
-        };
+        var parts = new List<string> { $"{cycles:N0} cycles" };
         var levelName = level.ToString().ToUpperInvariant();
         if (row.Exceeded)
         {
@@ -775,16 +782,12 @@ public partial class MainWindow
         {
             parts.Add($"{levelName} share {IonAccountingStore.Percent(fraction)}");
         }
+        // Both are defects worth naming, and both are normally zero - so they earn their place
+        // on the line only when they are not.
         if (row.ScansOutsideScheme > 0)
-        {
-            parts.Add(
-                $"{row.ScansOutsideScheme:N0} scans fell in no isolation window of the scheme");
-        }
+            parts.Add($"{row.ScansOutsideScheme:N0} scans outside the scheme");
         if (row.SpectraMissingInjectionTime > 0)
-        {
-            parts.Add(
-                $"{row.SpectraMissingInjectionTime:N0} scans reported no ion injection time");
-        }
+            parts.Add($"{row.SpectraMissingInjectionTime:N0} scans with no injection time");
         return string.Join(" | ", parts);
     }
 
