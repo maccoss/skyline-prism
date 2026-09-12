@@ -67,6 +67,7 @@ public class IonAccountingReportTests
         var broken = new IonAccountingRow(
             "bad", "experimental", "bad.raw", Ms2ReadStatus.Ok, "test", 1, 167,
             Ms1Acquired: 100, Ms2Acquired: 100, Ms1Assigned: 100, Ms2Assigned: 150,
+            Ms2Explained: 0, HasExplained: false,
             0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
         var result = Result(Row("s1", 10), Row("s2", 20), broken);
 
@@ -125,6 +126,9 @@ public class IonAccountingReportTests
         new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 1, 167,
             Ms1Acquired: 1000, Ms2Acquired: 1000,
             Ms1Assigned: percent * 10, Ms2Assigned: percent * 10,
+            // No explained total by default, so the existing assertions keep describing exactly
+            // what they described before it existed. The explained path has its own rows.
+            Ms2Explained: 0, HasExplained: false,
             0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
 
     private static IonAccountingResult Result(params IonAccountingRow[] rows) =>

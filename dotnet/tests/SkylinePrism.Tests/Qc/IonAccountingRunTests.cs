@@ -92,6 +92,7 @@ public class IonAccountingRunTests : IDisposable
                 dataPath, Ms2ReadStatus.Ok, Describe(), 3, 30,
                 Ms1Acquired: 3 * 3.7e5, Ms2Acquired: 3 * 1.2e5,
                 Ms1Assigned: 3 * 1.5e5, Ms2Assigned: 3 * 4.0e3,
+                Ms2Explained: 0, HasExplained: false,
                 new double[request.ListCount], new double[request.ListCount],
                 0, 1.5, 0, 0, cycles);
         }

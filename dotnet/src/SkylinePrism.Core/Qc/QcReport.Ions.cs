@@ -77,7 +77,7 @@ public static partial class QcReport
                 + "inside a region some peptide of this analysis claims. Shared signal is counted "
                 + "once - two peptides whose fragments fall within the extraction tolerance of each "
                 + "other read the same detector counts. " + FractionCaption(usable, level)
-                + " " + settings;
+                + ExplainedCaption(usable, level) + " " + settings;
 
             Render(
                 bars, caption, $"ion_accounting_{name.ToLowerInvariant()}.png", savePlots, plotsDir,
@@ -134,17 +134,26 @@ public static partial class QcReport
             if (cycles.Count == 0)
                 continue;
 
+            var explainedShare = row.HasExplained && !row.Exceeded
+                ? $" All possible b/y and precursor ions would account for "
+                  + $"{IonAccountingStore.Percent(row.Ms2ExplainedFraction)} of acquired MS2 ions."
+                : "";
             var share = row.Exceeded
                 ? "This replicate assigned more than it acquired, which is impossible, so no share "
                   + "is stated."
                 : $"Whole run: {IonAccountingStore.Percent(row.Ms2Fraction)} of acquired MS2 ions "
-                  + $"and {IonAccountingStore.Percent(row.Ms1Fraction)} of acquired MS1 ions.";
+                  + $"and {IonAccountingStore.Percent(row.Ms1Fraction)} of acquired MS1 ions."
+                  + explainedShare;
 
             Render(
                 images,
-                $"{labels[i]} by assigned share: {row.Sample}. The line is the share of each "
-                + $"cycle's acquired MS2 ions that a peptide explains. The axis starts at zero "
-                + $"and fits the data above it. "
+                $"{labels[i]} by assigned share: {row.Sample}. The lower line is the share of "
+                + "each cycle's acquired MS2 ions the run quantifies on"
+                + (row.HasExplained
+                    ? ", the upper one the share all possible b/y and precursor ions could account "
+                      + "for"
+                    : "")
+                + ". The axis starts at zero and fits the data above it. "
                 + share + " " + settings,
                 $"ion_share_{labels[i].ToLowerInvariant()}.png", savePlots, plotsDir,
                 () => PlotRenderer.IonFractionProfilePng(
@@ -177,6 +186,46 @@ public static partial class QcReport
     /// impossible, so where one occurs the figure is withheld and named as a defect rather than
     /// quietly excluded from a median.
     /// </summary>
+    /// <summary>
+    /// The second number, when there is one: the share the peptides can ACCOUNT FOR against the share
+    /// they are QUANTIFIED on.
+    ///
+    /// <para>Returns empty at MS1 and on a cache that measured no explained total, so a report over
+    /// an older directory reads exactly as it did before - silence rather than a zero, which would
+    /// say the peptides explain nothing.</para>
+    /// </summary>
+    internal static string ExplainedCaption(
+        IReadOnlyList<IonAccountingRow> usable, PlotRenderer.IonLevel level)
+    {
+        if (level != PlotRenderer.IonLevel.Ms2)
+            return "";
+
+        var fractions = usable
+            .Where(r => r.HasExplained && !r.Exceeded)
+            .Select(r => r.Ms2ExplainedFraction)
+            .Where(double.IsFinite)
+            .OrderBy(f => f)
+            .ToArray();
+        if (fractions.Length == 0)
+            return "";
+
+        var median = fractions.Length % 2 == 1
+            ? fractions[fractions.Length / 2]
+            : (fractions[fractions.Length / 2 - 1] + fractions[fractions.Length / 2]) / 2;
+        var span = fractions.Length > 1
+            ? $", ranging {IonAccountingStore.Percent(fractions[0])} to "
+              + $"{IonAccountingStore.Percent(fractions[^1])}"
+            : "";
+
+        return " The lighter bar is what these peptides could account for IN PRINCIPLE - every "
+            + "theoretical b and y ion at 1+ and 2+, plus the surviving precursor and its first two "
+            + "isotopes - against the narrower set the run actually quantifies on. Median "
+            + $"{IonAccountingStore.Percent(median)} explained{span}. The gap between the two is "
+            + "signal the peptide genuinely produced that no transition in the document integrates: "
+            + "low-m/z fragments and unfragmented precursor are poor quantifiers, but they are part "
+            + "of the mass balance.";
+    }
+
     internal static string FractionCaption(
         IReadOnlyList<IonAccountingRow> usable, PlotRenderer.IonLevel level)
     {

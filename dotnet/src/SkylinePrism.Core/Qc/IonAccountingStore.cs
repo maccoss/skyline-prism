@@ -25,6 +25,8 @@ public sealed record IonAccountingRow(
     double Ms2Acquired,
     double Ms1Assigned,
     double Ms2Assigned,
+    double Ms2Explained,
+    bool HasExplained,
     double RtStartMin,
     double RtStopMin,
     int Claims,
@@ -37,8 +39,18 @@ public sealed record IonAccountingRow(
     public double Ms1Fraction => Ms1Acquired > 0 ? Ms1Assigned / Ms1Acquired : double.NaN;
     public double Ms2Fraction => Ms2Acquired > 0 ? Ms2Assigned / Ms2Acquired : double.NaN;
 
+    /// <summary>
+    /// The share of acquired MS2 ions the peptides can ACCOUNT FOR - their theoretical b/y ions and
+    /// surviving precursor - against <see cref="Ms2Fraction"/>'s share they are quantified on.
+    /// NaN when this cache carries no explained total, which is not the same as zero.
+    /// </summary>
+    public double Ms2ExplainedFraction =>
+        HasExplained && Ms2Acquired > 0 ? Ms2Explained / Ms2Acquired : double.NaN;
+
     /// <inheritdoc cref="IonAccountingRecord.Exceeded"/>
-    public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
+    public bool Exceeded =>
+        Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired
+        || (HasExplained && Ms2Explained > Ms2Acquired);
 
     /// <inheritdoc cref="IonAccountingRecord.MeanMs1IonsPerScan"/>
     public double MeanMs1IonsPerScan => Ms1Count > 0 ? Ms1Acquired / Ms1Count : double.NaN;
@@ -128,7 +140,8 @@ public readonly record struct IonCycleRow(
     double Ms1Acquired,
     double Ms2Acquired,
     double Ms1Assigned,
-    double Ms2Assigned);
+    double Ms2Assigned,
+    double Ms2Explained = 0);
 
 /// <summary>
 /// Reads and writes the ion-accounting cache.
@@ -163,7 +176,12 @@ public static class IonAccountingStore
             // every total it cached is 1000x too large. The fractions were right, but the
             // columns are named "ions" - so the key is bumped to make every directory
             // recompute rather than replot the old magnitudes under the new caption.
-            "ions-v2",
+            //
+            // v3: the explained total arrived. A v2 file is not WRONG - every number in it is
+            // still right - but it carries no explained column, so reusing it would draw a
+            // section whose second series is silently absent on some replicates and present on
+            // others, depending on when each was measured. Recomputing is the honest answer.
+            "ions-v3",
             productTolerance,
             precursorTolerance,
             isolationScheme,
@@ -195,6 +213,11 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles("ms2_acquired", rows.Select(r => r.Ms2Acquired).ToArray()),
             ParquetWideWriter.Doubles("ms1_assigned", rows.Select(r => r.Ms1Assigned).ToArray()),
             ParquetWideWriter.Doubles("ms2_assigned", rows.Select(r => r.Ms2Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms2_explained", rows.Select(r => r.Ms2Explained).ToArray()),
+            // A flag, not an inference from a zero: an export with no charge column measures no
+            // explained total at all, and a reader that read that back as 0.0 would plot a peptide
+            // set that accounts for nothing rather than one that was never asked.
+            ParquetWideWriter.Bools("has_explained", rows.Select(r => r.HasExplained).ToArray()),
             ParquetWideWriter.Doubles("rt_start_min", rows.Select(r => r.RtStartMin).ToArray()),
             ParquetWideWriter.Doubles("rt_stop_min", rows.Select(r => r.RtStopMin).ToArray()),
             ParquetWideWriter.Longs("claims", rows.Select(r => (long)r.Claims).ToArray()),
@@ -245,6 +268,7 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
             ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
             ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
         };
         ParquetWideWriter.Write(
             path, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
@@ -313,6 +337,16 @@ public static class IonAccountingStore
             var ms2Acq = Nums(reader, "ms2_acquired", samples.Length);
             var ms1Asg = Nums(reader, "ms1_assigned", samples.Length);
             var ms2Asg = Nums(reader, "ms2_assigned", samples.Length);
+
+            // Optional: a cache written before the explained total existed has neither column. The
+            // settings key would refuse to REUSE such a file anyway, but it is still DISPLAYED, so
+            // reading it must not throw.
+            var ms2Exp = reader.HasColumn("ms2_explained")
+                ? Nums(reader, "ms2_explained", samples.Length)
+                : new double[samples.Length];
+            var hasExp = reader.HasColumn("has_explained")
+                ? reader.ReadDoubles("has_explained").Select(v => v != 0).ToArray()
+                : new bool[samples.Length];
             var rt0 = Nums(reader, "rt_start_min", samples.Length);
             var rt1 = Nums(reader, "rt_stop_min", samples.Length);
             var claims = Nums(reader, "claims", samples.Length);
@@ -343,6 +377,7 @@ public static class IonAccountingStore
                     readers[i],
                     (int)ms1Count[i], (int)ms2Count[i],
                     ms1Acq[i], ms2Acq[i], ms1Asg[i], ms2Asg[i],
+                    ms2Exp[i], hasExp[i],
                     rt0[i], rt1[i],
                     (int)claims[i], (int)outside[i], (int)noInj[i], (int)cycleCount[i],
                     perList?.Ms1 ?? Array.Empty<double>(),
@@ -390,6 +425,9 @@ public static class IonAccountingStore
             var ms2a = reader.ReadDoubles("ms2_acquired");
             var ms1s = reader.ReadDoubles("ms1_assigned");
             var ms2s = reader.ReadDoubles("ms2_assigned");
+            var ms2e = reader.HasColumn("ms2_explained")
+                ? reader.ReadDoubles("ms2_explained")
+                : new double[samples.Length];
 
             var rows = new List<IonCycleRow>();
             for (var i = 0; i < samples.Length; i++)
@@ -398,7 +436,7 @@ public static class IonAccountingStore
                     continue;
                 rows.Add(new IonCycleRow(
                     samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
-                    ms1a[i], ms2a[i], ms1s[i], ms2s[i]));
+                    ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i]));
             }
             return rows;
         }

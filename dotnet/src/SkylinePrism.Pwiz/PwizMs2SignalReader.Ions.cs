@@ -97,9 +97,11 @@ public sealed partial class PwizMs2SignalReader
         var ms1ByList = new double[listCount];
         var ms2ByList = new double[listCount];
 
+        var explained = request.Explained;
         var cycles = new List<IonCycle>();
         int ms1 = 0, ms2 = 0, noInjection = 0, outsideScheme = 0, unsorted = 0;
         double ms1Acquired = 0, ms2Acquired = 0, ms1Assigned = 0, ms2Assigned = 0;
+        double ms2Explained = 0;
         double reportedMs1 = 0, reportedMs2 = 0;
         double rtFirst = double.NaN, rtLast = double.NaN;
 
@@ -109,7 +111,7 @@ public sealed partial class PwizMs2SignalReader
         var cycleStart = double.NaN;
         var cycleStop = double.NaN;
         int cycleMs1 = 0, cycleMs2 = 0;
-        double cMs1Acq = 0, cMs2Acq = 0, cMs1Asg = 0, cMs2Asg = 0;
+        double cMs1Acq = 0, cMs2Acq = 0, cMs1Asg = 0, cMs2Asg = 0, cMs2Exp = 0;
 
         void CloseCycle()
         {
@@ -117,9 +119,9 @@ public sealed partial class PwizMs2SignalReader
                 return;
             cycles.Add(new IonCycle(
                 cycles.Count, cycleStart, cycleStop, cycleMs1, cycleMs2,
-                cMs1Acq, cMs2Acq, cMs1Asg, cMs2Asg));
+                cMs1Acq, cMs2Acq, cMs1Asg, cMs2Asg, cMs2Exp));
             cycleMs1 = cycleMs2 = 0;
-            cMs1Acq = cMs2Acq = cMs1Asg = cMs2Asg = 0;
+            cMs1Acq = cMs2Acq = cMs1Asg = cMs2Asg = cMs2Exp = 0;
             cycleStart = double.NaN;
             cycleStop = double.NaN;
         }
@@ -225,6 +227,20 @@ public sealed partial class PwizMs2SignalReader
             var claimed = claims.Claimed(
                 level, windowIndex, rt, mz, intensity,
                 level == 1 ? ms1ByList : ms2ByList);
+
+            // The second mask, against everything the peptides can account for. MS2 only: the
+            // explained index carries no MS1 lane, because at MS1 the theoretical claim IS the
+            // precursor isotope envelope Skyline already extracts and the two totals cannot differ.
+            // Per-list sums are deliberately not accumulated here - the lists answer "what share of
+            // the assigned signal does this panel hold", which is a question about the quantified
+            // set, and a second set of per-list arrays would double the memory for a number no plot
+            // shows.
+            var explainedClaimed = 0.0;
+            if (explained is not null && level == 2)
+            {
+                explainedClaimed = explained.Claimed(
+                    level, windowIndex, rt, mz, intensity, Span<double>.Empty);
+            }
             maskTicks += Stopwatch.GetTimestamp() - maskStart;
 
             var acquiredIons = summed * injection;
@@ -251,6 +267,10 @@ public sealed partial class PwizMs2SignalReader
                 cycleMs2++;
                 cMs2Acq += acquiredIons;
                 cMs2Asg += assignedIons;
+
+                var explainedIons = explainedClaimed * injection;
+                ms2Explained += explainedIons;
+                cMs2Exp += explainedIons;
             }
 
             if (!double.IsFinite(cycleStart))
@@ -264,6 +284,7 @@ public sealed partial class PwizMs2SignalReader
             ms1 + ms2 > 0 ? Ms2ReadStatus.Ok : Ms2ReadStatus.Failed,
             Describe(), ms1, ms2,
             ms1Acquired, ms2Acquired, ms1Assigned, ms2Assigned,
+            ms2Explained, explained is not null,
             ms1ByList, ms2ByList, rtFirst, rtLast, noInjection, outsideScheme, cycles,
             ms1 + ms2 > 0 ? null : "The file has no MS1 or MS2 spectra.");
 

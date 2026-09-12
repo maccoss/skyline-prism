@@ -17,6 +17,11 @@ namespace SkylinePrism.Core.Qc;
 /// <para>Beyond <see cref="SkylineColumns"/> because that type does not bind
 /// <c>StartTime</c>/<c>EndTime</c>, which only the density view had needed until this.</para>
 /// </remarks>
+/// <param name="PrecursorCharge">
+/// Null when the export has no charge column. Only the THEORETICAL claim set needs it - to enumerate
+/// a peptide's b/y ions you must know how many charges they can carry - so an export without it
+/// still supports the quantified accounting in full, and simply reports no explained total.
+/// </param>
 public sealed record SignalColumns(
     string Sample,
     string Peptide,
@@ -24,7 +29,8 @@ public sealed record SignalColumns(
     string PrecursorMz,
     string ProductMz,
     string StartTime,
-    string EndTime)
+    string EndTime,
+    string? PrecursorCharge = null)
 {
     /// <summary>
     /// How many protein lists can be accounted for at once - one bit each in
@@ -48,10 +54,15 @@ public sealed record SignalColumns(
         var start = SkylineColumns.FindColumn(available, "Start Time");
         var end = SkylineColumns.FindColumn(available, "End Time");
 
+        // Optional, and deliberately not part of the null check below: it gates only the explained
+        // total, so an older export missing it loses that one number rather than the whole section.
+        var precursorCharge = SkylineColumns.FindColumn(available, "Precursor Charge");
+
         return sample is null || peptide is null || transition is null
             || precursorMz is null || productMz is null || start is null || end is null
             ? null
-            : new SignalColumns(sample, peptide, transition, precursorMz, productMz, start, end);
+            : new SignalColumns(
+                sample, peptide, transition, precursorMz, productMz, start, end, precursorCharge);
     }
 }
 

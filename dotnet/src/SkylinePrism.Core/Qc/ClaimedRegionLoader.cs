@@ -40,6 +40,27 @@ public static class ClaimedRegionLoader
     /// Not claims - signal a target was extracted at but that the analysis does not report.</param>
     /// <param name="UnknownPeptides">Rows whose peptide the caller's identity map did not mention.</param>
     /// <param name="NoGeometry">Rows with no usable m/z or retention-time span.</param>
+    /// <param name="ExplainedRegions">
+    /// MS2 claims for everything the peptide can put into the spectrum, not just what Skyline
+    /// quantifies on: its theoretical b/y ions and its surviving precursor isotopes, UNIONED with the
+    /// quantified claims above.
+    ///
+    /// <para>The union is what makes explained >= quantified true by construction rather than by
+    /// hope. Skyline sometimes quantifies on an ion this enumeration does not produce - a 3+
+    /// fragment, a neutral loss - and without the union such a transition would count toward the
+    /// quantified total and not the explained one, which reads as a defect on the plot.</para>
+    ///
+    /// <para>MS2 only. At MS1 the two sets would be identical (the theoretical MS1 claim IS the
+    /// precursor isotope envelope, which is what Skyline already extracts), so building both would
+    /// double the memory for a number that cannot differ.</para>
+    /// </param>
+    /// <param name="Precursors">Distinct (peptide, charge) precursors seen, assigned ones only.</param>
+    /// <param name="Unreconciled">
+    /// Precursors whose sequence did not reproduce Skyline's own <c>Precursor Mz</c>, so no
+    /// theoretical claim was made for them. **Reported loudly**: this is the count that reveals a
+    /// modification PRISM cannot resolve - notably a heavy isotope label, which the peptide-level
+    /// sequence does not carry - and its symptom is otherwise just a quietly smaller explained total.
+    /// </param>
     public sealed record Loaded(
         IReadOnlyList<ClaimedRegion> Regions,
         int Ms1Rows,
@@ -48,14 +69,34 @@ public static class ClaimedRegionLoader
         int OutsideScheme,
         int Unassigned,
         int UnknownPeptides,
-        int NoGeometry)
+        int NoGeometry,
+        IReadOnlyList<ClaimedRegion> ExplainedRegions,
+        int Precursors,
+        int Unreconciled)
     {
+        /// <summary>Whether a theoretical claim set was built at all.</summary>
+        public bool HasExplained => ExplainedRegions.Count > 0;
+
         /// <summary>A one-line summary for the run log, so a surprising fraction can be explained.</summary>
-        public string Describe() =>
-            $"{Regions.Count:N0} claims ({Ms1Rows:N0} MS1 + {Ms2Rows:N0} MS2 rows, "
-            + $"{DuplicateRows:N0} duplicate); skipped {Unassigned:N0} unassigned, "
-            + $"{OutsideScheme:N0} outside the scheme, {NoGeometry:N0} without geometry"
-            + (UnknownPeptides > 0 ? $"; {UnknownPeptides:N0} peptides not in the identity map" : "");
+        public string Describe()
+        {
+            var line =
+                $"{Regions.Count:N0} claims ({Ms1Rows:N0} MS1 + {Ms2Rows:N0} MS2 rows, "
+                + $"{DuplicateRows:N0} duplicate); skipped {Unassigned:N0} unassigned, "
+                + $"{OutsideScheme:N0} outside the scheme, {NoGeometry:N0} without geometry"
+                + (UnknownPeptides > 0 ? $"; {UnknownPeptides:N0} peptides not in the identity map" : "");
+            if (ExplainedRegions.Count > 0 || Precursors > 0)
+            {
+                line += $"; {ExplainedRegions.Count:N0} explained claims over {Precursors:N0} precursor(s)";
+                if (Unreconciled > 0)
+                {
+                    var pct = Precursors > 0 ? 100.0 * Unreconciled / Precursors : 0;
+                    line += $", {Unreconciled:N0} ({pct:0.0}%) NOT RECONCILED against Skyline's "
+                        + "precursor m/z and excluded";
+                }
+            }
+            return line;
+        }
     }
 
     /// <summary>
@@ -79,7 +120,8 @@ public static class ClaimedRegionLoader
         using var cmd = DuckDbTuning.StreamingCommand(conn, Sql(cols, dataset.ScanTarget, sample));
         using var reader = cmd.ExecuteReader();
 
-        var block = new Accumulator(scheme, productTolerance, precursorTolerance, classes);
+        var block = new Accumulator(
+            scheme, productTolerance, precursorTolerance, classes, cols.PrecursorCharge is not null);
         while (reader.Read())
             block.Add(reader, ordinalOffset: 0);
         return block.Take();
@@ -104,7 +146,8 @@ public static class ClaimedRegionLoader
         using var cmd = DuckDbTuning.StreamingCommand(conn, Sql(cols, dataset.ScanTarget, sample: null));
         using var reader = cmd.ExecuteReader();
 
-        var block = new Accumulator(scheme, productTolerance, precursorTolerance, classes);
+        var block = new Accumulator(
+            scheme, productTolerance, precursorTolerance, classes, cols.PrecursorCharge is not null);
         string? current = null;
 
         while (reader.Read())
@@ -148,6 +191,12 @@ public static class ClaimedRegionLoader
             : $@"WHERE ""{cols.Sample}"" = '{Esc(sample)}'";
         var order = sample is null ? "ORDER BY samp" : "";
 
+        // Selected as a literal NULL when the export has no charge column, so the ordinals below do
+        // not move with the schema. An older export then simply builds no theoretical claims.
+        var charge = cols.PrecursorCharge is null
+            ? "CAST(NULL AS INTEGER)"
+            : $@"TRY_CAST(""{cols.PrecursorCharge}"" AS INTEGER)";
+
         return $@"
             SELECT
                 {samp}
@@ -156,7 +205,8 @@ public static class ClaimedRegionLoader
                 TRY_CAST(""{cols.PrecursorMz}"" AS DOUBLE) AS pmz,
                 TRY_CAST(""{cols.ProductMz}"" AS DOUBLE) AS mz,
                 TRY_CAST(""{cols.StartTime}"" AS DOUBLE) AS rt0,
-                TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1
+                TRY_CAST(""{cols.EndTime}"" AS DOUBLE) AS rt1,
+                {charge} AS pz
             FROM {MergedParquetReader.Scan(scanTarget)}
             {where}
             {order}";
@@ -179,15 +229,28 @@ public static class ClaimedRegionLoader
         private HashSet<ClaimedRegion> _claims = new();
         private int _ms1, _ms2, _duplicates, _outside, _unassigned, _unknown, _noGeometry;
 
+        // A LIST, not a set, unlike the quantified claims: theoretical ions are enumerated once per
+        // precursor (see _seenPrecursors) and the quantified MS2 claims added here have already been
+        // deduplicated by _claims, so the repeats a set would collapse have been prevented instead.
+        // At roughly ten times the quantified claim count, a second hash set is memory worth saving,
+        // and ClaimedSignalIndex merges overlapping ranges anyway.
+        private List<ClaimedRegion> _explained = new();
+        private HashSet<(string Peptide, int Charge)> _seenPrecursors = new();
+        private int _precursors, _unreconciled;
+
+        private readonly bool _wantExplained;
+
         public Accumulator(
             IsolationScheme scheme, ProductMassTolerance? productTolerance,
             ProductMassTolerance? precursorTolerance,
-            IReadOnlyDictionary<string, PeptideClass> classes)
+            IReadOnlyDictionary<string, PeptideClass> classes,
+            bool wantExplained)
         {
             _scheme = scheme;
             _productTolerance = productTolerance;
             _precursorTolerance = precursorTolerance;
             _classes = classes;
+            _wantExplained = wantExplained && productTolerance is not null;
         }
 
         public void Add(DuckDBDataReader reader, int ordinalOffset)
@@ -198,6 +261,9 @@ public static class ClaimedRegionLoader
             var mz = Num(reader, ordinalOffset + 3);
             var rt0 = Num(reader, ordinalOffset + 4);
             var rt1 = Num(reader, ordinalOffset + 5);
+            var charge = reader.IsDBNull(ordinalOffset + 6)
+                ? 0
+                : Convert.ToInt32(reader.GetValue(ordinalOffset + 6));
 
             if (isPrecursor)
                 _ms1++;
@@ -255,15 +321,64 @@ public static class ClaimedRegionLoader
                 window.Start, window.End, rt0, rt1, cls.ListMask);
             if (!_claims.Add(claim))
                 _duplicates++;
+            else if (!isPrecursor && _wantExplained)
+                _explained.Add(claim);   // the union half: what Skyline quantifies on is explained too
+
+            if (!isPrecursor && _wantExplained)
+                AddTheoretical(pep, charge, pmz, rt0, rt1, windowIndex, cls.ListMask);
+        }
+
+        /// <summary>
+        /// Everything this precursor can put into its own MS2 spectrum, claimed once per precursor
+        /// rather than once per row.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Reconciled first.</b> The masses come from PRISM's residue and modification
+        /// tables, so a modification they cannot resolve would otherwise place a peptide's worth of
+        /// windows on m/z belonging to nothing and count another peptide's signal as this one's.
+        /// Checking the computed precursor m/z against the one Skyline exported for the same row is
+        /// free and external, and turns that into a precursor that is skipped and COUNTED.</para>
+        ///
+        /// <para>The isolation window and retention span are the precursor's own, already resolved
+        /// for the fragment row that brought us here - every transition of one precursor shares the
+        /// peak boundaries Skyline integrated, so the first row to arrive carries them all.</para>
+        /// </remarks>
+        private void AddTheoretical(
+            string peptide, int charge, double precursorMz, double rt0, double rt1,
+            int windowIndex, uint listMask)
+        {
+            if (charge <= 0 || !double.IsFinite(precursorMz))
+                return;
+            if (!_seenPrecursors.Add((peptide, charge)))
+                return;
+
+            _precursors++;
+            if (!PeptideFragments.Reconciles(peptide, charge, precursorMz))
+            {
+                _unreconciled++;
+                return;
+            }
+
+            foreach (var ion in PeptideFragments.Enumerate(peptide, charge))
+            {
+                var w = _productTolerance!.WindowAt(ion.Mz);
+                if (!double.IsFinite(w.Start) || !double.IsFinite(w.End))
+                    continue;
+                _explained.Add(new ClaimedRegion(2, windowIndex, w.Start, w.End, rt0, rt1, listMask));
+            }
         }
 
         public Loaded Take() => new(
-            _claims.ToArray(), _ms1, _ms2, _duplicates, _outside, _unassigned, _unknown, _noGeometry);
+            _claims.ToArray(), _ms1, _ms2, _duplicates, _outside, _unassigned, _unknown, _noGeometry,
+            _explained.ToArray(), _precursors, _unreconciled);
 
         public void Reset()
         {
             _claims = new HashSet<ClaimedRegion>();
+            _explained = new List<ClaimedRegion>();
+            _seenPrecursors = new HashSet<(string, int)>();
             _ms1 = _ms2 = _duplicates = _outside = _unassigned = _unknown = _noGeometry = 0;
+            _precursors = _unreconciled = 0;
         }
     }
 

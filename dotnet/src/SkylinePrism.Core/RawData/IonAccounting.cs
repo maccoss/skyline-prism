@@ -20,13 +20,30 @@ namespace SkylinePrism.Core.RawData;
 /// <param name="Claims">The regions peptides claim, already merged for sharing.</param>
 /// <param name="Scheme">The isolation windows, in the order the claims were indexed against.</param>
 /// <param name="ListNames">Protein lists with a bit in <see cref="ClaimedRegion.ListMask"/>, in bit order.</param>
+/// <param name="Claims">
+/// What the run QUANTIFIES on: the transitions the document carries, both MS levels.
+/// </param>
+/// <param name="Explained">
+/// What the peptides can ACCOUNT FOR: their theoretical b/y ions and surviving precursor isotopes,
+/// unioned with <paramref name="Claims"/>'s MS2 half. MS2 only, and null when the export lacks a
+/// precursor charge column - the reader then reports no explained total rather than a wrong one.
+///
+/// <para>Two indexes rather than one index with two masks, deliberately. Masking is about 0.5% of a
+/// file's cost, so a second pass over the same spectrum is roughly 1% - far cheaper than the
+/// bookkeeping needed to keep two overlapping claim sets straight inside one merge, in the one piece
+/// of arithmetic here where a mistake yields a plausible wrong number rather than a crash.</para>
+/// </param>
 public sealed record IonAccountingRequest(
     ClaimedSignalIndex Claims,
     IsolationScheme Scheme,
-    IReadOnlyList<string> ListNames)
+    IReadOnlyList<string> ListNames,
+    ClaimedSignalIndex? Explained = null)
 {
     /// <summary>How many per-list totals the reader should accumulate.</summary>
     public int ListCount => ListNames?.Count ?? 0;
+
+    /// <summary>Whether an explained total should be measured at all.</summary>
+    public bool HasExplained => Explained is not null;
 
     /// <summary>
     /// The scheme window an MS2 scan belongs to, by the same rule that placed the claims: the
@@ -65,6 +82,11 @@ public sealed record IonAccountingRequest(
 /// <param name="Ms1Acquired">Ion-proportional total over the cycle's MS1 scans. See
 /// <see cref="IonAccountingRecord"/> for what the unit is.</param>
 /// <param name="Ms1Assigned">The part of it inside a region some peptide claimed.</param>
+/// <param name="Ms2Explained">
+/// The explained MS2 total for this cycle - everything the cycle's peptides can account for, not just
+/// what they are quantified on. Zero when no explained index was supplied, which a caller must tell
+/// apart from a measured zero by asking the record, not the cycle.
+/// </param>
 public readonly record struct IonCycle(
     int Index,
     double RtStartMin,
@@ -74,7 +96,8 @@ public readonly record struct IonCycle(
     double Ms1Acquired,
     double Ms2Acquired,
     double Ms1Assigned,
-    double Ms2Assigned);
+    double Ms2Assigned,
+    double Ms2Explained = 0);
 
 /// <summary>
 /// What one instrument data file contributes to ion accounting: how many ions reached the detector,
@@ -127,6 +150,8 @@ public sealed record IonAccountingRecord(
     double Ms2Acquired,
     double Ms1Assigned,
     double Ms2Assigned,
+    double Ms2Explained,
+    bool HasExplained,
     IReadOnlyList<double> Ms1ByList,
     IReadOnlyList<double> Ms2ByList,
     double RtStartMin,
@@ -145,6 +170,17 @@ public sealed record IonAccountingRecord(
     public double Ms2Fraction => Ms2Acquired > 0 ? Ms2Assigned / Ms2Acquired : double.NaN;
 
     /// <summary>
+    /// Explained over acquired at MS2: the share of the acquired ions the run's peptides can account
+    /// for at all, against <see cref="Ms2Fraction"/>'s share they are quantified on.
+    ///
+    /// <para>NaN when nothing was acquired OR when no explained index was supplied, so a caller
+    /// cannot mistake "not measured" for "measured as zero". <see cref="HasExplained"/> is the
+    /// flag to branch on.</para>
+    /// </summary>
+    public double Ms2ExplainedFraction =>
+        HasExplained && Ms2Acquired > 0 ? Ms2Explained / Ms2Acquired : double.NaN;
+
+    /// <summary>
     /// True when more signal was assigned than acquired, which is impossible and therefore a defect
     /// - a units mismatch, a window index that does not line up, or claims merged too loosely.
     ///
@@ -153,7 +189,21 @@ public sealed record IonAccountingRecord(
     /// this feature shipped a fraction computed from mismatched units for exactly that reason: it
     /// looked like a coverage percentage, so nothing about it invited checking.</para>
     /// </summary>
-    public bool Exceeded => Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired;
+    public bool Exceeded =>
+        Ms1Assigned > Ms1Acquired || Ms2Assigned > Ms2Acquired
+        || (HasExplained && Ms2Explained > Ms2Acquired);
+
+    /// <summary>
+    /// True when the run is quantifying on more signal than its peptides can account for, which is
+    /// impossible: the explained set is the quantified set UNIONED with the theoretical ions, so it
+    /// contains every region the quantified set does.
+    ///
+    /// <para>Set means a defect in claim construction rather than anything about the data - the two
+    /// indexes disagreeing about a window, or a region that reached one set and not the other. Worth
+    /// its own flag rather than folding into <see cref="Exceeded"/>, because the cause is different
+    /// and so is the fix.</para>
+    /// </summary>
+    public bool ExplainedBelowAssigned => HasExplained && Ms2Explained < Ms2Assigned;
 
 
     /// <summary>
@@ -206,7 +256,7 @@ public sealed record IonAccountingRecord(
     /// <summary>A record standing for a read that did not happen, so callers never see a null.</summary>
     public static IonAccountingRecord Unavailable(
         string dataPath, Ms2ReadStatus status, string reader, string? message = null) =>
-        new(dataPath, status, reader, 0, 0, 0, 0, 0, 0,
+        new(dataPath, status, reader, 0, 0, 0, 0, 0, 0, 0, false,
             Array.Empty<double>(), Array.Empty<double>(), double.NaN, double.NaN, 0, 0,
             Array.Empty<IonCycle>(), message);
 }

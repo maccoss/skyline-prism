@@ -53,6 +53,11 @@ public static partial class PlotRenderer
 
         var acquiredOf = Selector(level, acquired: true);
         var assignedOf = Selector(level, acquired: false);
+
+        // Drawn only where it exists and can differ: MS2, and a cache that actually measured it. An
+        // export with no precursor charge column measures none, and a bar of height zero would read
+        // as "these peptides account for nothing" rather than "this was never asked".
+        var showExplained = level == IonLevel.Ms2 && rows.Any(r => r.HasExplained);
         var tallest = rows.Max(r => Math.Max(Finite(acquiredOf(r)), Finite(assignedOf(r))));
         var (scale, unit) = SignalScale(tallest);
 
@@ -84,6 +89,36 @@ public static partial class PlotRenderer
             : $"acquired {level.ToString().ToUpperInvariant()} ions "
               + $"({withDenominator:N0} of {rows.Count:N0})";
 
+        // Between the two, and BEFORE the assigned bars so the shorter one lands on top. The three
+        // totals nest - acquired >= explained >= assigned - so they are drawn back to front rather
+        // than stacked: stacking would partition, and these do not partition.
+        if (showExplained)
+        {
+            var explainedBars = new List<Bar>(rows.Count);
+            for (var i = 0; i < rows.Count; i++)
+            {
+                explainedBars.Add(new Bar
+                {
+                    Position = i,
+                    Value = rows[i].HasExplained ? Finite(rows[i].Ms2Explained) / scale : 0,
+                    FillColor = ExplainedBarColor,
+                    LineWidth = 0,
+                    Size = 0.85,
+                });
+            }
+            plt.Add.Bars(explainedBars);
+
+            var measured = rows.Count(r => r.HasExplained);
+            var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
+            explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
+            explainedKey.MarkerStyle.Size = 14;
+            explainedKey.MarkerStyle.FillColor = ExplainedBarColor;
+            explainedKey.MarkerStyle.LineWidth = 0;
+            explainedKey.LegendText = measured == rows.Count
+                ? "explained by any b/y or precursor ion"
+                : $"explained by any b/y or precursor ion ({measured:N0} of {rows.Count:N0})";
+        }
+
         var assignedBars = new List<Bar>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
@@ -114,9 +149,12 @@ public static partial class PlotRenderer
                 ? Color.FromHex(TypeColors["experimental"])
                 : GroupColor(type, 0);
             key.MarkerStyle.LineWidth = 0;
+            // "quantified" only once there is an explained series to tell it apart from; on its
+            // own the old wording is what every existing report says and means the same thing.
+            var assignedLabel = showExplained ? "quantified" : "assigned to a peptide";
             key.LegendText = string.IsNullOrWhiteSpace(type)
-                ? "assigned to a peptide"
-                : $"assigned ({type})";
+                ? assignedLabel
+                : $"{(showExplained ? "quantified" : "assigned")} ({type})";
         }
 
         plt.ShowLegend(Alignment.UpperRight);
@@ -152,6 +190,8 @@ public static partial class PlotRenderer
         var x = binned.Select(b => b.RtMin).ToArray();
         var acquired = binned.Select(b => b.Acquired).ToArray();
         var assigned = binned.Select(b => b.Assigned).ToArray();
+        var explained = binned.Select(b => b.Explained).ToArray();
+        var showExplained = explained.Any(v => v > 0);
         var tallest = Math.Max(acquired.Max(), assigned.Max());
         var (scale, unit) = SignalScale(tallest);
 
@@ -165,11 +205,20 @@ public static partial class PlotRenderer
         band.MarkerSize = 0;
         band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} ions";
 
+        if (showExplained)
+        {
+            var explainedLine = plt.Add.Scatter(x, explained.Select(v => v / scale).ToArray());
+            explainedLine.Color = ExplainedBarColor;
+            explainedLine.LineWidth = 3;
+            explainedLine.MarkerSize = 0;
+            explainedLine.LegendText = "explained by any b/y or precursor ion";
+        }
+
         var line = plt.Add.Scatter(x, assigned.Select(v => v / scale).ToArray());
         line.Color = Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
-        line.LegendText = "assigned to a peptide";
+        line.LegendText = showExplained ? "quantified" : "assigned to a peptide";
 
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel("Retention time (min)");
@@ -218,12 +267,31 @@ public static partial class PlotRenderer
             return;
         }
 
+        var explainedPoints = binned
+            .Where(b => b.Acquired > 0 && b.Explained > 0)
+            .Select(b => (b.RtMin, Fraction: b.Explained / b.Acquired * 100.0))
+            .ToArray();
+        var showExplained = explainedPoints.Length > 0;
+
+        if (showExplained)
+        {
+            var explainedLine = plt.Add.Scatter(
+                explainedPoints.Select(p => p.RtMin).ToArray(),
+                explainedPoints.Select(p => p.Fraction).ToArray());
+            explainedLine.Color = ExplainedBarColor;
+            explainedLine.LineWidth = 3;
+            explainedLine.MarkerSize = 0;
+            explainedLine.LegendText = "explained share";
+        }
+
         var line = plt.Add.Scatter(
             points.Select(p => p.RtMin).ToArray(), points.Select(p => p.Fraction).ToArray());
         line.Color = Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
-        line.LegendText = $"assigned share of acquired {level.ToString().ToUpperInvariant()}";
+        line.LegendText = showExplained
+            ? "quantified share"
+            : $"assigned share of acquired {level.ToString().ToUpperInvariant()}";
 
         var overallAcquired = binned.Sum(b => b.Acquired);
         var overall = overallAcquired > 0 ? binned.Sum(b => b.Assigned) / overallAcquired * 100 : 0;
@@ -241,6 +309,8 @@ public static partial class PlotRenderer
         // Zero origin always; the top fits the data, with a floor so a near-zero run does not get an
         // absurdly magnified axis, and a ceiling because a fraction cannot exceed 100%.
         var tallest = Math.Max(points.Max(p => p.Fraction), overall);
+        if (showExplained)
+            tallest = Math.Max(tallest, explainedPoints.Max(p => p.Fraction));
         var top = Math.Min(100.0, Math.Max(MinimumFractionAxisTop, tallest * 1.25));
         plt.Axes.SetLimits(
             points[0].RtMin - binMinutes, points[^1].RtMin + binMinutes, 0, top);
@@ -284,7 +354,14 @@ public static partial class PlotRenderer
     /// </summary>
     private const double MinimumFractionAxisTop = 5.0;
 
-    internal readonly record struct CycleBin(double RtMin, double Acquired, double Assigned);
+    internal readonly record struct CycleBin(
+        double RtMin, double Acquired, double Assigned, double Explained = 0);
+
+    /// <summary>
+    /// The explained series' color: between the neutral acquired background and the saturated
+    /// assigned bar, because the quantity it shows nests between them.
+    /// </summary>
+    private static readonly Color ExplainedBarColor = Color.FromHex("#8fa8c8");
 
     /// <summary>
     /// Group cycles into retention-time bins. Bin membership is by the cycle's START time, so a
@@ -312,10 +389,18 @@ public static partial class PlotRenderer
             ? new Func<IonCycleRow, double>(c => c.Ms1Assigned)
             : c => c.Ms2Assigned;
 
+        // MS1 has no explained series: the theoretical MS1 claim IS the precursor isotope envelope
+        // Skyline already extracts, so the two totals cannot differ and one of them would be a line
+        // drawn exactly on top of another.
+        var explainedOf = level == IonLevel.Ms1
+            ? new Func<IonCycleRow, double>(_ => 0)
+            : c => c.Ms2Explained;
+
         var origin = usable[0].RtStartMin;
         var current = -1;
         var acquired = 0.0;
         var assigned = 0.0;
+        var explained = 0.0;
 
         foreach (var cycle in usable)
         {
@@ -323,15 +408,18 @@ public static partial class PlotRenderer
             if (bin != current)
             {
                 if (current >= 0)
-                    bins.Add(new CycleBin(origin + (current + 0.5) * width, acquired, assigned));
+                    bins.Add(new CycleBin(
+                        origin + (current + 0.5) * width, acquired, assigned, explained));
                 current = bin;
                 acquired = 0;
                 assigned = 0;
+                explained = 0;
             }
             acquired += Finite(acquiredOf(cycle));
             assigned += Finite(assignedOf(cycle));
+            explained += Finite(explainedOf(cycle));
         }
-        bins.Add(new CycleBin(origin + (current + 0.5) * width, acquired, assigned));
+        bins.Add(new CycleBin(origin + (current + 0.5) * width, acquired, assigned, explained));
         return bins;
     }
 

@@ -245,7 +245,17 @@ public static class IonAccountingRun
                 gate.Wait(ct);
 
                 var index = new ClaimedSignalIndex(loaded.Regions, classified.ListNames.Count);
-                var request = new IonAccountingRequest(index, scheme, classified.ListNames);
+
+                // The second claim set: everything these peptides can account for, not just what the
+                // document quantifies on. Built with NO list count - the per-list breakdown answers
+                // "what share of the assigned signal does this panel hold", which is a question
+                // about the quantified set, and carrying masks here would double the memory of the
+                // larger of the two indexes for a number nothing plots.
+                var explained = loaded.HasExplained
+                    ? new ClaimedSignalIndex(loaded.ExplainedRegions, listCount: 0)
+                    : null;
+                var request = new IonAccountingRequest(
+                    index, scheme, classified.ListNames, explained);
 
                 pending.Add(Task.Run(
                     () =>
@@ -311,7 +321,7 @@ public static class IonAccountingRun
             // has no measured denominator and the plot must show a gap rather than a zero.
             rows.Add(new IonAccountingRow(
                 sample, SampleTypeOf(sampleTypes, sample), "", Ms2ReadStatus.NotFound, "none",
-                0, 0, 0, 0, 0, 0, double.NaN, double.NaN, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, false, double.NaN, double.NaN, 0, 0, 0, 0,
                 new double[classified.ListNames.Count], new double[classified.ListNames.Count]));
         }
 
@@ -360,6 +370,8 @@ public static class IonAccountingRun
             record.Ms2Acquired,
             record.Ms1Assigned,
             record.Ms2Assigned,
+            record.Ms2Explained,
+            record.HasExplained,
             record.RtStartMin,
             record.RtStopMin,
             loaded.Regions.Count,

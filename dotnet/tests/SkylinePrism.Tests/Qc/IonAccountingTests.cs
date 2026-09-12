@@ -163,6 +163,7 @@ public class IonAccountingTests
         int ms1Count, double ms1Acquired, int ms2Count, double ms2Acquired) =>
         new("s", "experimental", "s.raw", Ms2ReadStatus.Ok, "test", ms1Count, ms2Count,
             ms1Acquired, ms2Acquired, ms1Acquired * 0.405, ms2Acquired * 0.034,
+            Ms2Explained: 0, HasExplained: false,
             0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
 
     // ---------------------------------------------------------------- the cache
@@ -328,7 +329,7 @@ public class IonAccountingTests
     {
         var failed = new IonAccountingRow(
             "s1", "experimental", "", Ms2ReadStatus.NotFound, "none", 0, 0,
-            0, 0, 0, 0, double.NaN, double.NaN, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, false, double.NaN, double.NaN, 0, 0, 0, 0,
             Array.Empty<double>(), Array.Empty<double>());
 
         Assert.False(failed.IsUsable);
@@ -464,9 +465,11 @@ public class IonAccountingTests
 
     private static IonAccountingRow Row(
         double ms1Acquired, double ms2Acquired, double ms1Assigned, double ms2Assigned,
-        string sample = "s", double[]? ms1ByList = null, double[]? ms2ByList = null) =>
+        string sample = "s", double[]? ms1ByList = null, double[]? ms2ByList = null,
+        double ms2Explained = 0) =>
         new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test",
             1, 167, ms1Acquired, ms2Acquired, ms1Assigned, ms2Assigned,
+            ms2Explained, ms2Explained > 0,
             0, 60, 1000, 0, 0, 1,
             ms1ByList ?? Array.Empty<double>(), ms2ByList ?? Array.Empty<double>());
 
