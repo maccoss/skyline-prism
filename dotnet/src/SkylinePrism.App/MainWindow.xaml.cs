@@ -850,6 +850,18 @@ public partial class MainWindow : Window
 
         var command = $"prism run -i {reportArgs} -o \"{outputDir}\" -c \"{configPath}\""
                       + (metadataArgs.Length > 0 ? $" -m {metadataArgs}" : "");
+
+        // Ion accounting is a SECOND command, not a config key: it reads the instrument files, which
+        // a pipeline run never touches, and it needs a raw directory that no config carries. Showing
+        // it here keeps this window honest - it claims to be the equivalent of the current settings.
+        if (IonAccountingCheck.IsChecked == true)
+        {
+            var raw = string.IsNullOrWhiteSpace(IonRawDirText.Text)
+                ? "<raw-dir>"
+                : IonRawDirText.Text.Trim();
+            command += "\r\n\r\nprism ion-accounting -d \"" + outputDir + "\" -r \"" + raw + "\""
+                + " --product-tolerance \"10 ppm\" --precursor-tolerance \"10 ppm\"";
+        }
         var body =
             "Command-line equivalent of the current GUI settings.\r\n\r\n" +
             "The tool exports each input into <output>\\skyline-reports\\ (named after its batch label) and\r\n" +
@@ -954,13 +966,19 @@ public partial class MainWindow : Window
             config.Metadata.BatchColumn = batchColumn;
         var inputs = _inputs.ToList(); // snapshot: the grid stays editable while the run proceeds
 
+        // Captured HERE because RunPipeline runs on a worker and these are UI controls. The same
+        // reason the metadata report and batch column are read above rather than inside the run.
+        var ionRawDir = IonAccountingCheck.IsChecked == true
+            ? IonRawDirText.Text?.Trim()
+            : null;
+
         try
         {
             _runCancellation = new CancellationTokenSource();
             StopButton.IsEnabled = true;
             var token = _runCancellation.Token;
             await Task.Run(
-                () => RunPipeline(inputs, outputDir, metadataReport, config, token),
+                () => RunPipeline(inputs, outputDir, metadataReport, config, ionRawDir, token),
                 token);
             // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
@@ -1108,9 +1126,13 @@ public partial class MainWindow : Window
     /// Directory of instrument data files to read the acquired MS2 total from, or null to skip it.
     /// Captured on the UI thread by the caller, because this method runs on a worker.
     /// </param>
+    /// <param name="ionRawDir">
+    /// Directory of instrument data files to measure ion accounting from, or null to skip it.
+    /// Captured on the UI thread by the caller, because this method runs on a worker.
+    /// </param>
     private void RunPipeline(
         IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config,
-        CancellationToken cancellationToken)
+        string? ionRawDir, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
@@ -1249,6 +1271,131 @@ public partial class MainWindow : Window
             Log("Still reading the acquisition's isolation windows in the background; the density map "
                 + "will use them once it finishes.");
         isolationTask.Wait(TimeSpan.FromSeconds(20));
+
+        RunIonAccounting(inputs, outputDir, ionRawDir, cancellationToken);
+    }
+
+    /// <summary>
+    /// The optional pass over the instrument files, after the pipeline has written its outputs.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>After, not during.</b> It needs <c>merged_data/</c> for the extraction geometry and
+    /// <c>peptides_rollup.parquet</c> for which peptides the run kept, so it cannot start before
+    /// those exist. Running it last also means a failure here costs the ion accounting and not the
+    /// analysis - the pipeline's outputs are already on disk by the time this is called.</para>
+    ///
+    /// <para><b>Never fatal.</b> A missing reader, an unreadable share, a cohort whose files cannot
+    /// be paired - each is reported and returns. The run that produced the peptides and proteins
+    /// succeeded, and a QC section is not a reason to tell the user it did not.</para>
+    /// </remarks>
+    private void RunIonAccounting(
+        IReadOnlyList<PrismInput> inputs, string outputDir, string? rawDir,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(rawDir))
+            return;
+
+        try
+        {
+            if (!Directory.Exists(rawDir))
+            {
+                Log($"Ion accounting: no such data directory, so it was skipped: {rawDir}");
+                return;
+            }
+
+            OptionalReaders.Register(Log);
+            if (IonAccountingReaders.All.Count == 0)
+            {
+                Log("Ion accounting: this build has no instrument-file reader, so it was skipped.");
+                return;
+            }
+
+            // The document's own windows, never a default: a guessed tolerance changes how much
+            // fragment sharing is found, and nothing on the plot would say the number moved. Each
+              // input is asked and the first answer wins, with a warning when they disagree - the
+            // accounting applies one tolerance to the whole cohort, so plates acquired differently
+            // cannot all be right.
+            ProductMassTolerance? product = null;
+            ProductMassTolerance? precursor = null;
+            foreach (var input in inputs)
+            {
+                var (p, q) = input.TryGetExtractionTolerances(Log);
+                if (p is null)
+                    continue;
+                if (product is not null && !Equals(product, p))
+                {
+                    Log($"Ion accounting: WARNING - {input.DisplayName} states {p.Describe()} where an "
+                        + $"earlier input states {product.Describe()}. Using the first; plates acquired "
+                        + "differently cannot all be right under one tolerance.");
+                    continue;
+                }
+                product ??= p;
+                precursor ??= q;
+            }
+
+            if (product is null)
+            {
+                Log("Ion accounting: no input could state its product-ion extraction window - a "
+                    + "pre-exported report carries no settings - so it was skipped rather than run "
+                    + "against a guessed tolerance.");
+                return;
+            }
+
+            Log($"Ion accounting: reading {rawDir} with product {product.Describe()}"
+                + (precursor is null
+                    ? ", no precursor window (the MS2 half only)"
+                    : $", precursor {precursor.Describe()}") + ".");
+
+            var scheme = IsolationSchemeResolver.Resolve(outputDir, rawDir, Log);
+            if (scheme is null)
+            {
+                Log("Ion accounting: no isolation scheme with windows could be resolved, so it was "
+                    + "skipped.");
+                return;
+            }
+
+            var result = IonAccountingRun.Compute(
+                outputDir, rawDir, scheme, product, precursor,
+                Array.Empty<ProteinList>(), sampleTypes: null, log: Log, ct: cancellationToken);
+
+            if (result is null)
+                Log("Ion accounting: nothing was measured.");
+        }
+        catch (OperationCanceledException)
+        {
+            Log("Ion accounting: stopped. Whatever it had already measured is cached.");
+        }
+        catch (Exception ex)
+        {
+            Log($"Ion accounting failed, which does not affect the analysis above: {ex.Message}");
+        }
+    }
+
+    private void OnIonAccountingOptionChanged(object sender, RoutedEventArgs e)
+    {
+        var on = IonAccountingCheck.IsChecked == true;
+        IonRawDirText.IsEnabled = on;
+        IonRawDirBrowse.IsEnabled = on;
+    }
+
+    private void OnBrowseIonRawDir(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Instrument data files for these replicates",
+        };
+
+        // The box first when it already points somewhere, so re-browsing lands where you were; the
+        // shared start directory otherwise, the way every other picker in this window behaves.
+        var current = IonRawDirText.Text?.Trim();
+        var start = !string.IsNullOrWhiteSpace(current) && Directory.Exists(current)
+            ? current
+            : DialogStartDir();
+        if (start is not null)
+            dialog.InitialDirectory = start;
+
+        if (dialog.ShowDialog(this) == true)
+            IonRawDirText.Text = dialog.FolderName;
     }
 
     /// <summary>

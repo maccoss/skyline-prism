@@ -221,6 +221,21 @@
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="Marker normalization needs at least 3 of the list's proteins quantified, and reports how many it found. The markers stay in the output, flagged 'normalization_marker' - their values are near-flat by construction, so exclude them from results read off these files. The per-sample score is written to marker_normalization.csv." />
 
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <TextBlock Text="9. Ion accounting:" Width="230" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="IonAccountingCheck" VerticalAlignment="Center" Margin="0,0,8,0"
+                                              Checked="OnIonAccountingOptionChanged" Unchecked="OnIonAccountingOptionChanged"
+                                              Content="Measure ions from the instrument files"
+                                              ToolTip="After the pipeline, read every replicate's data file and count the ions that reached the detector, and the part of them this analysis accounts for - at MS1 and MS2 separately. Both halves are measured the same way, so the ratio is a genuine fraction. This is the only thing PRISM does that reads the instrument files, and it is what fills the Ion accounting pane." />
+                                    <TextBox x:Name="IonRawDirText" Width="300" IsEnabled="False" VerticalAlignment="Center"
+                                             ToolTip="The directory holding the .raw / .mzML / .d files for these replicates. They are paired to replicates by file name, one-to-one; a replicate matching a file another replicate also matches is reported as ambiguous and neither is given it." />
+                                    <Button x:Name="IonRawDirBrowse" Content="Browse..." Padding="10,2" Margin="8,0,0,0"
+                                            IsEnabled="False" Click="OnBrowseIonRawDir" />
+                                </StackPanel>
+
+                                <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="Reads each data file once, which is single-digit minutes per file - comparable to what Skyline spends pulling the same numbers out of a .skyd, and cheaper than exporting its per-transition ion counts. Extraction tolerances come from the document's own Transition Settings > Full-Scan where it can be read. Results are cached, so the pane and 'prism qc -d' replot for free, and a re-run measures only the replicates the cache does not already cover." />
+
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"
                                            Text="Batch correction runs only when 2+ batches are detected (set the Batch column above). Sample types come from the metadata report's Sample Type column." />

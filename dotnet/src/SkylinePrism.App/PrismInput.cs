@@ -300,7 +300,25 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// there is no RPC for the transition settings, and the extraction tolerance is not something that
     /// is edited between saves the way peak boundaries are.</para>
     /// </summary>
-    public ProductMassTolerance? TryGetExtractionTolerance(Action<string> log)
+    public ProductMassTolerance? TryGetExtractionTolerance(Action<string> log) =>
+        TryGetExtractionTolerances(log).Product;
+
+    /// <summary>
+    /// Both extraction windows the document states, product and precursor.
+    /// </summary>
+    /// <remarks>
+    /// Ion accounting wants both: the product window decides when two fragments read the same
+    /// detector counts, and the precursor window does the same for the MS1 half. Reading them
+    /// together costs one parse of the document header rather than two, and keeps them from
+    /// disagreeing about which document they came from.
+    ///
+    /// <para>Either may be null on its own - a document can state a product analyzer and no
+    /// precursor one - and the caller must treat a null precursor as "compute the MS2 half only"
+    /// rather than substituting the product value, because a guessed window changes how much sharing
+    /// is found with nothing on the plot to say the number moved.</para>
+    /// </remarks>
+    public (ProductMassTolerance? Product, ProductMassTolerance? Precursor)
+        TryGetExtractionTolerances(Action<string> log)
     {
         try
         {
@@ -312,13 +330,15 @@ public sealed class PrismInput : INotifyPropertyChanged
                 _ => null,
             };
             if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
-                return null;
-            return SkyDocumentInfo.TryRead(documentPath, log)?.ProductTolerance;
+                return (null, null);
+
+            var info = SkyDocumentInfo.TryRead(documentPath, log);
+            return (info?.ProductTolerance, info?.PrecursorTolerance);
         }
         catch (Exception ex)
         {
-            log($"({DisplayName}: could not read the product-ion extraction settings: {ex.Message})");
-            return null;
+            log($"({DisplayName}: could not read the extraction settings: {ex.Message})");
+            return (null, null);
         }
     }
 

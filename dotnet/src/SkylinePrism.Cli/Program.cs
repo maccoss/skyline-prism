@@ -260,8 +260,7 @@ public static class Program
             return 1;
         }
 
-        var scheme = ResolveScheme(dir, schemeName)
-            ?? ImportSchemeFromData(dir, rawDir);
+        var scheme = IsolationSchemeResolver.Resolve(dir, rawDir, Console.WriteLine, schemeName);
         if (scheme is null)
             return 1;
 
@@ -282,49 +281,6 @@ public static class Program
             $"Wrote {Path.Combine(dir, IonAccountingStore.FileName)} and "
             + $"{IonAccountingStore.CyclesFile}. Re-run 'prism qc -d' to plot them.");
         return 0;
-    }
-
-    /// <summary>
-    /// The isolation scheme to account against, from the output directory's own
-    /// <c>isolation_schemes.xml</c>. Never guessed: fragments in different isolation windows never
-    /// share signal, so the wrong scheme silently changes every number.
-    /// </summary>
-    private static IsolationScheme? ResolveScheme(string dir, string? named)
-    {
-        var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
-        var catalog = IsolationSchemeCatalog.Load(path);
-        var usable = catalog?.UsableSchemes
-            ?? (IReadOnlyList<IsolationScheme>)Array.Empty<IsolationScheme>();
-
-        // No windows is the NORMAL state of a DIA analysis document: it stores
-        // <isolation_scheme name="Results only" /> and Skyline keeps the windows in the data files.
-        // Saying nothing here lets the caller import them from a file instead of failing.
-        if (usable.Count == 0)
-            return null;
-
-        if (!string.IsNullOrWhiteSpace(named))
-        {
-            foreach (var candidate in usable)
-            {
-                if (string.Equals(candidate.Name, named, StringComparison.OrdinalIgnoreCase))
-                    return candidate;
-            }
-            Console.Error.WriteLine(
-                $"Error: no isolation scheme named '{named}'. Available: "
-                + string.Join(", ", usable.Select(s => s.Name)));
-            return null;
-        }
-
-        if (usable.Count > 1)
-        {
-            Console.Error.WriteLine(
-                "Error: more than one isolation scheme is available, so --scheme must name one: "
-                + string.Join(", ", usable.Select(s => s.Name)));
-            return null;
-        }
-
-        Console.WriteLine($"Isolation scheme: {usable[0].Describe()}");
-        return usable[0];
     }
 
     /// <summary>
@@ -396,61 +352,6 @@ public static class Program
             "  - It measures THIS directory, now. A share busy with someone else's run answers for "
             + "that load, so re-probe if the answer looks unlike the storage you think you have.");
         return 0;
-    }
-
-    /// <summary>
-    /// Read the isolation windows out of the first data file, for the usual case where the document
-    /// does not carry them.
-    /// </summary>
-    /// <remarks>
-    /// Uses the acquired-only read, which is headers only - the windows are a property of the
-    /// ACQUISITION METHOD, so one file describes every replicate of the cohort and there is no
-    /// reason to decode a peak to find them. The result is written to isolation_schemes.xml so the
-    /// next run, and the QC report, both reuse it.
-    /// </remarks>
-    private static IsolationScheme? ImportSchemeFromData(string dir, string rawDir)
-    {
-        var files = ReplicateDataFiles.Enumerate(rawDir);
-        if (files.Count == 0)
-        {
-            Console.Error.WriteLine($"Error: no instrument data files in {rawDir}.");
-            return null;
-        }
-
-        var first = files[0];
-        Console.WriteLine(
-            "No isolation scheme with windows was cached, which is normal for a DIA analysis "
-            + $"document. Reading the windows from {Path.GetFileName(first)}.");
-
-        var record = Ms2SignalReaders.Read(first, Console.WriteLine);
-        if (record.IsolationWindows.Count == 0)
-        {
-            Console.Error.WriteLine(
-                "Error: that file reported no repeating isolation windows, so there is no scheme to "
-                + "account against. A DDA acquisition has one window per spectrum and is not "
-                + "supported here.");
-            return null;
-        }
-
-        var name = $"Imported from {Path.GetFileNameWithoutExtension(first)}";
-        var scheme = new IsolationScheme(name, record.IsolationWindows);
-        Console.WriteLine($"Isolation scheme: {scheme.Describe()}");
-
-        try
-        {
-            var path = Path.Combine(dir, IsolationSchemeCatalog.FileName);
-            var catalog = IsolationSchemeCatalog.Load(path) ?? new IsolationSchemeCatalog();
-            catalog.AddDocumentScheme(name, scheme);
-            catalog.Save(path);
-            Console.WriteLine($"Cached it in {IsolationSchemeCatalog.FileName}.");
-        }
-        catch (IOException ex)
-        {
-            // Not fatal: the scheme is in hand, and re-reading one file next time costs seconds.
-            Console.WriteLine($"Could not cache the scheme: {ex.Message}");
-        }
-
-        return scheme;
     }
 
     private static int CmdCompare(string[] args)
