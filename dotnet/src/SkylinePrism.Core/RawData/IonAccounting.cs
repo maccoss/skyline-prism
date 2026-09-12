@@ -174,7 +174,8 @@ public sealed record IonAccountingRecord(
     int SpectraMissingInjectionTime,
     int ScansOutsideScheme,
     IReadOnlyList<IonCycle> Cycles,
-    string? Message = null)
+    string? Message = null,
+    DateTime? AcquiredUtc = null)
 {
     public bool IsUsable => Status == Ms2ReadStatus.Ok && (Ms1Acquired > 0 || Ms2Acquired > 0);
 

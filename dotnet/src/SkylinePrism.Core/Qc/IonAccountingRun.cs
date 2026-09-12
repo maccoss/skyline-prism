@@ -411,7 +411,8 @@ public static class IonAccountingRun
             record.SpectraMissingInjectionTime,
             record.Cycles.Count,
             Padded(record.Ms1ByList, listCount),
-            Padded(record.Ms2ByList, listCount));
+            Padded(record.Ms2ByList, listCount),
+            record.AcquiredUtc);
 
     private static double[] Padded(IReadOnlyList<double> values, int count)
     {

@@ -468,6 +468,15 @@
                                     <ComboBoxItem Tag="Ms2">MS2</ComboBoxItem>
                                     <ComboBoxItem Tag="Ms1">MS1</ComboBoxItem>
                                 </ComboBox>
+                                <TextBlock x:Name="IonSortLabel" Text="Order:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonSortCombo" Width="150"
+                                          SelectionChanged="OnIonSortChanged"
+                                          ToolTip="The bar plot has one bar per replicate and no room to label them, so the order is the axis. By run order it shows drift over a batch; by sample type it shows whether the controls sit where the experimental samples do. Run order comes from each data file's own start timestamp - a cache measured before that was recorded falls back to file name and says so.">
+                                    <ComboBoxItem Tag="RunOrder">Run order</ComboBoxItem>
+                                    <ComboBoxItem Tag="FileName">File name</ComboBoxItem>
+                                    <ComboBoxItem Tag="SampleType">Sample type</ComboBoxItem>
+                                </ComboBox>
                                 <TextBlock x:Name="IonReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
                                 <ComboBox x:Name="IonReplicateCombo" Width="240"
@@ -483,8 +492,10 @@
                                         ToolTip="Re-read ion_accounting.parquet and ion_cycles.parquet from the output directory above." />
                                 <TextBlock x:Name="IonStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
+                                <TextBlock x:Name="IonHoverText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#333" TextWrapping="Wrap" />
                             </WrapPanel>
-                            <sp:WpfPlot x:Name="IonPlot" />
+                            <sp:WpfPlot x:Name="IonPlot" MouseMove="OnIonPlotMouseMove" />
                         </DockPanel>
                     </Grid>
                 </Grid>

@@ -295,7 +295,8 @@ public sealed partial class PwizMs2SignalReader
             ms1Acquired, ms2Acquired, ms1Assigned, ms2Assigned,
             ms2Explained, explained is not null,
             ms1ByList, ms2ByList, rtFirst, rtLast, noInjection, outsideScheme, cycles,
-            ms1 + ms2 > 0 ? null : "The file has no MS1 or MS2 spectra.");
+            ms1 + ms2 > 0 ? null : "The file has no MS1 or MS2 spectra.",
+            RunStart(msd));
 
         Report(record, claims, reportedMs1, reportedMs2, unsorted, log);
         log?.Invoke(

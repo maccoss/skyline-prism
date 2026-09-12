@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -398,6 +399,38 @@ public sealed partial class PwizMs2SignalReader
             AddWindow(windows, spectrum.Precursors[0].IsolationWindow);
         }
         return windows.Values.OrderBy(w => w.Start).ToList();
+    }
+
+    /// <summary>
+    /// When the instrument began acquiring this run, from the file's own start timestamp.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is what "run order" means on the ion accounting plot, and it is the only honest
+    /// source for it: neither the file name nor the order the files happen to be read in is the
+    /// order they were acquired in, and a plot sorted by either while calling itself run order
+    /// invites reading drift into an ordering that has none.</para>
+    /// <para>Null when the format declares none, or when what it declares cannot be parsed. The
+    /// caller keeps that as "unknown" rather than substituting a time.</para>
+    /// </remarks>
+    internal static DateTime? RunStart(MSData msd)
+    {
+        try
+        {
+            var stamp = msd.Run?.StartTimeStamp;
+            return string.IsNullOrWhiteSpace(stamp)
+                ? null
+                : DateTime.TryParse(
+                    stamp, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal, out var value)
+                    ? value
+                    : null;
+        }
+        catch (Exception)
+        {
+            // A vendor SDK that throws reading a header field is not a reason to lose the file's
+            // measurement; the run simply has no recorded start.
+            return null;
+        }
     }
 
     /// <summary>One isolation window, keyed on rounded edges so float noise cannot multiply it.</summary>

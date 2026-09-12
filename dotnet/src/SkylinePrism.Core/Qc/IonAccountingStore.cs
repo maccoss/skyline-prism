@@ -34,7 +34,13 @@ public sealed record IonAccountingRow(
     int SpectraMissingInjectionTime,
     int CycleCount,
     IReadOnlyList<double> Ms1ByList,
-    IReadOnlyList<double> Ms2ByList)
+    IReadOnlyList<double> Ms2ByList,
+    /// <summary>
+    /// When the instrument began acquiring this replicate, from the data file's own start
+    /// timestamp. Null for a cache written before this was recorded, and for a file that does not
+    /// declare one - which is why ordering by it is offered only when every row has one.
+    /// </summary>
+    DateTime? AcquiredUtc = null)
 {
     public double Ms1Fraction => Ms1Acquired > 0 ? Ms1Assigned / Ms1Acquired : double.NaN;
     public double Ms2Fraction => Ms2Acquired > 0 ? Ms2Assigned / Ms2Acquired : double.NaN;
@@ -237,6 +243,14 @@ public static class IonAccountingStore
                 "missing_injection_time",
                 rows.Select(r => (long)r.SpectraMissingInjectionTime).ToArray()),
             ParquetWideWriter.Longs("cycle_count", rows.Select(r => (long)r.CycleCount).ToArray()),
+            // When the instrument started this replicate, round-trip UTC. A string rather than a
+            // number because "not recorded" has to survive: a file that declares no start time, and
+            // a cache written before this column existed, are both legitimately unknown and must not
+            // read back as any particular instant.
+            ParquetWideWriter.Strings(
+                "acquired_utc",
+                rows.Select(r => r.AcquiredUtc?.ToUniversalTime()
+                    .ToString("O", System.Globalization.CultureInfo.InvariantCulture) ?? "").ToArray()),
             // Repeated per row: parquet dictionary-encodes them to nothing and it makes the file
             // self-describing to anything that opens it.
             ParquetWideWriter.Strings("product_tolerance", Repeat(result.ProductTolerance, n)),
@@ -363,6 +377,7 @@ public static class IonAccountingStore
             var outside = Nums(reader, "scans_outside_scheme", samples.Length);
             var noInj = Nums(reader, "missing_injection_time", samples.Length);
             var cycleCount = Nums(reader, "cycle_count", samples.Length);
+            var acquired = Strings(reader, "acquired_utc", samples.Length);
 
             var lists = ReadLists(outputDir, out var listNames);
 
@@ -391,7 +406,8 @@ public static class IonAccountingStore
                     rt0[i], rt1[i],
                     (int)claims[i], (int)outside[i], (int)noInj[i], (int)cycleCount[i],
                     perList?.Ms1 ?? Array.Empty<double>(),
-                    perList?.Ms2 ?? Array.Empty<double>()));
+                    perList?.Ms2 ?? Array.Empty<double>(),
+                    ParseUtc(acquired[i])));
             }
 
             return new IonAccountingResult(
@@ -567,6 +583,20 @@ public static class IonAccountingStore
             return new Dictionary<string, PerList>(StringComparer.Ordinal);
         }
     }
+
+    /// <summary>
+    /// A recorded acquisition time, or null when the cache does not carry one. Unparseable is null
+    /// too: an instant guessed from a malformed stamp would put a replicate somewhere specific in
+    /// run order with nothing to say it was a guess.
+    /// </summary>
+    private static DateTime? ParseUtc(string? text) =>
+        !string.IsNullOrWhiteSpace(text)
+        && DateTime.TryParse(
+            text, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var value)
+            ? value
+            : null;
 
     private static string[] Strings(ParquetColumnReader reader, string name, int count) =>
         reader.ColumnNames.Contains(name, StringComparer.Ordinal)

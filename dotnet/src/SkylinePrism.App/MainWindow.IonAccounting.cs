@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using ScottPlot;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Visualization;
 
@@ -49,12 +50,21 @@ public partial class MainWindow
 
     private const double DefaultIonBinMinutes = 1.0;
 
+    /// <summary>
+    /// The rows in the order the bars were DRAWN, which is what the hover readout indexes into. Held
+    /// rather than re-derived: the readout has to name the bar actually under the cursor, and a
+    /// second sort that disagreed with the drawn one by a single position would attribute every
+    /// replicate to its neighbour - wrong in a way that looks entirely plausible.
+    /// </summary>
+    private IReadOnlyList<IonAccountingRow> _ionDrawn = Array.Empty<IonAccountingRow>();
+
     /// <summary>Drop the cached result so the pane reloads next time it is shown.</summary>
     private void InvalidateIonAccounting()
     {
         _ionLoaded = false;
         _ionResult = null;
         _ionCycles.Clear();
+        _ionDrawn = Array.Empty<IonAccountingRow>();
         // The nav entry's answer is cached against the directory, so a run that has just WRITTEN
         // the accounting has to be able to make it appear.
         _ionNavProbedDir = null;
@@ -71,6 +81,11 @@ public partial class MainWindow
 
     private bool IonProfileSelected =>
         IonView is "Profile" or "Fraction";
+
+    private IonRowOrder.By IonSort =>
+        Enum.TryParse<IonRowOrder.By>(ComboTag(IonSortCombo), out var by)
+            ? by
+            : IonRowOrder.By.RunOrder;
 
     private PlotRenderer.IonLevel IonLevel =>
         string.Equals(ComboTag(IonLevelCombo), "Ms1", StringComparison.Ordinal)
@@ -93,6 +108,20 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnIonViewChanged), ex);
+        }
+    }
+
+    private async void OnIonSortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _suppressIonRender)
+                return;
+            await RenderIonAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonSortChanged), ex);
         }
     }
 
@@ -277,6 +306,8 @@ public partial class MainWindow
                 IonViewCombo.SelectedIndex = 0;
             if (IonLevelCombo.SelectedIndex < 0)
                 IonLevelCombo.SelectedIndex = 0;
+            if (IonSortCombo.SelectedIndex < 0)
+                IonSortCombo.SelectedIndex = 0;
         }
         finally
         {
@@ -348,6 +379,93 @@ public partial class MainWindow
         IonReplicateCombo.Visibility = visibility;
         IonBinLabel.Visibility = visibility;
         IonBinBox.Visibility = visibility;
+
+        // The order only means anything where there is a bar per replicate; the profile views have
+        // one replicate and a retention-time axis.
+        var forBars = profile ? Visibility.Collapsed : Visibility.Visible;
+        IonSortLabel.Visibility = forBars;
+        IonSortCombo.Visibility = forBars;
+    }
+
+    /// <summary>
+    /// Says so when run order was ASKED FOR and could not be given. Silently falling back to file
+    /// name would present an arbitrary order as an acquisition one, which is the reading this plot
+    /// is most likely to be used for.
+    /// </summary>
+    private string IonOrderNote(IonAccountingResult result) =>
+        IonSort == IonRowOrder.By.RunOrder && !IonRowOrder.CanOrderByRun(result.Rows)
+            ? "; ordered by file name - this cache does not record when each replicate was acquired, "
+              + "which a re-measure would add"
+            : "";
+
+    /// <summary>
+    /// Name the bar under the cursor. The plot has one bar per replicate and no room to label them,
+    /// so without this there is no way at all to tell which replicate is which.
+    /// </summary>
+    private void OnIonPlotMouseMove(object sender, MouseEventArgs e)
+    {
+        try
+        {
+            if (_ionDrawn.Count == 0)
+                return;
+
+            var position = e.GetPosition(IonPlot);
+            var scale = IonPlot.DisplayScale;
+            var coordinates = IonPlot.Plot.GetCoordinates(
+                new Pixel(position.X * scale, position.Y * scale));
+
+            // Bars sit at integer positions 0..n-1, so the nearest whole number is the one under
+            // the cursor - and only when the cursor is actually within its half-width.
+            var index = (int)Math.Round(coordinates.X);
+            if (index < 0 || index >= _ionDrawn.Count || Math.Abs(coordinates.X - index) > 0.5)
+            {
+                IonHoverText.Text = "";
+                return;
+            }
+            IonHoverText.Text = DescribeIonBar(_ionDrawn[index], IonLevel);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonPlotMouseMove), ex);
+        }
+    }
+
+    /// <summary>One replicate, in the terms of the level being shown.</summary>
+    private static string DescribeIonBar(IonAccountingRow row, PlotRenderer.IonLevel level)
+    {
+        var name = row.Sample;
+        if (!row.IsUsable)
+        {
+            return $"{name}: not measured ({row.Status})"
+                + (string.IsNullOrWhiteSpace(row.DataFile) ? "" : $" - {row.DataFile}");
+        }
+
+        var acquired = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Acquired : row.Ms2Acquired;
+        var assigned = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Assigned : row.Ms2Assigned;
+        var fraction = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Fraction : row.Ms2Fraction;
+
+        var text = $"{name}"
+            + (string.IsNullOrWhiteSpace(row.SampleType) ? "" : $" ({row.SampleType})")
+            + $": acquired {acquired:0.###e+0}, "
+            + (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained ? "quantified " : "assigned ")
+            + $"{assigned:0.###e+0}";
+        // Exceeded means a defect, and no fraction is shown anywhere else either - see
+        // IonAccountingRow.Exceeded.
+        text += row.Exceeded
+            ? " (assigned exceeds acquired - no fraction shown)"
+            : double.IsFinite(fraction) ? $" = {fraction * 100:0.##}%" : "";
+
+        if (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained
+            && double.IsFinite(row.Ms2ExplainedFraction) && !row.Exceeded)
+        {
+            text += $"; explained {row.Ms2Explained:0.###e+0} = {row.Ms2ExplainedFraction * 100:0.##}%";
+        }
+
+        if (row.AcquiredUtc is { } when)
+            text += $"; acquired {when.ToLocalTime():yyyy-MM-dd HH:mm}";
+        if (!string.IsNullOrWhiteSpace(row.DataFile))
+            text += $"; {row.DataFile}";
+        return text;
     }
 
     // ------------------------------------------------------------------ rendering
@@ -362,12 +480,20 @@ public partial class MainWindow
 
         if (!IonProfileSelected)
         {
+            // Sorted HERE and not in the renderer: the pane has to keep the order it drew to
+            // answer the hover, and a renderer that sorted privately would leave it guessing.
+            var ordered = IonRowOrder.Sort(result.Rows, IonSort);
+            _ionDrawn = ordered;
             PlotRenderer.DrawIonAccounting(
-                IonPlot.Plot, result, level, IonBarTitle(result, level));
+                IonPlot.Plot, result with { Rows = ordered }, level, IonBarTitle(result, level));
             IonPlot.Refresh();
-            IonStatusText.Text = DescribeIon(result, level);
+            IonStatusText.Text = DescribeIon(result, level) + IonOrderNote(result);
+            IonHoverText.Text = "";
             return;
         }
+
+        _ionDrawn = Array.Empty<IonAccountingRow>();
+        IonHoverText.Text = "";
 
         if (IonReplicateCombo.SelectedItem is not string sample)
         {
@@ -561,8 +687,10 @@ public partial class MainWindow
     /// </summary>
     private void ShowIonMessage(string message)
     {
+        _ionDrawn = Array.Empty<IonAccountingRow>();
         PlotRenderer.DrawEmptyState(IonPlot.Plot, message);
         IonPlot.Refresh();
         IonStatusText.Text = message;
+        IonHoverText.Text = "";
     }
 }
