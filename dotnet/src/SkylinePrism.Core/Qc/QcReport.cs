@@ -353,6 +353,18 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
                 : "<ul style=\"margin:0;padding-left:18px\">"
                   + string.Concat(info.SourceFiles.Select(f => $"<li><code>{HtmlEncode(f)}</code></li>"))
                   + "</ul>");
+            // The acquisition's own window layout, where the run managed to record one. It is here
+            // rather than only in isolation_schemes.xml because this is the page that gets kept: the
+            // instrument files are routinely deleted once an analysis is done, and after that nothing
+            // else in a result says what the data was acquired with.
+            if (info.IsolationSchemes is { Count: > 0 } schemes)
+            {
+                Row("Isolation scheme", schemes.Count == 1
+                    ? HtmlEncode(schemes[0])
+                    : "<ul style=\"margin:0;padding-left:18px\">"
+                      + string.Concat(schemes.Select(s => $"<li>{HtmlEncode(s)}</li>"))
+                      + "</ul>");
+            }
         }
         Row("Report generated", HtmlEncode(generatedAt));
         sb.Append("</table>");

@@ -36,6 +36,7 @@ output_dir/
 ├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
 ├── fasta/                          # Copy of the search database(s) this run used (if any)
 ├── parameters.json                 # Complete provenance and processing parameters
+├── isolation_schemes.xml           # The acquisition's DIA isolation windows, if any were learned
 ├── ion_accounting.parquet          # Ions acquired/assigned/explained per replicate (if `prism ion-accounting`)
 ├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
 ├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
@@ -353,9 +354,44 @@ output reflects whatever version you ran (the example below is illustrative).
     "n_transitions": 67974,
     "n_proteins": 3643,
     "n_protein_groups": 3648
-  }
+  },
+  "isolation_schemes": [
+    {
+      "source": "measured",
+      "data_file": "R:\\cohort\\2026-extended-FLARE-001-1-B1-013.raw",
+      "recorded": "2026-09-12T19:50:30.4715664Z",
+      "name": "Imported from 2026-extended-FLARE-001-1-B1-013",
+      "summary": "167 windows, 400.4-901.7 m/z, 3.001 Th",
+      "window_count": 167,
+      "mz_start": 400.43189,
+      "mz_end": 901.65971,
+      "scheduled": false,
+      "windows": [
+        { "start": 400.43189, "end": 403.43329 },
+        { "start": 403.43331, "end": 406.43461 }
+      ]
+    }
+  ]
 }
 ```
+
+**`isolation_schemes`**: the DIA isolation windows the data was acquired with, when the run managed to
+learn them. `source` is `measured` for windows read out of an instrument data file (`data_file` names
+which one, `recorded` says when) and `document` for windows a Skyline document declared, in which case
+`batch` names the input.
+
+This is recorded because the windows are otherwise only in two places, both of which go away. A DIA
+analysis document stores `<isolation_scheme name="Results only" />` and **no windows** - Skyline reads
+them from the data at import and does not write them down - so the instrument files are the only
+original, and they are routinely moved off a share or deleted once an analysis is finished. After that
+nothing can say what the acquisition was, and the Spectrum density map falls back to a built-in layout
+that looks exactly as plausible as the right one. `isolation_schemes.xml` beside the outputs is what
+the tool reads back; this is the same thing in the file that travels with a result, window edges
+included, so the grid can be reconstructed from provenance alone.
+
+Written by `prism isolation-scheme`, by `prism ion-accounting`, and by the Skyline tool when it
+resolves the windows for a run. `--from-provenance` ignores it - it is a record of the acquisition,
+not a processing parameter.
 
 **Re-running with provenance**: You can use `parameters.json` to re-run PRISM with identical
 parameters:

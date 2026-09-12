@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using SkylinePrism.Core.RawData;
 
 namespace SkylinePrism.Core.Qc;
@@ -29,20 +30,26 @@ public static class IsolationSchemeResolver
     /// </param>
     /// <returns>Null when none could be resolved; the reason is logged.</returns>
     public static IsolationScheme? Resolve(
-        string outputDir, string? rawDir, Action<string>? log = null, string? named = null)
+        string outputDir, string? rawDir, Action<string>? log = null, string? named = null,
+        CancellationToken ct = default)
     {
         var cached = FromCache(outputDir, named, log);
         if (cached is not null)
             return cached;
+        if (string.IsNullOrWhiteSpace(rawDir))
+            return null;
 
-        return string.IsNullOrWhiteSpace(rawDir) ? null : FromData(outputDir, rawDir!, log);
+        log?.Invoke(
+            "No isolation scheme with windows was cached, which is normal for a DIA analysis document.");
+        return FromData(outputDir, rawDir!, log, ct);
     }
 
     private static IsolationScheme? FromCache(string outputDir, string? named, Action<string>? log)
     {
         var path = Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
-        var usable = IsolationSchemeCatalog.Load(path)?.UsableSchemes;
-        if (usable is null || usable.Count == 0)
+        var catalog = IsolationSchemeCatalog.Load(path);
+        var usable = catalog?.UsableSchemes;
+        if (catalog is null || usable is null || usable.Count == 0)
             return null;   // normal for a DIA document; the caller imports from data instead
 
         if (!string.IsNullOrWhiteSpace(named))
@@ -60,6 +67,19 @@ public static class IsolationSchemeResolver
 
         if (usable.Count > 1)
         {
+            // A cohort can end up with both a scheme Skyline declared and one PRISM read out of the
+            // data - the same acquisition under two names, which deduplication on the layout cannot
+            // collapse. The measured one is the acquisition's own answer, so it wins rather than the
+            // pair being reported as an ambiguity the user has to resolve by hand.
+            var measured = usable.Where(catalog.IsMeasured).ToList();
+            if (measured.Count == 1)
+            {
+                log?.Invoke(
+                    $"Isolation scheme: {measured[0].Describe()} (measured from the data; "
+                    + $"{usable.Count - 1} other cached scheme(s) not used).");
+                return measured[0];
+            }
+
             log?.Invoke(
                 "More than one isolation scheme is cached, so one must be named: "
                 + string.Join(", ", usable.Select(s => s.Name)));
@@ -77,7 +97,8 @@ public static class IsolationSchemeResolver
     /// Headers only - the windows are a property of the ACQUISITION METHOD, so one file describes
     /// every replicate of the cohort and there is no reason to decode a peak to find them.
     /// </remarks>
-    private static IsolationScheme? FromData(string outputDir, string rawDir, Action<string>? log)
+    public static IsolationScheme? FromData(
+        string outputDir, string rawDir, Action<string>? log, CancellationToken ct = default)
     {
         var files = ReplicateDataFiles.Enumerate(rawDir);
         if (files.Count == 0)
@@ -87,12 +108,13 @@ public static class IsolationSchemeResolver
         }
 
         var first = files[0];
-        log?.Invoke(
-            "No isolation scheme with windows was cached, which is normal for a DIA analysis "
-            + $"document. Reading the windows from {Path.GetFileName(first)}.");
+        log?.Invoke($"Reading the acquisition's isolation windows from {Path.GetFileName(first)}.");
 
-        var record = Ms2SignalReaders.Read(first, log);
-        if (record.IsolationWindows.Count == 0)
+        // The windows only, never a full signal read: they are scan headers in the first two cycles,
+        // so this costs the file open and little else. Asking Read() for them measured the whole run
+        // to use one field of the answer.
+        var windows = IsolationWindowProbe.Read(first, log, ct);
+        if (windows.Count == 0)
         {
             log?.Invoke(
                 "That file reported no repeating isolation windows, so there is no scheme to account "
@@ -101,23 +123,42 @@ public static class IsolationSchemeResolver
         }
 
         var name = $"Imported from {Path.GetFileNameWithoutExtension(first)}";
-        var scheme = new IsolationScheme(name, record.IsolationWindows);
+        var scheme = new IsolationScheme(name, windows);
         log?.Invoke($"Isolation scheme: {scheme.Describe()}");
+        Record(outputDir, scheme, first, log);
+        return scheme;
+    }
 
+    /// <summary>
+    /// Write a measured scheme down twice, in the two places a later reader will look.
+    /// </summary>
+    /// <remarks>
+    /// The data files are the only other copy of this, and they are the first thing to move off a
+    /// share. <c>isolation_schemes.xml</c> is what the density picker reloads, so it holds the window
+    /// edges; <c>parameters.json</c> is what gets archived with a result, so it holds the same thing
+    /// in the file people keep. Both are written beside the outputs and neither is fatal to lose.
+    /// </remarks>
+    private static void Record(
+        string outputDir, IsolationScheme scheme, string dataFile, Action<string>? log)
+    {
         try
         {
             var path = Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
             var catalog = IsolationSchemeCatalog.Load(path) ?? new IsolationSchemeCatalog();
-            catalog.AddDocumentScheme(name, scheme);
+            // The full path, because this is provenance: a relative or mixed-separator form
+            // records where the reader happened to be standing rather than where the file is.
+            catalog.AddMeasuredScheme(scheme, Path.GetFullPath(dataFile));
             catalog.Save(path);
-            log?.Invoke($"Cached it in {IsolationSchemeCatalog.FileName}.");
+            var alsoJson = Pipeline.Provenance.RecordIsolationSchemes(outputDir, catalog);
+            log?.Invoke(
+                $"Cached it in {IsolationSchemeCatalog.FileName}"
+                + (alsoJson ? $" and recorded it in {Pipeline.Provenance.FileName}." : ".")
+                + " The windows survive there if the data files do not.");
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Not fatal: the scheme is in hand, and re-reading one file next time costs seconds.
-            log?.Invoke($"Could not cache the scheme: {ex.Message}");
+            log?.Invoke($"Could not record the scheme: {ex.Message}");
         }
-
-        return scheme;
     }
 }

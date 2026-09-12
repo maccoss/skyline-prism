@@ -40,6 +40,7 @@ public static class Program
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
                 "ion-accounting" => CmdIonAccounting(rest),
+                "isolation-scheme" => CmdIsolationScheme(rest),
                 "compare" => CmdCompare(rest),
                 "config-template" => CmdConfigTemplate(rest),
                 _ => Unknown(args[0]),
@@ -397,6 +398,79 @@ public static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Read the acquisition's isolation windows and write them down beside the outputs.
+    /// </summary>
+    /// <remarks>
+    /// <para>The headless half of what the Spectrum density tab does when it opens. Worth its own
+    /// command because the windows are needed for a plot and cost one file open, where
+    /// <c>ion-accounting</c> - the only other thing that resolves them - reads every file in the
+    /// cohort.</para>
+    ///
+    /// <para><b>Why write them down at all.</b> A DIA analysis document stores
+    /// <c>isolation_scheme name="Results only"</c> and no windows: Skyline reads them from the data at
+    /// import and does not record them. So once the instrument files are moved off a share - which is
+    /// the normal end of an analysis - nothing says what the data was acquired with, and a density map
+    /// falls back to a built-in layout that looks exactly as plausible as the right one. Run this
+    /// while the files are still reachable.</para>
+    /// </remarks>
+    private static int CmdIsolationScheme(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string>());
+        var dir = opts.GetSingle("-d", "--dir") ?? opts.GetSingle("-o", "--output-dir");
+        var rawDir = opts.GetSingleOrNull("-r", "--raw-dir");
+        var schemeName = opts.GetSingleOrNull("--scheme");
+        var force = Array.Exists(args, a => a is "--force");
+
+        if (dir is null)
+        {
+            Console.Error.WriteLine(
+                "Usage: prism isolation-scheme -d <output-dir> [-r <raw-dir>] [--scheme <name>] "
+                + "[--force]");
+            return 2;
+        }
+        if (!Directory.Exists(dir))
+        {
+            Console.Error.WriteLine($"Error: no such output directory: {dir}");
+            return 2;
+        }
+        if (rawDir is not null && !Directory.Exists(rawDir))
+        {
+            Console.Error.WriteLine($"Error: no such raw directory: {rawDir}");
+            return 2;
+        }
+        if (force && rawDir is null)
+        {
+            Console.Error.WriteLine(
+                "Error: --force re-reads the windows from the data, so it needs -r <raw-dir>.");
+            return 2;
+        }
+
+        OptionalReaders.Register(Console.WriteLine);
+
+        var scheme = force
+            ? IsolationSchemeResolver.FromData(dir, rawDir!, Console.WriteLine)
+            : IsolationSchemeResolver.Resolve(dir, rawDir, Console.WriteLine, schemeName);
+        if (scheme is null)
+        {
+            Console.Error.WriteLine(
+                "No isolation scheme could be resolved; the reason is above."
+                + (rawDir is null ? " Pass -r <raw-dir> to read it from the data files." : ""));
+            return 1;
+        }
+
+        // Also true of a scheme that came from the cache: a directory written before provenance
+        // carried the windows has them in the XML and not in parameters.json, and this is how that
+        // gets put right without re-reading anything.
+        var catalog = IsolationSchemeCatalog.Load(
+            Path.Combine(dir, IsolationSchemeCatalog.FileName));
+        if (catalog is not null && Provenance.RecordIsolationSchemes(dir, catalog))
+            Console.WriteLine($"Recorded in {Provenance.FileName}.");
+
+        Console.WriteLine(scheme.Describe());
+        return 0;
+    }
+
     private static int PrintUsage()
     {
         Console.WriteLine(UsageText);
@@ -417,6 +491,7 @@ public static class Program
         "merge" => MergeHelp,
         "qc" => QcHelp,
         "ion-accounting" => IonAccountingHelp,
+        "isolation-scheme" => IsolationSchemeHelp,
         "compare" => CompareHelp,
         "config-template" => ConfigTemplateHelp,
         _ => UsageText,
@@ -445,6 +520,8 @@ public static class Program
             run                Run the full PRISM pipeline (rollup, normalize, batch-correct, QC)
             merge              Merge Skyline transition reports into one parquet
             qc                 (Re)generate the QC report from an existing output directory
+            ion-accounting     Count acquired ions and the fraction assigned to a peptide
+            isolation-scheme   Read the acquisition's DIA isolation windows and record them
             compare            Compare control-sample CVs between two runs
             config-template    Emit an annotated configuration template
             version            Print the version
@@ -544,6 +621,34 @@ public static class Program
 
         Not part of `prism run`: a cohort is often a terabyte of instrument files on a
         network share, and everything else in the pipeline reads one exported report.
+        """;
+
+    private const string IsolationSchemeHelp = """
+        prism isolation-scheme - Read the acquisition's DIA isolation windows and record them
+
+        A DIA analysis document does not store its isolation windows: Skyline reads them from
+        the data files at import and records only 'Results only'. The windows therefore live in
+        the instrument files alone, and once those are moved or deleted nothing can say what the
+        data was acquired with - the Spectrum density map then bins on a built-in layout that
+        looks exactly as plausible as the right one.
+
+        This reads them from one data file (it costs a file open; the windows are scan headers in
+        the first two acquisition cycles) and writes them beside the outputs, in both
+        isolation_schemes.xml and parameters.json. Run it while the data files are reachable.
+
+        With no -r it only reports and records what the directory already knows.
+
+        Usage: prism isolation-scheme -d <output-dir> [-r <raw-dir>] [options]
+
+        Options:
+            -d, --dir <dir>      Output directory of a PRISM run (required)
+            -r, --raw-dir <dir>  Where the instrument files are, if the windows must be read
+                --scheme <name>  Pick this scheme when several are cached
+                --force          Re-read from the data even if a scheme is already cached
+
+        Examples:
+            prism isolation-scheme -d output/ -r /data/raw/
+            prism isolation-scheme -d output/            # report what is already recorded
         """;
 
     private const string CompareHelp = """

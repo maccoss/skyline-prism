@@ -501,6 +501,17 @@ Key sections:
 - `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
 - `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
 - `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs
+- `IsolationSchemeCatalog` / `IsolationSchemeResolver` / `RawData/IsolationWindowProbe`: the
+  acquisition's DIA isolation windows - where they come from and where they are kept.
+  **A DIA analysis document declares none of its own** (`<isolation_scheme name="Results only" />`):
+  Skyline reads them from the data at import and does not write them down, so the instrument files
+  are the only original and the analysis outlives them. Two copies are therefore written beside the
+  outputs and both matter: `isolation_schemes.xml` (what the density picker reloads, and the only
+  place a per-batch document scheme is kept) and `parameters.json` -> `isolation_schemes` (window
+  edges included, so a result archived on its own can still be re-binned). `IsolationWindowProbe`
+  reads the windows for the cost of opening ONE file - they are scan headers in the first two
+  acquisition cycles - so never reach for `Ms2SignalReaders.Read` to get them: that measures the
+  whole run to use one field of the answer.
 - `Visualization/PlotRenderer`: every plot (ScottPlot/SkiaSharp), rendered headlessly
 
 ### dotnet/Directory.Build.props
@@ -561,6 +572,9 @@ prism ion-accounting -d output_dir/ -r raw_dir/ --product-tolerance "10 ppm" \
 
 # How many files to read at once is a property of YOUR STORAGE, not of PRISM. Measure it:
 prism ion-accounting -d output_dir/ -r raw_dir/ --probe-lanes
+
+# Read the acquisition's DIA isolation windows from a data file and record them beside the outputs
+prism isolation-scheme -d output_dir/ -r raw_dir/ [--force]
 
 # Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv

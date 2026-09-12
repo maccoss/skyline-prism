@@ -111,6 +111,42 @@ as the GitHub Release description and fails if it is missing.
   also keeps its own state - zoom, ticked replicates, matrices already read - while you are on
   another one.
 
+- **The Spectrum density map now bins on the windows the data was actually acquired with, and PRISM
+  writes them down so they outlive the data files.** A DIA analysis document stores
+  `<isolation_scheme name="Results only" />` and no windows at all - Skyline reads them from the
+  instrument files at import and does not record them - so the map used to open on a built-in layout
+  that looks exactly as plausible as the right one. On a real Astral acquisition the true scheme is
+  167 windows of 3.0014 Th starting at 400.4319, deliberately placed in the peptide forbidden zones;
+  a uniform 3 Th grid starting at 400 sits ~14% of a window off and cuts through the very precursor
+  clusters the scheme exists to keep intact.
+
+  The tab now reads the real windows itself, through PRISM's own ProteoWizard reader, and defaults
+  the picker to them - labeled **(from the data files)**, so which entry is the acquisition's own
+  answer and which are guesses is visible in the list rather than inferred. The read costs one file
+  open (~4 s on a 3.3 GB Thermo file over an SMB share) because the windows are scan headers in the
+  first two acquisition cycles, and it starts *after* the map is already drawn, so a slow share
+  delays an improvement rather than the plot. It needs no Skyline: checked against the same
+  acquisition Skyline imported, all 167 windows agree edge for edge.
+
+  A scheme you picked yourself is never overruled by it.
+
+  **And it is recorded twice, on purpose.** The windows previously existed only in
+  `isolation_schemes.xml` beside the outputs and in the instrument files - and the instrument files
+  are the first thing to be moved off a share when an analysis is finished. A run's `parameters.json`
+  now carries an `isolation_schemes` block with the window edges, which file they were read from and
+  when, so a result archived on its own can still say what it was acquired with; the QC report's
+  Analysis Information names the scheme for the same reason. Nothing about `--from-provenance`
+  changes - this is a record of the acquisition, not a processing parameter.
+
+  New:
+
+  ```
+  prism isolation-scheme -d <output-dir> [-r <raw-dir>] [--force]
+  ```
+
+  the headless equivalent - resolve the windows, record them, print what they are. With no `-r` it
+  reports what the directory already knows, which works with no data files present at all.
+
 - **The Marker score plot reads out replicate names on hover**, the way the PCA plot does. Its points
   are jittered within their column so overlapping scores stay separable, which means the horizontal
   position carries no information - hovering is the only way to tell which injection an outlying score

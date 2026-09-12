@@ -1341,8 +1341,38 @@ public partial class MainWindow : Window
             Log("Still reading the acquisition's isolation windows in the background; the density map "
                 + "will use them once it finishes.");
         isolationTask.Wait(TimeSpan.FromSeconds(20));
+        RecordIsolationProvenance(outputDir);
 
         RunIonAccounting(inputs, outputDir, ionRawDir, cancellationToken);
+    }
+
+    /// <summary>
+    /// Copy whatever windows this directory knows about into the run's <c>parameters.json</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Runs AFTER the pipeline, because parameters.json does not exist until it writes one -
+    /// the isolation read happens alongside the run precisely so it is not in the way, and the
+    /// provenance stamp is the part that has to wait for both.</para>
+    /// <para>A read still in flight past the wait above leaves an incomplete list here. That is the
+    /// right trade: <c>isolation_schemes.xml</c> is the complete record either way, and a run is not
+    /// held open for a plot's provenance. Ion accounting re-stamps it if it runs.</para>
+    /// </remarks>
+    private void RecordIsolationProvenance(string outputDir)
+    {
+        try
+        {
+            var catalog = IsolationSchemeCatalog.Load(
+                Path.Combine(outputDir, IsolationSchemeCatalog.FileName));
+            if (catalog is not null && Provenance.RecordIsolationSchemes(outputDir, catalog))
+            {
+                Log($"Recorded the acquisition's isolation windows in {Provenance.FileName}, so they "
+                    + "survive the data files being moved or deleted.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("Could not record the isolation windows in the provenance file: " + ex.Message);
+        }
     }
 
     /// <summary>

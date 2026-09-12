@@ -394,14 +394,28 @@ at 400 sits ~14% of a window off and cuts through the very precursor clusters th
 intact.
 
 PRISM gets those windows from the document's Full-Scan settings when it defines a scheme, and otherwise —
-the usual `Results only` case, where Skyline keeps the windows only inside the raw files — by having
-Skyline read them from one of the run's data files. That read happens when you click **Run PRISM**, while
-the raw data is most likely still where the document says it is, and the result is saved to
-`isolation_schemes.xml` in the output directory so the map still bins correctly when the tab is reopened
-later with no Skyline running.
+the usual `Results only` case, where Skyline keeps the windows only inside the raw files — by reading
+them out of one of the run's data files. Two routes do that, and the tab prefers whichever answers:
 
-It runs **alongside** the pipeline, not before it, so a slow or unreachable data file delays nothing. If
-it does not finish, the map falls back to clearly-labeled uniform bins and the log says so.
+- **PRISM's own reader**, when the build carries one. The windows are scan headers in the first two
+  acquisition cycles, so the whole cost is opening the file: about 4 s on a 3.3 GB Thermo file over an
+  SMB share, no Skyline launch involved. The Spectrum density tab does this itself when it opens on a
+  directory whose windows are not already known, *after* the map is already drawn on the fallback grid,
+  and defaults the picker to the result — labeled **(from the data files)** so it is clear which entry
+  is the acquisition's own answer and which are guesses.
+- **Skyline**, asked to import a repeating cycle from a data file. This happens when you click **Run
+  PRISM**, while the raw data is most likely still where the document says it is. It runs **alongside**
+  the pipeline, not before it, so a slow or unreachable data file delays nothing.
+
+Either way the result is saved to `isolation_schemes.xml` in the output directory, and summarized with
+its window edges in `parameters.json`, so the map still bins correctly when the tab is reopened later
+with no Skyline running **and no data files left** — which is the normal state of a finished analysis.
+Headless, `prism isolation-scheme -d <output-dir> -r <raw-dir>` does the same thing and prints the
+scheme. If nothing can read the windows, the map falls back to clearly-labeled uniform bins or a
+built-in layout, and says which.
+
+The picker never overrules you: once you have named a scheme, a later data-file read records what it
+found and leaves your choice alone.
 
 **The tab is for DIA.** Skyline's importer can only read a repeating isolation cycle out of a data file,
 so targeted methods (PRM, MTM) have no route to their real windows — getting them means walking the file's

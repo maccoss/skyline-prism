@@ -33,7 +33,8 @@ namespace SkylinePrism.Pwiz;
 /// back to summing and says so in <see cref="Describe"/>, so a cohort that mixes the two is visible
 /// rather than silently averaged over.</para>
 /// </remarks>
-public sealed partial class PwizMs2SignalReader : IMs2SignalReader, IIonAccountingReader
+public sealed partial class PwizMs2SignalReader
+    : IMs2SignalReader, IIonAccountingReader, IIsolationWindowReader
 {
     /// <summary>Extensions pwiz can open here. A directory-shaped format (.d) counts as a path.</summary>
     private static readonly string[] Extensions =
@@ -291,6 +292,83 @@ public sealed partial class PwizMs2SignalReader : IMs2SignalReader, IIonAccounti
             ms1, ms2, totalMs2, times[0], times[times.Count - 1],
             cycles.Count > 0 ? Ms2CycleModel.Ms1Bounded : Ms2CycleModel.FixedRtBins,
             cycles, windows);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>The whole cost of this is the OPEN - ~2.2 s of a 2.7 s read on a 3.3 GB Thermo file over
+    /// SMB - because the windows themselves are scan headers and come back in ~0.05 s. That is what
+    /// makes it affordable to ask while a tab is loading, where a full signal read is not.</para>
+    /// <para>How far to walk is decided by the data rather than by a spectrum count: a cycle is
+    /// bounded by MS1 survey scans, so stopping after the THIRD one has seen two complete cycles
+    /// whether the scheme has 8 windows or 800. <see cref="MaxProbeSpectra"/> is the backstop for an
+    /// MS2-only acquisition, which has no MS1 to count.</para>
+    /// </remarks>
+    public IReadOnlyList<PrismIsolationWindow> ReadIsolationWindows(
+        string dataPath, Action<string>? log = null, CancellationToken ct = default)
+    {
+        if (!File.Exists(dataPath) && !Directory.Exists(dataPath))
+            return Array.Empty<PrismIsolationWindow>();
+
+        try
+        {
+            using var msd = new MSData();
+            ReaderList.Default.Read(
+                dataPath, msd, new ReaderConfig { CombineIonMobilitySpectra = true });
+            return ProbeIsolationWindows(msd, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<PrismIsolationWindow>();
+        }
+        catch (Exception ex)
+        {
+            // Never throws, by contract. A missing scheme costs the density map its real windows;
+            // it must not cost the caller its window.
+            log?.Invoke($"  Could not read isolation windows from {Path.GetFileName(dataPath)}: {ex.Message}");
+            return Array.Empty<PrismIsolationWindow>();
+        }
+    }
+
+    /// <summary>Spectra the window probe will look at before giving up on finding a repeating cycle.</summary>
+    private const int MaxProbeSpectra = 4_000;
+
+    /// <summary>
+    /// Walk scan headers until two complete acquisition cycles have gone by, collecting the distinct
+    /// isolation windows. Empty when there are no spectra, no MS2, or so many distinct windows that
+    /// this is not a repeating cycle at all (see <see cref="MaxSchemeWindows"/>).
+    /// </summary>
+    private static IReadOnlyList<PrismIsolationWindow> ProbeIsolationWindows(
+        MSData msd, CancellationToken ct)
+    {
+        var spectra = msd.Run.SpectrumList;
+        if (spectra is null || spectra.Count == 0)
+            return Array.Empty<PrismIsolationWindow>();
+
+        var windows = new Dictionary<(long, long), PrismIsolationWindow>();
+        var surveys = 0;
+        var limit = Math.Min(spectra.Count, MaxProbeSpectra);
+        for (var i = 0; i < limit; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var spectrum = spectra.GetSpectrum(i, DetailLevel.FullMetadata);
+            var level = spectrum.Params.CvParamValueOrDefault(CVID.MS_ms_level, 0);
+            if (level == 1)
+            {
+                // Two cycles are in hand once the third survey scan opens, and only then - stopping
+                // at the second would truncate the last cycle of a scheme whose windows are not
+                // acquired in m/z order.
+                if (++surveys >= 3 && windows.Count > 0)
+                    break;
+                continue;
+            }
+            if (level != 2 || spectrum.Precursors.Count == 0)
+                continue;
+            AddWindow(windows, spectrum.Precursors[0].IsolationWindow);
+            if (windows.Count > MaxSchemeWindows)
+                return Array.Empty<PrismIsolationWindow>();
+        }
+        return windows.Values.OrderBy(w => w.Start).ToList();
     }
 
     /// <summary>

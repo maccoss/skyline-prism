@@ -214,9 +214,18 @@ Skyline (`GetSettingsListNames`/`GetSettingsListItem` on `IsolationSchemeList`) 
 Picking the wrong scheme is visible rather than silent: precursors that fall outside every window are
 counted (never clamped into the nearest one) and the status line warns with the percentage.
 
-**Timing: this all happens when the user clicks Run PRISM**, before the pipeline starts - deliberately, as
+**Timing: this all happens when the user clicks Run PRISM**, alongside the pipeline - deliberately, as
 that is when the raw data is most likely still where the document says it is. The windows are resolved once
 and written to the output directory; nothing later depends on the data files still being reachable.
+
+Since dotnet-vNEXT the tool no longer needs Skyline for this. `IsolationWindowProbe` reads the windows
+through PRISM's own ProteoWizard reader in about the time it takes to open the file (~4 s on a 3.3 GB
+Thermo file over SMB, against a ~10 s Skyline launch per input), and the Spectrum density tab does it
+itself when it opens on a directory whose windows are not known - after the map is already drawn, so a
+slow share delays an improvement rather than the plot. Verified against the same acquisition Skyline
+imported: 167 windows, every edge identical. The resolved scheme is also summarized into
+`parameters.json`, edges included, because `isolation_schemes.xml` and the data files are otherwise the
+only two copies and the second is the first thing to be deleted.
 
 ### DIA only, and why
 

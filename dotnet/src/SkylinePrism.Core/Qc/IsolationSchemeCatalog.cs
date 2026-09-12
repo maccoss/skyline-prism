@@ -20,6 +20,10 @@ namespace SkylinePrism.Core.Qc;
 /// documents (see <see cref="Library"/>, which explains why Skyline's own saved scheme list is
 /// deliberately NOT collected). When a document defines no windows, these are what the picker can
 /// offer, since a cohort's plates are usually the same acquisition.</item>
+/// <item><b>Measured schemes</b> - windows read straight out of an instrument data file, with the file
+/// they came from and when. This is the acquisition's own answer rather than a declared one, and it is
+/// the reason the file is worth keeping: the data files are the only other place the windows exist, and
+/// they are the first thing to move off a share or be deleted.</item>
 /// </list>
 /// </remarks>
 public sealed class IsolationSchemeCatalog
@@ -55,12 +59,12 @@ public sealed class IsolationSchemeCatalog
     /// SWATH grid gives a map that looks plausible and is wrong. The acquisition's own windows come
     /// from its data file; where they cannot be read, labeled uniform bins are the honest fallback.
     /// </para>
-    /// </summary>
-/// <para>
-    /// Read-only on purpose: every entry has to arrive through <see cref="AddDocumentScheme"/> (or
-    /// <see cref="Load"/>), which is what keeps a library entry paired with the batch it came from. A
-    /// publicly mutable list let a caller add a scheme with no such pairing, which is the state the
-    /// removal of the inclusion-list loader was meant to make impossible.
+    /// <para>
+    /// Read-only on purpose: every entry has to arrive through <see cref="AddDocumentScheme"/>,
+    /// <see cref="AddMeasuredScheme"/> or <see cref="Load"/>, which is what keeps a library entry
+    /// paired with where it came from. A publicly mutable list let a caller add a scheme with no such
+    /// pairing, which is the state the removal of the inclusion-list loader was meant to make
+    /// impossible.
     /// </para>
     /// </summary>
     public IReadOnlyList<IsolationScheme> Library => _library;
@@ -95,6 +99,44 @@ public sealed class IsolationSchemeCatalog
     public string? DocumentSchemeNameFor(string batchLabel) =>
         ByBatch.TryGetValue(batchLabel, out var s) ? s.Name : null;
 
+    /// <summary>
+    /// A scheme read out of an instrument data file, with the provenance of that reading.
+    /// </summary>
+    /// <param name="DataFile">The file the windows were read from, as given.</param>
+    /// <param name="MeasuredUtc">Round-trip UTC timestamp of the reading, or empty if unrecorded.</param>
+    public sealed record MeasuredScheme(IsolationScheme Scheme, string DataFile, string MeasuredUtc);
+
+    private readonly List<MeasuredScheme> _measured = new();
+
+    /// <summary>
+    /// Schemes read from instrument data files, newest first. Normally one: the windows are a property
+    /// of the acquisition method, so one file describes the cohort.
+    /// </summary>
+    public IReadOnlyList<MeasuredScheme> Measured => _measured;
+
+    /// <summary>Was this scheme read from the data, rather than declared by a document?</summary>
+    public bool IsMeasured(IsolationScheme scheme) =>
+        scheme is not null && _measured.Any(m => m.Scheme.LayoutKey == scheme.LayoutKey);
+
+    /// <summary>
+    /// Record windows read from a data file. A re-reading of the same layout replaces the previous
+    /// record rather than accumulating one entry per run.
+    /// </summary>
+    public void AddMeasuredScheme(IsolationScheme scheme, string dataFile, DateTime? measuredUtc = null)
+    {
+        if (scheme is null || !scheme.HasWindows)
+            return;
+        _measured.RemoveAll(m => m.Scheme.LayoutKey == scheme.LayoutKey);
+        _measured.Insert(0, new MeasuredScheme(
+            scheme, dataFile ?? "",
+            (measuredUtc ?? DateTime.UtcNow).ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
+        if (!_library.Any(s => s.LayoutKey == scheme.LayoutKey
+                && string.Equals(s.Name, scheme.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _library.Add(scheme);
+        }
+    }
+
     public void AddDocumentScheme(string batchLabel, IsolationScheme scheme)
     {
         ByBatch[batchLabel] = scheme;
@@ -108,7 +150,8 @@ public sealed class IsolationSchemeCatalog
             AcquisitionByBatch[batchLabel] = acquisitionMethod!;
     }
 
-    public bool IsEmpty => ByBatch.Count == 0 && _library.Count == 0 && AcquisitionByBatch.Count == 0;
+    public bool IsEmpty =>
+        ByBatch.Count == 0 && _library.Count == 0 && AcquisitionByBatch.Count == 0 && _measured.Count == 0;
 
     public void Save(string path)
     {
@@ -133,6 +176,17 @@ public sealed class IsolationSchemeCatalog
             if (AcquisitionByBatch.TryGetValue(batch, out var method))
                 element.Add(new XAttribute("acquisition", method));
             root.Add(element);
+        }
+        // Measured schemes, with the file and the moment they were read. Written BEFORE the library
+        // dump and also included in it: an older PRISM reads only the library and still offers these,
+        // which is the difference between a downgrade losing the picker's best option and not.
+        foreach (var measured in _measured)
+        {
+            root.Add(new XElement(
+                "measured",
+                new XAttribute("file", measured.DataFile),
+                new XAttribute("at", measured.MeasuredUtc),
+                SchemeElement(measured.Scheme)));
         }
         // The library, for the picker: deduplicated the same way UsableSchemes is, so a same-named
         // scheme with different windows is kept rather than silently dropped on the way to disk.
@@ -181,6 +235,25 @@ public sealed class IsolationSchemeCatalog
                 var scheme = IsolationScheme.Parse(element.ToString());
                 if (scheme is not null)
                     catalog._library.Add(scheme);
+            }
+            foreach (var element in root.Elements()
+                         .Where(e => string.Equals(e.Name.LocalName, "measured", StringComparison.OrdinalIgnoreCase)))
+            {
+                var inlineScheme = element.Elements().FirstOrDefault(e => string.Equals(
+                    e.Name.LocalName, "IsolationScheme", StringComparison.OrdinalIgnoreCase));
+                if (inlineScheme is null || IsolationScheme.Parse(inlineScheme.ToString()) is not { } read)
+                    continue;
+                // The library dump above already carries this layout, so AddMeasuredScheme's own
+                // de-duplication is what keeps it from being listed twice in the picker.
+                catalog._measured.Add(new MeasuredScheme(
+                    read,
+                    element.Attribute("file")?.Value ?? "",
+                    element.Attribute("at")?.Value ?? ""));
+                if (!catalog._library.Any(s => s.LayoutKey == read.LayoutKey
+                        && string.Equals(s.Name, read.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    catalog._library.Add(read);
+                }
             }
             foreach (var element in root.Elements()
                          .Where(e => string.Equals(e.Name.LocalName, "document", StringComparison.OrdinalIgnoreCase)))
