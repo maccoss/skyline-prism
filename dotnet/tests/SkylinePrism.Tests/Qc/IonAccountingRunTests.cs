@@ -86,13 +86,14 @@ public class IonAccountingRunTests : IDisposable
                 cycles.Add(new IonCycle(
                     i, i * 0.5, i * 0.5 + 0.5, 1, 10,
                     Ms1Acquired: 3.7e5, Ms2Acquired: 1.2e5,
-                    Ms1Assigned: 1.5e5, Ms2Assigned: 4.0e3));
+                    Ms1Assigned: 1.5e5, Ms2Assigned: 4.0e3,
+                    Ms2Explained: 1.04e4));
             }
             return new IonAccountingRecord(
                 dataPath, Ms2ReadStatus.Ok, Describe(), 3, 30,
                 Ms1Acquired: 3 * 3.7e5, Ms2Acquired: 3 * 1.2e5,
                 Ms1Assigned: 3 * 1.5e5, Ms2Assigned: 3 * 4.0e3,
-                Ms2Explained: 0, HasExplained: false,
+                Ms2Explained: 3 * 1.04e4, HasExplained: true,
                 new double[request.ListCount], new double[request.ListCount],
                 0, 1.5, 0, 0, cycles);
         }
@@ -330,4 +331,39 @@ public class IonAccountingRunTests : IDisposable
         _dirs.Add(dir);
         return dir;
     }
+
+    /// <summary>
+    /// The per-cycle explained total must survive the trip to the cache and back, and must sum to
+    /// the per-replicate total.
+    ///
+    /// <para>This pins a bug that shipped and was caught only by running on real data.
+    /// <c>IonCycleRow.Ms2Explained</c> has a default of 0, so omitting it where the cycle rows are
+    /// built compiled clean and wrote zeros - every per-replicate number was right, and the gradient
+    /// plots silently had no explained trace at all. Conservation is the property that catches it:
+    /// nothing about the replicate row is wrong, so only comparing the two levels reveals it.</para>
+    /// </summary>
+    [Fact]
+    public void CycleExplainedTotalsSurviveTheCacheAndSumToTheReplicateTotal()
+    {
+        Ms2SignalReaders.Register(new FakeReader());
+        var dir = Seed(out var rawDir);
+
+        var result = Compute(dir, rawDir, new List<string>());
+        Assert.NotNull(result);
+
+        var cycles = IonAccountingStore.ReadCycles(dir);
+        Assert.NotEmpty(cycles);
+
+        foreach (var row in result!.Usable)
+        {
+            Assert.True(row.HasExplained);
+            var summed = cycles
+                .Where(c => string.Equals(c.Sample, row.Sample, StringComparison.Ordinal))
+                .Sum(c => c.Ms2Explained);
+
+            Assert.True(summed > 0, $"{row.Sample} cached no per-cycle explained total at all");
+            Assert.Equal(row.Ms2Explained, summed, 6);
+        }
+    }
+
 }
