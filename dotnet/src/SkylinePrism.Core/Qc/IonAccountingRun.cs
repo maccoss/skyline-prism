@@ -165,6 +165,13 @@ public static class IonAccountingRun
         var sources = resolution.Matched.Values
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .Append(representative)
+            // The two files that decide WHICH peptides claim signal, and therefore every assigned
+            // and explained number and the peptide count in every caption. merged_data alone does
+            // not cover them: Stage 1 reuses it byte-for-byte across a config change, so a re-run
+            // with a different transition_rollup.min_transitions has the same key and a different
+            // assigned set - and would replot the old numbers under the new caption.
+            .Append(Path.Combine(outputDir, "peptides_rollup.parquet"))
+            .Append(Path.Combine(outputDir, "corrected_peptides.parquet"))
             .ToList();
         var settingsKey = IonAccountingStore.SettingsKeyFor(
             productText, precursorText, schemeKey, classified.ListNames, sources);
