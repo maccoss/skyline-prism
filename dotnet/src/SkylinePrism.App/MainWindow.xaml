@@ -257,8 +257,21 @@
                                             IsEnabled="False" Click="OnBrowseIonRawDir" />
                                 </StackPanel>
 
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <TextBlock Text="" Width="230" />
+                                    <TextBlock Text="Product tolerance:" VerticalAlignment="Center"
+                                               Margin="0,0,6,0" />
+                                    <TextBox x:Name="IonProductTolText" Width="90" IsEnabled="False"
+                                             VerticalAlignment="Center" ToolTip="The +/- extraction window this analysis used, as your document's Transition Settings &gt; Full-Scan states it - e.g. &quot;10 ppm&quot; or &quot;0.4 m/z&quot;. Leave blank when an input is a Skyline document: PRISM reads it from the document. It is REQUIRED for a pre-exported report, which carries no settings, and typing one here overrides a document that states a different value. The tolerance decides how much fragment sharing is found, so it is never guessed." />
+                                    <TextBlock Text="Precursor tolerance:" VerticalAlignment="Center"
+                                               Margin="16,0,6,0" />
+                                    <TextBox x:Name="IonPrecursorTolText" Width="90" IsEnabled="False"
+                                             VerticalAlignment="Center"
+                                             ToolTip="The MS1 half's extraction window. Optional - left blank, only the MS2 half is measured. Same rules as the product tolerance beside it." />
+                                </StackPanel>
+
                                 <TextBlock Foreground="#888" Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="Reads each data file once, which is single-digit minutes per file - comparable to what Skyline spends pulling the same numbers out of a .skyd, and cheaper than exporting its per-transition ion counts. Extraction tolerances come from the document's own Transition Settings > Full-Scan where it can be read. Results are cached, so the pane and 'prism qc -d' replot for free, and a re-run measures only the replicates the cache does not already cover." />
+                                           Text="Reads each data file once, which is single-digit minutes per file - comparable to what Skyline spends pulling the same numbers out of a .skyd, and cheaper than exporting its per-transition ion counts. Extraction tolerances come from the document's own Transition Settings > Full-Scan where it can be read; a PRE-EXPORTED REPORT carries no settings, so state them in the boxes above or the measurement is skipped rather than run against a guess. Results are cached, so the pane and 'prism qc -d' replot for free, and a re-run measures only the replicates the cache does not already cover." />
 
 
                                 <TextBlock Foreground="#888" Margin="0,10,0,0" TextWrapping="Wrap"

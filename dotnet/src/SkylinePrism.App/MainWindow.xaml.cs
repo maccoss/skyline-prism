@@ -1410,41 +1410,25 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // The document's own windows, never a default: a guessed tolerance changes how much
-            // fragment sharing is found, and nothing on the plot would say the number moved. Each
-              // input is asked and the first answer wins, with a warning when they disagree - the
-            // accounting applies one tolerance to the whole cohort, so plates acquired differently
-            // cannot all be right.
-            ProductMassTolerance? product = null;
-            ProductMassTolerance? precursor = null;
-            foreach (var input in inputs)
-            {
-                var (p, q) = input.TryGetExtractionTolerances(Log);
-                if (p is null)
-                    continue;
-                if (product is not null && !Equals(product, p))
-                {
-                    Log($"Ion accounting: WARNING - {input.DisplayName} states {p.Describe()} where an "
-                        + $"earlier input states {product.Describe()}. Using the first; plates acquired "
-                        + "differently cannot all be right under one tolerance.");
-                    continue;
-                }
-                product ??= p;
-                precursor ??= q;
-            }
-
+            // Never a default: a guessed tolerance changes how much fragment sharing is found,
+            // and nothing on the plot would say the number moved. Two ways to know it, and neither
+            // is a guess - what the user typed, and what the document declares.
+            var (product, precursor, source) = ResolveIonTolerances(inputs);
             if (product is null)
             {
-                Log("Ion accounting: no input could state its product-ion extraction window - a "
-                    + "pre-exported report carries no settings - so it was skipped rather than run "
-                    + "against a guessed tolerance.");
+                Log("Ion accounting: the product-ion extraction window is not known, so it was "
+                    + "skipped rather than run against a guessed tolerance. A pre-exported report "
+                    + "carries no Full-Scan settings, which is why nothing could state it - type it "
+                    + "into the 'Product tolerance' box under Ion accounting on the Settings tab, as "
+                    + "your document's Transition Settings > Full-Scan states it (e.g. \"10 ppm\").");
                 return;
             }
 
             Log($"Ion accounting: reading {rawDir} with product {product.Describe()}"
                 + (precursor is null
                     ? ", no precursor window (the MS2 half only)"
-                    : $", precursor {precursor.Describe()}") + ".");
+                    : $", precursor {precursor.Describe()}")
+                + $" ({source}).");
 
             var scheme = IsolationSchemeResolver.Resolve(outputDir, rawDir, Log);
             if (scheme is null)
@@ -1476,9 +1460,58 @@ public partial class MainWindow : Window
         var on = IonAccountingCheck.IsChecked == true;
         IonRawDirText.IsEnabled = on;
         IonRawDirBrowse.IsEnabled = on;
+        IonProductTolText.IsEnabled = on;
+        IonPrecursorTolText.IsEnabled = on;
 
         if (on && string.IsNullOrWhiteSpace(IonRawDirText.Text))
             FillIonRawDirFromDocuments();
+    }
+
+    /// <summary>
+    /// The extraction tolerances to account against, and where they came from.
+    /// </summary>
+    /// <remarks>
+    /// Reads both sources and hands the precedence to <see cref="IonToleranceChoice"/>, which is
+    /// where that rule is documented and tested. What is decided HERE is the document half: across
+    /// several documents the FIRST answer wins, with a warning when they disagree - the accounting
+    /// applies one tolerance to the whole cohort, so plates acquired differently cannot all be right
+    /// under it.
+    /// </remarks>
+    private (ProductMassTolerance? Product, ProductMassTolerance? Precursor, string Source)
+        ResolveIonTolerances(IReadOnlyList<PrismInput> inputs)
+    {
+        var typedProduct = ProductMassTolerance.ParseSetting(IonProductTolText.Text?.Trim());
+        var typedPrecursor = ProductMassTolerance.ParseSetting(IonPrecursorTolText.Text?.Trim());
+        if (!string.IsNullOrWhiteSpace(IonProductTolText.Text) && typedProduct is null)
+        {
+            Log($"Ion accounting: could not read the product tolerance \"{IonProductTolText.Text}\". "
+                + "Write it as the +/- window the document states, e.g. \"10 ppm\" or \"0.4 m/z\".");
+        }
+
+        ProductMassTolerance? product = null;
+        ProductMassTolerance? precursor = null;
+        foreach (var input in inputs)
+        {
+            var (p, q) = input.TryGetExtractionTolerances(Log);
+            if (p is null)
+                continue;
+            if (product is not null && !Equals(product, p))
+            {
+                Log($"Ion accounting: WARNING - {input.DisplayName} states {p.Describe()} where an "
+                    + $"earlier input states {product.Describe()}. Using the first; plates acquired "
+                    + "differently cannot all be right under one tolerance.");
+                continue;
+            }
+            product ??= p;
+            precursor ??= q;
+        }
+
+        if (typedProduct is not null && product is not null && !Equals(product, typedProduct))
+        {
+            Log($"Ion accounting: using the {typedProduct.Describe()} you entered rather than the "
+                + $"{product.Describe()} the document states.");
+        }
+        return IonToleranceChoice.Pick(typedProduct, typedPrecursor, product, precursor);
     }
 
     /// <summary>
