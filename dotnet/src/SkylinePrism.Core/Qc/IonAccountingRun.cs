@@ -47,13 +47,18 @@ public static class IonAccountingRun
     /// <para>Aggregate throughput keeps climbing - eight lanes is 64% faster than two - while the
     /// per-file rate falls from ~650 to ~265 spectra/s, which is the share saturating. So the choice
     /// is not speed against nothing; it is speed against MEMORY.</para>
-    /// <para><b>Four, because a default has to be safe on a working machine.</b> Eight reached
-    /// 32.1 GB of 64 and was still climbing when the run ended. On 2026-09-11 two ion-accounting
-    /// processes died with a native access violation inside DuckDB's allocator, 13 and 16 minutes
-    /// into a 6.5 GB Skyline document being opened beside them (see the DuckDB caution in
-    /// CLAUDE.md) - so a default that needs half the machine to itself is a default that fails the
-    /// first time someone works while it runs. Four takes 31 of the available 64 percentage points
-    /// at half the memory. Pass <c>--lanes 8</c> when the machine is idle and has the RAM.</para>
+    /// <para><b>Four, because the default runs on machines nobody measured.</b> Eight reached
+    /// 32.1 GB of 64 and was still climbing when the run ended - which on a 32 GB laptop is not
+    /// slower, it is a run that cannot finish. The failure is not graceful either: on 2026-09-11 two
+    /// ion-accounting processes died with a native access violation inside DuckDB's allocator, 13
+    /// and 16 minutes into a 6.5 GB Skyline document being opened beside them (see the DuckDB
+    /// caution in CLAUDE.md), because a pool sized when memory was free cannot be honoured when it
+    /// is not.</para>
+    /// <para>So the default is chosen for the machine we cannot see, not the fastest one we
+    /// measured: four takes 31 of the available 64 percentage points at half the memory, and
+    /// <c>--probe-lanes</c> exists for anyone whose storage or RAM says otherwise. On the share this
+    /// was built against the probe recommends EIGHT, and shipping four anyway is the deliberate
+    /// choice - speed that needs half a machine to itself is not a default.</para>
     /// <para><b>An earlier measurement said four was WORSE than two</b> (205 vs 185 s per file, at
     /// 27.8 GB). That was before <c>ForEachSample</c> took a <c>wanted</c> predicate: the loader was
     /// building a claim set for every sample in the cohort and the caller was discarding all but
