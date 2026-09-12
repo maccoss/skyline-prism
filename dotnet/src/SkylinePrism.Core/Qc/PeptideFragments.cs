@@ -34,6 +34,19 @@ public readonly record struct TheoreticalIon(double Mz, IonSeries Series, int Or
 /// unfragmented precursor and the low-m/z fragments are poor quantifiers but real detector counts
 /// that the peptide genuinely explains. This enumerates the second set, so both can be reported.</para>
 ///
+/// <para><b>NOT YET WIRED UP, and there is a known gap to close first: HEAVY ISOTOPE LABELS.</b>
+/// The PRISM report exports <c>Precursor.Peptide.ModifiedSequence.UnimodIds</c> - the PEPTIDE-level
+/// sequence, which carries structural modifications only. An isotope label is a property of the
+/// PRECURSOR (Skyline: <c>Precursor.IsotopeLabelType</c>, "indicating which isotope modifications
+/// are applied"), so on a document with heavy internal standards this file computes the LIGHT mass,
+/// fails to reconcile against the row's HEAVY precursor m/z, and drops the precursor. That is safe -
+/// no wrong claim is made - but it would silently remove every heavy precursor from the total.
+/// Closing it means exporting <c>Precursor.ModifiedSequenceUnimodIds</c> instead, which carries the
+/// label AND its position; the position is why the delta cannot simply be derived from
+/// <c>Precursor Mz</c>, since a +8 on the C-terminal K belongs to every y ion and no b ion. Whatever
+/// wires this up must also report the reconciliation-failure COUNT per replicate, or the gap is
+/// invisible in exactly the case it matters.</para>
+///
 /// <para><b>Every sequence is reconciled against Skyline's own precursor m/z before it is used</b>
 /// (<see cref="Reconciles"/>). The residue table and the modification table here are PRISM's, not
 /// Skyline's, so a modification this file does not know - or a residue it cannot parse - would
