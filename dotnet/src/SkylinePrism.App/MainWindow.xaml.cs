@@ -174,17 +174,16 @@ public partial class MainWindow : Window
     /// </remarks>
     private void UpdateBatchCorrectionDefault()
     {
-        if (_batchChoiceIsUsers)
-            return;
-
-        var haveBatches = _inputs.Count > 1
-            || !string.IsNullOrWhiteSpace(BatchColumnBox.Text);
+        var suggested = BatchCorrectionDefault.Suggest(
+            _inputs.Count, BatchColumnBox.Text, _batchChoiceIsUsers);
+        if (suggested is null)
+            return;   // the user has spoken; never overrule them
 
         _suppressBatchChoice = true;
         try
         {
-            PeptideBatchCheck.IsChecked = haveBatches;
-            ProteinBatchCheck.IsChecked = haveBatches;
+            PeptideBatchCheck.IsChecked = suggested.Value;
+            ProteinBatchCheck.IsChecked = suggested.Value;
         }
         finally
         {
