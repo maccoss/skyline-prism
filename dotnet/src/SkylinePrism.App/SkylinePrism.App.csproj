@@ -67,6 +67,9 @@
     <!-- Skyline tool manifest, copied next to the exe and staged into the tool zip. -->
     <None Include="tool-inf\info.properties" CopyToOutputDirectory="PreserveNewest" />
     <None Include="tool-inf\SkylinePrism.properties" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Tool logo, staged into the tool zip under tool-inf/. The Skyline Tool Store reads the image in
+         tool-inf/ on upload and displays it as the tool logo. -->
+    <None Include="..\..\..\images\skyline-prism-logo.png" Link="tool-inf\skyline-prism-logo.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
