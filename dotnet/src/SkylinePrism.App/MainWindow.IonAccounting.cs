@@ -301,7 +301,7 @@ public partial class MainWindow
         if (!IonProfileSelected)
         {
             PlotRenderer.DrawIonAccounting(
-                IonPlot.Plot, result, level, "Ions acquired and assigned, per replicate");
+                IonPlot.Plot, result, level, IonBarTitle(result, level));
             IonPlot.Refresh();
             IonStatusText.Text = DescribeIon(result, level);
             return;
@@ -332,7 +332,7 @@ public partial class MainWindow
         {
             PlotRenderer.DrawIonFractionProfile(
                 IonPlot.Plot, cycles, level, bin,
-                $"{sample}: share of acquired {level.ToString().ToUpperInvariant()} ions assigned");
+                ShareTitle(sample, level, result));
         }
         else
         {
@@ -362,6 +362,25 @@ public partial class MainWindow
     /// The status line for the cohort view. Names the settings the numbers were computed with,
     /// because the cache is keyed on them and a reader has no other way to know.
     /// </summary>
+    /// <summary>
+    /// The bar plot's title. The renderer appends the medians; this is the noun phrase above them,
+    /// and it has to stop saying "assigned" the moment there are two numerators to tell apart.
+    /// </summary>
+    private static string IonBarTitle(IonAccountingResult result, PlotRenderer.IonLevel level) =>
+        level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
+            ? "Ions acquired, quantified and explained, per replicate"
+            : "Ions acquired and assigned, per replicate";
+
+    /// <inheritdoc cref="IonBarTitle"/>
+    private static string ShareTitle(
+        string sample, PlotRenderer.IonLevel level, IonAccountingResult result)
+    {
+        var name = level.ToString().ToUpperInvariant();
+        return level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
+            ? $"{sample}: share of acquired {name} ions quantified and explained"
+            : $"{sample}: share of acquired {name} ions assigned";
+    }
+
     private static string DescribeIon(IonAccountingResult result, PlotRenderer.IonLevel level)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
@@ -399,10 +418,28 @@ public partial class MainWindow
                 .ToArray();
             if (fractions.Length > 0)
             {
+                var name = level.ToString().ToUpperInvariant();
+                var explained = usable
+                    .Where(r => r.HasExplained)
+                    .Select(r => r.Ms2ExplainedFraction)
+                    .Where(double.IsFinite)
+                    .ToArray();
+
+                // "quantified" only once there is a second number to tell it apart from; on its own
+                // the old wording says the same thing and is what every earlier report used.
                 parts.Add(
-                    $"{level.ToString().ToUpperInvariant()} assigned share "
+                    (level == PlotRenderer.IonLevel.Ms2 && explained.Length > 0
+                        ? $"{name} quantified share "
+                        : $"{name} assigned share ")
                     + $"{IonAccountingStore.Percent(fractions.Min())} to "
                     + $"{IonAccountingStore.Percent(fractions.Max())}");
+
+                if (level == PlotRenderer.IonLevel.Ms2 && explained.Length > 0)
+                {
+                    parts.Add(
+                        $"explained share {IonAccountingStore.Percent(explained.Min())} to "
+                        + $"{IonAccountingStore.Percent(explained.Max())}");
+                }
             }
         }
 
@@ -428,9 +465,21 @@ public partial class MainWindow
             $"{row.Ms1Count:N0} MS1 and {row.Ms2Count:N0} MS2 spectra",
             $"{row.Claims:N0} claimed regions",
         };
-        parts.Add(row.Exceeded
-            ? "WARNING: assigned exceeds acquired, so no share is shown"
-            : $"{level.ToString().ToUpperInvariant()} share {IonAccountingStore.Percent(fraction)}");
+        var levelName = level.ToString().ToUpperInvariant();
+        if (row.Exceeded)
+        {
+            parts.Add("WARNING: assigned exceeds acquired, so no share is shown");
+        }
+        else if (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained)
+        {
+            parts.Add(
+                $"{levelName} quantified {IonAccountingStore.Percent(fraction)}, "
+                + $"explained {IonAccountingStore.Percent(row.Ms2ExplainedFraction)}");
+        }
+        else
+        {
+            parts.Add($"{levelName} share {IonAccountingStore.Percent(fraction)}");
+        }
         if (row.ScansOutsideScheme > 0)
         {
             parts.Add(

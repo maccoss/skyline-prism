@@ -404,10 +404,10 @@
                                 <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
                                 <ComboBox x:Name="IonViewCombo" Width="230"
                                           SelectionChanged="OnIonViewChanged"
-                                          ToolTip="Per replicate: ions acquired and ions assigned to a peptide, for the whole cohort. Across the gradient: the same two totals per acquisition cycle for one replicate. Assigned share: the ratio of the two, which is where a stretch the analysis cannot explain becomes visible.">
+                                          ToolTip="Per replicate: ions acquired, the part quantified on the document&apos;s transitions, and the part any b/y or precursor ion of those peptides could account for. Across the gradient: the same totals per acquisition cycle for one replicate. Share: those totals as fractions of acquired, which is where a stretch the analysis cannot explain becomes visible.">
                                     <ComboBoxItem Tag="Accounting">Ions per replicate</ComboBoxItem>
                                     <ComboBoxItem Tag="Profile">Ions across the gradient</ComboBoxItem>
-                                    <ComboBoxItem Tag="Fraction">Assigned share across the gradient</ComboBoxItem>
+                                    <ComboBoxItem Tag="Fraction">Share across the gradient</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="IonLevelCombo" Width="70"
