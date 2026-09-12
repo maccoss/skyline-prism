@@ -314,7 +314,10 @@ public static class IonAccountingRun
                                         cycle.Ms1Count, cycle.Ms2Count,
                                         cycle.Ms1Acquired, cycle.Ms2Acquired,
                                         cycle.Ms1Assigned, cycle.Ms2Assigned,
-                                        cycle.Ms2Explained));
+                                        cycle.Ms2Explained,
+                                        cycle.Ms1Signal, cycle.Ms2Signal,
+                                        cycle.Ms1SignalAssigned, cycle.Ms2SignalAssigned,
+                                        cycle.Ms2SignalExplained));
                                 }
 
                                 // Written after EVERY replicate, not once at the end. This is the
@@ -412,7 +415,10 @@ public static class IonAccountingRun
             record.Cycles.Count,
             Padded(record.Ms1ByList, listCount),
             Padded(record.Ms2ByList, listCount),
-            record.AcquiredUtc);
+            record.AcquiredUtc,
+            record.Ms1Signal, record.Ms2Signal,
+            record.Ms1SignalAssigned, record.Ms2SignalAssigned, record.Ms2SignalExplained,
+            record.HasSignal);
 
     private static double[] Padded(IReadOnlyList<double> values, int count)
     {

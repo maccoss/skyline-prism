@@ -82,6 +82,11 @@ public partial class MainWindow
     private bool IonProfileSelected =>
         IonView is "Profile" or "Fraction";
 
+    private PlotRenderer.IonQuantity IonQuantity =>
+        string.Equals(ComboTag(IonQuantityCombo), "Signal", StringComparison.Ordinal)
+            ? PlotRenderer.IonQuantity.Signal
+            : PlotRenderer.IonQuantity.Ions;
+
     private IonRowOrder.By IonSort =>
         Enum.TryParse<IonRowOrder.By>(ComboTag(IonSortCombo), out var by)
             ? by
@@ -108,6 +113,20 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnIonViewChanged), ex);
+        }
+    }
+
+    private async void OnIonQuantityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _suppressIonRender)
+                return;
+            await RenderIonAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonQuantityChanged), ex);
         }
     }
 
@@ -308,6 +327,8 @@ public partial class MainWindow
                 IonLevelCombo.SelectedIndex = 0;
             if (IonSortCombo.SelectedIndex < 0)
                 IonSortCombo.SelectedIndex = 0;
+            if (IonQuantityCombo.SelectedIndex < 0)
+                IonQuantityCombo.SelectedIndex = 0;
         }
         finally
         {
@@ -422,7 +443,7 @@ public partial class MainWindow
                 IonHoverText.Text = "";
                 return;
             }
-            IonHoverText.Text = DescribeIonBar(_ionDrawn[index], IonLevel);
+            IonHoverText.Text = DescribeIonBar(_ionDrawn[index], IonLevel, IonQuantity);
         }
         catch (Exception ex)
         {
@@ -430,8 +451,16 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>One replicate, in the terms of the level being shown.</summary>
-    private static string DescribeIonBar(IonAccountingRow row, PlotRenderer.IonLevel level)
+    /// <summary>
+    /// One replicate, in the terms of the level AND the quantity being shown.
+    /// </summary>
+    /// <remarks>
+    /// The quantity matters here as much as on the axis: the ion count and the summed TIC are
+    /// different numbers with different fractions, so a readout that always reported ions would
+    /// quietly disagree with the bar it is naming.
+    /// </remarks>
+    private static string DescribeIonBar(
+        IonAccountingRow row, PlotRenderer.IonLevel level, PlotRenderer.IonQuantity quantity)
     {
         var name = row.Sample;
         if (!row.IsUsable)
@@ -440,9 +469,35 @@ public partial class MainWindow
                 + (string.IsNullOrWhiteSpace(row.DataFile) ? "" : $" - {row.DataFile}");
         }
 
-        var acquired = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Acquired : row.Ms2Acquired;
-        var assigned = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Assigned : row.Ms2Assigned;
-        var fraction = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Fraction : row.Ms2Fraction;
+        var ms1 = level == PlotRenderer.IonLevel.Ms1;
+        var signal = quantity == PlotRenderer.IonQuantity.Signal;
+        if (signal && !row.HasSignal)
+            return $"{name}: no summed TIC in this cache - re-measure it, or switch back to Ions";
+
+        var acquired = (ms1, signal) switch
+        {
+            (true, false) => row.Ms1Acquired,
+            (true, true) => row.Ms1Signal,
+            (false, false) => row.Ms2Acquired,
+            _ => row.Ms2Signal,
+        };
+        var assigned = (ms1, signal) switch
+        {
+            (true, false) => row.Ms1Assigned,
+            (true, true) => row.Ms1SignalAssigned,
+            (false, false) => row.Ms2Assigned,
+            _ => row.Ms2SignalAssigned,
+        };
+        var fraction = (ms1, signal) switch
+        {
+            (true, false) => row.Ms1Fraction,
+            (true, true) => row.Ms1SignalFraction,
+            (false, false) => row.Ms2Fraction,
+            _ => row.Ms2SignalFraction,
+        };
+        var explained = signal ? row.Ms2SignalExplained : row.Ms2Explained;
+        var explainedFraction =
+            signal ? row.Ms2SignalExplainedFraction : row.Ms2ExplainedFraction;
 
         var text = $"{name}"
             + (string.IsNullOrWhiteSpace(row.SampleType) ? "" : $" ({row.SampleType})")
@@ -456,9 +511,9 @@ public partial class MainWindow
             : double.IsFinite(fraction) ? $" = {fraction * 100:0.##}%" : "";
 
         if (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained
-            && double.IsFinite(row.Ms2ExplainedFraction) && !row.Exceeded)
+            && double.IsFinite(explainedFraction) && !row.Exceeded)
         {
-            text += $"; explained {row.Ms2Explained:0.###e+0} = {row.Ms2ExplainedFraction * 100:0.##}%";
+            text += $"; explained {explained:0.###e+0} = {explainedFraction * 100:0.##}%";
         }
 
         if (row.AcquiredUtc is { } when)
@@ -485,9 +540,11 @@ public partial class MainWindow
             var ordered = IonRowOrder.Sort(result.Rows, IonSort);
             _ionDrawn = ordered;
             PlotRenderer.DrawIonAccounting(
-                IonPlot.Plot, result with { Rows = ordered }, level, IonBarTitle(result, level));
+                IonPlot.Plot, result with { Rows = ordered }, level,
+                IonBarTitle(result, level), 1.0, IonQuantity);
             IonPlot.Refresh();
-            IonStatusText.Text = DescribeIon(result, level) + IonOrderNote(result);
+            IonStatusText.Text =
+                DescribeIon(result, level) + IonOrderNote(result) + IonQuantityNote(result);
             IonHoverText.Text = "";
             return;
         }
@@ -516,20 +573,24 @@ public partial class MainWindow
         }
 
         var bin = IonBinMinutes();
+        var quantity = IonQuantity;
+        var noun = quantity == PlotRenderer.IonQuantity.Signal ? "signal (TIC)" : "ions";
         if (string.Equals(IonView, "Fraction", StringComparison.Ordinal))
         {
             PlotRenderer.DrawIonFractionProfile(
                 IonPlot.Plot, cycles, level, bin,
-                ShareTitle(sample, level, result));
+                ShareTitle(sample, level, result, noun), 1.0, quantity);
         }
         else
         {
             PlotRenderer.DrawIonProfile(
                 IonPlot.Plot, cycles, level, bin,
-                $"{sample}: {level.ToString().ToUpperInvariant()} ions across the gradient");
+                $"{sample}: {level.ToString().ToUpperInvariant()} {noun} across the gradient",
+                1.0, quantity);
         }
         IonPlot.Refresh();
-        IonStatusText.Text = DescribeIonReplicate(result, sample, level, cycles.Count);
+        IonStatusText.Text = DescribeIonReplicate(result, sample, level, cycles.Count)
+            + IonQuantityNote(result);
     }
 
     private double IonBinMinutes()
@@ -554,19 +615,32 @@ public partial class MainWindow
     /// The bar plot's title. The renderer appends the medians; this is the noun phrase above them,
     /// and it has to stop saying "assigned" the moment there are two numerators to tell apart.
     /// </summary>
-    private static string IonBarTitle(IonAccountingResult result, PlotRenderer.IonLevel level) =>
-        level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
-            ? "Ions acquired, quantified and explained, per replicate"
-            : "Ions acquired and assigned, per replicate";
+    private string IonBarTitle(IonAccountingResult result, PlotRenderer.IonLevel level)
+    {
+        var noun = IonQuantity == PlotRenderer.IonQuantity.Signal ? "Signal (TIC)" : "Ions";
+        return level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
+            ? $"{noun} acquired, quantified and explained, per replicate"
+            : $"{noun} acquired and assigned, per replicate";
+    }
+
+    /// <summary>
+    /// Says so when the summed TIC was asked for and this cache does not carry it. Drawing zeros
+    /// would read as a run that acquired nothing, which is the one thing the plot must not say.
+    /// </summary>
+    private string IonQuantityNote(IonAccountingResult result) =>
+        IonQuantity == PlotRenderer.IonQuantity.Signal && !result.Rows.Any(r => r.HasSignal)
+            ? "; WARNING: this cache carries no summed TIC - it was measured before signal was "
+              + "recorded, so re-measure it or switch back to Ions"
+            : "";
 
     /// <inheritdoc cref="IonBarTitle"/>
     private static string ShareTitle(
-        string sample, PlotRenderer.IonLevel level, IonAccountingResult result)
+        string sample, PlotRenderer.IonLevel level, IonAccountingResult result, string noun)
     {
         var name = level.ToString().ToUpperInvariant();
         return level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
-            ? $"{sample}: share of acquired {name} ions quantified and explained"
-            : $"{sample}: share of acquired {name} ions assigned";
+            ? $"{sample}: share of acquired {name} {noun} quantified and explained"
+            : $"{sample}: share of acquired {name} {noun} assigned";
     }
 
     private static string DescribeIon(IonAccountingResult result, PlotRenderer.IonLevel level)

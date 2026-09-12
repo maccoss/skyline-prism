@@ -101,6 +101,13 @@ public sealed partial class PwizMs2SignalReader
         var cycles = new List<IonCycle>();
         int ms1 = 0, ms2 = 0, noInjection = 0, outsideScheme = 0, unsorted = 0;
         double ms1Acquired = 0, ms2Acquired = 0, ms1Assigned = 0, ms2Assigned = 0;
+        // The same sums WITHOUT the injection-time weighting - what the instrument reports as TIC.
+        // Accumulated over exactly the same scans as the ion totals, which is why they are gathered
+        // here rather than in a pass of their own: a scan with no injection time is excluded from
+        // both, so the two views always describe the same set of spectra and their fractions are
+        // answering the same question of the same data.
+        double ms1Signal = 0, ms2Signal = 0, ms1SignalAssigned = 0, ms2SignalAssigned = 0;
+        double ms2SignalExplained = 0;
         double ms2Explained = 0;
         double reportedMs1 = 0, reportedMs2 = 0;
         double rtFirst = double.NaN, rtLast = double.NaN;
@@ -112,6 +119,7 @@ public sealed partial class PwizMs2SignalReader
         var cycleStop = double.NaN;
         int cycleMs1 = 0, cycleMs2 = 0;
         double cMs1Acq = 0, cMs2Acq = 0, cMs1Asg = 0, cMs2Asg = 0, cMs2Exp = 0;
+        double cMs1Sig = 0, cMs2Sig = 0, cMs1SigAsg = 0, cMs2SigAsg = 0, cMs2SigExp = 0;
 
         void CloseCycle()
         {
@@ -119,9 +127,11 @@ public sealed partial class PwizMs2SignalReader
                 return;
             cycles.Add(new IonCycle(
                 cycles.Count, cycleStart, cycleStop, cycleMs1, cycleMs2,
-                cMs1Acq, cMs2Acq, cMs1Asg, cMs2Asg, cMs2Exp));
+                cMs1Acq, cMs2Acq, cMs1Asg, cMs2Asg, cMs2Exp,
+                cMs1Sig, cMs2Sig, cMs1SigAsg, cMs2SigAsg, cMs2SigExp));
             cycleMs1 = cycleMs2 = 0;
             cMs1Acq = cMs2Acq = cMs1Asg = cMs2Asg = cMs2Exp = 0;
+            cMs1Sig = cMs2Sig = cMs1SigAsg = cMs2SigAsg = cMs2SigExp = 0;
             cycleStart = double.NaN;
             cycleStop = double.NaN;
         }
@@ -266,6 +276,10 @@ public sealed partial class PwizMs2SignalReader
                 cycleMs1++;
                 cMs1Acq += acquiredIons;
                 cMs1Asg += assignedIons;
+                ms1Signal += summed;
+                ms1SignalAssigned += claimed;
+                cMs1Sig += summed;
+                cMs1SigAsg += claimed;
             }
             else
             {
@@ -276,10 +290,16 @@ public sealed partial class PwizMs2SignalReader
                 cycleMs2++;
                 cMs2Acq += acquiredIons;
                 cMs2Asg += assignedIons;
+                ms2Signal += summed;
+                ms2SignalAssigned += claimed;
+                cMs2Sig += summed;
+                cMs2SigAsg += claimed;
 
                 var explainedIons = explainedClaimed * injection;
                 ms2Explained += explainedIons;
                 cMs2Exp += explainedIons;
+                ms2SignalExplained += explainedClaimed;
+                cMs2SigExp += explainedClaimed;
             }
 
             if (!double.IsFinite(cycleStart))
@@ -296,7 +316,11 @@ public sealed partial class PwizMs2SignalReader
             ms2Explained, explained is not null,
             ms1ByList, ms2ByList, rtFirst, rtLast, noInjection, outsideScheme, cycles,
             ms1 + ms2 > 0 ? null : "The file has no MS1 or MS2 spectra.",
-            RunStart(msd));
+            RunStart(msd),
+            ms1Signal, ms2Signal, ms1SignalAssigned, ms2SignalAssigned, ms2SignalExplained,
+            // Measured, not merely zero. Every walk that reaches here accumulated it, so the flag
+            // is what tells a plot apart from a cache written before the columns existed.
+            HasSignal: true);
 
         Report(record, claims, reportedMs1, reportedMs2, unsorted, log);
         log?.Invoke(

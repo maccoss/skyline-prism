@@ -27,6 +27,35 @@ public static partial class PlotRenderer
     }
 
     /// <summary>
+    /// Which measured quantity to plot. NOT two units for one thing - two different quantities.
+    /// </summary>
+    /// <remarks>
+    /// <para>A scan's intensity is a RATE, in ions per second. <see cref="Ions"/> multiplies it by
+    /// that scan's ion injection time in seconds, which makes it a count of ions; <see cref="Signal"/>
+    /// does not, which leaves a sum of rates - what an instrument reports as TIC.</para>
+    ///
+    /// <para>Both are worth having and they answer different questions. Ions is the physical count,
+    /// and the only one of the two that may be compared between scans acquired at different
+    /// injection times. Signal is what a mass spectrometrist reads the instrument in, and the pair
+    /// together says what the injection times were doing - where they diverge, the AGC was working.
+    /// </para>
+    ///
+    /// <para><b>Their assigned fractions are not the same number either</b>, and neither is wrong:
+    /// the ion fraction weights each scan by its injection time and the signal fraction does not, so
+    /// they agree only where the assigned share happens to be constant across injection times. Never
+    /// present one as the other, and never add or subtract across the two.</para>
+    /// </remarks>
+    public enum IonQuantity
+    {
+        Ions = 0,
+        Signal = 1,
+    }
+
+    /// <summary>The axis noun for a quantity: "ions", or "signal (TIC)".</summary>
+    private static string Noun(IonQuantity quantity) =>
+        quantity == IonQuantity.Signal ? "signal (TIC)" : "ions";
+
+    /// <summary>
     /// Per replicate: the ions acquired, and the part of them assigned to a peptide sequence.
     /// </summary>
     /// <remarks>
@@ -42,7 +71,7 @@ public static partial class PlotRenderer
     /// </remarks>
     public static void DrawIonAccounting(
         Plot plt, IonAccountingResult result, IonLevel level, string? title = null,
-        double fontScale = 1.0)
+        double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions)
     {
         // Start from an empty plot. ScottPlot's Add methods APPEND - they do not replace, and
         // neither the plottables nor the legend entries they carry go away on their own - so a
@@ -61,13 +90,14 @@ public static partial class PlotRenderer
             return;
         }
 
-        var acquiredOf = Selector(level, acquired: true);
-        var assignedOf = Selector(level, acquired: false);
+        var acquiredOf = Selector(level, acquired: true, quantity);
+        var assignedOf = Selector(level, acquired: false, quantity);
 
         // Drawn only where it exists and can differ: MS2, and a cache that actually measured it. An
         // export with no precursor charge column measures none, and a bar of height zero would read
         // as "these peptides account for nothing" rather than "this was never asked".
-        var showExplained = level == IonLevel.Ms2 && rows.Any(r => r.HasExplained);
+        var showExplained = level == IonLevel.Ms2 && rows.Any(r => r.HasExplained)
+            && (quantity == IonQuantity.Ions || rows.Any(r => r.HasSignal));
         var tallest = rows.Max(r => Math.Max(Finite(acquiredOf(r)), Finite(assignedOf(r))));
         var (scale, unit) = SignalScale(tallest);
 
@@ -95,8 +125,8 @@ public static partial class PlotRenderer
         acquiredKey.MarkerStyle.FillColor = AcquiredBarColor;
         acquiredKey.MarkerStyle.LineWidth = 0;
         acquiredKey.LegendText = withDenominator == rows.Count
-            ? $"acquired {level.ToString().ToUpperInvariant()} ions"
-            : $"acquired {level.ToString().ToUpperInvariant()} ions "
+            ? $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
+            : $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} "
               + $"({withDenominator:N0} of {rows.Count:N0})";
 
         // Between the two, and BEFORE the assigned bars so the shorter one lands on top. The three
@@ -177,10 +207,10 @@ public static partial class PlotRenderer
 
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel($"Replicate (n = {rows.Count:N0})");
-        plt.YLabel($"{level.ToString().ToUpperInvariant()} ions{unit}");
+        plt.YLabel($"{level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit}");
         LabelCategoryTicks(plt, rows.Select(r => r.Sample).ToArray());
         StyleQcPlot(plt, fontScale);
-        SetPlotTitle(plt, WithIonFraction(title, result, level), fontScale);
+        SetPlotTitle(plt, WithIonFraction(title, result, level, quantity), fontScale);
         plt.Axes.SetLimits(-0.7, rows.Count - 0.3, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
     }
 
@@ -196,11 +226,11 @@ public static partial class PlotRenderer
     /// </remarks>
     public static void DrawIonProfile(
         Plot plt, IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
-        string? title = null, double fontScale = 1.0)
+        string? title = null, double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions)
     {
         plt.Clear();   // see DrawIonAccounting: these append, so a redraw stacks without this
 
-        var binned = BinCycles(cycles, level, binMinutes);
+        var binned = BinCycles(cycles, level, binMinutes, quantity);
         if (binned.Count == 0)
         {
             DrawEmptyState(plt, title ?? "No cycles to profile", fontScale);
@@ -223,7 +253,7 @@ public static partial class PlotRenderer
         band.FillColor = Color.FromHex("#c8ccd4").WithAlpha((byte)140);
         band.LineWidth = 0;
         band.MarkerSize = 0;
-        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} ions";
+        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}";
 
         if (showExplained)
         {
@@ -242,7 +272,8 @@ public static partial class PlotRenderer
 
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel("Retention time (min)");
-        plt.YLabel($"{level.ToString().ToUpperInvariant()} ions{unit} per {binMinutes:0.##} min");
+        plt.YLabel(
+            $"{level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit} per {binMinutes:0.##} min");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
         plt.Axes.SetLimits(
@@ -266,11 +297,11 @@ public static partial class PlotRenderer
     /// </remarks>
     public static void DrawIonFractionProfile(
         Plot plt, IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
-        string? title = null, double fontScale = 1.0)
+        string? title = null, double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions)
     {
         plt.Clear();   // see DrawIonAccounting: these append, so a redraw stacks without this
 
-        var binned = BinCycles(cycles, level, binMinutes);
+        var binned = BinCycles(cycles, level, binMinutes, quantity);
         if (binned.Count == 0)
         {
             DrawEmptyState(plt, title ?? "No cycles to profile", fontScale);
@@ -336,8 +367,9 @@ public static partial class PlotRenderer
         plt.XLabel("Retention time (min)");
         plt.YLabel(
             showExplained
-                ? $"Share of acquired {level.ToString().ToUpperInvariant()} ions (%)"
-                : $"Assigned share of acquired {level.ToString().ToUpperInvariant()} ions (%)");
+                ? $"Share of acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} (%)"
+                : $"Assigned share of acquired {level.ToString().ToUpperInvariant()} "
+                  + $"{Noun(quantity)} (%)");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
         // Zero origin always; the top fits the data, with a floor so a near-zero run does not get an
@@ -353,30 +385,33 @@ public static partial class PlotRenderer
     /// <summary>PNG of <see cref="DrawIonAccounting"/>, for the QC report.</summary>
     public static byte[] IonAccountingPng(
         IonAccountingResult result, IonLevel level, string? title = null,
-        int width = Width, int height = Height, double fontScale = 1.0)
+        int width = Width, int height = Height, double fontScale = 1.0,
+        IonQuantity quantity = IonQuantity.Ions)
     {
         var plt = new Plot();
-        DrawIonAccounting(plt, result, level, title, fontScale);
+        DrawIonAccounting(plt, result, level, title, fontScale, quantity);
         return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
     /// <summary>PNG of <see cref="DrawIonProfile"/>, for the QC report.</summary>
     public static byte[] IonProfilePng(
         IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
-        string? title = null, int width = Width, int height = Height, double fontScale = 1.0)
+        string? title = null, int width = Width, int height = Height, double fontScale = 1.0,
+        IonQuantity quantity = IonQuantity.Ions)
     {
         var plt = new Plot();
-        DrawIonProfile(plt, cycles, level, binMinutes, title, fontScale);
+        DrawIonProfile(plt, cycles, level, binMinutes, title, fontScale, quantity);
         return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
     /// <summary>PNG of <see cref="DrawIonFractionProfile"/>, for the QC report.</summary>
     public static byte[] IonFractionProfilePng(
         IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes = 1.0,
-        string? title = null, int width = Width, int height = Height, double fontScale = 1.0)
+        string? title = null, int width = Width, int height = Height, double fontScale = 1.0,
+        IonQuantity quantity = IonQuantity.Ions)
     {
         var plt = new Plot();
-        DrawIonFractionProfile(plt, cycles, level, binMinutes, title, fontScale);
+        DrawIonFractionProfile(plt, cycles, level, binMinutes, title, fontScale, quantity);
         return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
 
@@ -402,7 +437,8 @@ public static partial class PlotRenderer
     /// cycle belongs to exactly one bin and no signal is counted twice.
     /// </summary>
     internal static List<CycleBin> BinCycles(
-        IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes)
+        IReadOnlyList<IonCycleRow> cycles, IonLevel level, double binMinutes,
+        IonQuantity quantity = IonQuantity.Ions)
     {
         var bins = new List<CycleBin>();
         if (cycles is null || cycles.Count == 0)
@@ -416,19 +452,30 @@ public static partial class PlotRenderer
         if (usable.Length == 0)
             return bins;
 
+        var signal = quantity == IonQuantity.Signal;
         var acquiredOf = level == IonLevel.Ms1
-            ? new Func<IonCycleRow, double>(c => c.Ms1Acquired)
-            : c => c.Ms2Acquired;
+            ? signal
+                ? new Func<IonCycleRow, double>(c => c.Ms1Signal)
+                : c => c.Ms1Acquired
+            : signal
+                ? c => c.Ms2Signal
+                : c => c.Ms2Acquired;
         var assignedOf = level == IonLevel.Ms1
-            ? new Func<IonCycleRow, double>(c => c.Ms1Assigned)
-            : c => c.Ms2Assigned;
+            ? signal
+                ? new Func<IonCycleRow, double>(c => c.Ms1SignalAssigned)
+                : c => c.Ms1Assigned
+            : signal
+                ? c => c.Ms2SignalAssigned
+                : c => c.Ms2Assigned;
 
         // MS1 has no explained series: the theoretical MS1 claim IS the precursor isotope envelope
         // Skyline already extracts, so the two totals cannot differ and one of them would be a line
         // drawn exactly on top of another.
         var explainedOf = level == IonLevel.Ms1
             ? new Func<IonCycleRow, double>(_ => 0)
-            : c => c.Ms2Explained;
+            : signal
+                ? c => c.Ms2SignalExplained
+                : c => c.Ms2Explained;
 
         var origin = usable[0].RtStartMin;
         var current = -1;
@@ -457,20 +504,26 @@ public static partial class PlotRenderer
         return bins;
     }
 
-    private static Func<IonAccountingRow, double> Selector(IonLevel level, bool acquired) =>
-        (level, acquired) switch
+    private static Func<IonAccountingRow, double> Selector(
+        IonLevel level, bool acquired, IonQuantity quantity = IonQuantity.Ions) =>
+        (level, acquired, quantity) switch
         {
-            (IonLevel.Ms1, true) => r => r.Ms1Acquired,
-            (IonLevel.Ms1, false) => r => r.Ms1Assigned,
-            (_, true) => r => r.Ms2Acquired,
-            _ => r => r.Ms2Assigned,
+            (IonLevel.Ms1, true, IonQuantity.Ions) => r => r.Ms1Acquired,
+            (IonLevel.Ms1, false, IonQuantity.Ions) => r => r.Ms1Assigned,
+            (IonLevel.Ms1, true, _) => r => r.Ms1Signal,
+            (IonLevel.Ms1, false, _) => r => r.Ms1SignalAssigned,
+            (_, true, IonQuantity.Ions) => r => r.Ms2Acquired,
+            (_, false, IonQuantity.Ions) => r => r.Ms2Assigned,
+            (_, true, _) => r => r.Ms2Signal,
+            _ => r => r.Ms2SignalAssigned,
         };
 
     /// <summary>
     /// Add the median assigned fraction to the title, and refuse to when it is not physical.
     /// </summary>
     private static string? WithIonFraction(
-        string? title, IonAccountingResult result, IonLevel level)
+        string? title, IonAccountingResult result, IonLevel level,
+        IonQuantity quantity = IonQuantity.Ions)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
         if (usable.Length == 0)
@@ -485,8 +538,15 @@ public static partial class PlotRenderer
             return string.IsNullOrEmpty(title) ? suffix : $"{title}{NewLine}{suffix}";
         }
 
+        var signal = quantity == IonQuantity.Signal;
         var fractions = usable
-            .Select(r => level == IonLevel.Ms1 ? r.Ms1Fraction : r.Ms2Fraction)
+            .Select(r => (level, signal) switch
+            {
+                (IonLevel.Ms1, false) => r.Ms1Fraction,
+                (IonLevel.Ms1, true) => r.Ms1SignalFraction,
+                (_, false) => r.Ms2Fraction,
+                _ => r.Ms2SignalFraction,
+            })
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();
@@ -500,15 +560,16 @@ public static partial class PlotRenderer
         // one number out of two invites the reading that it is the whole answer.
         var explained = usable
             .Where(r => r.HasExplained)
-            .Select(r => r.Ms2ExplainedFraction)
+            .Select(r => signal ? r.Ms2SignalExplainedFraction : r.Ms2ExplainedFraction)
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();
 
+        var noun = Noun(quantity);
         var text = level == IonLevel.Ms2 && explained.Length > 0
-            ? $"median {median:P1} of acquired {name} ions quantified, "
+            ? $"median {median:P1} of acquired {name} {noun} quantified, "
               + $"{Median(explained):P1} explained by any b/y or precursor ion"
-            : $"median {median:P1} of acquired {name} ions assigned to a peptide";
+            : $"median {median:P1} of acquired {name} {noun} assigned to a peptide";
         return string.IsNullOrEmpty(title) ? text : $"{title}{NewLine}{text}";
     }
 

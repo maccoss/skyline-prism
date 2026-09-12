@@ -40,8 +40,35 @@ public sealed record IonAccountingRow(
     /// timestamp. Null for a cache written before this was recorded, and for a file that does not
     /// declare one - which is why ordering by it is offered only when every row has one.
     /// </summary>
-    DateTime? AcquiredUtc = null)
+    DateTime? AcquiredUtc = null,
+    double Ms1Signal = 0,
+    double Ms2Signal = 0,
+    double Ms1SignalAssigned = 0,
+    double Ms2SignalAssigned = 0,
+    double Ms2SignalExplained = 0,
+    /// <summary>
+    /// Whether the summed TIC was measured at all. A flag rather than an inference from a zero: a
+    /// cache written before this column carries no signal, and reading that back as 0.0 would draw a
+    /// replicate that acquired nothing.
+    /// </summary>
+    bool HasSignal = false)
 {
+    /// <summary>
+    /// The assigned share of the summed TIC, which is NOT the assigned share of the ions - the ion
+    /// count weights each scan by its injection time and the TIC does not. NaN when this cache
+    /// carries no signal, which is not the same as zero.
+    /// </summary>
+    public double Ms1SignalFraction =>
+        HasSignal && Ms1Signal > 0 ? Ms1SignalAssigned / Ms1Signal : double.NaN;
+
+    /// <inheritdoc cref="Ms1SignalFraction"/>
+    public double Ms2SignalFraction =>
+        HasSignal && Ms2Signal > 0 ? Ms2SignalAssigned / Ms2Signal : double.NaN;
+
+    /// <inheritdoc cref="Ms1SignalFraction"/>
+    public double Ms2SignalExplainedFraction =>
+        HasSignal && HasExplained && Ms2Signal > 0 ? Ms2SignalExplained / Ms2Signal : double.NaN;
+
     public double Ms1Fraction => Ms1Acquired > 0 ? Ms1Assigned / Ms1Acquired : double.NaN;
     public double Ms2Fraction => Ms2Acquired > 0 ? Ms2Assigned / Ms2Acquired : double.NaN;
 
@@ -157,7 +184,12 @@ public readonly record struct IonCycleRow(
     double Ms2Acquired,
     double Ms1Assigned,
     double Ms2Assigned,
-    double Ms2Explained = 0);
+    double Ms2Explained = 0,
+    double Ms1Signal = 0,
+    double Ms2Signal = 0,
+    double Ms1SignalAssigned = 0,
+    double Ms2SignalAssigned = 0,
+    double Ms2SignalExplained = 0);
 
 /// <summary>
 /// Reads and writes the ion-accounting cache.
@@ -193,11 +225,17 @@ public static class IonAccountingStore
             // columns are named "ions" - so the key is bumped to make every directory
             // recompute rather than replot the old magnitudes under the new caption.
             //
+            // v4: the summed TIC arrived, acquired and assigned, per replicate and per cycle.
+            // Same reasoning as v3 - a v3 file is not WRONG, but it carries no signal columns, so
+            // reusing it would offer a Signal view that is silently empty on the replicates measured
+            // before and populated on the ones measured after. The quantity picker would then be
+            // showing two different cohorts depending on when each file happened to be read.
+            //
             // v3: the explained total arrived. A v2 file is not WRONG - every number in it is
             // still right - but it carries no explained column, so reusing it would draw a
             // section whose second series is silently absent on some replicates and present on
             // others, depending on when each was measured. Recomputing is the honest answer.
-            "ions-v3",
+            "ions-v4",
             productTolerance,
             precursorTolerance,
             isolationScheme,
@@ -230,6 +268,18 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles("ms1_assigned", rows.Select(r => r.Ms1Assigned).ToArray()),
             ParquetWideWriter.Doubles("ms2_assigned", rows.Select(r => r.Ms2Assigned).ToArray()),
             ParquetWideWriter.Doubles("ms2_explained", rows.Select(r => r.Ms2Explained).ToArray()),
+            // The unweighted sums - what the instrument calls TIC. A DIFFERENT QUANTITY from the
+            // ion columns above, not another unit for them: these are sums of rates, those are
+            // counts. Never add or compare one against the other.
+            ParquetWideWriter.Doubles("ms1_signal", rows.Select(r => r.Ms1Signal).ToArray()),
+            ParquetWideWriter.Doubles("ms2_signal", rows.Select(r => r.Ms2Signal).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms1_signal_assigned", rows.Select(r => r.Ms1SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_assigned", rows.Select(r => r.Ms2SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_explained", rows.Select(r => r.Ms2SignalExplained).ToArray()),
+            ParquetWideWriter.Bools("has_signal", rows.Select(r => r.HasSignal).ToArray()),
             // A flag, not an inference from a zero: an export with no charge column measures no
             // explained total at all, and a reader that read that back as 0.0 would plot a peptide
             // set that accounts for nothing rather than one that was never asked.
@@ -292,6 +342,14 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
             ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
             ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms1_signal", cycles.Select(c => c.Ms1Signal).ToArray()),
+            ParquetWideWriter.Doubles("ms2_signal", cycles.Select(c => c.Ms2Signal).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms1_signal_assigned", cycles.Select(c => c.Ms1SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_assigned", cycles.Select(c => c.Ms2SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
             ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
         };
         ParquetWideWriter.Write(
@@ -378,6 +436,14 @@ public static class IonAccountingStore
             var noInj = Nums(reader, "missing_injection_time", samples.Length);
             var cycleCount = Nums(reader, "cycle_count", samples.Length);
             var acquired = Strings(reader, "acquired_utc", samples.Length);
+            var ms1Sig = Nums(reader, "ms1_signal", samples.Length);
+            var ms2Sig = Nums(reader, "ms2_signal", samples.Length);
+            var ms1SigAsg = Nums(reader, "ms1_signal_assigned", samples.Length);
+            var ms2SigAsg = Nums(reader, "ms2_signal_assigned", samples.Length);
+            var ms2SigExp = Nums(reader, "ms2_signal_explained", samples.Length);
+            var hasSig = reader.HasColumn("has_signal")
+                ? reader.ReadDoubles("has_signal").Select(v => v != 0).ToArray()
+                : new bool[samples.Length];
 
             var lists = ReadLists(outputDir, out var listNames);
 
@@ -407,7 +473,9 @@ public static class IonAccountingStore
                     (int)claims[i], (int)outside[i], (int)noInj[i], (int)cycleCount[i],
                     perList?.Ms1 ?? Array.Empty<double>(),
                     perList?.Ms2 ?? Array.Empty<double>(),
-                    ParseUtc(acquired[i])));
+                    ParseUtc(acquired[i]),
+                    ms1Sig[i], ms2Sig[i], ms1SigAsg[i], ms2SigAsg[i], ms2SigExp[i],
+                    i < hasSig.Length && hasSig[i]));
             }
 
             return new IonAccountingResult(
@@ -454,6 +522,11 @@ public static class IonAccountingStore
             var ms2e = reader.HasColumn("ms2_explained")
                 ? reader.ReadDoubles("ms2_explained")
                 : new double[samples.Length];
+            var ms1sig = CycleNums(reader, "ms1_signal", samples.Length);
+            var ms2sig = CycleNums(reader, "ms2_signal", samples.Length);
+            var ms1sigA = CycleNums(reader, "ms1_signal_assigned", samples.Length);
+            var ms2sigA = CycleNums(reader, "ms2_signal_assigned", samples.Length);
+            var ms2sigE = CycleNums(reader, "ms2_signal_explained", samples.Length);
 
             var rows = new List<IonCycleRow>();
             for (var i = 0; i < samples.Length; i++)
@@ -462,7 +535,8 @@ public static class IonAccountingStore
                     continue;
                 rows.Add(new IonCycleRow(
                     samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
-                    ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i]));
+                    ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i],
+                    ms1sig[i], ms2sig[i], ms1sigA[i], ms2sigA[i], ms2sigE[i]));
             }
             return rows;
         }
@@ -589,6 +663,13 @@ public static class IonAccountingStore
     /// too: an instant guessed from a malformed stamp would put a replicate somewhere specific in
     /// run order with nothing to say it was a guess.
     /// </summary>
+    /// <summary>
+    /// A cycles column, or zeros when the file predates it. Separate from <see cref="Nums"/> because
+    /// the cycles table is read column-wise against its own row count.
+    /// </summary>
+    private static double[] CycleNums(ParquetColumnReader reader, string name, int count) =>
+        reader.HasColumn(name) ? reader.ReadDoubles(name) : new double[count];
+
     private static DateTime? ParseUtc(string? text) =>
         !string.IsNullOrWhiteSpace(text)
         && DateTime.TryParse(

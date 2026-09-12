@@ -102,6 +102,15 @@ public sealed record IonAccountingRequest(
 /// what they are quantified on. Zero when no explained index was supplied, which a caller must tell
 /// apart from a measured zero by asking the record, not the cycle.
 /// </param>
+/// <param name="Ms1Signal">
+/// The same MS1 scans' summed intensity, NOT multiplied by the injection time - a sum of rates, which
+/// is what an instrument reports as TIC. It is a different quantity from the ion count beside it, not
+/// another unit for it, and the two must never be added or compared as though they were the same:
+/// see the unit discussion on <see cref="IonAccountingRecord"/>. Recorded because TIC is what a mass
+/// spectrometrist reads the instrument in, and because the pair together says what the injection
+/// times were doing.
+/// </param>
+/// <param name="Ms1SignalAssigned">The part of that TIC inside a region some peptide claimed.</param>
 public readonly record struct IonCycle(
     int Index,
     double RtStartMin,
@@ -112,7 +121,12 @@ public readonly record struct IonCycle(
     double Ms2Acquired,
     double Ms1Assigned,
     double Ms2Assigned,
-    double Ms2Explained = 0);
+    double Ms2Explained = 0,
+    double Ms1Signal = 0,
+    double Ms2Signal = 0,
+    double Ms1SignalAssigned = 0,
+    double Ms2SignalAssigned = 0,
+    double Ms2SignalExplained = 0);
 
 /// <summary>
 /// What one instrument data file contributes to ion accounting: how many ions reached the detector,
@@ -175,8 +189,27 @@ public sealed record IonAccountingRecord(
     int ScansOutsideScheme,
     IReadOnlyList<IonCycle> Cycles,
     string? Message = null,
-    DateTime? AcquiredUtc = null)
+    DateTime? AcquiredUtc = null,
+    double Ms1Signal = 0,
+    double Ms2Signal = 0,
+    double Ms1SignalAssigned = 0,
+    double Ms2SignalAssigned = 0,
+    double Ms2SignalExplained = 0,
+    bool HasSignal = false)
 {
+    /// <summary>
+    /// The assigned share of the summed TIC, which is NOT the assigned share of the ions. Both are
+    /// real fractions of what was acquired; they differ because the ion count weights each scan by
+    /// its injection time and the TIC does not, so they agree only where the assigned share happens
+    /// to be constant across injection times.
+    /// </summary>
+    public double Ms1SignalFraction =>
+        HasSignal && Ms1Signal > 0 ? Ms1SignalAssigned / Ms1Signal : double.NaN;
+
+    /// <inheritdoc cref="Ms1SignalFraction"/>
+    public double Ms2SignalFraction =>
+        HasSignal && Ms2Signal > 0 ? Ms2SignalAssigned / Ms2Signal : double.NaN;
+
     public bool IsUsable => Status == Ms2ReadStatus.Ok && (Ms1Acquired > 0 || Ms2Acquired > 0);
 
     /// <summary>Assigned over acquired at MS1, or NaN when nothing was acquired.</summary>

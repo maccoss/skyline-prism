@@ -58,6 +58,110 @@ public class IonPlotTests
     }
 
     /// <summary>
+    /// The two quantities are DIFFERENT NUMBERS, not two units for one. A scan's intensity is a
+    /// rate; the ion count multiplies it by the injection time and the summed TIC does not. Where
+    /// the injection times vary, the assigned fractions differ too - and neither is wrong.
+    /// </summary>
+    [Fact]
+    public void SignalIsNotTheSameQuantityAsIons()
+    {
+        // Injection time varies across the run, so weighting cannot cancel: an ion fraction and a
+        // signal fraction built from the same scans genuinely disagree.
+        var rows = new[]
+        {
+            RowWithSignal("s1", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 250),
+            RowWithSignal("s2", ms2Acquired: 2000, ms2Assigned: 200, ms2Signal: 1000, ms2SignalAssigned: 250),
+        };
+        var result = Result(rows);
+
+        var ions = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            ions, result, PlotRenderer.IonLevel.Ms2, "t", 1.0, PlotRenderer.IonQuantity.Ions);
+        var signal = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            signal, result, PlotRenderer.IonLevel.Ms2, "t", 1.0, PlotRenderer.IonQuantity.Signal);
+
+        // 10% of the ions, 25% of the TIC - the titles must not agree.
+        Assert.Contains("10.0%", ions.Axes.Title.Label.Text);
+        Assert.Contains("25.0%", signal.Axes.Title.Label.Text);
+        Assert.NotEqual(ions.Axes.Title.Label.Text, signal.Axes.Title.Label.Text);
+    }
+
+    /// <summary>
+    /// The axis has to name the quantity drawn. Both are totals of the same scans and they scale
+    /// alike, so nothing else on the plot distinguishes them - mislabelling one as the other would
+    /// present a sum of rates as a count of ions, which is the error this whole feature is built
+    /// around not making.
+    /// </summary>
+    [Fact]
+    public void TheAxisNamesTheQuantityDrawn()
+    {
+        var result = Result(RowWithSignal("s1", 1000, 100, 1000, 250));
+
+        var ions = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            ions, result, PlotRenderer.IonLevel.Ms2, null, 1.0, PlotRenderer.IonQuantity.Ions);
+        Assert.Contains("ions", ions.Axes.Left.Label.Text);
+        Assert.DoesNotContain("TIC", ions.Axes.Left.Label.Text);
+
+        var signal = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            signal, result, PlotRenderer.IonLevel.Ms2, null, 1.0, PlotRenderer.IonQuantity.Signal);
+        Assert.Contains("TIC", signal.Axes.Left.Label.Text);
+    }
+
+    /// <summary>
+    /// Across the gradient the two quantities bin independently, and the signal bins are the TIC -
+    /// not the ion totals relabelled.
+    /// </summary>
+    [Fact]
+    public void BinningKeepsTheTwoQuantitiesApart()
+    {
+        var cycles = new[]
+        {
+            new IonCycleRow("s1", 0, 0, 0.5, 1, 10, 100, 200, 10, 20, 30, 1000, 2000, 100, 200, 300),
+            new IonCycleRow("s1", 1, 0.5, 1.0, 1, 10, 100, 200, 10, 20, 30, 1000, 2000, 100, 200, 300),
+        };
+
+        var ionBins = PlotRenderer.BinCycles(
+            cycles, PlotRenderer.IonLevel.Ms2, 10.0, PlotRenderer.IonQuantity.Ions);
+        var signalBins = PlotRenderer.BinCycles(
+            cycles, PlotRenderer.IonLevel.Ms2, 10.0, PlotRenderer.IonQuantity.Signal);
+
+        Assert.Equal(400, Assert.Single(ionBins).Acquired);
+        Assert.Equal(4000, Assert.Single(signalBins).Acquired);
+        Assert.Equal(40, ionBins[0].Assigned);
+        Assert.Equal(400, signalBins[0].Assigned);
+        Assert.Equal(60, ionBins[0].Explained);
+        Assert.Equal(600, signalBins[0].Explained);
+    }
+
+    /// <summary>
+    /// A cache measured before the TIC was recorded has no signal, and zeros are not it. The fraction
+    /// reads as NaN - "not measured" - rather than as a replicate that acquired nothing.
+    /// </summary>
+    [Fact]
+    public void ACacheWithoutSignalReportsNotMeasuredRatherThanZero()
+    {
+        var row = Row("s1", 10);
+
+        Assert.False(row.HasSignal);
+        Assert.True(double.IsNaN(row.Ms1SignalFraction));
+        Assert.True(double.IsNaN(row.Ms2SignalFraction));
+        Assert.True(double.IsNaN(row.Ms2SignalExplainedFraction));
+    }
+
+    private static IonAccountingRow RowWithSignal(
+        string sample, double ms2Acquired, double ms2Assigned,
+        double ms2Signal, double ms2SignalAssigned) =>
+        new(sample, "experimental", $"{sample}.raw", Ms2ReadStatus.Ok, "pwiz-sharp",
+            10, 100, ms2Acquired, ms2Acquired, ms2Assigned, ms2Assigned,
+            ms2Assigned * 1.5, true, 0, 60, 5, 0, 0, 10,
+            Array.Empty<double>(), Array.Empty<double>(), null,
+            ms2Signal, ms2Signal, ms2SignalAssigned, ms2SignalAssigned,
+            ms2SignalAssigned * 1.5, true);
+
+    /// <summary>
     /// Drawing again on the same plot REPLACES what was there. The GUI keeps one Plot for the whole
     /// pane and redraws it every time the view, level, replicate or bin width changes, so anything
     /// that accumulates does so once per interaction.
