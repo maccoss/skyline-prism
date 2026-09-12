@@ -210,38 +210,51 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Find the merged dataset under the current output directory and list its runs. Both the schema probe
-    /// and the DISTINCT scan touch the (possibly very large) dataset, so they run off the UI thread.
+    /// Find the merged dataset under the current output directory and list its runs.
     /// </summary>
+    /// <remarks>
+    /// <b>Every file system call is inside the one background read.</b> Locating <c>merged_data</c>
+    /// probes for two candidate paths and used to do it on the UI thread, before the read it belongs
+    /// in - which against a share that is slow or disconnected is the window stopped for the SMB
+    /// timeout with nothing yet on screen to say why. Anything added here that touches the disk goes
+    /// inside the <c>Task.Run</c>.
+    /// </remarks>
     private async Task LoadDensitySamplesAsync()
     {
         var outputDir = OutputDirBox.Text?.Trim();
-        // Either layout: the partitioned directory this release writes, or the single file older ones did.
-        var root = MergedDataset.Locate(outputDir);
-
-        if (root is null)
-        {
-            _densityLoaded = false;
-            SetDensitySamples(new List<string>());
-            ShowDensityMessage($"No {MergedName} in the output directory. Run PRISM, or point the "
-                + "output directory at a previous run.");
-            return;
-        }
-
         DensityStatusText.Text = "Reading " + MergedName + "...";
         try
         {
-            var schemePath = Path.Combine(outputDir!, IsolationSchemeCatalog.FileName);
+            var schemePath = string.IsNullOrWhiteSpace(outputDir)
+                ? null
+                : Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
             var (dataset, columns, samples, schemes) = await Task.Run(() =>
             {
+                // Either layout: the partitioned directory this release writes, or the single file
+                // older ones did.
+                var root = MergedDataset.Locate(outputDir);
+                if (root is null || schemePath is null)
+                {
+                    return ((MergedDataset?)null, (PrecursorDensity.Columns?)null,
+                            new List<string>(), (IsolationSchemeCatalog?)null);
+                }
                 var ds = MergedDataset.Open(root);
                 var cols = PrecursorDensity.Resolve(
                     ParquetTable.ReadColumnNames(ds.RepresentativeFile()).ToHashSet());
                 var ids = cols is null
                     ? new List<string>()
                     : MergedParquetReader.GetSortedSamples(ds, cols.Sample);
-                return (ds, cols, ids, IsolationSchemeCatalog.Load(schemePath));
+                return ((MergedDataset?)ds, cols, ids, IsolationSchemeCatalog.Load(schemePath));
             });
+
+            if (dataset is null)
+            {
+                _densityLoaded = false;
+                SetDensitySamples(new List<string>());
+                ShowDensityMessage($"No {MergedName} in the output directory. Run PRISM, or point the "
+                    + "output directory at a previous run.");
+                return;
+            }
 
             _densityDataset = dataset;
             _densityColumns = columns;
@@ -793,7 +806,7 @@ public partial class MainWindow
     /// </remarks>
     private async Task MeasureIsolationSchemeAsync(string outputDir)
     {
-        if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
+        if (string.IsNullOrWhiteSpace(outputDir))
             return;
         if (string.Equals(_densityMeasuredFor, outputDir, StringComparison.OrdinalIgnoreCase))
             return;
@@ -804,24 +817,37 @@ public partial class MainWindow
         if (BatchOfSelectedRun() is { } batch && _densitySchemes?.DocumentSchemeFor(batch) is not null)
             return;
 
-        var rawDir = DensityRawDirectory();
-        if (rawDir is null)
-            return;
-
-        OptionalReaders.Register(Log);
-        if (!IsolationWindowProbe.Available)
-        {
-            _densityMeasuredFor = outputDir;   // no reader in this build; asking again changes nothing
-            return;
-        }
+        // Snapshotted on the UI thread; everything that touches the disk happens off it. Finding the
+        // raw directory PROBES PATHS A DOCUMENT RECORDED, which on a machine that is not the one the
+        // data was imported on are exactly the paths that no longer resolve - and a dead UNC path
+        // does not fail fast, it blocks for the SMB timeout.
+        var named = IonRawDirText.Text?.Trim();
+        var inputs = _inputs.ToArray();
 
         _densityMeasuredFor = outputDir;
         var previousStatus = DensityStatusText.Text;
         DensityStatusText.Text = "Reading the acquisition's isolation windows from the data files...";
         try
         {
-            var scheme = await Task.Run(
-                () => IsolationSchemeResolver.FromData(outputDir, rawDir, Log));
+            var (scheme, catalog) = await Task.Run(() =>
+            {
+                if (!Directory.Exists(outputDir))
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+                var rawDir = DensityRawDirectory(named, inputs);
+                if (rawDir is null)
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+
+                OptionalReaders.Register(Log);
+                if (!IsolationWindowProbe.Available)
+                    return ((IsolationScheme?)null, (IsolationSchemeCatalog?)null);
+
+                var read = IsolationSchemeResolver.FromData(outputDir, rawDir, Log);
+                return (read, read is null
+                    ? null
+                    : IsolationSchemeCatalog.Load(
+                        Path.Combine(outputDir, IsolationSchemeCatalog.FileName)));
+            });
+
             // The user can have moved on while a file opened over a share.
             if (!_densityLoaded
                 || !string.Equals(OutputDirBox.Text?.Trim(), outputDir, StringComparison.OrdinalIgnoreCase))
@@ -834,8 +860,7 @@ public partial class MainWindow
                 return;
             }
 
-            var schemePath = Path.Combine(outputDir, IsolationSchemeCatalog.FileName);
-            _densitySchemes = IsolationSchemeCatalog.Load(schemePath) ?? _densitySchemes;
+            _densitySchemes = catalog ?? _densitySchemes;
             PopulateSchemeCombo();
             // Only re-bin when the picker actually moved to the measured scheme. If the user had
             // already named one, PopulateSchemeCombo kept it and the map on screen is still theirs.
@@ -855,13 +880,17 @@ public partial class MainWindow
     /// Where the instrument files are, for the window read: the directory the Settings tab names, else
     /// wherever an input document says it imported from. Null when neither answers.
     /// </summary>
-    private string? DensityRawDirectory()
+    /// <remarks>
+    /// Static, taking its inputs by argument, because it runs on a background thread - it probes the
+    /// file system several times and must not do that on the dispatcher. Nothing here may touch a
+    /// control.
+    /// </remarks>
+    private static string? DensityRawDirectory(string? named, IReadOnlyList<PrismInput> inputs)
     {
-        var named = IonRawDirText.Text?.Trim();
         if (!string.IsNullOrWhiteSpace(named) && Directory.Exists(named))
             return named;
 
-        foreach (var input in _inputs)
+        foreach (var input in inputs)
         {
             var guess = input.GuessRawDirectory(App.WriteLog);
             if (!string.IsNullOrWhiteSpace(guess) && Directory.Exists(guess))
