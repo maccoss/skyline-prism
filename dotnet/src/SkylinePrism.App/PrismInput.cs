@@ -304,6 +304,61 @@ public sealed class PrismInput : INotifyPropertyChanged
         TryGetExtractionTolerances(log).Product;
 
     /// <summary>
+    /// Where this input's instrument files are, from the document's own record of where they were
+    /// imported from.
+    /// </summary>
+    /// <remarks>
+    /// <para>A Skyline document stores the <c>file_path</c> of every <c>&lt;sample_file&gt;</c> it
+    /// imported, so the usual case needs no guessing at all - the answer is written down. Asking the
+    /// user to find a directory the document already names is work they should not have to do.</para>
+    ///
+    /// <para>Falls back through <see cref="SkylineIsolationImporter.ResolveDataFile"/>, which tries
+    /// the recorded path, then beside the document, then one directory above it - the layouts that
+    /// cover a moved cohort, a <c>.sky.zip</c> extracted into a subfolder, and a document kept below
+    /// its acquisition directory. Returns null when nothing resolves, and the caller then asks.</para>
+    ///
+    /// <para>The directory of the FIRST file that resolves, not a directory per replicate: ion
+    /// accounting takes one raw directory for the cohort, and a document whose replicates live in
+    /// several places cannot be expressed to it anyway.</para>
+    /// </remarks>
+    public string? GuessRawDirectory(Action<string> log)
+    {
+        try
+        {
+            var documentPath = Kind switch
+            {
+                PrismInputKind.RunningSkyline when Session is not null =>
+                    Session.Execute(c => c.GetDocumentPath()),
+                PrismInputKind.ClosedDocument => Path,
+                _ => null,
+            };
+            if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
+                return null;
+
+            var info = SkyDocumentInfo.TryRead(documentPath, log);
+            if (info is null || info.SampleFilePaths.Count == 0)
+                return null;
+
+            var resolved = SkylineIsolationImporter.ResolveDataFile(
+                info.SampleFilePaths, documentPath);
+            if (resolved is null)
+                return null;
+
+            // A Bruker/Agilent acquisition IS a directory, so the containing directory is what is
+            // wanted either way - GetDirectoryName of a directory path gives its parent.
+            return System.IO.Path.GetDirectoryName(
+                resolved.TrimEnd(
+                    System.IO.Path.DirectorySeparatorChar,
+                    System.IO.Path.AltDirectorySeparatorChar));
+        }
+        catch (Exception ex)
+        {
+            log($"({DisplayName}: could not work out where the data files are: {ex.Message})");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Both extraction windows the document states, product and precursor.
     /// </summary>
     /// <remarks>

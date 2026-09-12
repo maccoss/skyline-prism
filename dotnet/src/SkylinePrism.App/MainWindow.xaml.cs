@@ -1447,6 +1447,42 @@ public partial class MainWindow : Window
         var on = IonAccountingCheck.IsChecked == true;
         IonRawDirText.IsEnabled = on;
         IonRawDirBrowse.IsEnabled = on;
+
+        if (on && string.IsNullOrWhiteSpace(IonRawDirText.Text))
+            FillIonRawDirFromDocuments();
+    }
+
+    /// <summary>
+    /// Fill the data directory from where the documents say they imported from.
+    /// </summary>
+    /// <remarks>
+    /// <para>A Skyline document records the path of every file it imported, so in the usual case
+    /// this is written down rather than guessed, and asking someone to browse for a directory their
+    /// document already names is work they should not have to do.</para>
+    ///
+    /// <para>Only ever fills an EMPTY box, and only on ticking - never overwrites a path that is
+    /// already there, and never re-asserts itself if you clear it deliberately.</para>
+    /// </remarks>
+    private void FillIonRawDirFromDocuments()
+    {
+        foreach (var input in _inputs)
+        {
+            var dir = input.GuessRawDirectory(Log);
+            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+                continue;
+
+            IonRawDirText.Text = dir;
+            Log($"Ion accounting: {input.DisplayName} imported its data from {dir}, so that is "
+                + "where the files will be read from. Change it above if they have moved.");
+            return;
+        }
+
+        if (_inputs.Count > 0)
+        {
+            Log("Ion accounting: none of the inputs could say where its data files are - a "
+                + "pre-exported report records no paths, and a document whose files have moved "
+                + "records the old ones. Browse to the directory instead.");
+        }
     }
 
     private void OnBrowseIonRawDir(object sender, RoutedEventArgs e)
