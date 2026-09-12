@@ -299,11 +299,18 @@ public static partial class PlotRenderer
         mean.Color = Colors.Gray.WithAlpha(0.6);
         mean.LineWidth = 2;
         mean.LinePattern = LinePattern.Dashed;
-        mean.LegendText = $"whole run ({overall:0.#}%)";
+        // Named for the series it belongs to once there are two, or it reads as the average of
+        // whichever line the eye landed on first.
+        mean.LegendText = showExplained
+            ? $"whole run, quantified ({overall:0.#}%)"
+            : $"whole run ({overall:0.#}%)";
 
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel("Retention time (min)");
-        plt.YLabel($"Assigned share of acquired {level.ToString().ToUpperInvariant()} ions (%)");
+        plt.YLabel(
+            showExplained
+                ? $"Share of acquired {level.ToString().ToUpperInvariant()} ions (%)"
+                : $"Assigned share of acquired {level.ToString().ToUpperInvariant()} ions (%)");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
         // Zero origin always; the top fits the data, with a floor so a near-zero run does not get an
@@ -459,11 +466,22 @@ public static partial class PlotRenderer
         if (fractions.Length == 0)
             return title;
 
-        var median = fractions.Length % 2 == 1
-            ? fractions[fractions.Length / 2]
-            : (fractions[fractions.Length / 2 - 1] + fractions[fractions.Length / 2]) / 2;
-        var text = $"median {median:P1} of acquired {level.ToString().ToUpperInvariant()} ions "
-            + $"assigned to a peptide";
+        var name = level.ToString().ToUpperInvariant();
+        var median = Median(fractions);
+
+        // Both medians when both exist. The title is the line a reader takes away from the page, and
+        // one number out of two invites the reading that it is the whole answer.
+        var explained = usable
+            .Where(r => r.HasExplained)
+            .Select(r => r.Ms2ExplainedFraction)
+            .Where(double.IsFinite)
+            .OrderBy(f => f)
+            .ToArray();
+
+        var text = level == IonLevel.Ms2 && explained.Length > 0
+            ? $"median {median:P1} of acquired {name} ions quantified, "
+              + $"{Median(explained):P1} explained by any b/y or precursor ion"
+            : $"median {median:P1} of acquired {name} ions assigned to a peptide";
         return string.IsNullOrEmpty(title) ? text : $"{title}{NewLine}{text}";
     }
 
@@ -476,6 +494,12 @@ public static partial class PlotRenderer
     /// names; too many get an empty axis, because a 192-replicate cohort cannot show a name per bar
     /// and overlapping labels are worse than none.
     /// </remarks>
+    /// <summary>Median of an ALREADY SORTED array.</summary>
+    private static double Median(IReadOnlyList<double> sorted) =>
+        sorted.Count % 2 == 1
+            ? sorted[sorted.Count / 2]
+            : (sorted[sorted.Count / 2 - 1] + sorted[sorted.Count / 2]) / 2;
+
     private static void LabelCategoryTicks(Plot plt, IReadOnlyList<string> samples)
     {
         if (samples.Count > MaxNamedCategories)

@@ -82,9 +82,13 @@ public static partial class QcReport
             Render(
                 bars, caption, $"ion_accounting_{name.ToLowerInvariant()}.png", savePlots, plotsDir,
                 () => PlotRenderer.IonAccountingPng(
-                    result, level, $"{name} Ions Acquired and Assigned to a Peptide"));
+                    result, level, AccountingTitle(name, usable)));
         }
-        sections.Add(new PlotSection("Ions Acquired and Assigned to a Peptide", bars));
+        sections.Add(new PlotSection(
+            usable.Any(r => r.HasExplained)
+                ? "Ions Acquired, Quantified and Explained"
+                : "Ions Acquired and Assigned to a Peptide",
+            bars));
 
         AddIonProfileSection(sections, outputDir, result, settings, savePlots, plotsDir, log);
         return sections;
@@ -294,4 +298,14 @@ public static partial class QcReport
                 caption + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>()));
         }
     }
+
+    /// <summary>
+    /// The plot heading. "Assigned to a Peptide" describes one numerator, which is the whole answer
+    /// only until there are two.
+    /// </summary>
+    private static string AccountingTitle(string level, IReadOnlyList<IonAccountingRow> usable) =>
+        level == "MS2" && usable.Any(r => r.HasExplained)
+            ? "MS2 Ions Acquired, Quantified and Explained"
+            : $"{level} Ions Acquired and Assigned to a Peptide";
+
 }
