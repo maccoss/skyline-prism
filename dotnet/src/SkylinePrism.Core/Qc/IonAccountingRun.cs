@@ -226,6 +226,18 @@ public static class IonAccountingRun
         var pending = new List<Task>();
         var sync = new object();
 
+        // Decided UP FRONT rather than inside the callback, because the callback runs after the
+        // claims have already been built. The order is the query's ORDER BY, so taking the first
+        // maxReplicates of the samples that still need measuring picks exactly the ones the loop
+        // below would have accepted.
+        var stillNeeded = resolution.Matched.Keys
+            .Where(s => !reusable.ContainsKey(s))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+        if (maxReplicates > 0 && stillNeeded.Count > maxReplicates)
+            stillNeeded = stillNeeded.Take(maxReplicates).ToList();
+        var wanted = new HashSet<string>(stillNeeded, StringComparer.Ordinal);
+
         ClaimedRegionLoader.ForEachSample(
             dataset, cols, scheme, productTolerance, precursorTolerance, classified.Classes,
             (sample, loaded) =>
@@ -283,7 +295,8 @@ public static class IonAccountingRun
                                         sample, cycle.Index, cycle.RtStartMin, cycle.RtStopMin,
                                         cycle.Ms1Count, cycle.Ms2Count,
                                         cycle.Ms1Acquired, cycle.Ms2Acquired,
-                                        cycle.Ms1Assigned, cycle.Ms2Assigned));
+                                        cycle.Ms1Assigned, cycle.Ms2Assigned,
+                                        cycle.Ms2Explained));
                                 }
 
                                 // Written after EVERY replicate, not once at the end. This is the
@@ -304,7 +317,8 @@ public static class IonAccountingRun
                     },
                     ct));
             },
-            memoryBudgetMb);
+            memoryBudgetMb,
+            wanted: wanted.Contains);
 
         Task.WaitAll(pending.ToArray(), ct);
 

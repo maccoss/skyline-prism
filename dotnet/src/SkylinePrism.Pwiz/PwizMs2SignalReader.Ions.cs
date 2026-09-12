@@ -317,6 +317,24 @@ public sealed partial class PwizMs2SignalReader
             + $"MS2 ions {record.Ms2Acquired:E3} acquired, {record.Ms2Assigned:E3} assigned "
             + $"({Percent(record.Ms2Fraction)}).");
 
+        // The second numerator, on its own line rather than folded into the one above: the point of
+        // measuring it is the COMPARISON, and a reader who cannot see both figures side by side has
+        // to go to the parquet to make it.
+        if (record.HasExplained)
+        {
+            var ratio = record.Ms2Assigned > 0 ? record.Ms2Explained / record.Ms2Assigned : double.NaN;
+            log($"    MS2 explained by any b/y or precursor ion: {record.Ms2Explained:E3} "
+                + $"({Percent(record.Ms2ExplainedFraction)} of acquired"
+                + (double.IsFinite(ratio) ? $", {ratio:0.0}x the quantified total" : "")
+                + ").");
+            if (record.ExplainedBelowAssigned)
+            {
+                log("    WARNING: that is BELOW the quantified total, which is impossible - the "
+                    + "explained set contains the quantified one by construction. This is a defect "
+                    + "in claim building, not a property of the data.");
+            }
+        }
+
         // Per SCAN, which is the only figure here a reader can sanity-check against something they
         // already know: it should land near the instrument's AGC target. The absolute totals cannot
         // be checked that way and neither can the fraction - a units error cancels out of the ratio

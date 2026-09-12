@@ -133,11 +133,23 @@ public static class ClaimedRegionLoader
     /// a sample's rows arrive contiguously, so one replicate's claims are held at a time rather than
     /// the cohort's.
     /// </summary>
+    /// <param name="wanted">
+    /// Which samples the caller will actually use. Rows of any other sample are read past without
+    /// being accumulated, and no <see cref="Loaded"/> is built for them.
+    ///
+    /// <para><b>This bounds the WORK, not just the output.</b> A replicate's explained claim set runs
+    /// to millions of regions - a Large Object Heap array of a hundred megabytes and more - so
+    /// building one per sample and letting the caller discard it made <c>--max 3</c> on a
+    /// 93-replicate document do ninety of those for nothing, alongside DuckDB's own native buffer
+    /// pool. The rows still have to be read, because sample boundaries are only known by reading
+    /// them; nothing is allocated for them.</para>
+    /// </param>
     public static void ForEachSample(
         MergedDataset dataset, SignalColumns cols, IsolationScheme scheme,
         ProductMassTolerance? productTolerance, ProductMassTolerance? precursorTolerance,
         IReadOnlyDictionary<string, PeptideClass> classes,
-        Action<string, Loaded> onSample, int memoryBudgetMb = 0)
+        Action<string, Loaded> onSample, int memoryBudgetMb = 0,
+        Func<string, bool>? wanted = null)
     {
         if (onSample is null)
             throw new ArgumentNullException(nameof(onSample));
@@ -149,20 +161,30 @@ public static class ClaimedRegionLoader
         var block = new Accumulator(
             scheme, productTolerance, precursorTolerance, classes, cols.PrecursorCharge is not null);
         string? current = null;
+        var keep = true;
 
         while (reader.Read())
         {
             var sample = reader.IsDBNull(0) ? "" : reader.GetString(0);
             if (current is not null && !string.Equals(sample, current, StringComparison.Ordinal))
             {
-                onSample(current, block.Take());
-                block.Reset();
+                if (keep)
+                {
+                    onSample(current, block.Take());
+                    block.Reset();
+                }
+                keep = wanted is null || wanted(sample);
+            }
+            else if (current is null)
+            {
+                keep = wanted is null || wanted(sample);
             }
             current = sample;
-            block.Add(reader, ordinalOffset: 1);
+            if (keep)
+                block.Add(reader, ordinalOffset: 1);
         }
 
-        if (current is not null)
+        if (current is not null && keep)
             onSample(current, block.Take());
     }
 

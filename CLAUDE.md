@@ -898,6 +898,24 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
 >   database) tearing an instance down under a live reader - but the later configurations rule that
 >   out, because they fail with no teardown possible and no shared instance at all. Parallel partition
 >   readers were built, crashed, and were reverted; see `TransitionRollup.RunParallel`.
+> - **A long read can die of memory pressure that arrived AFTER it started, and the symptom is a
+>   native access violation, not an exception.** `AutoMemoryBudgetMb()` bounds the pool against FREE
+>   RAM, which is right - but it is evaluated ONCE, when the connection opens. A run that starts on an
+>   idle machine takes a large budget and keeps it; if free memory later collapses, the native pool
+>   cannot get what it was promised and DuckDB.NET faults inside
+>   `DuckDBStreamFetchChunk`/`InitChunkData` with `0xC0000005`. Nothing managed sees it - no
+>   `OutOfMemoryException`, no catch block, just `Fatal error.` and exit 139.
+>
+>   Observed on 2026-09-11: two independent `prism ion-accounting` processes, on different shares,
+>   built from different commits, died three minutes apart with identical stacks - 13 and 16 minutes
+>   into a 6.5 GB Skyline document being opened alongside them. One of them had run nine hours and 71
+>   replicates successfully on the same data before the machine filled up.
+>
+>   Two practical consequences. **Do not run two cohort-scale reads at once**, and do not start one
+>   beside something that will take many gigabytes later. And **save progress per unit of work**:
+>   ion accounting writes its cache after every replicate, which is the only reason 72 of 82
+>   replicates survived that crash instead of nine hours being lost.
+>
 > - **`memory_limit` is a *database*-level setting, not a connection one.** Connections sharing an
 >   instance - which, per the above, means every `":memory:"` connection in the process - share one
 >   budget. Setting it per connection does not give each its own pool.
