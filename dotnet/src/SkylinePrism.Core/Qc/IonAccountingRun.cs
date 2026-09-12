@@ -173,8 +173,13 @@ public static class IonAccountingRun
             .Append(Path.Combine(outputDir, "peptides_rollup.parquet"))
             .Append(Path.Combine(outputDir, "corrected_peptides.parquet"))
             .ToList();
+        // By CONTENT, not by the display names the result carries: a list edited in place keeps
+        // its name and its per-list totals are a different answer afterwards.
+        var listKeys = lists
+            .Select(l => IonAccountingStore.ProteinListIdentity(l.Name, l.Members))
+            .ToList();
         var settingsKey = IonAccountingStore.SettingsKeyFor(
-            productText, precursorText, schemeKey, classified.ListNames, sources);
+            productText, precursorText, schemeKey, listKeys, sources);
 
         // What the cache already holds for THESE settings. A keyed cache is not automatically
         // complete: the key covers the files that could be measured, not the ones that were, so a

@@ -174,6 +174,12 @@ public partial class MainWindow : Window
     /// </remarks>
     private void UpdateBatchCorrectionDefault()
     {
+        // Defensive like UpdateRunEnabled, which calls this: these controls are declared AFTER
+        // OutputDirBox in the markup, so a TextChanged raised during InitializeComponent would
+        // reach here before they exist - and an NRE there is a startup crash, not a handler error.
+        if (BatchColumnBox is null || PeptideBatchCheck is null || ProteinBatchCheck is null)
+            return;
+
         var suggested = BatchCorrectionDefault.Suggest(
             _inputs.Count, BatchColumnBox.Text, _batchChoiceIsUsers);
         if (suggested is null)
@@ -544,44 +550,63 @@ public partial class MainWindow : Window
     /// not the absolute-abundance estimate iBAQ is chosen for. That fallback is only mentioned in the
     /// log today, which is not where someone picking a method is looking.
     /// </summary>
-    private void UpdateFastaHint()
+    /// <remarks>
+    /// The existence probe runs off the UI thread. This is reached from the box's
+    /// <c>TextChanged</c>, so on a FASTA held on a share it was one blocking round trip per
+    /// keystroke - the same hazard the Ion Accounting and Spectrum Density panes were fixed for,
+    /// and the last one left in this window.
+    /// </remarks>
+    private async void UpdateFastaHint()
     {
-        if (FastaHint is null || FastaBox is null || ProteinRollupCombo is null)
-            return;
+        try
+        {
+            if (FastaHint is null || FastaBox is null || ProteinRollupCombo is null)
+                return;
 
-        var path = FastaBox.Text?.Trim();
-        var have = !string.IsNullOrWhiteSpace(path);
-        var isIbaq = string.Equals(
-            ComboText(ProteinRollupCombo, "median_polish"), "ibaq", StringComparison.OrdinalIgnoreCase);
+            var path = FastaBox.Text?.Trim();
+            var have = !string.IsNullOrWhiteSpace(path);
+            var isIbaq = string.Equals(
+                ComboText(ProteinRollupCombo, "median_polish"), "ibaq", StringComparison.OrdinalIgnoreCase);
 
-        if (have && !File.Exists(path))
-        {
-            FastaHint.Text = "File not found - the run will fall back to the Skyline accession column.";
-            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+            var missing = have && !await Task.Run(() => File.Exists(path!));
+            // The box can have moved on while a slow share answered; a hint for a path that is no
+            // longer typed is worse than none.
+            if (!string.Equals(FastaBox.Text?.Trim(), path, StringComparison.Ordinal))
+                return;
+
+            if (missing)
+            {
+                FastaHint.Text = "File not found - the run will fall back to the Skyline accession column.";
+                FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+            }
+            else if (isIbaq && !have)
+            {
+                FastaHint.Text = "iBAQ needs a FASTA. Without one it divides by the OBSERVED peptide count, "
+                    + "which is not an iBAQ.";
+                FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
+            }
+            else if (isIbaq && !string.IsNullOrWhiteSpace(_ibaqFastaOverride))
+            {
+                // The loaded config points iBAQ at its own database. Say so, because the box does not show it
+                // and the run will not use what is on screen for the iBAQ counts.
+                FastaHint.Text = "iBAQ uses its own database from the loaded config: "
+                    + Path.GetFileName(_ibaqFastaOverride);
+                FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+            }
+            else if (have)
+            {
+                FastaHint.Text = "Enzyme-aware parsimony" + (isIbaq ? " and iBAQ counts." : ".");
+                FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+            }
+            else
+            {
+                FastaHint.Text = "Optional - without it, protein groups come from the Skyline accession column.";
+                FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+            }
         }
-        else if (isIbaq && !have)
+        catch (Exception ex)
         {
-            FastaHint.Text = "iBAQ needs a FASTA. Without one it divides by the OBSERVED peptide count, "
-                + "which is not an iBAQ.";
-            FastaHint.Foreground = System.Windows.Media.Brushes.Firebrick;
-        }
-        else if (isIbaq && !string.IsNullOrWhiteSpace(_ibaqFastaOverride))
-        {
-            // The loaded config points iBAQ at its own database. Say so, because the box does not show it
-            // and the run will not use what is on screen for the iBAQ counts.
-            FastaHint.Text = "iBAQ uses its own database from the loaded config: "
-                + Path.GetFileName(_ibaqFastaOverride);
-            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
-        }
-        else if (have)
-        {
-            FastaHint.Text = "Enzyme-aware parsimony" + (isIbaq ? " and iBAQ counts." : ".");
-            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
-        }
-        else
-        {
-            FastaHint.Text = "Optional - without it, protein groups come from the Skyline accession column.";
-            FastaHint.Foreground = System.Windows.Media.Brushes.Gray;
+            ReportHandlerFailure(nameof(UpdateFastaHint), ex);
         }
     }
 

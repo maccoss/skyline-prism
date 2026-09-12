@@ -442,10 +442,12 @@ public static class ClaimedRegionLoader
         for (var i = 0; i < scheme.Windows.Count; i++)
         {
             var w = scheme.Windows[i];
-            if (!w.Contains(mz))
-                continue;
-            if (double.IsFinite(rtStart) && double.IsFinite(rtStop)
-                && !w.IsOnAt(rtStart) && !w.IsOnAt(rtStop))
+            // Covers() is true interval OVERLAP, which is what a peak spanning a scheduled window
+            // needs. Testing the two peak ends instead rejected a window whose firing interval sits
+            // strictly INSIDE the peak - the reader, which asks per scan, would have placed scans in
+            // it - so the claim was dropped as outside the scheme and assigned was quietly
+            // understated. No effect on plain DIA, where every window is on for the whole gradient.
+            if (!w.Covers(mz, rtStart, rtStop))
                 continue;
             if (w.Width < bestWidth)
             {

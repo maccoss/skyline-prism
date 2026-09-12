@@ -242,11 +242,17 @@ public static class IonAccountingStore
 
     /// <summary>
     /// The cache validity key. <paramref name="sources"/> is every input whose CONTENT would change
-    /// the answer: the instrument files, and <c>merged_data/</c> for the claim geometry.
+    /// the answer: the instrument files, <c>merged_data/</c> for the claim geometry, and the rollup
+    /// and corrected peptide matrices for which peptides claim at all.
     /// </summary>
+    /// <param name="listKeys">
+    /// One entry per selected protein list, identifying it by its CONTENT and not only its name -
+    /// see <see cref="ProteinListIdentity"/>. A list edited in place keeps its name and gives
+    /// different per-list totals, so keying on the name alone reuses stale ones.
+    /// </param>
     public static string SettingsKeyFor(
         string productTolerance, string precursorTolerance, string isolationScheme,
-        IEnumerable<string> listNames, IReadOnlyList<string> sources) =>
+        IEnumerable<string> listKeys, IReadOnlyList<string> sources) =>
         string.Join(
             "|",
             // v2: v1 multiplied the intensity by the injection time in MILLISECONDS, so
@@ -268,8 +274,28 @@ public static class IonAccountingStore
             productTolerance,
             precursorTolerance,
             isolationScheme,
-            string.Join(",", listNames),
+            string.Join(",", listKeys),
             SourceFingerprint.Compute(sources));
+
+    /// <summary>
+    /// A protein list's identity for the cache key: its name, its size, and a digest of its members.
+    /// </summary>
+    /// <remarks>
+    /// Sorted and case-folded so the same set written in a different order is the same list, and
+    /// digested rather than joined so a 2,000-protein panel does not put 2,000 accessions into a
+    /// string that is stored in every row of the cache.
+    /// </remarks>
+    public static string ProteinListIdentity(string name, IEnumerable<string>? members)
+    {
+        var ordered = (members ?? Array.Empty<string>())
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Select(m => m.Trim().ToUpperInvariant())
+            .OrderBy(m => m, StringComparer.Ordinal)
+            .ToList();
+        var digest = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join("\n", ordered)));
+        return $"{name}#{ordered.Count}#{Convert.ToHexString(digest, 0, 8)}";
+    }
 
     /// <summary>One phrase naming a set of settings, for the log line on a cache miss.</summary>
     public static string SummarizeSettings(

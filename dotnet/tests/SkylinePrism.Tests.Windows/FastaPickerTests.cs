@@ -112,7 +112,10 @@ public class FastaPickerTests
     [Fact]
     public void ChoosingIbaqWithoutAFastaIsCalledOut()
     {
-        var hint = Between(CodeBehind, "private void UpdateFastaHint()", "\n    private ");
+        // Matched on the name alone: the method became async when its File.Exists moved off the
+        // UI thread, and an anchor carrying the modifiers breaks on a change that is not the one
+        // this test is about.
+        var hint = Between(CodeBehind, "void UpdateFastaHint()", "\n    private ");
 
         Assert.Contains("ibaq", hint, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("OBSERVED", hint);
