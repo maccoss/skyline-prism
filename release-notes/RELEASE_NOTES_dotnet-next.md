@@ -31,6 +31,30 @@ as the GitHub Release description and fails if it is missing.
   rather than clamping it, because a fraction above 100% is impossible and therefore a defect worth
   seeing.
 
+  **At MS2 the question has two answers, and the report gives both.** The *quantified* total is the
+  signal in the transitions your document carries - the handful of fragments Skyline integrates, and
+  the right numerator for "what is my quantification standing on". The *explained* total is every
+  theoretical b and y ion at 1+ and 2+ (capped at the precursor charge) plus the surviving precursor
+  and its first two isotopes - the right numerator for "how much of the acquisition can this peptide
+  account for at all". The unfragmented precursor and the low-m/z fragments are poor quantifiers,
+  which is why Skyline does not pick them, and they are still part of the mass balance. Both appear
+  per replicate and across the gradient: a third bar on each plot, a third trace on the absolute
+  profile, and a second line on the share profile.
+
+  The explained set is the theoretical ions UNIONED with the quantified claims, so it can never fall
+  below the quantified total even where Skyline integrates an ion the enumeration does not produce.
+  Every sequence is reconciled against Skyline's own `Precursor Mz` before its claims are used, and a
+  precursor whose mass PRISM cannot reproduce is excluded and COUNTED - that count is reported per
+  replicate, because its only other symptom would be a quietly smaller explained total. Validated
+  against every distinct precursor of the committed cohort fixture: 385 of them, worst deviation
+  0.0022 ppm.
+
+  Two limits worth knowing. **Heavy isotope labels are not yet handled** - the exported sequence is
+  the peptide-level one, which carries structural modifications only, so on a document with heavy
+  internal standards those precursors fail to reconcile and are excluded rather than mis-claimed.
+  And **an export without a `Precursor Charge` column measures no explained total at all**, which the
+  plots show as absent rather than as zero.
+
   **Shared signal is counted once.** Two peptides whose fragments fall within the extraction
   tolerance of each other in the same isolation window extract the *same* detector counts. Summing
   their peak areas credits both and can push assigned past acquired; PRISM instead merges every

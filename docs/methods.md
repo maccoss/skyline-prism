@@ -1003,6 +1003,56 @@ a 4.44 GB Thermo file of 168,920 spectra: **1.0 s of 206.7 s** is masking 465,30
 against every spectrum. The other 99.5% is decoding spectra, which is why this is a separate cached
 step and not part of every run.
 
+### Two numerators: quantified, and explained
+
+The assigned total above is the signal in the transitions the **document carries** - typically six
+fragments per precursor, the ones Skyline integrates. That answers *what is this quantification
+standing on*. It is the wrong numerator for *how much of the acquisition can this peptide account
+for at all*, because the ions Skyline does not quantify on are still the peptide's:
+
+$$\text{explained} \;=\; \underbrace{\{b_i, y_i \text{ at } 1^+, 2^+\}}_{\text{capped at the precursor charge}} \;\cup\; \{\text{precursor } M, M{+}1, M{+}2\} \;\cup\; \underbrace{\text{quantified}}_{\text{the union half}}$$
+
+Both totals are measured in the same walk over the file, against two `ClaimedSignalIndex` instances.
+Masking is about 0.5% of a file's cost, so the second pass is roughly 1%; the cost is in building the
+claims, of which there are roughly ten times as many.
+
+**The union with the quantified set is not cosmetic.** Skyline sometimes integrates an ion this
+enumeration does not produce - a 3+ fragment, a neutral loss - and without the union such a transition
+would raise the quantified total and not the explained one, making explained < quantified, which is
+impossible and reads as a defect. Unioning makes the nesting true by construction rather than by
+hope; `IonAccountingRecord.ExplainedBelowAssigned` exists to catch it if it ever is not.
+
+**Every sequence is reconciled against Skyline's own `Precursor Mz` first.** The residue and Unimod
+tables are PRISM's, so a modification they cannot resolve would place a peptide's worth of m/z windows
+on masses belonging to nothing - and then count another peptide's signal as this one's. There is no
+safe fallback for a wrong mass, so an unresolvable precursor is **skipped and counted**, and the count
+is reported per replicate. Validated against every distinct precursor of the committed cohort fixture:
+385 of them, worst deviation 0.0022 ppm.
+
+| claimed | not claimed | why |
+|---|---|---|
+| b and y, 1+ and 2+ | 3+ and higher fragments | a 2+ precursor cannot make one; the cap is the precursor's own charge |
+| precursor M, M+1, M+2 | charge-reduced precursor | real in ETD-family activation, speculative for HCD |
+| | neutral losses (water, ammonia) | needs a loss table per residue; not enumerated |
+| | a-ions, c/z ions | not produced in quantity by HCD |
+
+> [!CAUTION]
+> **Heavy isotope labels are not handled, and the export does not carry them.** PRISM exports
+> `Precursor.Peptide.ModifiedSequence` - the PEPTIDE-level sequence, structural modifications only -
+> while an isotope label is a property of the PRECURSOR. On a document with heavy internal standards
+> the light mass is computed, fails to reconcile against the row's heavy `Precursor Mz`, and the
+> precursor is excluded. That is safe, and it is silent apart from the reconciliation count, which is
+> why the count is reported. Closing it means exporting `Precursor.ModifiedSequenceUnimodIds`, which
+> carries the label AND its position - the position being why the delta cannot simply be derived from
+> `Precursor Mz`, since a +8 on the C-terminal K belongs to every y ion and no b ion.
+
+**MS2 only.** At MS1 the theoretical claim IS the precursor isotope envelope Skyline already extracts,
+so the two totals cannot differ and a second index would cost memory to draw a line on top of another.
+
+**Not measured is not zero.** An export with no `Precursor Charge` column builds no theoretical claims
+at all. `HasExplained` keeps that apart from a measured zero - which would say the peptides explain
+nothing - and the plots and captions then render exactly as they did before the feature existed.
+
 ### Protein lists
 
 Each selected list gets its own total, carried as a bit per list on the claim (`ListMask`) and

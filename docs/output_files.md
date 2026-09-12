@@ -36,7 +36,7 @@ output_dir/
 ├── marker_normalization.csv        # Per-sample marker score + loadings (if marker_normalization)
 ├── fasta/                          # Copy of the search database(s) this run used (if any)
 ├── parameters.json                 # Complete provenance and processing parameters
-├── ion_accounting.parquet          # Ions acquired/assigned per replicate (if `prism ion-accounting`)
+├── ion_accounting.parquet          # Ions acquired/assigned/explained per replicate (if `prism ion-accounting`)
 ├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
 ├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
@@ -51,8 +51,8 @@ file in the cohort, which is often a terabyte over a network share.
 
 | File | One row per | Holds |
 |---|---|---|
-| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
-| `ion_cycles.parquet` | acquisition cycle | the same four totals per cycle, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
+| `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. Also scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
+| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained`, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
 | `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
 
 **The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity

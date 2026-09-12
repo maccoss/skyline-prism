@@ -297,8 +297,20 @@ guess which document you meant.
 ## Ion accounting
 
 **Of the ions that actually reached the detector, what fraction did this analysis put a peptide
-sequence to?** Two numbers per replicate at each MS level, both measured from the instrument files,
-so both are the same quantity and the ratio is a genuine fraction.
+sequence to?** Measured from the instrument files at each MS level, so both sides of the ratio are the
+same quantity and the fraction is a genuine one.
+
+At MS2 the question is asked twice, because it has two honest answers:
+
+| | what it counts | what it tells you |
+|---|---|---|
+| **quantified** | the transitions the document carries - the fragments Skyline integrates | what your quantification is standing on |
+| **explained** | every theoretical b and y ion at 1+ and 2+, plus the surviving precursor and its first two isotopes | what the peptide can account for at all |
+
+The gap between them is signal the peptide genuinely produced that no transition in the document
+integrates. Low-m/z fragments and unfragmented precursor are poor quantifiers - which is why Skyline
+does not pick them - and they are still part of the mass balance. Both appear on every plot: a third
+bar per replicate, a third trace across the gradient, and a second line on the share profile.
 
 No Skyline export can answer this. `TicArea` is one value per replicate and is MS1 by construction,
 and a peak area is an intensity-time integral where a summed total ion current is an intensity - so
