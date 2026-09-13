@@ -50,7 +50,13 @@ public partial class MainWindow : Window
         // start the picker sat empty and the shipped panels looked as though they had not been installed.
         RefreshMarkerListCombo();
         InputsGrid.ItemsSource = _inputs;
-        _inputs.CollectionChanged += (_, _) => UpdateRunEnabled();
+        _inputs.CollectionChanged += (_, _) =>
+        {
+            UpdateRunEnabled();
+            // The one place the document probe hangs off, so it fires once per input change rather
+            // than once per keystroke in the output box.
+            RefreshIonDocumentFacts();
+        };
 
         // Run stays disabled until there is an output directory AND at least one input. When connected to a
         // saved document, SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the
@@ -217,39 +223,105 @@ public partial class MainWindow : Window
                 && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
 
         // Adding and removing an input both reach here, which makes it the one place the ComBat
-        // default and the tolerance row have to follow.
+        // default has to follow.
         UpdateBatchCorrectionDefault();
-        UpdateIonToleranceVisibility();
-
-        // Adding a document with ion accounting already ticked has to fill the folder too, not just
-        // ticking it with a document already added - the box was left empty depending on which order
-        // the two were done in.
-        if (IonAccountingCheck?.IsChecked == true && string.IsNullOrWhiteSpace(IonRawDirText?.Text))
-            _ = FillIonRawDirFromDocumentsAsync();
     }
 
+    private int _ionFactsProbe;   // newest probe wins
+
     /// <summary>
-    /// The extraction-tolerance boxes are on screen only when nothing else can state the tolerance.
+    /// Ask the inputs what they can say about the acquisition, and shape the pane to the answer:
+    /// hide the tolerance boxes when a document states one, and fill the data folder when a document
+    /// records it.
     /// </summary>
     /// <remarks>
-    /// <para>A Skyline document - running or on disk - declares its own extraction window in
-    /// Transition Settings &gt; Full-Scan, and PRISM reads it from there. Leaving the boxes visible
-    /// alongside one asks the user for something already known, and an empty box beside a required
-    /// setting reads as an omission.</para>
+    /// <para><b>By ASKING, not by input kind.</b> Kind is the wrong proxy: an unsaved live Skyline
+    /// document has no path, so <see cref="PrismInput.TryGetExtractionTolerances"/> returns nothing
+    /// for it - and hiding the boxes on kind alone left that user with a run that skips ion
+    /// accounting for a missing tolerance and no way on screen to supply one.</para>
     ///
-    /// <para>Decided by input KIND rather than by reading each document, because this runs on every
-    /// input change and reading is a file-system round trip. A document that turns out to be
-    /// unreadable is reported in the run log, which names the box - the row reappears as soon as the
-    /// document is removed.</para>
+    /// <para><b>One probe, from input changes and the checkbox only.</b> It used to hang off
+    /// <c>UpdateRunEnabled</c>, which also runs for every output-directory keystroke - so typing a
+    /// UNC path fanned out a document read and a network probe per character. Each call retires the
+    /// one before it.</para>
     /// </remarks>
-    private void UpdateIonToleranceVisibility()
+    private async void RefreshIonDocumentFacts()
     {
-        if (IonTolerancePanel is null)
-            return;
-        var anyDocument = _inputs.Any(i => i.Kind != PrismInputKind.ReportFile);
-        IonTolerancePanel.Visibility = _inputs.Count > 0 && !anyDocument
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        try
+        {
+            if (IonTolerancePanel is null || IonRawDirText is null)
+                return;
+
+            var request = ++_ionFactsProbe;
+            var inputs = _inputs.ToArray();
+            if (inputs.Length == 0)
+            {
+                IonTolerancePanel.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            // Snapshotted on the UI thread; the probe below touches no control.
+            var wantFolder = IonAccountingCheck?.IsChecked == true
+                && string.IsNullOrWhiteSpace(IonRawDirText.Text);
+            var outputDir = OutputDirBox?.Text?.Trim();
+
+            var facts = await Task.Run(() =>
+            {
+                ProductMassTolerance? product = null;
+                string? folder = null;
+                PrismInput? from = null;
+                foreach (var input in inputs)
+                {
+                    product ??= input.TryGetExtractionTolerances(App.WriteLog).Product;
+                    if (wantFolder && folder is null)
+                    {
+                        var guess = input.GuessRawDirectory(App.WriteLog);
+                        if (!string.IsNullOrWhiteSpace(guess) && Directory.Exists(guess))
+                        {
+                            folder = guess;
+                            from = input;
+                        }
+                    }
+                }
+                if (wantFolder && folder is null && !string.IsNullOrWhiteSpace(outputDir))
+                {
+                    var recorded = Provenance.ReadAcquisition(outputDir!).InstrumentFiles;
+                    if (!string.IsNullOrWhiteSpace(recorded) && Directory.Exists(recorded))
+                        folder = recorded;
+                }
+                return (Product: product, Folder: folder, From: from);
+            });
+
+            if (request != _ionFactsProbe)
+                return;
+
+            // Hidden only when something actually answered. A document that cannot say - unsaved,
+            // unreadable, or a plain report - leaves the boxes available.
+            IonTolerancePanel.Visibility =
+                facts.Product is null ? Visibility.Visible : Visibility.Collapsed;
+
+            if (facts.Folder is not null && string.IsNullOrWhiteSpace(IonRawDirText.Text))
+            {
+                IonRawDirText.Text = facts.Folder;
+                Log(facts.From is not null
+                    ? $"Ion accounting: {facts.From.DisplayName} imported its data from "
+                      + $"{facts.Folder}, so that is where the files will be read from. Change it "
+                      + "above if they have moved."
+                    : $"Ion accounting: an earlier run of this output directory recorded its data in "
+                      + $"{facts.Folder}, so that is where the files will be read from. Change it "
+                      + "above if they have moved.");
+            }
+            else if (wantFolder && facts.Folder is null)
+            {
+                Log("Ion accounting: none of the inputs could say where its data files are - a "
+                    + "pre-exported report records no paths, and a document whose files have moved "
+                    + "records the old ones. Browse to the directory instead.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(RefreshIonDocumentFacts), ex);
+        }
     }
 
     private void OnBatchColumnChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -1098,9 +1170,14 @@ public partial class MainWindow : Window
 
         // Captured HERE because RunPipeline runs on a worker and these are UI controls. The same
         // reason the metadata report and batch column are read above rather than inside the run.
-        var ionRawDir = IonAccountingCheck.IsChecked == true
-            ? IonRawDirText.Text?.Trim()
-            : null;
+        // The tolerance boxes were read INSIDE the run instead, which threw "the calling thread
+        // cannot access this object because a different thread owns it" and cost the whole ion
+        // accounting pass - the analysis above it had already finished, so it looked like a
+        // measurement failure rather than a bug.
+        var ion = new IonRunSettings(
+            IonAccountingCheck.IsChecked == true ? IonRawDirText.Text?.Trim() : null,
+            IonProductTolText.Text?.Trim(),
+            IonPrecursorTolText.Text?.Trim());
 
         try
         {
@@ -1108,7 +1185,7 @@ public partial class MainWindow : Window
             StopButton.IsEnabled = true;
             var token = _runCancellation.Token;
             await Task.Run(
-                () => RunPipeline(inputs, outputDir, metadataReport, config, ionRawDir, token),
+                () => RunPipeline(inputs, outputDir, metadataReport, config, ion, token),
                 token);
             // Load the QC matrices (parquet I/O) OFF the UI thread - reading the just-written outputs
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
@@ -1264,9 +1341,16 @@ public partial class MainWindow : Window
     /// Directory of instrument data files to measure ion accounting from, or null to skip it.
     /// Captured on the UI thread by the caller, because this method runs on a worker.
     /// </param>
+    /// <summary>
+    /// Everything the ion accounting pass needs from the window, read on the UI thread before the
+    /// run starts. Nothing below <see cref="RunPipeline"/> may touch a control.
+    /// </summary>
+    private sealed record IonRunSettings(
+        string? RawDirectory, string? ProductTolerance, string? PrecursorTolerance);
+
     private void RunPipeline(
         IReadOnlyList<PrismInput> inputs, string outputDir, string? metadataReport, PrismConfig config,
-        string? ionRawDir, CancellationToken cancellationToken)
+        IonRunSettings ion, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDir);
         var reportsDir = Path.Combine(outputDir, "skyline-reports");
@@ -1406,9 +1490,9 @@ public partial class MainWindow : Window
                 + "will use them once it finishes.");
         isolationTask.Wait(TimeSpan.FromSeconds(20));
         RecordIsolationProvenance(outputDir);
-        RecordAcquisitionProvenance(inputs, outputDir, ionRawDir);
+        RecordAcquisitionProvenance(inputs, outputDir, ion);
 
-        RunIonAccounting(inputs, outputDir, ionRawDir, cancellationToken);
+        RunIonAccounting(inputs, outputDir, ion, cancellationToken);
     }
 
     /// <summary>
@@ -1451,13 +1535,13 @@ public partial class MainWindow : Window
     /// knew and threw away.
     /// </remarks>
     private void RecordAcquisitionProvenance(
-        IReadOnlyList<PrismInput> inputs, string outputDir, string? rawDir)
+        IReadOnlyList<PrismInput> inputs, string outputDir, IonRunSettings ion)
     {
         try
         {
-            var (product, precursor, _) = ResolveIonTolerances(inputs);
-            var directory = !string.IsNullOrWhiteSpace(rawDir)
-                ? rawDir
+            var (product, precursor, _) = ResolveIonTolerances(inputs, outputDir, ion);
+            var directory = !string.IsNullOrWhiteSpace(ion.RawDirectory)
+                ? ion.RawDirectory
                 : DensityRawDirectory(null, inputs);
 
             if (Provenance.RecordAcquisition(
@@ -1487,9 +1571,10 @@ public partial class MainWindow : Window
     /// succeeded, and a QC section is not a reason to tell the user it did not.</para>
     /// </remarks>
     private void RunIonAccounting(
-        IReadOnlyList<PrismInput> inputs, string outputDir, string? rawDir,
+        IReadOnlyList<PrismInput> inputs, string outputDir, IonRunSettings ion,
         CancellationToken cancellationToken)
     {
+        var rawDir = ion.RawDirectory;
         if (string.IsNullOrWhiteSpace(rawDir))
             return;
 
@@ -1511,7 +1596,7 @@ public partial class MainWindow : Window
             // Never a default: a guessed tolerance changes how much fragment sharing is found,
             // and nothing on the plot would say the number moved. Two ways to know it, and neither
             // is a guess - what the user typed, and what the document declares.
-            var (product, precursor, source) = ResolveIonTolerances(inputs);
+            var (product, precursor, source) = ResolveIonTolerances(inputs, outputDir, ion);
             if (product is null)
             {
                 Log("Ion accounting: the product-ion extraction window is not known, so it was "
@@ -1561,8 +1646,8 @@ public partial class MainWindow : Window
         IonProductTolText.IsEnabled = on;
         IonPrecursorTolText.IsEnabled = on;
 
-        if (on && string.IsNullOrWhiteSpace(IonRawDirText.Text))
-            _ = FillIonRawDirFromDocumentsAsync();
+        if (on)
+            RefreshIonDocumentFacts();
     }
 
     /// <summary>
@@ -1576,13 +1661,13 @@ public partial class MainWindow : Window
     /// under it.
     /// </remarks>
     private (ProductMassTolerance? Product, ProductMassTolerance? Precursor, string Source)
-        ResolveIonTolerances(IReadOnlyList<PrismInput> inputs)
+        ResolveIonTolerances(IReadOnlyList<PrismInput> inputs, string outputDir, IonRunSettings ion)
     {
-        var typedProduct = ProductMassTolerance.ParseSetting(IonProductTolText.Text?.Trim());
-        var typedPrecursor = ProductMassTolerance.ParseSetting(IonPrecursorTolText.Text?.Trim());
-        if (!string.IsNullOrWhiteSpace(IonProductTolText.Text) && typedProduct is null)
+        var typedProduct = ProductMassTolerance.ParseSetting(ion.ProductTolerance);
+        var typedPrecursor = ProductMassTolerance.ParseSetting(ion.PrecursorTolerance);
+        if (!string.IsNullOrWhiteSpace(ion.ProductTolerance) && typedProduct is null)
         {
-            Log($"Ion accounting: could not read the product tolerance \"{IonProductTolText.Text}\". "
+            Log($"Ion accounting: could not read the product tolerance \"{ion.ProductTolerance}\". "
                 + "Write it as the +/- window the document states, e.g. \"10 ppm\" or \"0.4 m/z\".");
         }
 
@@ -1614,7 +1699,7 @@ public partial class MainWindow : Window
         // had the document; this one may only have the report it exported.
         if (typedProduct is null && product is null)
         {
-            var dir = OutputDirBox.Text?.Trim();
+            var dir = outputDir;
             if (!string.IsNullOrWhiteSpace(dir))
             {
                 var recorded = Provenance.ReadAcquisition(dir!);
@@ -1634,81 +1719,6 @@ public partial class MainWindow : Window
         return IonToleranceChoice.Pick(typedProduct, typedPrecursor, product, precursor);
     }
 
-    /// <summary>
-    /// Fill the data directory from where the documents say they imported from.
-    /// </summary>
-    /// <remarks>
-    /// <para>A Skyline document records the path of every file it imported, so in the usual case
-    /// this is written down rather than guessed, and asking someone to browse for a directory their
-    /// document already names is work they should not have to do.</para>
-    ///
-    /// <para>Only ever fills an EMPTY box, and only on ticking - never overwrites a path that is
-    /// already there, and never re-asserts itself if you clear it deliberately.</para>
-    /// </remarks>
-    /// <remarks>
-    /// <para><b>Off the UI thread.</b> <see cref="PrismInput.GuessRawDirectory"/> makes a
-    /// named-pipe round trip into Skyline, stream-parses the document header, and then probes every
-    /// recorded sample-file path plus up to three ancestors each. On a machine that is not the one
-    /// the data was imported on those paths are exactly the ones that no longer resolve, and a dead
-    /// UNC path does not fail fast - it blocks for the SMB timeout, several hundred times, on a
-    /// single click of the checkbox. The Spectrum Density pane learned this first; see
-    /// <c>DensityRawDirectory</c>, which is static for the same reason.</para>
-    /// </remarks>
-    private async Task FillIonRawDirFromDocumentsAsync()
-    {
-        try
-        {
-            // Snapshotted on the UI thread; nothing below touches a control until the await
-            // returns, and the box is only filled if it is still the empty one we set out to fill.
-            var inputs = _inputs.ToArray();
-            if (inputs.Length == 0)
-                return;
-
-            var outputDir = OutputDirBox.Text?.Trim();
-            var found = await Task.Run(() =>
-            {
-                foreach (var input in inputs)
-                {
-                    var dir = input.GuessRawDirectory(App.WriteLog);
-                    if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
-                        return (Input: (PrismInput?)input, Dir: (string?)dir);
-                }
-                // No document among the inputs to ask - but a previous run of this output directory
-                // may have had one and written down where its files were.
-                if (!string.IsNullOrWhiteSpace(outputDir))
-                {
-                    var recorded = Provenance.ReadAcquisition(outputDir!).InstrumentFiles;
-                    if (!string.IsNullOrWhiteSpace(recorded) && Directory.Exists(recorded))
-                        return (Input: null, Dir: recorded);
-                }
-                return (Input: null, Dir: null);
-            });
-
-            if (!string.IsNullOrWhiteSpace(IonRawDirText.Text))
-                return;   // the user typed or browsed one while the share was being probed
-
-            if (found.Dir is not null)
-            {
-                IonRawDirText.Text = found.Dir;
-                Log(found.Input is not null
-                    ? $"Ion accounting: {found.Input.DisplayName} imported its data from {found.Dir}, "
-                      + "so that is where the files will be read from. Change it above if they have "
-                      + "moved."
-                    : $"Ion accounting: an earlier run of this output directory recorded its data in "
-                      + $"{found.Dir}, so that is where the files will be read from. Change it above "
-                      + "if they have moved.");
-                return;
-            }
-
-            Log("Ion accounting: none of the inputs could say where its data files are - a "
-                + "pre-exported report records no paths, and a document whose files have moved "
-                + "records the old ones. Browse to the directory instead.");
-        }
-        catch (Exception ex)
-        {
-            ReportHandlerFailure(nameof(FillIonRawDirFromDocumentsAsync), ex);
-        }
-    }
 
     private void OnBrowseIonRawDir(object sender, RoutedEventArgs e)
     {
