@@ -280,13 +280,22 @@ public class IonCyclesCacheTests : IDisposable
         IonAccountingStore.PlacementAttempts = 2;
         IonAccountingStore.PlacementDelayMs = 1;
         var lines = new List<string>();
+        bool refused;
         try
         {
-            using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                // Forty-eight instrument files and several hours. Throwing over a file NAME
+                // reported all of it as "Ion accounting failed" when every cycle was on disk and
+                // readable.
+                IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
 
-            // Forty-eight instrument files and several hours. Throwing over a file NAME reported
-            // all of it as "Ion accounting failed" when every cycle was on disk and readable.
-            IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
+                // Windows refuses every way of replacing a file something holds exclusively.
+                // POSIX does not - a rename over an open file is ordinary there - so the placement
+                // genuinely succeeds on Linux and macOS. Both outcomes are a success; asserting
+                // the Windows one everywhere is what broke this on the other two.
+                refused = File.Exists(path + ".new");
+            }
         }
         finally
         {
@@ -294,9 +303,14 @@ public class IonCyclesCacheTests : IDisposable
             IonAccountingStore.PlacementDelayMs = delay;
         }
 
+        // The measurement survives either way, which is the whole point.
         Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
-        Assert.Contains(lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("WARNING", StringComparison.Ordinal));
+        if (refused)
+        {
+            Assert.Contains(
+                lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
+        }
     }
 
     private string NewDir()
