@@ -51,9 +51,18 @@ public static partial class PlotRenderer
         Signal = 1,
     }
 
-    /// <summary>The axis noun for a quantity: "ions", or "signal (TIC)".</summary>
+    /// <summary>
+    /// The axis noun for a quantity: "ions" or "signal".
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT "signal (TIC)". Only the ACQUIRED series is a total ion current; the
+    /// assigned and explained series are the parts of it inside a claimed region, which no
+    /// instrument reports and which are not TICs. Naming the whole axis TIC labels two of three
+    /// series as something they are not - so the axis says "signal" and the acquired series says
+    /// TIC in its own legend entry, where it is true.
+    /// </remarks>
     private static string Noun(IonQuantity quantity) =>
-        quantity == IonQuantity.Signal ? "signal (TIC)" : "ions";
+        quantity == IonQuantity.Signal ? "signal" : "ions";
 
     /// <summary>
     /// Per replicate: the ions acquired, and the part of them assigned to a peptide sequence.
@@ -127,10 +136,13 @@ public static partial class PlotRenderer
         acquiredKey.MarkerStyle.Size = 14;
         acquiredKey.MarkerStyle.FillColor = AcquiredBarColor;
         acquiredKey.MarkerStyle.LineWidth = 0;
+        // TIC belongs HERE and nowhere else on the plot: this series is the instrument's own total,
+        // and the two drawn over it are parts of it.
+        var acquiredNoun = level.ToString().ToUpperInvariant() + " " + Noun(quantity)
+            + (quantity == IonQuantity.Signal ? " (TIC)" : "");
         acquiredKey.LegendText = withDenominator == rows.Count
-            ? $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
-            : $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} "
-              + $"({withDenominator:N0} of {rows.Count:N0})";
+            ? $"acquired {acquiredNoun}"
+            : $"acquired {acquiredNoun} ({withDenominator:N0} of {rows.Count:N0})";
 
         // Between the two, and BEFORE the assigned bars so the shorter one lands on top. The three
         // totals nest - acquired >= explained >= assigned - so they are drawn back to front rather
@@ -261,7 +273,8 @@ public static partial class PlotRenderer
         band.FillColor = Color.FromHex("#c8ccd4").WithAlpha((byte)140);
         band.LineWidth = 0;
         band.MarkerSize = 0;
-        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}";
+        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
+            + (quantity == IonQuantity.Signal ? " (TIC)" : "");
 
         if (showExplained)
         {

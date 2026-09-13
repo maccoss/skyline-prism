@@ -200,7 +200,7 @@ public static class IonAccountingRun
                 // measured, so it was never read again, and the next incremental save rewrote the
                 // cycles file from memory and made the gap permanent: its gradient panel simply
                 // vanished from the report with nothing logged.
-                var haveCycles = IonAccountingStore.SamplesWithCycles(outputDir)
+                var haveCycles = IonAccountingStore.SamplesWithCycles(outputDir, log)
                     .ToHashSet(StringComparer.Ordinal);
                 foreach (var row in cached.Rows)
                 {
@@ -361,7 +361,7 @@ public static class IonAccountingRun
                                 // than trusting a short file.
                                 SaveProgress(
                                     outputDir, settingsKey, productText, precursorText, schemeText,
-                                    classified, rows, cycles);
+                                    classified, rows, cycles, log);
                             }
                         }
                         finally
@@ -410,7 +410,8 @@ public static class IonAccountingRun
     private static void SaveProgress(
         string outputDir, string settingsKey, string productText, string precursorText,
         string schemeText, AssignedPeptides.Classified classified,
-        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles)
+        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles,
+        Action<string>? log = null)
     {
         try
         {
@@ -418,9 +419,13 @@ public static class IonAccountingRun
                 settingsKey, productText, precursorText, schemeText, classified.ListNames,
                 classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles));
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            // A cache that cannot be written is not a reason to abandon the reads already done.
+            // Not a reason to abandon the reads already done - but SAYING SO is the difference
+            // between a run whose cache is stale and a run that spent hours reading instrument files
+            // and silently kept none of it. A locked cache file did exactly that.
+            log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}. The "
+                + "measurement continues, but nothing measured so far has been saved.");
         }
     }
 

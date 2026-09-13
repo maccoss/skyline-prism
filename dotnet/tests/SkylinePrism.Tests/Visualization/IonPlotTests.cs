@@ -109,7 +109,19 @@ public class IonPlotTests
         var signal = new Plot();
         PlotRenderer.DrawIonAccounting(
             signal, result, PlotRenderer.IonLevel.Ms2, null, 1.0, PlotRenderer.IonQuantity.Signal);
-        Assert.Contains("TIC", signal.Axes.Left.Label.Text);
+        Assert.Contains("signal", signal.Axes.Left.Label.Text);
+
+        // And the axis does NOT say TIC. Only the ACQUIRED series is a total ion current; the
+        // assigned and explained series are the parts of it inside a claimed region, which no
+        // instrument reports. Naming the axis TIC labels two of three series as something they are
+        // not, so TIC appears in the acquired legend entry and nowhere else.
+        Assert.DoesNotContain("TIC", signal.Axes.Left.Label.Text);
+        var legend = signal.GetPlottables()
+            .SelectMany(p => p.LegendItems)
+            .Select(i => i.LabelText ?? "")
+            .ToArray();
+        Assert.Contains(legend, l => l.Contains("acquired") && l.Contains("TIC"));
+        Assert.DoesNotContain(legend, l => l.Contains("quantified") && l.Contains("TIC"));
     }
 
     /// <summary>

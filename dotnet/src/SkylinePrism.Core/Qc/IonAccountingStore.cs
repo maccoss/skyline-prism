@@ -370,17 +370,24 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(outputDir, result.Cycles);
+        WriteCycles(outputDir, result.Cycles, result.Rows.Count);
         WriteLists(outputDir, result);
     }
 
-    private static void WriteCycles(string outputDir, IReadOnlyList<IonCycleRow> cycles)
+    /// <param name="rowCount">
+    /// How many replicates the result carries. Deleting is gated on this: an empty cycle list from
+    /// a result that measured NOTHING is a run that read no file, and the previous run's traces
+    /// should not be left behind - but an empty list from a result that does carry replicates means
+    /// the cycles were lost on the way, and deleting then destroys a whole cohort's gradient data
+    /// to tidy up after a failure. One of those happened.
+    /// </param>
+    private static void WriteCycles(
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         if (cycles.Count == 0)
         {
-            // A re-run that read no file must not leave the previous run's traces behind.
-            if (File.Exists(path))
+            if (rowCount == 0 && File.Exists(path))
                 File.Delete(path);
             return;
         }
@@ -602,18 +609,27 @@ public static class IonAccountingStore
     }
 
     /// <summary>Which replicates have cycle traces cached, for a GUI replicate picker.</summary>
-    public static IReadOnlyList<string> SamplesWithCycles(string outputDir)
+    /// <param name="log">
+    /// Told why the answer is empty. Returning nothing looks identical whether the file is absent,
+    /// locked by another process, or corrupt - and the caller turns all three into "no replicate has
+    /// cached cycles to profile", which reads as a property of the data.
+    /// </param>
+    public static IReadOnlyList<string> SamplesWithCycles(string outputDir, Action<string>? log = null)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         if (!File.Exists(path))
+        {
+            log?.Invoke($"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
             return Array.Empty<string>();
+        }
         try
         {
             using var reader = ParquetColumnReader.Open(path);
             return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            log?.Invoke($"  Could not read {CyclesFile}: {ex.Message}");
             return Array.Empty<string>();
         }
     }

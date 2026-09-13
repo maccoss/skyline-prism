@@ -296,7 +296,7 @@ public partial class MainWindow
             // need it - so it is skipped entirely when there is nothing to plot.
             var samples = read is null || read.Rows.Count == 0
                 ? (IReadOnlyList<string>)Array.Empty<string>()
-                : IonAccountingStore.SamplesWithCycles(dir);
+                : IonAccountingStore.SamplesWithCycles(dir, App.WriteLog);
             return (Exists: true, Result: read, Samples: samples);
         });
 
