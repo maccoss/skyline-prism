@@ -39,7 +39,7 @@ as the GitHub Release description and fails if it is missing.
   account for at all". The unfragmented precursor and the low-m/z fragments are poor quantifiers,
   which is why Skyline does not pick them, and they are still part of the mass balance. Both appear
   per replicate and across the gradient: a third bar on each plot, a third trace on the absolute
-  profile, and a second line on the share profile.
+  profile, and a second line on the fraction profile.
 
   The explained set is the theoretical ions UNIONED with the quantified claims, so it can never fall
   below the quantified total even where Skyline integrates an ion the enumeration does not produce.
@@ -85,18 +85,23 @@ as the GitHub Release description and fails if it is missing.
   document stores `<isolation_scheme name="Results only" />` and Skyline keeps the windows in the
   data files.
 
-- **An Ion accounting pane in the tool's Visualization tab, with three interactive views.** Ions per
-  replicate for the whole cohort; ions per acquisition cycle across the gradient for one replicate;
-  and the assigned *share* across the gradient. The third earns its place because the two absolute
-  traces both rise and fall with the elution envelope, so a stretch the analysis cannot explain is
-  invisible in them and obvious in the ratio. That axis always starts at zero and fits the data
-  above it: a non-zero origin is what makes a chart lie, while a fitted top is what makes a 3%
-  trace readable at all - pinning it to 0-100% was tried first and left the line flat on the
-  baseline.
+- **An Ion accounting pane in the tool's Visualization tab.** Three pickers, each answering one
+  question. **View** is the shape: *Per replicate*, one bar per run so the cohort can be compared
+  and an outlier found, or *Across the gradient*, the same totals per acquisition cycle for one
+  replicate. **Quantity** is what is measured: *Ions* or *Signal*. **Show** is how: *Totals*, or
+  *Fraction of acquired*.
+
+  Fraction earns its place because the absolute traces all rise and fall with the elution envelope,
+  so a stretch the analysis cannot explain is invisible in them and obvious in the ratio - and
+  because the absolute height is dominated by how much was loaded, which makes two replicates
+  incomparable until they are divided by their own acquired totals. That axis always starts at zero
+  and fits the data above it: a non-zero origin is what makes a chart lie, while a fitted top is
+  what makes a 3% trace readable at all - pinning it to 0-100% was tried first and left the line
+  flat on the baseline.
 
   Everything on the pane is a read of two cached parquet files, so switching replicate, MS level,
-  view or bin width is instant. The pane opens on the *median* replicate by assigned share rather
-  than the first one alphabetically, with the best and worst a click away.
+  view, quantity or bin width is instant. The pane opens on the *median* replicate by assigned
+  fraction rather than the first one alphabetically, with the best and worst a click away.
 
   The nav entry is hidden entirely until the output directory carries measured ion accounting. Every
   plot on it needs a denominator, and a fraction computed against a guessed one reads as coverage
@@ -113,12 +118,12 @@ as the GitHub Release description and fails if it is missing.
   and what a mass spectrometrist reads it in. Both are measured in the same pass over the same
   scans. Their assigned fractions are different numbers too, and neither is wrong: the ion fraction
   weights each scan by its injection time and the signal fraction does not, so they agree only where
-  the assigned share happens to be constant across injection times. Where they diverge, the AGC was
+  the assigned fraction happens to be constant across injection times. Where they diverge, the AGC was
   working. The axis, legend, title, median and hover readout all name the quantity actually drawn.
 
   **Hover** reads out the replicate: name, sample type, acquired and quantified totals, the fraction
-  (or the reason there is none), the explained share, when it was acquired and which file it came
-  from.
+  (or the reason there is none), the explained fraction, when it was acquired and which file it
+  came from.
 
   **Order**: run order, file name, or grouped by sample type. Run order comes from each data file's
   own acquisition start timestamp, now recorded in `ion_accounting.parquet` - the only honest source
@@ -220,6 +225,25 @@ as the GitHub Release description and fails if it is missing.
 
   All of it now runs in one background pass per pane. On a healthy share none of it was visible: the
   same reads measure 135 ms, 50 ms and 80 ms on a real 48-replicate cohort over SMB.
+
+- **PRISM locked its own files, and lost a measurement to it.** A 48-replicate ion accounting run
+  read every instrument file over several hours and saved none of the cycles: the write was refused
+  because `ion_cycles.parquet` was "locked by another process". Nothing else was running. PRISM was
+  the other process.
+
+  Every parquet reader opened the file sharing Read and nothing else, so for as long as a plot was
+  reading a file, nothing could write, replace or delete it - including the run that owned it. Every
+  writer asked for exclusive access, which is refused while any other handle exists at all. And the
+  cycles file was replaced after *every* replicate, so a 48-replicate run rewrote it 48 times and
+  had 48 chances to collide with itself.
+
+  Readers no longer take a file hostage, writers no longer demand exclusivity (a second writer is
+  still kept out), and the real cycles file is now written once, at the end of a run, with progress
+  going to a staging file beside it. An interrupted run loses nothing: whatever it measured is
+  picked up on the next read, and the longer of the two is the one that survives.
+
+  This reaches beyond ion accounting. Every parquet PRISM writes went through the same exclusive
+  open, so viewing any output file while a run rewrote it could fail the write.
 
 - **The ion accounting plots stacked every redraw instead of replacing it.** ScottPlot's `Add`
   methods append, and legend entries ride on the plottables, so each change of view, level,
