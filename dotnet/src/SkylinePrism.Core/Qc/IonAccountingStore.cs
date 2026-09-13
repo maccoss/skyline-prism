@@ -303,7 +303,13 @@ public static class IonAccountingStore
         $"product {productTolerance}, precursor {precursorTolerance}, "
         + $"isolation scheme \"{isolationScheme}\", {listCount} protein list(s)";
 
-    public static void Write(string outputDir, IonAccountingResult result)
+    /// <param name="log">
+    /// Told exactly what reached disk. A measurement is hours of instrument reads and the two files
+    /// are written separately, so "it failed" is not enough: the summary can survive while the
+    /// cycles do not, and the caller has to know which views it has lost.
+    /// </param>
+    public static void Write(
+        string outputDir, IonAccountingResult result, Action<string>? log = null)
     {
         var rows = result.Rows;
         var n = rows.Count;
@@ -370,7 +376,7 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(outputDir, result.Cycles, result.Rows.Count);
+        WriteCycles(outputDir, result.Cycles, result.Rows.Count, log);
         WriteLists(outputDir, result);
     }
 
@@ -382,7 +388,7 @@ public static class IonAccountingStore
     /// to tidy up after a failure. One of those happened.
     /// </param>
     private static void WriteCycles(
-        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount)
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount, Action<string>? log)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         if (cycles.Count == 0)
@@ -391,6 +397,13 @@ public static class IonAccountingStore
                 File.Delete(path);
             return;
         }
+
+        // Written beside the real name and renamed into place. The previous version wrote straight
+        // over it, so a file another process had open - which happens on a share, and did - failed
+        // after fifteen retries and threw away every cycle of a 48-replicate measurement that had
+        // just taken hours. Renaming cannot half-succeed, and when even the rename is refused the
+        // .new file is left where a later run or a hand rename recovers the whole measurement.
+        var staging = path + ".new";
 
         var meta = new List<ParquetWideWriter.MetaColumn>
         {
@@ -415,7 +428,24 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
         };
         ParquetWideWriter.Write(
-            path, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+            staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+        try
+        {
+            File.Move(staging, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke(
+                $"  WARNING: {CyclesFile} is held by another process, so the measurement could not "
+                + $"replace it - {ex.Message}");
+            log?.Invoke(
+                $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside it. "
+                + "Close whatever holds the file and rename it over, or re-run once it is free - "
+                + "nothing has been lost.");
+            throw new IOException(
+                $"The ion accounting summary was written, but {CyclesFile} is locked by another "
+                + $"process. The measured cycles are in {Path.GetFileName(staging)}.", ex);
+        }
     }
 
     private static void WriteLists(string outputDir, IonAccountingResult result)
@@ -619,8 +649,30 @@ public static class IonAccountingStore
         var path = Path.Combine(outputDir, CyclesFile);
         if (!File.Exists(path))
         {
-            log?.Invoke($"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
-            return Array.Empty<string>();
+            // A measurement whose rename was refused leaves its cycles here. Taking it now is what
+            // turns "the lock cost you the run" into "the lock cost you nothing".
+            var staging = path + ".new";
+            if (File.Exists(staging))
+            {
+                try
+                {
+                    File.Move(staging, path, overwrite: true);
+                    log?.Invoke($"  Recovered {CyclesFile} from a measurement whose write was "
+                        + "blocked by a locked file.");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    log?.Invoke($"  {Path.GetFileName(staging)} holds a completed measurement but "
+                        + $"cannot be renamed over {CyclesFile}: {ex.Message}");
+                    return Array.Empty<string>();
+                }
+            }
+            else
+            {
+                log?.Invoke(
+                    $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
+                return Array.Empty<string>();
+            }
         }
         try
         {

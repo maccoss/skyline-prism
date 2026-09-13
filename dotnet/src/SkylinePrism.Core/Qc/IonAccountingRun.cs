@@ -399,7 +399,7 @@ public static class IonAccountingRun
             settingsKey, productText, precursorText, schemeText, classified.ListNames,
             classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles);
 
-        IonAccountingStore.Write(outputDir, result);
+        IonAccountingStore.Write(outputDir, result, log);
         ReportTotals(result, clock, log);
         return result;
     }
@@ -415,9 +415,12 @@ public static class IonAccountingRun
     {
         try
         {
-            IonAccountingStore.Write(outputDir, new IonAccountingResult(
-                settingsKey, productText, precursorText, schemeText, classified.ListNames,
-                classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles));
+            IonAccountingStore.Write(
+                outputDir,
+                new IonAccountingResult(
+                    settingsKey, productText, precursorText, schemeText, classified.ListNames,
+                    classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles),
+                log);
         }
         catch (IOException ex)
         {
