@@ -315,7 +315,7 @@ public partial class MainWindow
                 return (Exists: false, Result: (IonAccountingResult?)null,
                         Samples: (IReadOnlyList<string>)Array.Empty<string>());
             }
-            var read = IonAccountingStore.Read(dir);
+            var read = IonAccountingStore.Read(dir, App.WriteLog);
             // The replicate list is a second trip to the same share, and only the profile views
             // need it - so it is skipped entirely when there is nothing to plot.
             var samples = read is null || read.Rows.Count == 0
@@ -615,7 +615,12 @@ public partial class MainWindow
 
         if (IonReplicateCombo.SelectedItem is not string sample)
         {
-            ShowIonMessage("No replicate has cached cycles to profile.");
+            // Naming the file and the remedy. "No replicate has cached cycles to profile" said
+            // nothing a user could act on, and the cause is never the replicates.
+            ShowIonMessage(
+                _ionOutputDir is null
+                    ? "No replicate has cached cycles to profile."
+                    : IonAccountingStore.DescribeMissingCycles(_ionOutputDir));
             return;
         }
 

@@ -488,11 +488,15 @@ public static class IonAccountingStore
     /// Read the cache, or null when it is absent or unreadable. Never throws: a corrupt cache is a
     /// reason to recompute, not to fail a report.
     /// </summary>
-    public static IonAccountingResult? Read(string outputDir)
+    public static IonAccountingResult? Read(string outputDir, Action<string>? log = null)
     {
         var path = Path.Combine(outputDir, FileName);
         if (!File.Exists(path))
             return null;
+
+        // The first thing anything does with this directory, so a measurement whose cycles write
+        // was blocked is put right before anyone notices it was.
+        RecoverStagedCycles(outputDir, log);
 
         try
         {
@@ -647,32 +651,12 @@ public static class IonAccountingStore
     public static IReadOnlyList<string> SamplesWithCycles(string outputDir, Action<string>? log = null)
     {
         var path = Path.Combine(outputDir, CyclesFile);
+        RecoverStagedCycles(outputDir, log);
         if (!File.Exists(path))
         {
-            // A measurement whose rename was refused leaves its cycles here. Taking it now is what
-            // turns "the lock cost you the run" into "the lock cost you nothing".
-            var staging = path + ".new";
-            if (File.Exists(staging))
-            {
-                try
-                {
-                    File.Move(staging, path, overwrite: true);
-                    log?.Invoke($"  Recovered {CyclesFile} from a measurement whose write was "
-                        + "blocked by a locked file.");
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    log?.Invoke($"  {Path.GetFileName(staging)} holds a completed measurement but "
-                        + $"cannot be renamed over {CyclesFile}: {ex.Message}");
-                    return Array.Empty<string>();
-                }
-            }
-            else
-            {
-                log?.Invoke(
-                    $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
-                return Array.Empty<string>();
-            }
+            log?.Invoke(
+                $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
+            return Array.Empty<string>();
         }
         try
         {
@@ -779,6 +763,55 @@ public static class IonAccountingStore
         {
             return new Dictionary<string, PerList>(StringComparer.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// Rename a staged cycles file into place, if a measurement left one behind.
+    /// </summary>
+    /// <remarks>
+    /// A write blocked by a locked file leaves the whole measurement in <c>ion_cycles.parquet.new</c>
+    /// rather than discarding it. Recovering it here - from every entry point that opens the
+    /// directory, not just the one that lists replicates - is what makes that automatic instead of
+    /// something a user has to be told about.
+    /// </remarks>
+    public static void RecoverStagedCycles(string outputDir, Action<string>? log = null)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        var staging = path + ".new";
+        if (File.Exists(path) || !File.Exists(staging))
+            return;
+
+        try
+        {
+            File.Move(staging, path, overwrite: true);
+            log?.Invoke(
+                $"  Recovered {CyclesFile} from a measurement whose write had been blocked by a "
+                + "locked file. Nothing was lost.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke(
+                $"  {Path.GetFileName(staging)} holds a completed measurement but cannot be renamed "
+                + $"over {CyclesFile}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Why the across-the-gradient views have nothing, in a sentence a reader can act on.
+    /// </summary>
+    public static string DescribeMissingCycles(string outputDir)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        if (File.Exists(path + ".new"))
+        {
+            return $"A completed measurement is waiting in {CyclesFile}.new, but it could not be "
+                + $"renamed over {CyclesFile} - something has that file open. Close it, or rename "
+                + "the .new file over it by hand; nothing has been lost.";
+        }
+        return File.Exists(path)
+            ? $"{CyclesFile} is there but could not be read - see the log."
+            : $"This directory has no {CyclesFile}, which is what the across-the-gradient views "
+              + "read. Re-run ion accounting to create it.";
     }
 
     /// <summary>
