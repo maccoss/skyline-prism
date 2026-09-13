@@ -488,10 +488,20 @@ public static class IonAccountingStore
     /// overwriting copy is not refused by a well-behaved reader, which is why it is the fallback
     /// rather than the failure. Both directions were measured, not assumed.
     /// </remarks>
-    private static void PlaceStagedCycles(
-        string staging, string path, Action<string>? log,
-        int maxAttempts = 20, int delayMs = 500)
+    /// <summary>
+    /// How long to wait for a file a scanner has just opened, as attempts x milliseconds. Settable
+    /// only so the give-up path can be exercised in a second rather than half a minute; nothing
+    /// outside tests changes it.
+    /// </summary>
+    internal static int PlacementAttempts = 30;
+
+    /// <inheritdoc cref="PlacementAttempts"/>
+    internal static int PlacementDelayMs = 1000;
+
+    private static void PlaceStagedCycles(string staging, string path, Action<string>? log)
     {
+        var maxAttempts = Math.Max(1, PlacementAttempts);
+        var delayMs = Math.Max(0, PlacementDelayMs);
         Exception? last = null;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -504,18 +514,63 @@ public static class IonAccountingStore
                 Thread.Sleep(delayMs);
         }
 
+        // NOT an exception. The measurement succeeded - every replicate was read and every cycle is
+        // on disk under a name the readers know to look for. Throwing here reported "Ion accounting
+        // failed" after forty-eight files and several hours, for a file NAME that could not be
+        // claimed. See CyclesPathFor: the staging file is read where it lies.
         log?.Invoke(
-            $"  WARNING: {CyclesFile} is held by another process, so the measurement could not "
-            + $"replace it after {maxAttempts} attempts over "
-            + $"{maxAttempts * delayMs / 1000.0:0.#} s - {last?.Message}");
+            $"  NOTE: this measurement could not be put under {CyclesFile} after {maxAttempts} "
+            + $"attempts over {maxAttempts * delayMs / 1000.0:0.#} s - {Held(staging, path)}");
         log?.Invoke(
-            $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside it, and "
-            + "PRISM puts it under the real name by itself the next time this directory is opened. "
-            + "Nothing has been lost and there is nothing to do by hand.");
-        throw new IOException(
-            $"The ion accounting summary was written, but {CyclesFile} is locked by another "
-            + $"process. The measured cycles are in {Path.GetFileName(staging)}, and the next read "
-            + "of this directory puts them in place.", last);
+            $"  It is complete and is in {Path.GetFileName(staging)} beside it, which is where "
+            + "PRISM reads it from. Nothing is lost and there is nothing to do by hand.");
+    }
+
+    /// <summary>
+    /// Which of the two files is actually unavailable, said in as many words.
+    /// </summary>
+    /// <remarks>
+    /// <b>The exception cannot be trusted for this.</b> <see cref="File.Move(string, string, bool)"/>
+    /// names the DESTINATION in its message whatever went wrong, so a locked staging file was
+    /// reported as "ion_cycles.parquet is being used by another process" - about a file that did not
+    /// exist. Three rounds of investigation went to the wrong file on the strength of that sentence.
+    ///
+    /// <para>The two cases even have distinct text, which is what makes the misattribution so easy
+    /// to miss: a held SOURCE gives "The process cannot access the file ... because it is being used
+    /// by another process", a held DESTINATION gives "Access to the path is denied", and both quote
+    /// the destination path. Measured both ways.</para>
+    ///
+    /// <para>The usual culprit is a virus scanner or a NAS indexer opening the file PRISM has just
+    /// closed - the staging file is tens of megabytes and lands on a network share, so the scan is
+    /// not instant. It opens without sharing, which blocks the copy as well as the rename.</para>
+    /// </remarks>
+    private static string Held(string staging, string path)
+    {
+        var stagingHeld = IsUnavailable(staging);
+        var targetHeld = File.Exists(path) && IsUnavailable(path);
+        return (stagingHeld, targetHeld) switch
+        {
+            (true, true) => $"both {Path.GetFileName(staging)} and {CyclesFile} are open in another "
+                + "process",
+            (true, false) => $"{Path.GetFileName(staging)} is open in another process, most likely a "
+                + "scanner reading the file PRISM just wrote",
+            (false, true) => $"{CyclesFile} is open in another process",
+            _ => "neither file is locked now, so whatever held one has since let go",
+        };
+    }
+
+    /// <summary>Whether a file cannot even be opened for reading right now.</summary>
+    private static bool IsUnavailable(string file)
+    {
+        try
+        {
+            using var probe = ParquetColumnIo.OpenRead(file);
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     /// <summary>One attempt: rename if it can, copy if it cannot.</summary>
@@ -714,8 +769,8 @@ public static class IonAccountingStore
     /// </summary>
     public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
     {
-        var path = Path.Combine(outputDir, CyclesFile);
-        if (!File.Exists(path))
+        var path = CyclesPathFor(outputDir);
+        if (path is null)
             return Array.Empty<IonCycleRow>();
 
         try
@@ -772,9 +827,8 @@ public static class IonAccountingStore
     public static IReadOnlyList<string> SamplesWithCycles(
         string outputDir, Action<string>? log = null, string? expectKey = null)
     {
-        var path = Path.Combine(outputDir, CyclesFile);
-        RecoverStagedCycles(outputDir, log);
-        if (!File.Exists(path))
+        var path = CyclesPathFor(outputDir, log);
+        if (path is null)
         {
             log?.Invoke(
                 $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
@@ -946,8 +1000,9 @@ public static class IonAccountingStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             log?.Invoke(
-                $"  {Path.GetFileName(staging)} holds a measurement but cannot be put under "
-                + $"{CyclesFile}: {ex.Message}");
+                $"  {CyclesFile} is held by another process, so {Path.GetFileName(staging)} could "
+                + $"not be put under it - reading the measurement from {Path.GetFileName(staging)} "
+                + $"instead: {ex.Message}");
         }
     }
 
@@ -997,21 +1052,64 @@ public static class IonAccountingStore
     }
 
     /// <summary>
+    /// The file the cycles are actually in: the real one, or the staging file beside it when the
+    /// real name could not be claimed. Null when there are none.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A file name PRISM cannot claim must not cost a measurement.</b> Recovery is still
+    /// tried first and is still the normal outcome - one rename, and the staging file is gone. But
+    /// when the real name is held by something PRISM cannot argue with, the alternative to reading
+    /// the staging file is refusing to draw anything at all, forever, over a rename. That is what
+    /// happened: a 48-replicate measurement finished, every cycle on disk, and the pane said a
+    /// measurement was waiting and someone should rename a file by hand.</para>
+    ///
+    /// <para>The stale file is NOT read in preference to it. The staging file is written after the
+    /// file it stages, so the newer of the two is the one with more in it - the same rule
+    /// <see cref="RecoverStagedCycles"/> uses to decide whether to act at all.</para>
+    ///
+    /// <para>During a measurement the staging file is ignored: the run rewrites it after every
+    /// replicate, so a read could catch it half-written. The real file, stale or absent, is the
+    /// honest answer until the run finishes.</para>
+    /// </remarks>
+    internal static string? CyclesPathFor(string outputDir, Action<string>? log = null)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        var staging = path + ".new";
+
+        if (IsMeasuring(outputDir) || !File.Exists(staging))
+            return File.Exists(path) ? path : null;
+
+        RecoverStagedCycles(outputDir, log);
+        if (!File.Exists(staging))
+            return File.Exists(path) ? path : null;
+
+        // Recovery was refused. Read the staged measurement in place when it is the newer of the
+        // two, which it is whenever it holds anything the real file does not.
+        if (!File.Exists(path)
+            || File.GetLastWriteTimeUtc(staging) > File.GetLastWriteTimeUtc(path))
+        {
+            return staging;
+        }
+        return path;
+    }
+
+    /// <summary>
     /// Why the across-the-gradient views have nothing, in a sentence a reader can act on.
     /// </summary>
     public static string DescribeMissingCycles(string outputDir)
     {
-        var path = Path.Combine(outputDir, CyclesFile);
-        if (File.Exists(path + ".new"))
+        // Asked only when there is nothing to draw, so the staging file has already been tried and
+        // did not work either. It no longer asks anyone to rename anything: CyclesPathFor reads it
+        // in place, so a staged file that exists is a file that was read.
+        var path = CyclesPathFor(outputDir);
+        if (path is not null)
         {
-            return $"A measurement is waiting in {CyclesFile}.new, but it could not be put under "
-                + $"{CyclesFile} - something has that file open. Close it, or rename the .new file "
-                + "over it by hand; nothing has been lost.";
+            return $"{Path.GetFileName(path)} is there but could not be read - see the log. It may "
+                + "be mid-write, or truncated by a run that was interrupted; re-running ion "
+                + "accounting rewrites it.";
         }
-        return File.Exists(path)
-            ? $"{CyclesFile} is there but could not be read - see the log."
-            : $"This directory has no {CyclesFile}, which is what the across-the-gradient views "
-              + "read. Re-run ion accounting to create it.";
+        return $"This directory has no {CyclesFile}, which is what the across-the-gradient views "
+            + "read. Re-run ion accounting to create it.";
     }
 
     /// <summary>

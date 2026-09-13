@@ -452,7 +452,8 @@ public static class IonAccountingRun
             // What it must NOT say is that nothing was saved, which is what it used to say and was
             // not true: the cycles are in the staging file and the summary is written separately.
             // Reading "nothing measured so far has been saved" after two hours of instrument reads
-            // is alarming, and it was alarming about the wrong thing.
+            // is alarming, and it was alarming about the wrong thing. A cycles file that cannot be
+            // replaced no longer reaches here at all - see IonAccountingStore.PlaceStagedCycles.
             log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}");
         }
     }

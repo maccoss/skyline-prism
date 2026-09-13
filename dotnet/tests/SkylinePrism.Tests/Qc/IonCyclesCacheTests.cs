@@ -239,6 +239,66 @@ public class IonCyclesCacheTests : IDisposable
         Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir));
     }
 
+    /// <summary>
+    /// A name PRISM cannot claim must not cost a measurement.
+    /// </summary>
+    /// <remarks>
+    /// Recovery is still tried first and is still the normal outcome. But when the real name is
+    /// held by something PRISM cannot argue with - a scanner, a NAS, another machine - the
+    /// alternative to reading the staged file where it lies is refusing to draw anything at all,
+    /// forever, over a rename. A 48-replicate measurement finished with every cycle on disk and the
+    /// pane said a measurement was waiting and someone should rename a file by hand.
+    /// </remarks>
+    [Fact]
+    public void AStagedMeasurementIsReadWhereItLiesWhenTheRealNameIsHeld()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        IonAccountingStore.Write(dir, Result("A", cycles: 2));
+        IonAccountingStore.Write(dir, Result("A", cycles: 9), log: null, finalize: false);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(-2));
+        File.SetLastWriteTimeUtc(path + ".new", DateTime.UtcNow);
+
+        // Exclusive, so recovery cannot put the staged file under the real name however it tries.
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        // The NEWER of the two, which is the staged one - not the stale file that happens to own
+        // the name.
+        Assert.Equal(9, IonAccountingStore.ReadCycles(dir, "A").Count);
+        Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir));
+    }
+
+    [Fact]
+    public void AMeasurementThatCannotClaimTheNameIsStillASuccess()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        IonAccountingStore.Write(dir, Result("A", cycles: 2));
+
+        var attempts = IonAccountingStore.PlacementAttempts;
+        var delay = IonAccountingStore.PlacementDelayMs;
+        IonAccountingStore.PlacementAttempts = 2;
+        IonAccountingStore.PlacementDelayMs = 1;
+        var lines = new List<string>();
+        try
+        {
+            using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            // Forty-eight instrument files and several hours. Throwing over a file NAME reported
+            // all of it as "Ion accounting failed" when every cycle was on disk and readable.
+            IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
+        }
+        finally
+        {
+            IonAccountingStore.PlacementAttempts = attempts;
+            IonAccountingStore.PlacementDelayMs = delay;
+        }
+
+        Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
+        Assert.Contains(lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("WARNING", StringComparison.Ordinal));
+    }
+
     private string NewDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "prism-cycles-" + Guid.NewGuid().ToString("N"));
