@@ -294,6 +294,10 @@ public static class IonAccountingRun
                 // would disagree with it wherever DuckDB's collation differs from ordinal, and the
                 // symptom would be measuring fewer replicates than asked with nothing said.
                 read++;
+                // Captured per dispatch so each file's report says where it is in the run. The reads
+                // are concurrent, so this is start order rather than finish order - which is what a
+                // reader watching a long run wants either way.
+                var ordinal = read;
 
                 // Blocks BEFORE the index is built, so at most `lanes` replicates' claims exist at
                 // once. Waiting after would let the producer run ahead of the readers and hold the
@@ -321,7 +325,10 @@ public static class IonAccountingRun
                             // Each file's lines are collected and emitted together. Interleaving
                             // eight files' multi-line reports would make the log unreadable, and
                             // this log is how a surprising fraction gets explained.
-                            var lines = new List<string> { $"  {sample}: {loaded.Describe()}" };
+                            var lines = new List<string>
+                            {
+                                $"  [{ordinal:N0} of {wanted.Count:N0}] {sample}: {loaded.Describe()}",
+                            };
                             var record = IonAccountingReaders.Read(
                                 path, request, line => lines.Add(line), ct);
 

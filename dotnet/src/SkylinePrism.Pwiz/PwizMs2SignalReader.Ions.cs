@@ -391,9 +391,7 @@ public sealed partial class PwizMs2SignalReader
         // instead of seconds, which put these at 3.7e8 and 7.3e6.
         var perMs1 = record.Ms1Count > 0 ? record.Ms1Acquired / record.Ms1Count : double.NaN;
         var perMs2 = record.Ms2Count > 0 ? record.Ms2Acquired / record.Ms2Count : double.NaN;
-        log($"    mean ions per scan: MS1 {perMs1:E2}, MS2 {perMs2:E2} "
-            + "(compare with the AGC target - these are the figures a units error shows up in, "
-            + "because it cancels out of the fraction).");
+        log($"    mean ions per scan: MS1 {perMs1:E2}, MS2 {perMs2:E2} (vs the AGC target).");
         if (record.IonScaleImplausible)
         {
             log("    WARNING: that is outside anything an instrument can hold, so the totals are "
@@ -407,26 +405,23 @@ public sealed partial class PwizMs2SignalReader
         // relative to what the detector saw.
         if (reportedMs1 > 0 || reportedMs2 > 0)
         {
-            log($"    Reported total-ion-current, same weighting: MS1 {reportedMs1:E3}, "
-                + $"MS2 {reportedMs2:E3} (the denominator above sums the centroided peaks instead).");
+            log($"    reported TIC, same weighting: MS1 {reportedMs1:E3}, MS2 {reportedMs2:E3} "
+                + "(the totals above sum centroided peaks).");
         }
 
         if (record.SpectraMissingInjectionTime > 0)
         {
             log($"    {record.SpectraMissingInjectionTime:N0} scans reported no ion injection "
-                + "time, so they could not be converted to ions and are excluded from both totals. "
-                + "The fraction stays valid; the totals cover the remaining scans.");
+                + "time and are excluded from both totals - the fraction stays valid.");
         }
         if (record.ScansOutsideScheme > 0)
         {
-            log($"    {record.ScansOutsideScheme:N0} MS2 scans fell in no isolation window of the "
-                + "scheme, so nothing could be assigned in them. A large count means the scheme does "
-                + "not match this acquisition.");
+            log($"    {record.ScansOutsideScheme:N0} MS2 scans fell in no isolation window - a "
+                + "large count means the scheme does not match this acquisition.");
         }
         if (unsorted > 0)
         {
-            log($"    {unsorted:N0} spectra had a non-ascending m/z array and were sorted before "
-                + "masking.");
+            log($"    {unsorted:N0} spectra had a non-ascending m/z array, sorted before masking.");
         }
         if (claims.BackwardScans > 0)
         {

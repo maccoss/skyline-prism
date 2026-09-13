@@ -85,17 +85,45 @@ public static class ClaimedRegionLoader
         /// <inheritdoc cref="ExplainedMeasured"/>
         public bool HasExplained => ExplainedMeasured;
 
-        /// <summary>A one-line summary for the run log, so a surprising fraction can be explained.</summary>
+        /// <summary>
+        /// A one-line summary for the run log, so a surprising fraction can be explained.
+        /// </summary>
+        /// <remarks>
+        /// Written in the reader's terms, not the code's. A "claim" here is a REGION of signal
+        /// space - one isolation window, an m/z range, a retention-time span - that a transition
+        /// occupies, and two transitions landing on the same region share it rather than each being
+        /// counted, which is the whole reason the assigned total cannot be a sum of peak areas. The
+        /// log said "claims" and "duplicate" without ever saying duplicate WHAT.
+        ///
+        /// <para>The four skip counters are normally zero, so they are printed only when they are
+        /// not - six zeros on every line of a 192-replicate run is noise that hides the one line
+        /// that matters.</para>
+        /// </remarks>
         public string Describe()
         {
+            var transitions = Ms1Rows + Ms2Rows;
             var line =
-                $"{Regions.Count:N0} claims ({Ms1Rows:N0} MS1 + {Ms2Rows:N0} MS2 rows, "
-                + $"{DuplicateRows:N0} duplicate); skipped {Unassigned:N0} unassigned, "
-                + $"{OutsideScheme:N0} outside the scheme, {NoGeometry:N0} without geometry"
-                + (UnknownPeptides > 0 ? $"; {UnknownPeptides:N0} peptides not in the identity map" : "");
+                $"{transitions:N0} transitions -> {Regions.Count:N0} distinct extraction regions"
+                + (DuplicateRows > 0
+                    ? $" ({DuplicateRows:N0} shared a region another transition had already claimed)"
+                    : "");
+
+            var skipped = new List<string>();
+            if (Unassigned > 0)
+                skipped.Add($"{Unassigned:N0} unassigned");
+            if (OutsideScheme > 0)
+                skipped.Add($"{OutsideScheme:N0} outside the scheme");
+            if (NoGeometry > 0)
+                skipped.Add($"{NoGeometry:N0} without peak boundaries");
+            if (UnknownPeptides > 0)
+                skipped.Add($"{UnknownPeptides:N0} peptides not in the identity map");
+            if (skipped.Count > 0)
+                line += "; skipped " + string.Join(", ", skipped);
+
             if (ExplainedMeasured)
             {
-                line += $"; {ExplainedRegions.Count:N0} explained claims over {Precursors:N0} precursor(s)";
+                line += $"; {ExplainedRegions.Count:N0} regions explainable from "
+                    + $"{Precursors:N0} precursor(s)";
                 if (Unreconciled > 0)
                 {
                     var pct = Precursors > 0 ? 100.0 * Unreconciled / Precursors : 0;
