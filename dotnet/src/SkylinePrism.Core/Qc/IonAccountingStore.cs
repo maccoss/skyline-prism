@@ -308,8 +308,13 @@ public static class IonAccountingStore
     /// are written separately, so "it failed" is not enough: the summary can survive while the
     /// cycles do not, and the caller has to know which views it has lost.
     /// </param>
+    /// <param name="finalize">
+    /// False for a progress save mid-run, which leaves <c>ion_cycles.parquet</c> alone and keeps the
+    /// cycles in the staging file beside it. See <see cref="WriteCycles"/> for why that matters.
+    /// </param>
     public static void Write(
-        string outputDir, IonAccountingResult result, Action<string>? log = null)
+        string outputDir, IonAccountingResult result, Action<string>? log = null,
+        bool finalize = true)
     {
         var rows = result.Rows;
         var n = rows.Count;
@@ -376,7 +381,7 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(outputDir, result.Cycles, result.Rows.Count, log);
+        WriteCycles(outputDir, result.Cycles, result.Rows.Count, log, finalize);
         WriteLists(outputDir, result);
     }
 
@@ -387,8 +392,18 @@ public static class IonAccountingStore
     /// the cycles were lost on the way, and deleting then destroys a whole cohort's gradient data
     /// to tidy up after a failure. One of those happened.
     /// </param>
+    /// <param name="finalize">
+    /// Whether this write is the end of a run. <b>The real file is created ONCE, when it is.</b>
+    /// Progress saves go to the staging file only - not as an optimization, but because a save
+    /// happens after every replicate, so a 48-replicate run replaced <c>ion_cycles.parquet</c>
+    /// forty-eight times and lost a race against a reader of its own each time. Nothing is risked
+    /// by waiting: the staging file holds every cycle measured so far, and
+    /// <see cref="RecoverStagedCycles"/> puts it under the real name on the next read, so an
+    /// interrupted run still leaves exactly what it had.
+    /// </param>
     private static void WriteCycles(
-        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount, Action<string>? log)
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount, Action<string>? log,
+        bool finalize)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         if (cycles.Count == 0)
@@ -429,22 +444,61 @@ public static class IonAccountingStore
         };
         ParquetWideWriter.Write(
             staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+        if (!finalize)
+            return;
+
+        PlaceStagedCycles(staging, path, log);
+    }
+
+    /// <summary>
+    /// Put the staged cycles under the real name - the one time a run does it.
+    /// </summary>
+    /// <remarks>
+    /// Renaming is tried first because it cannot half-succeed. It is also the strictest operation
+    /// there is: Windows refuses a rename-over while ANY handle is open on the target, even one
+    /// shared for write and delete, so it fails in exactly the case this is meant to survive. An
+    /// overwriting copy is not refused by a well-behaved reader, which is why it is the fallback
+    /// rather than the failure. Both directions were measured, not assumed.
+    /// </remarks>
+    private static void PlaceStagedCycles(string staging, string path, Action<string>? log)
+    {
         try
         {
             File.Move(staging, path, overwrite: true);
+            return;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            try
+            {
+                File.Copy(staging, path, overwrite: true);
+            }
+            catch (Exception blocked) when (blocked is IOException or UnauthorizedAccessException)
+            {
+                log?.Invoke(
+                    $"  WARNING: {CyclesFile} is held by another process, so the measurement could "
+                    + $"not replace it - {blocked.Message}");
+                log?.Invoke(
+                    $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside "
+                    + "it. Close whatever holds the file and rename it over, or re-run once it is "
+                    + "free - nothing has been lost.");
+                throw new IOException(
+                    $"The ion accounting summary was written, but {CyclesFile} is locked by another "
+                    + $"process. The measured cycles are in {Path.GetFileName(staging)}.", ex);
+            }
+        }
+
+        // The copy carried the data, so the staging file is now a duplicate. Not being able to
+        // remove it is not worth failing a write that succeeded.
+        try
+        {
+            File.Delete(staging);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
             log?.Invoke(
-                $"  WARNING: {CyclesFile} is held by another process, so the measurement could not "
-                + $"replace it - {ex.Message}");
-            log?.Invoke(
-                $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside it. "
-                + "Close whatever holds the file and rename it over, or re-run once it is free - "
-                + "nothing has been lost.");
-            throw new IOException(
-                $"The ion accounting summary was written, but {CyclesFile} is locked by another "
-                + $"process. The measured cycles are in {Path.GetFileName(staging)}.", ex);
+                $"  {Path.GetFileName(staging)} could not be removed after {CyclesFile} was "
+                + "written from it; it is a duplicate and the next run replaces it.");
         }
     }
 
@@ -766,33 +820,46 @@ public static class IonAccountingStore
     }
 
     /// <summary>
-    /// Rename a staged cycles file into place, if a measurement left one behind.
+    /// Put a staged cycles file under the real name, if a run left one behind.
     /// </summary>
     /// <remarks>
-    /// A write blocked by a locked file leaves the whole measurement in <c>ion_cycles.parquet.new</c>
-    /// rather than discarding it. Recovering it here - from every entry point that opens the
-    /// directory, not just the one that lists replicates - is what makes that automatic instead of
-    /// something a user has to be told about.
+    /// <para>A run that never reached its end - interrupted, crashed, or blocked by a locked file -
+    /// leaves everything it measured in <c>ion_cycles.parquet.new</c>. Recovering it here, from
+    /// every entry point that opens the directory rather than only the one that lists replicates,
+    /// is what makes that automatic instead of something a user has to be told about.</para>
+    ///
+    /// <para><b>Newer wins, not "only when the real one is missing".</b> The staging file is always
+    /// written after the file it stages, so when it is the newer of the two it holds strictly more
+    /// than the real one does. Recovering only into an empty slot loses a whole second attempt:
+    /// interrupt a run at ten replicates and the next read recovers those ten; interrupt the next
+    /// run at thirty and the real file already exists, so the thirty would be passed over in favor
+    /// of the ten. These runs take hours and being interrupted is the case this exists for.</para>
     /// </remarks>
     public static void RecoverStagedCycles(string outputDir, Action<string>? log = null)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         var staging = path + ".new";
-        if (File.Exists(path) || !File.Exists(staging))
+        if (!File.Exists(staging))
             return;
+        if (File.Exists(path)
+            && File.GetLastWriteTimeUtc(staging) <= File.GetLastWriteTimeUtc(path))
+        {
+            return;
+        }
 
         try
         {
-            File.Move(staging, path, overwrite: true);
+            File.Copy(staging, path, overwrite: true);
+            File.Delete(staging);
             log?.Invoke(
-                $"  Recovered {CyclesFile} from a measurement whose write had been blocked by a "
-                + "locked file. Nothing was lost.");
+                $"  Recovered {CyclesFile} from a run that did not finish writing it. Nothing "
+                + "measured was lost.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             log?.Invoke(
-                $"  {Path.GetFileName(staging)} holds a completed measurement but cannot be renamed "
-                + $"over {CyclesFile}: {ex.Message}");
+                $"  {Path.GetFileName(staging)} holds a measurement but cannot be put under "
+                + $"{CyclesFile}: {ex.Message}");
         }
     }
 
@@ -804,9 +871,9 @@ public static class IonAccountingStore
         var path = Path.Combine(outputDir, CyclesFile);
         if (File.Exists(path + ".new"))
         {
-            return $"A completed measurement is waiting in {CyclesFile}.new, but it could not be "
-                + $"renamed over {CyclesFile} - something has that file open. Close it, or rename "
-                + "the .new file over it by hand; nothing has been lost.";
+            return $"A measurement is waiting in {CyclesFile}.new, but it could not be put under "
+                + $"{CyclesFile} - something has that file open. Close it, or rename the .new file "
+                + "over it by hand; nothing has been lost.";
         }
         return File.Exists(path)
             ? $"{CyclesFile} is there but could not be read - see the log."

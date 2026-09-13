@@ -359,9 +359,13 @@ public static class IonAccountingRun
                                 // partial cache carries a settings key that stops matching once
                                 // more replicates are added, so the next run recomputes rather
                                 // than trusting a short file.
+                                //
+                                // The cycles go to the STAGING file (finalize: false), so the real
+                                // one is created once, at the end. Replacing it every replicate is
+                                // how a run came to lose a race against a reader of its own.
                                 SaveProgress(
                                     outputDir, settingsKey, productText, precursorText, schemeText,
-                                    classified, rows, cycles, log);
+                                    classified, rows, cycles, log, finalize: false);
                             }
                         }
                         finally
@@ -411,7 +415,7 @@ public static class IonAccountingRun
         string outputDir, string settingsKey, string productText, string precursorText,
         string schemeText, AssignedPeptides.Classified classified,
         IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles,
-        Action<string>? log = null)
+        Action<string>? log = null, bool finalize = true)
     {
         try
         {
@@ -420,7 +424,7 @@ public static class IonAccountingRun
                 new IonAccountingResult(
                     settingsKey, productText, precursorText, schemeText, classified.ListNames,
                     classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles),
-                log);
+                log, finalize);
         }
         catch (IOException ex)
         {

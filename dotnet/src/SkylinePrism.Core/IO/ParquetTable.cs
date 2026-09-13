@@ -56,7 +56,7 @@ public sealed class ParquetTable
     /// </summary>
     public static IReadOnlyList<string> ReadColumnNames(string path)
     {
-        using var fs = File.OpenRead(path);
+        using var fs = ParquetColumnIo.OpenRead(path);
         // ParquetReader is IAsyncDisposable only in Parquet.Net 6, and this accessor is sync.
         var reader = ParquetReader.CreateAsync(fs, ParquetColumnIo.Options()).GetAwaiter().GetResult();
         try
@@ -71,7 +71,7 @@ public sealed class ParquetTable
 
     public static async Task<ParquetTable> LoadAsync(string path)
     {
-        await using var fs = File.OpenRead(path);
+        await using var fs = ParquetColumnIo.OpenRead(path);
         await using var reader = await ParquetReader.CreateAsync(fs, ParquetColumnIo.Options());
         var dataFields = reader.Schema.DataFields;
 

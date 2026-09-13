@@ -83,7 +83,11 @@ public static class ParquetWideWriter
         {
             try
             {
-                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+                // Read, not None. None is refused while ANY other handle is open, so a
+                // reader anywhere in this process - the GUI showing the very file the run is
+                // updating - blocked the write outright. Sharing Read still excludes a second
+                // WRITER, because that would need Write access this handle does not grant.
+                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
             }
             catch (IOException ex)
             {

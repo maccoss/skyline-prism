@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using Parquet;
 using Parquet.Schema;
@@ -35,6 +36,32 @@ internal static class ParquetColumnIo
         {
             typeof(string), typeof(long), typeof(bool), typeof(double), typeof(int), typeof(DateTime),
         };
+
+    /// <summary>
+    /// Open a parquet file for reading WITHOUT taking it hostage.
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="File.OpenRead"/> shares Read and nothing else, so for as long as the reader
+    /// is open NOBODY can write, replace or delete the file - including the program that owns it.
+    /// PRISM reads its own output directory from the GUI while a run is writing to it, so that
+    /// default turns an ordinary read into a lock on a file the run is about to replace. It did:
+    /// a 48-replicate ion accounting measurement failed to save because PRISM was holding the file
+    /// it was trying to write.</para>
+    ///
+    /// <para>Measured on Windows, with one holder open and everything else tried against it:</para>
+    /// <list type="table">
+    /// <item><term>holder shares Read</term><description>create-write, copy-over, rename-over and
+    /// delete are ALL refused</description></item>
+    /// <item><term>holder shares ReadWrite | Delete</term><description>create-write, copy-over and
+    /// delete all succeed; only rename-over is still refused</description></item>
+    /// </list>
+    ///
+    /// <para>The cost is that a read begun while a write is in flight can see a torn file. Every
+    /// reader here already treats an unreadable file as no data, and the alternative - which is
+    /// what shipped - was losing hours of instrument reads to a lock PRISM placed on itself.</para>
+    /// </remarks>
+    internal static FileStream OpenRead(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
     /// <summary>
     /// Options for every read and write, so the two cannot drift. Compression lives here because v6

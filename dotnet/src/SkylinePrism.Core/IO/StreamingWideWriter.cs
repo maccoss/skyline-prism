@@ -91,7 +91,9 @@ public sealed class StreamingWideWriter : IDisposable
         {
             try
             {
-                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+                // Read, not None - see ParquetWideWriter.OpenWriteWithRetryAsync. Sharing
+                // Read still keeps a second writer out and lets a reader in.
+                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
             }
             catch (IOException ex)
             {

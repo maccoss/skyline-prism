@@ -49,7 +49,7 @@ internal sealed class ParquetColumnReader : IDisposable
 
     public static ParquetColumnReader Open(string path)
     {
-        var fs = File.OpenRead(path);
+        var fs = ParquetColumnIo.OpenRead(path);
         try
         {
             var reader = ParquetReader.CreateAsync(fs, ParquetColumnIo.Options()).GetAwaiter().GetResult();
