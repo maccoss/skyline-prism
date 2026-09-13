@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.RawData;
 
 namespace SkylinePrism.Core.Qc;
@@ -97,6 +98,13 @@ public static class IonAccountingRun
     {
         if (productTolerance is null)
             throw new ArgumentNullException(nameof(productTolerance));
+
+        // FIRST, before anything can go wrong. This is the longest operation in the product - hours
+        // against a cohort - and the question that follows a surprising result is always "which
+        // build produced this?". The version cannot answer it: PRISM versions at release time, so
+        // every development build says the same number.
+        log?.Invoke($"  Ion accounting: PRISM {PrismVersion.BuildStamp}"
+            + (PrismVersion.BuildLocation.Length > 0 ? $" from {PrismVersion.BuildLocation}" : ""));
 
         if (!IonAccountingReaders.Available)
         {

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 
 namespace SkylinePrism.Core.Pipeline;
@@ -32,6 +33,64 @@ public static class PrismVersion
 {
     /// <summary>The running PRISM version, e.g. <c>26.24.2</c>. Never null, never empty.</summary>
     public static string Current { get; } = Resolve();
+
+    /// <summary>
+    /// The running build, in the terms someone checking a fix needs: the version, when the assembly
+    /// was built, and the folder it was loaded from.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Deliberately not part of <see cref="Current"/>.</b> That string feeds the
+    /// stage-cache fingerprint, provenance and the export sidecar - a build time in it would
+    /// invalidate all three on every rebuild, which is the same reason the source-revision suffix is
+    /// stripped above. Nothing computes anything from this one; it is for the log and the window.
+    /// </para>
+    ///
+    /// <para><b>Why it exists.</b> The version alone cannot answer "am I running the fix?". PRISM
+    /// versions at RELEASE time, so every build between two releases reports the same number, and a
+    /// user testing a fix has nothing to check. Two 48-file measurements - several hours each - were
+    /// run against a build that predated the fix they were testing, and neither the window nor the
+    /// log could have said so. The folder matters as much as the time: the Skyline tool runs the
+    /// copy installed under Skyline's Tools directory, which a newly built zip sitting on disk does
+    /// not touch.</para>
+    ///
+    /// <para>The timestamp is the assembly file's own, which survives being zipped and extracted, so
+    /// an installed copy still reports when it was built rather than when it was installed.</para>
+    /// </remarks>
+    public static string BuildStamp { get; } = ResolveStamp();
+
+    /// <summary>The folder the running PRISM assemblies were loaded from, or empty.</summary>
+    /// <inheritdoc cref="BuildStamp"/>
+    public static string BuildLocation { get; } = ResolveLocation();
+
+    /// <inheritdoc cref="Resolve"/>
+    private static string ResolveStamp()
+    {
+        try
+        {
+            var path = typeof(PrismVersion).Assembly.Location;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                return Current;
+            return $"{Current}, built {File.GetLastWriteTime(path):yyyy-MM-dd HH:mm}";
+        }
+        catch
+        {
+            return Current;
+        }
+    }
+
+    /// <inheritdoc cref="Resolve"/>
+    private static string ResolveLocation()
+    {
+        try
+        {
+            var path = typeof(PrismVersion).Assembly.Location;
+            return string.IsNullOrEmpty(path) ? "" : Path.GetDirectoryName(path) ?? "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
 
     /// <summary>
     /// Never throws, deliberately. This runs inside a static initializer, so an exception here

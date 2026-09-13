@@ -49,6 +49,12 @@ public partial class MainWindow : Window
         // the QC report footer print, so a user reporting a problem and the artifacts they attach
         // cannot disagree about which build produced them.
         VersionText.Text = "v" + PrismVersion.Current;
+        // The version is the same for every build between two releases, so it cannot tell one from
+        // another. The tooltip can, and the folder is half the answer: the Skyline tool runs the
+        // copy installed under Skyline's Tools directory, not a newly built zip sitting on disk.
+        VersionText.ToolTip = PrismVersion.BuildLocation.Length > 0
+            ? $"{PrismVersion.BuildStamp}\n{PrismVersion.BuildLocation}"
+            : PrismVersion.BuildStamp;
         QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
         // Here, not only in ApplyConfigToUi: that runs when a provenance file is opened, so on a fresh
         // start the picker sat empty and the shipped panels looked as though they had not been installed.
@@ -1166,6 +1172,12 @@ public partial class MainWindow : Window
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
         ShowAnalysis(AnalysisPane.Log); // show progress as it runs
+
+        // The first line of every run log, so a log pasted into an issue says which build wrote it.
+        Log($"PRISM {PrismVersion.BuildStamp}"
+            + (PrismVersion.BuildLocation.Length > 0
+                ? $" from {PrismVersion.BuildLocation}"
+                : ""));
 
         var outputDir = OutputDirBox.Text;
         var batchColumn = BatchColumnBox.Text?.Trim();
