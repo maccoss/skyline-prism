@@ -123,14 +123,34 @@ public static partial class PlotRenderer
             ? r => Share(explainedRaw(r), acquiredRaw(r))
             : explainedRaw;
 
+        // AS A FRACTION, a row whose assigned total exceeds its acquired total is not drawn at
+        // all. The fraction is impossible, so it means a defect - a units mismatch, a scheme that
+        // does not match the acquisition, or claims merged too loosely - and a 150% bar under an
+        // axis labelled "fraction of acquired" reads as a measurement. This function's own remarks
+        // have always said a fraction over 1 is never drawn; until the fraction view existed there
+        // was no path that could draw one, and adding the view added the path.
+        //
+        // Withheld per row rather than for the whole plot: one bad replicate must not blank a
+        // cohort. The title says how many are missing - see WithIonFraction.
+        var signalDrawn = quantity == IonQuantity.Signal;
+        var drawAssigned = asFraction
+            ? new Func<IonAccountingRow, bool>(r => !r.ExceededIn(signalDrawn))
+            : _ => true;
+        var drawExplained = asFraction
+            ? new Func<IonAccountingRow, bool>(
+                r => !r.ExceededIn(signalDrawn) && !r.ExplainedImpossibleIn(signalDrawn))
+            : _ => true;
+
         // Drawn only where it exists and can differ: MS2, and a cache that actually measured it. An
         // export with no precursor charge column measures none, and a bar of height zero would read
         // as "these peptides account for nothing" rather than "this was never asked".
         var showExplained = level == IonLevel.Ms2 && rows.Any(r => r.HasExplained)
             && (quantity == IonQuantity.Ions || rows.Any(r => r.HasSignal));
         var tallest = rows.Max(r => Math.Max(
-            Finite(acquiredOf(r)), Math.Max(Finite(assignedOf(r)),
-                showExplained ? Finite(explainedOf(r)) : 0)));
+            Finite(acquiredOf(r)),
+            Math.Max(
+                drawAssigned(r) ? Finite(assignedOf(r)) : 0,
+                showExplained && drawExplained(r) ? Finite(explainedOf(r)) : 0)));
         // A percentage is already in the units it is read in, so it is never rescaled.
         var (scale, unit) = asFraction ? (1.0, " (%)") : SignalScale(tallest);
 
@@ -181,7 +201,7 @@ public static partial class PlotRenderer
                 // measured partly before this feature is exactly the mixed case that produces both.
                 // Skipping it leaves the acquired background bar alone, and the legend says how many
                 // of the replicates carry the series.
-                if (!rows[i].HasExplained)
+                if (!rows[i].HasExplained || !drawExplained(rows[i]))
                     continue;
 
                 explainedBars.Add(new Bar
@@ -200,7 +220,7 @@ public static partial class PlotRenderer
             }
             plt.Add.Bars(explainedBars);
 
-            var measured = rows.Count(r => r.HasExplained);
+            var measured = rows.Count(r => r.HasExplained && drawExplained(r));
             var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
             explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
             explainedKey.MarkerStyle.Size = 14;
@@ -214,6 +234,9 @@ public static partial class PlotRenderer
         var assignedBars = new List<Bar>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
+            if (!drawAssigned(rows[i]))
+                continue;
+
             assignedBars.Add(new Bar
             {
                 Position = i,
@@ -256,7 +279,7 @@ public static partial class PlotRenderer
             : $"{level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit}");
         LabelCategoryTicks(plt, rows.Select(r => r.Sample).ToArray());
         StyleQcPlot(plt, fontScale);
-        SetPlotTitle(plt, WithIonFraction(title, result, level, quantity), fontScale);
+        SetPlotTitle(plt, WithIonFraction(title, result, level, quantity, asFraction), fontScale);
         plt.Axes.SetLimits(-0.7, rows.Count - 0.3, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
     }
 
@@ -397,6 +420,18 @@ public static partial class PlotRenderer
         line.LegendText = showExplained
             ? "quantified fraction"
             : $"assigned fraction of acquired {level.ToString().ToUpperInvariant()}";
+
+        // The same contract as the bars: a fraction over 100% is impossible, so it is named
+        // rather than left to be read as a measurement. Named and NOT dropped here - the points are
+        // a line, and ScottPlot joins across an omission, so removing a bin would sail the trace
+        // over exactly the stretch that is wrong.
+        var impossible = points.Count(p => p.Fraction > 100.0);
+        if (impossible > 0)
+        {
+            var note = $"{impossible:N0} of {points.Length:N0} bins exceed 100%, which is "
+                + "impossible - treat this trace as a defect, not a measurement";
+            title = string.IsNullOrEmpty(title) ? note : $"{title}{NewLine}{note}";
+        }
 
         var overallAcquired = binned.Sum(b => b.Acquired);
         var overall = overallAcquired > 0 ? binned.Sum(b => b.Assigned) / overallAcquired * 100 : 0;
@@ -570,7 +605,7 @@ public static partial class PlotRenderer
     /// </summary>
     private static string? WithIonFraction(
         string? title, IonAccountingResult result, IonLevel level,
-        IonQuantity quantity = IonQuantity.Ions)
+        IonQuantity quantity = IonQuantity.Ions, bool asFraction = false)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
         if (usable.Length == 0)
@@ -582,22 +617,23 @@ public static partial class PlotRenderer
         // injection time and the signal totals do not, so one can be under 1 while the other is
         // over it, and withholding on the wrong one shows an impossible fraction with no warning.
         var signalDrawn = quantity == IonQuantity.Signal;
-        if (usable.Any(r => r.ExceededIn(signalDrawn)))
+        var impossible = usable.Count(r => r.ExceededIn(signalDrawn));
+        if (impossible > 0)
         {
-            var suffix = "assigned exceeds acquired in "
-                + $"{usable.Count(r => r.ExceededIn(signalDrawn)):N0} replicate(s); fraction not shown";
+            // Two different withholdings, and saying the wrong one is worse than saying nothing.
+            // Plotting TOTALS, nothing impossible is on the axis and it is the median in this
+            // caption that is withheld. Plotting the FRACTION, those replicates have no bar at all,
+            // and a reader looking at a gap needs to know it is a defect rather than a missing file.
+            var suffix = asFraction
+                ? $"{impossible:N0} replicate(s) assigned more than was acquired, which is "
+                  + "impossible - they are not drawn"
+                : $"assigned exceeds acquired in {impossible:N0} replicate(s); fraction not shown";
             return string.IsNullOrEmpty(title) ? suffix : $"{title}{NewLine}{suffix}";
         }
 
         var signal = quantity == IonQuantity.Signal;
         var fractions = usable
-            .Select(r => (level, signal) switch
-            {
-                (IonLevel.Ms1, false) => r.Ms1Fraction,
-                (IonLevel.Ms1, true) => r.Ms1SignalFraction,
-                (_, false) => r.Ms2Fraction,
-                _ => r.Ms2SignalFraction,
-            })
+            .Select(r => level == IonLevel.Ms1 ? r.Ms1FractionIn(signal) : r.Ms2FractionIn(signal))
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();
@@ -611,7 +647,7 @@ public static partial class PlotRenderer
         // one number out of two invites the reading that it is the whole answer.
         var explained = usable
             .Where(r => r.HasExplained)
-            .Select(r => signal ? r.Ms2SignalExplainedFraction : r.Ms2ExplainedFraction)
+            .Select(r => r.Ms2ExplainedFractionIn(signal))
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();

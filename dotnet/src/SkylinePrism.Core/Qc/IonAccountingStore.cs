@@ -107,6 +107,25 @@ public sealed record IonAccountingRow(
         HasSignal && HasExplained
         && (Ms2SignalExplained > Ms2Signal || Ms2SignalExplained < Ms2SignalAssigned);
 
+    /// <summary>
+    /// The assigned fraction for the quantity actually being shown.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than at each caller. There are four of these numbers and three places that want
+    /// one - the plot, the cohort status line and the per-replicate status line - and picking the
+    /// wrong one is invisible: the plot draws TIC percentages while the line beside it reports
+    /// ion-weighted ones, both plausible, differing by whatever the injection times were doing. That
+    /// shipped.
+    /// </remarks>
+    public double Ms1FractionIn(bool signal) => signal ? Ms1SignalFraction : Ms1Fraction;
+
+    /// <inheritdoc cref="Ms1FractionIn"/>
+    public double Ms2FractionIn(bool signal) => signal ? Ms2SignalFraction : Ms2Fraction;
+
+    /// <inheritdoc cref="Ms1FractionIn"/>
+    public double Ms2ExplainedFractionIn(bool signal) =>
+        signal ? Ms2SignalExplainedFraction : Ms2ExplainedFraction;
+
     /// <summary>The impossibility check for the quantity actually being shown.</summary>
     public bool ExceededIn(bool signal) => signal ? SignalExceeded : Exceeded;
 
@@ -383,7 +402,8 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(outputDir, result.Cycles, result.Rows.Count, log, finalize);
+        WriteCycles(
+            outputDir, result.Cycles, result.SettingsKey, result.Rows.Count, log, finalize);
         WriteLists(outputDir, result);
     }
 
@@ -404,8 +424,8 @@ public static class IonAccountingStore
     /// interrupted run still leaves exactly what it had.
     /// </param>
     private static void WriteCycles(
-        string outputDir, IReadOnlyList<IonCycleRow> cycles, int rowCount, Action<string>? log,
-        bool finalize)
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, string settingsKey, int rowCount,
+        Action<string>? log, bool finalize)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         if (cycles.Count == 0)
@@ -443,6 +463,12 @@ public static class IonAccountingStore
             ParquetWideWriter.Doubles(
                 "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
             ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
+            // The same key the summary carries, so the two files can be checked against each other.
+            // They are written separately and the summary is written FIRST, so a failure between
+            // them leaves a new summary beside an older set of traces - and without this the only
+            // thing tying a trace to a measurement was the replicate name, which is identical
+            // across runs. Repeated per row and dictionary-encoded to nothing.
+            ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
         };
         ParquetWideWriter.Write(
             staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
@@ -738,7 +764,13 @@ public static class IonAccountingStore
     /// locked by another process, or corrupt - and the caller turns all three into "no replicate has
     /// cached cycles to profile", which reads as a property of the data.
     /// </param>
-    public static IReadOnlyList<string> SamplesWithCycles(string outputDir, Action<string>? log = null)
+    /// <param name="expectKey">
+    /// The settings key the caller is about to reuse against, or null to take whatever is there.
+    /// A trace measured under different settings is not a trace of this measurement, and the
+    /// replicate names are identical across runs, so the name alone cannot tell them apart.
+    /// </param>
+    public static IReadOnlyList<string> SamplesWithCycles(
+        string outputDir, Action<string>? log = null, string? expectKey = null)
     {
         var path = Path.Combine(outputDir, CyclesFile);
         RecoverStagedCycles(outputDir, log);
@@ -751,6 +783,19 @@ public static class IonAccountingStore
         try
         {
             using var reader = ParquetColumnReader.Open(path);
+            if (expectKey is not null && reader.HasColumn("settings_key"))
+            {
+                var keys = reader.ReadStrings("settings_key");
+                if (keys.Length > 0 && !string.Equals(keys[0], expectKey, StringComparison.Ordinal))
+                {
+                    log?.Invoke(
+                        $"  {CyclesFile} was measured under different settings than {FileName}, so "
+                        + "none of its traces are reused - they will be measured again.");
+                    return Array.Empty<string>();
+                }
+            }
+            // A file written before the key column existed cannot be checked, and is taken as
+            // before rather than thrown away: it was written by a run whose summary matched.
             return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
         }
         catch (Exception ex)

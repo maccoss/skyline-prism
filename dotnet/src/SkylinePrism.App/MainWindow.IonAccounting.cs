@@ -527,16 +527,9 @@ public partial class MainWindow
             (false, false) => row.Ms2Assigned,
             _ => row.Ms2SignalAssigned,
         };
-        var fraction = (ms1, signal) switch
-        {
-            (true, false) => row.Ms1Fraction,
-            (true, true) => row.Ms1SignalFraction,
-            (false, false) => row.Ms2Fraction,
-            _ => row.Ms2SignalFraction,
-        };
+        var fraction = ms1 ? row.Ms1FractionIn(signal) : row.Ms2FractionIn(signal);
         var explained = signal ? row.Ms2SignalExplained : row.Ms2Explained;
-        var explainedFraction =
-            signal ? row.Ms2SignalExplainedFraction : row.Ms2ExplainedFraction;
+        var explainedFraction = row.Ms2ExplainedFractionIn(signal);
 
         var text = $"{name}"
             + (string.IsNullOrWhiteSpace(row.SampleType) ? "" : $" ({row.SampleType})")
@@ -743,7 +736,12 @@ public partial class MainWindow
                 + "so the totals are in the wrong unit (the fractions are unaffected)");
         }
 
-        var exceeded = usable.Count(r => r.ExceededIn(IonQuantity == PlotRenderer.IonQuantity.Signal));
+        // Every number below is the one the PLOT is drawing. Ion-weighted and TIC fractions are
+        // different numbers - the ion count weights each scan by its injection time and the TIC does
+        // not - so a status line that always reported the ion figure sat beside a signal plot
+        // quoting a different percentage, with nothing to say which was which.
+        var signal = IonQuantity == PlotRenderer.IonQuantity.Signal;
+        var exceeded = usable.Count(r => r.ExceededIn(signal));
         if (exceeded > 0)
         {
             parts.Add(
@@ -753,7 +751,9 @@ public partial class MainWindow
         else
         {
             var fractions = usable
-                .Select(r => level == PlotRenderer.IonLevel.Ms1 ? r.Ms1Fraction : r.Ms2Fraction)
+                .Select(r => level == PlotRenderer.IonLevel.Ms1
+                    ? r.Ms1FractionIn(signal)
+                    : r.Ms2FractionIn(signal))
                 .Where(double.IsFinite)
                 .ToArray();
             if (fractions.Length > 0)
@@ -761,7 +761,7 @@ public partial class MainWindow
                 var name = level.ToString().ToUpperInvariant();
                 var explained = usable
                     .Where(r => r.HasExplained)
-                    .Select(r => r.Ms2ExplainedFraction)
+                    .Select(r => r.Ms2ExplainedFractionIn(signal))
                     .Where(double.IsFinite)
                     .ToArray();
 
@@ -805,10 +805,15 @@ public partial class MainWindow
             + $"product {result.ProductTolerance}\nprecursor {result.PrecursorTolerance}\n"
             + $"scheme {result.IsolationScheme}";
 
-        var fraction = level == PlotRenderer.IonLevel.Ms1 ? row.Ms1Fraction : row.Ms2Fraction;
+        // The drawn quantity, as in DescribeIon - including the impossibility check, which is
+        // not implied one way by the other.
+        var signal = IonQuantity == PlotRenderer.IonQuantity.Signal;
+        var fraction = level == PlotRenderer.IonLevel.Ms1
+            ? row.Ms1FractionIn(signal)
+            : row.Ms2FractionIn(signal);
         var parts = new List<string> { $"{cycles:N0} cycles" };
         var levelName = level.ToString().ToUpperInvariant();
-        if (row.Exceeded)
+        if (row.ExceededIn(signal))
         {
             parts.Add("WARNING: assigned exceeds acquired, so no fraction is shown");
         }
@@ -816,7 +821,7 @@ public partial class MainWindow
         {
             parts.Add(
                 $"{levelName} quantified {IonAccountingStore.Percent(fraction)}, "
-                + $"explained {IonAccountingStore.Percent(row.Ms2ExplainedFraction)}");
+                + $"explained {IonAccountingStore.Percent(row.Ms2ExplainedFractionIn(signal))}");
         }
         else
         {

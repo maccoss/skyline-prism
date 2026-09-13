@@ -221,6 +221,24 @@ public class IonCyclesCacheTests : IDisposable
         Assert.False(File.Exists(path + ".new"));
     }
 
+    [Fact]
+    public void CyclesMeasuredUnderOtherSettingsAreNotOfferedForReuse()
+    {
+        var dir = NewDir();
+        IonAccountingStore.Write(dir, Result("A", cycles: 5));
+
+        // The two files are written separately and the summary goes FIRST, so a failure between
+        // them leaves a new summary beside an older set of traces. Replicate names are identical
+        // from run to run, so the name alone cannot tell a stale trace from this run's - the key in
+        // the file can.
+        Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir, null, "key"));
+        Assert.Empty(IonAccountingStore.SamplesWithCycles(dir, null, "a-different-key"));
+
+        // With nothing to check against, whatever is there is taken - which is also how a file
+        // written before the key column behaves.
+        Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir));
+    }
+
     private string NewDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "prism-cycles-" + Guid.NewGuid().ToString("N"));

@@ -200,7 +200,12 @@ public static class IonAccountingRun
                 // measured, so it was never read again, and the next incremental save rewrote the
                 // cycles file from memory and made the gap permanent: its gradient panel simply
                 // vanished from the report with nothing logged.
-                var haveCycles = IonAccountingStore.SamplesWithCycles(outputDir, log)
+                // With the KEY, not just the directory. The summary is written before the
+                // cycles and a failure between them leaves the two describing different
+                // measurements; replicate names are identical across runs, so without the key a
+                // stale trace is indistinguishable from this run's.
+                var haveCycles = IonAccountingStore
+                    .SamplesWithCycles(outputDir, log, settingsKey)
                     .ToHashSet(StringComparer.Ordinal);
                 foreach (var row in cached.Rows)
                 {

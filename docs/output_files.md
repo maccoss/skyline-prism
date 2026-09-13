@@ -53,8 +53,8 @@ file in the cohort, which is often a terabyte over a network share.
 | File | One row per | Holds |
 |---|---|---|
 | `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. The same four totals **unweighted** as `ms1_signal`, `ms2_signal`, `ms1_signal_assigned`, `ms2_signal_assigned`, `ms2_signal_explained` with a `has_signal` flag - see below. Also `acquired_utc` (when the instrument started the run), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
-| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read |
-| `ion_accounting_lists.parquet` | replicate x protein list | each selected list's share of the assigned total; deleted when no lists are selected |
+| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read. Carries the same `settings_key` as the summary, so a trace left by an earlier measurement is never reused as this one's |
+| `ion_accounting_lists.parquet` | replicate x protein list | each selected list's fraction of the assigned total; deleted when no lists are selected |
 
 **The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity
 is multiplied by its ion injection time **in seconds** and summed. That is the quantity Skyline
