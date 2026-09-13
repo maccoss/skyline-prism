@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ScottPlot;
+using ScottPlot.Plottables;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.RawData;
 using SkylinePrism.Core.Visualization;
@@ -55,6 +56,40 @@ public class IonPlotTests
         var acquiredNothing = new[] { new IonCycleRow("s1", 0, 0, 0.5, 1, 167, 0, 0, 0, 0) };
         AssertPng(PlotRenderer.IonFractionProfilePng(
             acquiredNothing, PlotRenderer.IonLevel.Ms2));
+    }
+
+    /// <summary>
+    /// Fraction is a TRANSFORM of the per-replicate view, not a view of its own: the same three
+    /// series divided by each replicate&apos;s own acquired total. The acquired series is then 100%
+    /// for everyone by construction, so it is not drawn - a full-height bar behind every one
+    /// carries nothing and hides the axis the other two are read against.
+    /// </summary>
+    [Fact]
+    public void PerReplicateAsAFractionDropsTheAcquiredBarAndPlotsPercentages()
+    {
+        var result = Result(
+            RowWithSignal("s1", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 250));
+
+        var totals = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            totals, result, PlotRenderer.IonLevel.Ms2, null, 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: false);
+
+        var fraction = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            fraction, result, PlotRenderer.IonLevel.Ms2, null, 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: true);
+
+        // Three bar series with the acquired background, two without it.
+        Assert.Equal(3, totals.GetPlottables<BarPlot>().Count());
+        Assert.Equal(2, fraction.GetPlottables<BarPlot>().Count());
+
+        // 100 of 1000 quantified, 150 of 1000 explained - read straight off the axis in percent.
+        var bars = fraction.GetPlottables<BarPlot>().Select(b => b.Bars.First().Value).ToArray();
+        Assert.Equal(15.0, bars[0], 6);
+        Assert.Equal(10.0, bars[1], 6);
+        Assert.Contains("Fraction of acquired", fraction.Axes.Left.Label.Text);
+        Assert.Contains("%", fraction.Axes.Left.Label.Text);
     }
 
     /// <summary>

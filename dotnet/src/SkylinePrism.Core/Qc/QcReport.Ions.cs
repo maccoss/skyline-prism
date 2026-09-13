@@ -151,7 +151,7 @@ public static partial class QcReport
 
             Render(
                 images,
-                $"{labels[i]} by assigned share: {row.Sample}. The lower line is the share of "
+                $"{labels[i]} by assigned fraction: {row.Sample}. The lower line is the fraction of "
                 + "each cycle's acquired MS2 ions the run quantifies on"
                 + (row.HasExplained
                     ? ", the upper one the share all possible b/y and precursor ions could account "

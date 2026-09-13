@@ -458,10 +458,16 @@
                                 <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
                                 <ComboBox x:Name="IonViewCombo" Width="230"
                                           SelectionChanged="OnIonViewChanged"
-                                          ToolTip="Per replicate: ions acquired, the part quantified on the document&apos;s transitions, and the part any b/y or precursor ion of those peptides could account for. Across the gradient: the same totals per acquisition cycle for one replicate. Share: those totals as fractions of acquired, which is where a stretch the analysis cannot explain becomes visible.">
-                                    <ComboBoxItem Tag="Accounting">Ions per replicate</ComboBoxItem>
-                                    <ComboBoxItem Tag="Profile">Ions across the gradient</ComboBoxItem>
-                                    <ComboBoxItem Tag="Fraction">Share across the gradient</ComboBoxItem>
+                                          ToolTip="Per replicate: one bar per run, so the cohort can be compared and an outlier found. Across the gradient: the same totals per acquisition cycle for one replicate, so a stretch of the run that behaves differently can be seen. What is measured is set by Quantity, and whether it is plotted absolutely or as a percentage by Show.">
+                                    <ComboBoxItem Tag="Accounting">Per replicate</ComboBoxItem>
+                                    <ComboBoxItem Tag="Profile">Across the gradient</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Show:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonShowCombo" Width="150"
+                                          SelectionChanged="OnIonShowChanged"
+                                          ToolTip="Totals plots what was acquired and the parts of it assigned; Fraction plots those parts as a percentage of the acquired total, which is where replicates become comparable. The absolute traces are dominated by how much was loaded, so a replicate the analysis explains less of looks the same as one that simply ran lighter - and does not, here.">
+                                    <ComboBoxItem Tag="Totals">Totals</ComboBoxItem>
+                                    <ComboBoxItem Tag="Fraction">Fraction of acquired</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="IonLevelCombo" Width="70"

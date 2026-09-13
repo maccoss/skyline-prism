@@ -14,7 +14,7 @@ using SkylinePrism.Core.Visualization;
 namespace SkylinePrism.App;
 
 /// <summary>
-/// The "Ion accounting" pane: how many ions reached the detector in each replicate, and what share
+/// The "Ion accounting" pane: how many ions reached the detector in each replicate, and what fraction
 /// of them a peptide sequence explains - for the whole cohort, and across the gradient.
 /// </summary>
 /// <remarks>
@@ -86,8 +86,18 @@ public partial class MainWindow
 
     private string IonView => ComboTag(IonViewCombo) ?? "Accounting";
 
-    private bool IonProfileSelected =>
-        IonView is "Profile" or "Fraction";
+    private bool IonProfileSelected => IonView is "Profile";
+
+    /// <summary>
+    /// Whether to plot the totals as a percentage of each replicate's own acquired total.
+    /// </summary>
+    /// <remarks>
+    /// A transform of either view rather than a view of its own, which is why it is its own picker:
+    /// "fraction per replicate" is as meaningful as "fraction across the gradient", and folding it
+    /// into the view list made one entry a shape and another a transform.
+    /// </remarks>
+    private bool IonAsFraction =>
+        string.Equals(ComboTag(IonShowCombo), "Fraction", StringComparison.Ordinal);
 
     private PlotRenderer.IonQuantity IonQuantity =>
         string.Equals(ComboTag(IonQuantityCombo), "Signal", StringComparison.Ordinal)
@@ -120,6 +130,20 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnIonViewChanged), ex);
+        }
+    }
+
+    private async void OnIonShowChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _suppressIonRender)
+                return;
+            await RenderIonAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonShowChanged), ex);
         }
     }
 
@@ -343,6 +367,8 @@ public partial class MainWindow
                 IonSortCombo.SelectedIndex = 0;
             if (IonQuantityCombo.SelectedIndex < 0)
                 IonQuantityCombo.SelectedIndex = 0;
+            if (IonShowCombo.SelectedIndex < 0)
+                IonShowCombo.SelectedIndex = 0;
         }
         finally
         {
@@ -386,7 +412,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Which replicate to open on: the MEDIAN by assigned share, not the first alphabetically.
+    /// Which replicate to open on: the MEDIAN by assigned fraction, not the first alphabetically.
     /// </summary>
     /// <remarks>
     /// The first replicate of a cohort is an arbitrary choice that happens to be the one a user reads
@@ -576,7 +602,7 @@ public partial class MainWindow
             _ionDrawn = ordered;
             PlotRenderer.DrawIonAccounting(
                 IonPlot.Plot, result with { Rows = ordered }, level,
-                IonBarTitle(result, level), 1.0, IonQuantity);
+                IonBarTitle(result, level), 1.0, IonQuantity, IonAsFraction);
             IonPlot.Refresh();
             var line = DescribeIon(result, level) + IonOrderNote(result);
             SetIonStatus(line, _ionStatusDetail);
@@ -610,12 +636,12 @@ public partial class MainWindow
 
         var bin = IonBinMinutes();
         var quantity = IonQuantity;
-        var noun = quantity == PlotRenderer.IonQuantity.Signal ? "signal (TIC)" : "ions";
-        if (string.Equals(IonView, "Fraction", StringComparison.Ordinal))
+        var noun = quantity == PlotRenderer.IonQuantity.Signal ? "signal" : "ions";
+        if (IonAsFraction)
         {
             PlotRenderer.DrawIonFractionProfile(
                 IonPlot.Plot, cycles, level, bin,
-                ShareTitle(sample, level, result, noun), 1.0, quantity);
+                FractionTitle(sample, level, result, noun), 1.0, quantity);
         }
         else
         {
@@ -649,20 +675,28 @@ public partial class MainWindow
     /// </summary>
     private string IonBarTitle(IonAccountingResult result, PlotRenderer.IonLevel level)
     {
-        var noun = IonQuantity == PlotRenderer.IonQuantity.Signal ? "Signal (TIC)" : "Ions";
-        return level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
-            ? $"{noun} acquired, quantified and explained, per replicate"
-            : $"{noun} acquired and assigned, per replicate";
+        var noun = IonQuantity == PlotRenderer.IonQuantity.Signal ? "signal" : "ions";
+        var explained = level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained);
+        if (IonAsFraction)
+        {
+            return explained
+                ? $"Fraction of acquired {noun} quantified and explained, per replicate"
+                : $"Fraction of acquired {noun} assigned, per replicate";
+        }
+        return explained
+            ? $"{char.ToUpperInvariant(noun[0])}{noun[1..]} acquired, quantified and explained, "
+              + "per replicate"
+            : $"{char.ToUpperInvariant(noun[0])}{noun[1..]} acquired and assigned, per replicate";
     }
 
     /// <inheritdoc cref="IonBarTitle"/>
-    private static string ShareTitle(
+    private static string FractionTitle(
         string sample, PlotRenderer.IonLevel level, IonAccountingResult result, string noun)
     {
         var name = level.ToString().ToUpperInvariant();
         return level == PlotRenderer.IonLevel.Ms2 && result.Rows.Any(r => r.HasExplained)
-            ? $"{sample}: share of acquired {name} {noun} quantified and explained"
-            : $"{sample}: share of acquired {name} {noun} assigned";
+            ? $"{sample}: fraction of acquired {name} {noun} quantified and explained"
+            : $"{sample}: fraction of acquired {name} {noun} assigned";
     }
 
     /// <summary>
@@ -771,7 +805,7 @@ public partial class MainWindow
         var levelName = level.ToString().ToUpperInvariant();
         if (row.Exceeded)
         {
-            parts.Add("WARNING: assigned exceeds acquired, so no share is shown");
+            parts.Add("WARNING: assigned exceeds acquired, so no fraction is shown");
         }
         else if (level == PlotRenderer.IonLevel.Ms2 && row.HasExplained)
         {
@@ -781,7 +815,7 @@ public partial class MainWindow
         }
         else
         {
-            parts.Add($"{levelName} share {IonAccountingStore.Percent(fraction)}");
+            parts.Add($"{levelName} fraction {IonAccountingStore.Percent(fraction)}");
         }
         // Both are defects worth naming, and both are normally zero - so they earn their place
         // on the line only when they are not.
