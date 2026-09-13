@@ -104,9 +104,7 @@ public static class ClaimedRegionLoader
             var transitions = Ms1Rows + Ms2Rows;
             var line =
                 $"{transitions:N0} transitions -> {Regions.Count:N0} distinct extraction regions"
-                + (DuplicateRows > 0
-                    ? $" ({DuplicateRows:N0} shared a region another transition had already claimed)"
-                    : "");
+                + (DuplicateRows > 0 ? $" ({DuplicateRows:N0} shared a transition)" : "");
 
             var skipped = new List<string>();
             if (Unassigned > 0)
