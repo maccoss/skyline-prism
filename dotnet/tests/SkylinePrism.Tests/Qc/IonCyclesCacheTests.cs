@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.RawData;
@@ -168,6 +169,56 @@ public class IonCyclesCacheTests : IDisposable
         IonAccountingStore.RecoverStagedCycles(dir);
 
         Assert.Equal(4, IonAccountingStore.ReadCycles(dir, "A").Count);
+    }
+
+    [Fact]
+    public void ALiveRunsStagingFileIsLeftAloneByAReadFromElsewhere()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        IonAccountingStore.Write(dir, Result("A", cycles: 6), log: null, finalize: false);
+
+        // The GUI drawing the pane while the run works. The staging file is the run's own progress
+        // store and is rewritten after every replicate: copying a half-written one would put a torn
+        // parquet under the real name, and deleting it would take the run's progress away.
+        using (IonAccountingStore.MarkMeasuring(dir))
+        {
+            IonAccountingStore.RecoverStagedCycles(dir);
+            Assert.False(File.Exists(path));
+            Assert.True(File.Exists(path + ".new"));
+        }
+
+        // Once the run is over - or has died, taking the mark with it - recovery is free to act.
+        IonAccountingStore.RecoverStagedCycles(dir);
+        Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
+    }
+
+    [Fact]
+    public void TheFinalWriteWaitsOutAHolderThatLetsGo()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        IonAccountingStore.Write(dir, Result("A", cycles: 2));
+
+        // Exclusive, which is what an antivirus scan or an SMB lease on a freshly created file
+        // looks like: every way of replacing the target is refused until it lets go. These clear
+        // in a second or two, so the write waits rather than throwing away a measurement.
+        using var holding = new ManualResetEventSlim();
+        var holder = new Thread(() =>
+        {
+            using var exclusive = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.None);
+            holding.Set();
+            Thread.Sleep(1000);
+        }) { IsBackground = true };
+        holder.Start();
+
+        Assert.True(holding.Wait(TimeSpan.FromSeconds(10)));
+        IonAccountingStore.Write(dir, Result("A", cycles: 8));
+        holder.Join(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(8, IonAccountingStore.ReadCycles(dir, "A").Count);
+        Assert.False(File.Exists(path + ".new"));
     }
 
     private string NewDir()

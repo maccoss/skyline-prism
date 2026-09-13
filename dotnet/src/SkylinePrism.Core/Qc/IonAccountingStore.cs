@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.RawData;
 
@@ -460,36 +462,70 @@ public static class IonAccountingStore
     /// overwriting copy is not refused by a well-behaved reader, which is why it is the fallback
     /// rather than the failure. Both directions were measured, not assumed.
     /// </remarks>
-    private static void PlaceStagedCycles(string staging, string path, Action<string>? log)
+    private static void PlaceStagedCycles(
+        string staging, string path, Action<string>? log,
+        int maxAttempts = 20, int delayMs = 500)
+    {
+        Exception? last = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            if (TryPlace(staging, path, ref last))
+            {
+                RemoveStaging(staging, path, log);
+                return;
+            }
+            if (attempt < maxAttempts)
+                Thread.Sleep(delayMs);
+        }
+
+        log?.Invoke(
+            $"  WARNING: {CyclesFile} is held by another process, so the measurement could not "
+            + $"replace it after {maxAttempts} attempts over "
+            + $"{maxAttempts * delayMs / 1000.0:0.#} s - {last?.Message}");
+        log?.Invoke(
+            $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside it, and "
+            + "PRISM puts it under the real name by itself the next time this directory is opened. "
+            + "Nothing has been lost and there is nothing to do by hand.");
+        throw new IOException(
+            $"The ion accounting summary was written, but {CyclesFile} is locked by another "
+            + $"process. The measured cycles are in {Path.GetFileName(staging)}, and the next read "
+            + "of this directory puts them in place.", last);
+    }
+
+    /// <summary>One attempt: rename if it can, copy if it cannot.</summary>
+    private static bool TryPlace(string staging, string path, ref Exception? last)
     {
         try
         {
             File.Move(staging, path, overwrite: true);
-            return;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            try
-            {
-                File.Copy(staging, path, overwrite: true);
-            }
-            catch (Exception blocked) when (blocked is IOException or UnauthorizedAccessException)
-            {
-                log?.Invoke(
-                    $"  WARNING: {CyclesFile} is held by another process, so the measurement could "
-                    + $"not replace it - {blocked.Message}");
-                log?.Invoke(
-                    $"  Every cycle that was just measured is in {Path.GetFileName(staging)} beside "
-                    + "it. Close whatever holds the file and rename it over, or re-run once it is "
-                    + "free - nothing has been lost.");
-                throw new IOException(
-                    $"The ion accounting summary was written, but {CyclesFile} is locked by another "
-                    + $"process. The measured cycles are in {Path.GetFileName(staging)}.", ex);
-            }
+            last = ex;
         }
 
-        // The copy carried the data, so the staging file is now a duplicate. Not being able to
-        // remove it is not worth failing a write that succeeded.
+        try
+        {
+            File.Copy(staging, path, overwrite: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            last = ex;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Drop the staging file once its content is under the real name. A copy leaves it behind; a
+    /// rename does not, so this is a no-op in the ordinary case. Failing to remove it is never worth
+    /// failing a write that succeeded - it is a duplicate, and the next run replaces it.
+    /// </summary>
+    private static void RemoveStaging(string staging, string path, Action<string>? log)
+    {
+        if (!File.Exists(staging))
+            return;
         try
         {
             File.Delete(staging);
@@ -837,6 +873,13 @@ public static class IonAccountingStore
     /// </remarks>
     public static void RecoverStagedCycles(string outputDir, Action<string>? log = null)
     {
+        // A measurement in this process is actively writing that staging file after every
+        // replicate. Copying a half-written one would put a torn parquet under the real name, and
+        // deleting it would take away the run's own progress store - so leave a live run alone.
+        // The run finalizes it itself, and a run that dies leaves the mark behind with it.
+        if (IsMeasuring(outputDir))
+            return;
+
         var path = Path.Combine(outputDir, CyclesFile);
         var staging = path + ".new";
         if (!File.Exists(staging))
@@ -861,6 +904,51 @@ public static class IonAccountingStore
                 $"  {Path.GetFileName(staging)} holds a measurement but cannot be put under "
                 + $"{CyclesFile}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Output directories with a measurement running in THIS process.
+    /// </summary>
+    /// <remarks>
+    /// In-process only, and deliberately: the GUI reads the same directory the run is writing, and
+    /// those two are always the same process. A second PRISM on another machine writing the same
+    /// output directory is a different problem, and not one a lock file would solve either.
+    /// </remarks>
+    private static readonly ConcurrentDictionary<string, byte> Measuring =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Mark an output directory as being measured until the returned scope is disposed, so a read
+    /// from elsewhere in the process does not disturb the staging file the run is writing.
+    /// </summary>
+    public static IDisposable MarkMeasuring(string outputDir) => new MeasuringScope(outputDir);
+
+    private static bool IsMeasuring(string outputDir) =>
+        Measuring.ContainsKey(FullPathOrSelf(outputDir));
+
+    private static string FullPathOrSelf(string outputDir)
+    {
+        try
+        {
+            return Path.GetFullPath(outputDir);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            return outputDir;
+        }
+    }
+
+    private sealed class MeasuringScope : IDisposable
+    {
+        private readonly string _key;
+
+        internal MeasuringScope(string outputDir)
+        {
+            _key = FullPathOrSelf(outputDir);
+            Measuring[_key] = 0;
+        }
+
+        public void Dispose() => Measuring.TryRemove(_key, out _);
     }
 
     /// <summary>

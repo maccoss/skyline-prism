@@ -263,6 +263,10 @@ public static class IonAccountingRun
 
         // The producer is this thread and it must stay the only one touching DuckDB. The workers
         // only read instrument files, which is 99.5% of the cost.
+        //
+        // The mark keeps the rest of the process - the GUI, reading the same directory to draw the
+        // pane - from touching the staging file this loop writes after every replicate.
+        using var measuring = IonAccountingStore.MarkMeasuring(outputDir);
         using var gate = new SemaphoreSlim(effectiveLanes);
         var pending = new List<Task>();
         var sync = new object();
@@ -431,8 +435,12 @@ public static class IonAccountingRun
             // Not a reason to abandon the reads already done - but SAYING SO is the difference
             // between a run whose cache is stale and a run that spent hours reading instrument files
             // and silently kept none of it. A locked cache file did exactly that.
-            log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}. The "
-                + "measurement continues, but nothing measured so far has been saved.");
+            //
+            // What it must NOT say is that nothing was saved, which is what it used to say and was
+            // not true: the cycles are in the staging file and the summary is written separately.
+            // Reading "nothing measured so far has been saved" after two hours of instrument reads
+            // is alarming, and it was alarming about the wrong thing.
+            log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}");
         }
     }
 
