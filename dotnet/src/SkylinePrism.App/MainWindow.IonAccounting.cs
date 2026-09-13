@@ -48,7 +48,16 @@ public partial class MainWindow
     private readonly Dictionary<string, IReadOnlyList<IonCycleRow>> _ionCycles =
         new(StringComparer.Ordinal);
 
-    private const double DefaultIonBinMinutes = 1.0;
+    /// <summary>
+    /// The gradient bin width the pane opens on, in minutes.
+    /// </summary>
+    /// <remarks>
+    /// 0.01 min is 0.6 s - shorter than one acquisition cycle on the instruments this was built for,
+    /// where a sweep of 167 isolation windows takes about a second. So the default bins essentially
+    /// nothing and the trace is drawn at the rate the data was acquired at. A minute-wide bin
+    /// averaged sixty cycles together, which is the one thing these plots exist to show.
+    /// </remarks>
+    private const double DefaultIonBinMinutes = 0.01;
 
     /// <summary>
     /// The rows in the order the bars were DRAWN, which is what the hover readout indexes into. Held
@@ -365,8 +374,12 @@ public partial class MainWindow
                 IonLevelCombo.SelectedIndex = 0;
             if (IonSortCombo.SelectedIndex < 0)
                 IonSortCombo.SelectedIndex = 0;
+            // Signal is first in the list and is therefore the default - it is what the
+            // instrument reports and what a mass spectrometrist reads a run in. A cache measured
+            // before the summed TIC was recorded has none of it, though, and opening on a quantity
+            // that cannot be drawn would greet those directories with an error instead of a plot.
             if (IonQuantityCombo.SelectedIndex < 0)
-                IonQuantityCombo.SelectedIndex = 0;
+                IonQuantityCombo.SelectedIndex = HasSignal() ? 0 : IndexOfQuantity("Ions");
             if (IonShowCombo.SelectedIndex < 0)
                 IonShowCombo.SelectedIndex = 0;
         }
@@ -651,6 +664,23 @@ public partial class MainWindow
         IonPlot.Refresh();
         SetIonStatus(
             DescribeIonReplicate(result, sample, level, cycles.Count), _ionStatusDetail);
+    }
+
+    /// <summary>Whether the loaded cache carries the summed TIC at all.</summary>
+    private bool HasSignal() => _ionResult?.Rows.Any(r => r.HasSignal) == true;
+
+    /// <summary>The position of a quantity in the picker, so the order can change without this.</summary>
+    private int IndexOfQuantity(string tag)
+    {
+        for (var i = 0; i < IonQuantityCombo.Items.Count; i++)
+        {
+            if (IonQuantityCombo.Items[i] is ComboBoxItem item
+                && string.Equals(item.Tag as string, tag, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+        return 0;
     }
 
     private double IonBinMinutes()

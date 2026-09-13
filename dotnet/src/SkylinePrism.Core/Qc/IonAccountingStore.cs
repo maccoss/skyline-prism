@@ -520,7 +520,8 @@ public static class IonAccountingStore
         // claimed. See CyclesPathFor: the staging file is read where it lies.
         log?.Invoke(
             $"  NOTE: this measurement could not be put under {CyclesFile} after {maxAttempts} "
-            + $"attempts over {maxAttempts * delayMs / 1000.0:0.#} s - {Held(staging, path)}");
+            + $"attempts over {maxAttempts * delayMs / 1000.0:0.#} s - {last?.Message}");
+        log?.Invoke($"  {Held(staging, path)}");
         log?.Invoke(
             $"  It is complete and is in {Path.GetFileName(staging)} beside it, which is where "
             + "PRISM reads it from. Nothing is lost and there is nothing to do by hand.");
@@ -546,25 +547,41 @@ public static class IonAccountingStore
     /// </remarks>
     private static string Held(string staging, string path)
     {
+        var who = FileHolders.Describe(staging) ?? FileHolders.Describe(path);
         var stagingHeld = IsUnavailable(staging);
         var targetHeld = File.Exists(path) && IsUnavailable(path);
-        return (stagingHeld, targetHeld) switch
+
+        var which = (stagingHeld, targetHeld) switch
         {
-            (true, true) => $"both {Path.GetFileName(staging)} and {CyclesFile} are open in another "
-                + "process",
-            (true, false) => $"{Path.GetFileName(staging)} is open in another process, most likely a "
-                + "scanner reading the file PRISM just wrote",
-            (false, true) => $"{CyclesFile} is open in another process",
-            _ => "neither file is locked now, so whatever held one has since let go",
+            (true, true) => $"Both {Path.GetFileName(staging)} and {CyclesFile} are open elsewhere.",
+            (true, false) => $"{Path.GetFileName(staging)} is open elsewhere - typically a scanner "
+                + "reading back the file PRISM has just written.",
+            (false, true) => $"{CyclesFile} is open elsewhere.",
+            _ => "Neither file is held now, so whatever had one has let go since - a scan of a "
+                + "freshly written file is the usual reason, and it ends when the scan does.",
         };
+        return who is null
+            ? which + " Nothing on this machine has either file open, so the holder is on another "
+                + "machine or is the file server itself."
+            : which + $" Open on this machine by: {who}.";
     }
 
-    /// <summary>Whether a file cannot even be opened for reading right now.</summary>
+    /// <summary>
+    /// Whether a file is unavailable to the operations that PLACE it - not merely to a reader.
+    /// </summary>
+    /// <remarks>
+    /// The share mode is the whole point, and getting it wrong made this useless. A reader asking
+    /// for FileShare.ReadWrite|Delete is admitted by almost any holder, so probing that way reported
+    /// "neither file is locked" about a file that a rename could not touch - which sent the
+    /// investigation somewhere else twice. Asking for exclusive access is the question actually
+    /// being asked: can anything replace this file right now?
+    /// </remarks>
     private static bool IsUnavailable(string file)
     {
         try
         {
-            using var probe = ParquetColumnIo.OpenRead(file);
+            using var probe = new FileStream(
+                file, FileMode.Open, FileAccess.Read, FileShare.None);
             return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

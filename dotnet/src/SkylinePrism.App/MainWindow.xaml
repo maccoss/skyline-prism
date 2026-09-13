@@ -480,8 +480,8 @@
                                 <ComboBox x:Name="IonQuantityCombo" Width="120"
                                           SelectionChanged="OnIonQuantityChanged"
                                           ToolTip="Two different quantities, not two units for one. A scan's intensity is a RATE, in ions per second: Ions multiplies it by that scan's ion injection time to get a count, Signal does not and leaves a sum of rates - what the instrument reports as TIC. Their assigned fractions differ too, and neither is wrong: the ion fraction weights each scan by its injection time and the signal fraction does not. Where the two diverge, the AGC was working.">
-                                    <ComboBoxItem Tag="Ions">Ions</ComboBoxItem>
                                     <ComboBoxItem Tag="Signal">Signal (TIC)</ComboBoxItem>
+                                    <ComboBoxItem Tag="Ions">Ions</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock x:Name="IonSortLabel" Text="Order:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
@@ -499,7 +499,7 @@
                                           ToolTip="Which replicate to profile. The cycles are already cached, so switching is a file read rather than a re-measurement." />
                                 <TextBlock x:Name="IonBinLabel" Text="RT bin (min):" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
-                                <TextBox x:Name="IonBinBox" Width="46" Text="1" VerticalAlignment="Center"
+                                <TextBox x:Name="IonBinBox" Width="46" Text="0.01" VerticalAlignment="Center"
                                          LostFocus="OnIonBinChanged" KeyDown="OnIonBinKeyDown"
                                          ToolTip="Retention-time bin width. Cycles are grouped only to keep the trace readable - an hour-long run has thousands of them. Re-binning is free." />
                                 <Button x:Name="IonReloadButton" Content="Reload" Padding="10,2" Margin="16,0,0,0"
