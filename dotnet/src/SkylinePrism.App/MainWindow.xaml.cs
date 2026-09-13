@@ -41,6 +41,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Long enough to read a paragraph. The default is five seconds, which was fine when the
+        // pane carried the same text and is not now that the tooltip is the only copy.
+        System.Windows.Controls.ToolTipService.ShowDurationProperty.OverrideMetadata(
+            typeof(DependencyObject), new FrameworkPropertyMetadata(60_000));
         // The build, beside the name. PrismVersion.Current is the same string prism --version and
         // the QC report footer print, so a user reporting a problem and the artifacts they attach
         // cannot disagree about which build produced them.
@@ -263,7 +267,6 @@ public partial class MainWindow : Window
             // Snapshotted on the UI thread; the probe below touches no control.
             var wantFolder = IonAccountingCheck?.IsChecked == true
                 && string.IsNullOrWhiteSpace(IonRawDirText.Text);
-            var outputDir = OutputDirBox?.Text?.Trim();
 
             var facts = await Task.Run(() =>
             {
@@ -283,12 +286,6 @@ public partial class MainWindow : Window
                         }
                     }
                 }
-                if (wantFolder && folder is null && !string.IsNullOrWhiteSpace(outputDir))
-                {
-                    var recorded = Provenance.ReadAcquisition(outputDir!).InstrumentFiles;
-                    if (!string.IsNullOrWhiteSpace(recorded) && Directory.Exists(recorded))
-                        folder = recorded;
-                }
                 return (Product: product, Folder: folder, From: from);
             });
 
@@ -297,19 +294,31 @@ public partial class MainWindow : Window
 
             // Hidden only when something actually answered. A document that cannot say - unsaved,
             // unreadable, or a plain report - leaves the boxes available.
-            IonTolerancePanel.Visibility =
-                facts.Product is null ? Visibility.Visible : Visibility.Collapsed;
+            var answered = facts.Product is not null;
+            IonTolerancePanel.Visibility = answered ? Visibility.Collapsed : Visibility.Visible;
+
+            // Emptied as it is hidden. A typed value still WINS at run time, so leaving one behind a
+            // collapsed panel gave a run that silently overrode the document with a number the user
+            // could no longer see, let alone clear.
+            if (answered)
+            {
+                if (!string.IsNullOrWhiteSpace(IonProductTolText.Text)
+                    || !string.IsNullOrWhiteSpace(IonPrecursorTolText.Text))
+                {
+                    Log($"Ion accounting: the document states {facts.Product!.Describe()}, so the "
+                        + "tolerance you had entered has been cleared and the document's value is "
+                        + "what will be used.");
+                }
+                IonProductTolText.Text = "";
+                IonPrecursorTolText.Text = "";
+            }
 
             if (facts.Folder is not null && string.IsNullOrWhiteSpace(IonRawDirText.Text))
             {
                 IonRawDirText.Text = facts.Folder;
-                Log(facts.From is not null
-                    ? $"Ion accounting: {facts.From.DisplayName} imported its data from "
-                      + $"{facts.Folder}, so that is where the files will be read from. Change it "
-                      + "above if they have moved."
-                    : $"Ion accounting: an earlier run of this output directory recorded its data in "
-                      + $"{facts.Folder}, so that is where the files will be read from. Change it "
-                      + "above if they have moved.");
+                Log($"Ion accounting: {facts.From!.DisplayName} imported its data from "
+                    + $"{facts.Folder}, so that is where the files will be read from. Change it "
+                    + "above if they have moved.");
             }
             else if (wantFolder && facts.Folder is null)
             {
@@ -1174,10 +1183,13 @@ public partial class MainWindow : Window
         // cannot access this object because a different thread owns it" and cost the whole ion
         // accounting pass - the analysis above it had already finished, so it looked like a
         // measurement failure rather than a bug.
+        // The tolerance boxes are read only while they are VISIBLE. Collapsed means something else
+        // states the tolerance, and a value left behind a hidden box would otherwise still win.
+        var typedTolerances = IonTolerancePanel.Visibility == Visibility.Visible;
         var ion = new IonRunSettings(
             IonAccountingCheck.IsChecked == true ? IonRawDirText.Text?.Trim() : null,
-            IonProductTolText.Text?.Trim(),
-            IonPrecursorTolText.Text?.Trim());
+            typedTolerances ? IonProductTolText.Text?.Trim() : null,
+            typedTolerances ? IonPrecursorTolText.Text?.Trim() : null);
 
         try
         {
@@ -1490,7 +1502,6 @@ public partial class MainWindow : Window
                 + "will use them once it finishes.");
         isolationTask.Wait(TimeSpan.FromSeconds(20));
         RecordIsolationProvenance(outputDir);
-        RecordAcquisitionProvenance(inputs, outputDir, ion);
 
         RunIonAccounting(inputs, outputDir, ion, cancellationToken);
     }
@@ -1521,39 +1532,6 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log("Could not record the isolation windows in the provenance file: " + ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Write down what the inputs said about the acquisition, whether or not ions are measured.
-    /// </summary>
-    /// <remarks>
-    /// Recorded on EVERY run, because the run that can answer and the run that needs the answer are
-    /// usually not the same one. A pre-exported report carries no Full-Scan settings and no file
-    /// paths - including the report PRISM itself writes into <c>skyline-reports/</c> - so measuring
-    /// ions against a previous run's own export had to ask for a tolerance the first run already
-    /// knew and threw away.
-    /// </remarks>
-    private void RecordAcquisitionProvenance(
-        IReadOnlyList<PrismInput> inputs, string outputDir, IonRunSettings ion)
-    {
-        try
-        {
-            var (product, precursor, _) = ResolveIonTolerances(inputs, outputDir, ion);
-            var directory = !string.IsNullOrWhiteSpace(ion.RawDirectory)
-                ? ion.RawDirectory
-                : DensityRawDirectory(null, inputs);
-
-            if (Provenance.RecordAcquisition(
-                    outputDir, product?.Describe(), precursor?.Describe(), directory))
-            {
-                Log($"Recorded the extraction tolerances and data location in {Provenance.FileName}, "
-                    + "so a later run on this directory does not have to ask.");
-            }
-        }
-        catch (Exception ex)
-        {
-            Log("Could not record the acquisition settings in the provenance file: " + ex.Message);
         }
     }
 
@@ -1693,27 +1671,6 @@ public partial class MainWindow : Window
         {
             Log($"Ion accounting: using the {typedProduct.Describe()} you entered rather than the "
                 + $"{product.Describe()} the document states.");
-        }
-
-        // Nothing here can say, so ask what a previous run on this directory wrote down. That run
-        // had the document; this one may only have the report it exported.
-        if (typedProduct is null && product is null)
-        {
-            var dir = outputDir;
-            if (!string.IsNullOrWhiteSpace(dir))
-            {
-                var recorded = Provenance.ReadAcquisition(dir!);
-                var fromFile = ProductMassTolerance.ParseSetting(recorded.ProductTolerance);
-                if (fromFile is not null)
-                {
-                    Log($"Ion accounting: no input could state the extraction window, so using the "
-                        + $"{fromFile.Describe()} recorded in {Provenance.FileName} by an earlier run "
-                        + "of this directory.");
-                    return (fromFile,
-                        ProductMassTolerance.ParseSetting(recorded.PrecursorTolerance),
-                        $"from {Provenance.FileName}");
-                }
-            }
         }
 
         return IonToleranceChoice.Pick(typedProduct, typedPrecursor, product, precursor);

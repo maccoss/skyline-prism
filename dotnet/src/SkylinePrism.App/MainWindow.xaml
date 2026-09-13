@@ -158,7 +158,7 @@
                                     <TextBlock Text="3. Peptide batch correction:" Width="230" VerticalAlignment="Center" />
                                     <CheckBox x:Name="PeptideBatchCheck" Content="ComBat (peptide level)" VerticalAlignment="Center"
                                               Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
-                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. One document with no Batch column is one batch, and ComBat has nothing to correct between. Ticking it yourself overrides that, and the choice then sticks.&#x0a;&#x0a;Sample types come from the metadata report's Sample Type column." />
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. One document with no Batch column is one batch, and ComBat has nothing to correct between. Changing EITHER box yourself - ticking or unticking - overrides that for both, and the choice then sticks.&#x0a;&#x0a;Sample types come from the metadata report's Sample Type column." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -226,14 +226,14 @@
                                     <TextBlock Text="7. Protein batch correction:" Width="230" VerticalAlignment="Center" />
                                     <CheckBox x:Name="ProteinBatchCheck" Content="ComBat (protein level)" VerticalAlignment="Center"
                                               Checked="OnBatchCorrectionToggled" Unchecked="OnBatchCorrectionToggled"
-                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. One document with no Batch column is one batch, and ComBat has nothing to correct between. Ticking it yourself overrides that, and the choice then sticks.&#x0a;&#x0a;Sample types come from the metadata report's Sample Type column." />
+                                              ToolTip="Off until the run has more than one batch to correct between - a second input, or a Batch column naming plates within one document. One document with no Batch column is one batch, and ComBat has nothing to correct between. Changing EITHER box yourself - ticking or unticking - overrides that for both, and the choice then sticks.&#x0a;&#x0a;Sample types come from the metadata report's Sample Type column." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
                                     <TextBlock Text="" Width="230" VerticalAlignment="Center" />
                                     <CheckBox x:Name="ReferenceAnchoredCheck" VerticalAlignment="Center"
                                               Content="Anchor ComBat on the Standard samples"
-                                              ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels.&#x0a;&#x0a;The better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes they do not. Needs Standard replicates in EACH batch; one without any is corrected on its own average (location only), and the log says so." />
+                                              ToolTip="Estimate each batch's effect from the replicates whose Skyline Sample Type is Standard - identical material run in every batch - instead of from the across-batch average. Differences in that material are purely technical, so no biology is removed and the batches need not contain comparable samples. Applies to both the peptide and protein levels.&#x0a;&#x0a;The better choice when the batches differ in what they contain - different case/control ratios per plate, say - because standard ComBat assumes every batch holds comparable biology and removes real signal when it does not. Needs Standard replicates in EACH batch; one without any is corrected on its own average (location only), and the log says so." />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -254,7 +254,7 @@
                                     <CheckBox x:Name="IonAccountingCheck" VerticalAlignment="Center" Margin="0,0,8,0"
                                               Checked="OnIonAccountingOptionChanged" Unchecked="OnIonAccountingOptionChanged"
                                               Content="Measure ions from the instrument files"
-                                              ToolTip="After the pipeline, read every replicate's data file and count the ions that reached the detector, and the part of them this analysis accounts for - at MS1 and MS2 separately. Both halves are measured the same way, so the ratio is a genuine fraction. This is the only thing PRISM does that reads the instrument files, and it is what fills the Ion Accounting pane.&#x0a;&#x0a;Single-digit minutes per data file - comparable to what Skyline spends pulling the same numbers out of a .skyd. Results are cached, so the pane and 'prism qc -d' replot for free and a re-run measures only the replicates the cache does not already cover." />
+                                              ToolTip="After the pipeline, read every replicate's data file and count the ions that reached the detector, and the part of them this analysis accounts for - at MS1 and MS2 separately. Both halves are measured the same way, so the ratio is a genuine fraction. This is the only thing PRISM does that reads the instrument files, and it is what fills the Ion Accounting pane.&#x0a;&#x0a;Single-digit minutes per data file - comparable to what Skyline spends pulling the same numbers out of a .skyd, and cheaper than exporting its per-transition ion counts. Results are cached, so the pane and 'prism qc -d' replot for free and a re-run measures only the replicates the cache does not already cover." />
                                     <TextBox x:Name="IonRawDirText" Width="300" IsEnabled="False" VerticalAlignment="Center"
                                              ToolTip="The directory holding the .raw / .mzML / .d files for these replicates. They are paired to replicates by file name, one-to-one; a replicate matching a file another replicate also matches is reported as ambiguous and neither is given it." />
                                     <Button x:Name="IonRawDirBrowse" Content="Browse..." Padding="10,2" Margin="8,0,0,0"
@@ -271,7 +271,7 @@
                                     <TextBlock Text="Product tolerance:" VerticalAlignment="Center"
                                                Margin="0,0,6,0" />
                                     <TextBox x:Name="IonProductTolText" Width="90" IsEnabled="False"
-                                             VerticalAlignment="Center" ToolTip="The +/- extraction window this analysis used, as your document's Transition Settings &gt; Full-Scan states it - e.g. &quot;10 ppm&quot; or &quot;0.4 m/z&quot;. Leave blank when an input is a Skyline document: PRISM reads it from the document. It is REQUIRED for a pre-exported report, which carries no settings, and typing one here overrides a document that states a different value. The tolerance decides how much fragment sharing is found, so it is never guessed." />
+                                             VerticalAlignment="Center" ToolTip="The +/- extraction window this analysis used, as your document's Transition Settings &gt; Full-Scan states it - e.g. &quot;10 ppm&quot; or &quot;0.4 m/z&quot;. These boxes appear only when no input can state it - a pre-exported report carries no settings - and are cleared and hidden again the moment one can. The tolerance decides how much fragment sharing is found between co-isolated peptides, so it is never guessed: without it the measurement is skipped." />
                                     <TextBlock Text="Precursor tolerance:" VerticalAlignment="Center"
                                                Margin="16,0,6,0" />
                                     <TextBox x:Name="IonPrecursorTolText" Width="90" IsEnabled="False"

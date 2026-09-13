@@ -390,14 +390,6 @@ output reflects whatever version you ran (the example below is illustrative).
 }
 ```
 
-**`acquisition`**: the extraction tolerances and the directory the instrument files were in,
-as the input Skyline document stated them. Recorded for the same reason as `isolation_schemes`
-below: a pre-exported report carries neither, and that includes the report PRISM itself writes into
-`skyline-reports/`, so re-running ion accounting against a previous run's own export would
-otherwise have to ask for a tolerance the first run already knew. Beside the processing parameters
-and never inside them - a tolerance is a fact about the acquisition, not a setting of this pipeline,
-and `--from-provenance` does not replay it.
-
 **`isolation_schemes`**: the DIA isolation windows the data was acquired with, when the run managed to
 learn them. `source` is `measured` for windows read out of an instrument data file (`data_file` names
 which one, `recorded` says when) and `document` for windows a Skyline document declared, in which case

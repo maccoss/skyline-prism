@@ -31,11 +31,29 @@ public class UiThreadSafetyTests
         Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "SkylinePrism.App"));
 
-    /// <summary>Methods the selection poll runs on a worker thread, and must therefore keep UI-free.</summary>
+    /// <summary>
+    /// Methods that run on a worker thread, and must therefore keep UI-free.
+    /// </summary>
+    /// <remarks>
+    /// The first two are the selection poll this test was written for. The rest are the RUN, added
+    /// after the same mistake shipped a second time: the tolerance boxes were read inside
+    /// ResolveIonTolerances, which RunIonAccounting calls from the pipeline worker, and the run died
+    /// with "The calling thread cannot access this object because a different thread owns it" -
+    /// after the analysis had already succeeded, so it read as a measurement failure. The transitive
+    /// checker below would have caught it the moment RunPipeline was on this list.
+    ///
+    /// <para><b>Add a method here whenever one starts running off the UI thread.</b> OnRun captures
+    /// what the run needs into locals before Task.Run; anything below it takes those as arguments.
+    /// </para>
+    /// </remarks>
     private static readonly string[] WorkerThreadMethods =
     {
         "FindEntryByLocator",
         "ResolveLocator",
+        "RunPipeline",
+        "RunIonAccounting",
+        "ResolveIonTolerances",
+        "RecordIsolationProvenance",
     };
 
     [Fact]
@@ -142,8 +160,14 @@ public class UiThreadSafetyTests
         {
             var src = File.ReadAllText(file);
             // Methods, and expression/block-bodied properties - RangeLevel is a property.
+            //
+            // The return type may WRAP onto its own line, which a tuple-returning signature
+            // routinely does. Excluding newlines here skipped those silently, and a method this
+            // test cannot see is a method it cannot guard: adding ResolveIonTolerances to the list
+            // above failed with "not found - was it renamed?" rather than checking it. = and ;
+            // still bound the match, so a field cannot be mistaken for a member with a body.
             foreach (Match m in Regex.Matches(
-                         src, @"^\s*(?:private|internal|public|protected)[^\r\n=;]*?\b(\w+)\s*(\(|=>|\r?\n\s*\{)",
+                         src, @"^\s*(?:private|internal|public|protected)[^=;]*?\b(\w+)\s*(\(|=>|\r?\n\s*\{)",
                          RegexOptions.Multiline))
             {
                 var name = m.Groups[1].Value;

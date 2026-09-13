@@ -58,6 +58,9 @@ public partial class MainWindow
     /// </summary>
     private IReadOnlyList<IonAccountingRow> _ionDrawn = Array.Empty<IonAccountingRow>();
 
+    /// <summary>Set by the describe helpers, consumed by the caller that writes the status line.</summary>
+    private string? _ionStatusDetail;
+
     /// <summary>Drop the cached result so the pane reloads next time it is shown.</summary>
     private void InvalidateIonAccounting()
     {
@@ -426,7 +429,7 @@ public partial class MainWindow
     /// </summary>
     private string IonOrderNote(IonAccountingResult result) =>
         IonSort == IonRowOrder.By.RunOrder && !IonRowOrder.CanOrderByRun(result.Rows)
-            ? " | by file name: no acquisition times in this cache"
+            ? " | by file name: no acquisition times in this cache, which a re-measure would add"
             : "";
 
     /// <summary>
@@ -575,8 +578,8 @@ public partial class MainWindow
                 IonPlot.Plot, result with { Rows = ordered }, level,
                 IonBarTitle(result, level), 1.0, IonQuantity);
             IonPlot.Refresh();
-            IonStatusText.Text =
-                DescribeIon(result, level) + IonOrderNote(result) + IonQuantityNote(result);
+            var line = DescribeIon(result, level) + IonOrderNote(result);
+            SetIonStatus(line, _ionStatusDetail);
             IonHoverText.Text = "";
             return;
         }
@@ -597,7 +600,8 @@ public partial class MainWindow
 
         if (!_ionCycles.TryGetValue(sample, out var cycles))
         {
-            IonStatusText.Text = $"Reading {sample}...";
+            // No detail yet - the previous replicate's counts are not this one's.
+            SetIonStatus($"Reading {sample}...");
             cycles = await Task.Run(() => IonAccountingStore.ReadCycles(dir, sample));
             if (request != _ionRequest)
                 return;
@@ -621,8 +625,8 @@ public partial class MainWindow
                 1.0, quantity);
         }
         IonPlot.Refresh();
-        IonStatusText.Text = DescribeIonReplicate(result, sample, level, cycles.Count)
-            + IonQuantityNote(result);
+        SetIonStatus(
+            DescribeIonReplicate(result, sample, level, cycles.Count), _ionStatusDetail);
     }
 
     private double IonBinMinutes()
@@ -651,15 +655,6 @@ public partial class MainWindow
             : $"{noun} acquired and assigned, per replicate";
     }
 
-    /// <summary>
-    /// Says so when the summed TIC was asked for and this cache does not carry it. Drawing zeros
-    /// would read as a run that acquired nothing, which is the one thing the plot must not say.
-    /// </summary>
-    private string IonQuantityNote(IonAccountingResult result) =>
-        IonQuantity == PlotRenderer.IonQuantity.Signal && !result.Rows.Any(r => r.HasSignal)
-            ? " | WARNING: no summed TIC in this cache"
-            : "";
-
     /// <inheritdoc cref="IonBarTitle"/>
     private static string ShareTitle(
         string sample, PlotRenderer.IonLevel level, IonAccountingResult result, string noun)
@@ -684,8 +679,9 @@ public partial class MainWindow
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
 
-        // The settings, out of the way but not gone.
-        IonStatusText.ToolTip =
+        // The settings, out of the way but not gone. Returned with the line rather than set here,
+        // so the two can never be written apart - see SetIonStatus.
+        _ionStatusDetail =
             $"product {result.ProductTolerance}\nprecursor {result.PrecursorTolerance}\n"
             + $"scheme {result.IsolationScheme}\n"
             + $"{result.AssignedPeptides:N0} peptides claiming signal";
@@ -757,9 +753,14 @@ public partial class MainWindow
         var row = result.Rows.FirstOrDefault(
             r => string.Equals(r.Sample, sample, StringComparison.Ordinal));
         if (row is null)
+        {
+            // No accounting row for this replicate, so there is nothing to explain - and the
+            // previous replicate's counts must not stand in for it.
+            _ionStatusDetail = null;
             return $"{cycles:N0} cycles";
+        }
 
-        IonStatusText.ToolTip =
+        _ionStatusDetail =
             $"{row.Ms1Count:N0} MS1 and {row.Ms2Count:N0} MS2 spectra\n"
             + $"{row.Claims:N0} claimed regions\n"
             + $"product {result.ProductTolerance}\nprecursor {result.PrecursorTolerance}\n"
@@ -801,7 +802,23 @@ public partial class MainWindow
         _ionDrawn = Array.Empty<IonAccountingRow>();
         PlotRenderer.DrawEmptyState(IonPlot.Plot, message);
         IonPlot.Refresh();
-        IonStatusText.Text = message;
+        SetIonStatus(message);
         IonHoverText.Text = "";
+    }
+
+    /// <summary>
+    /// The status line and the settings behind it, which are written together or not at all.
+    /// </summary>
+    /// <remarks>
+    /// The detail moved to the tooltip when the line was shortened, and three of the five places
+    /// that set the text did not touch the tooltip - so a message about a directory with no
+    /// accounting, or a "Reading &lt;replicate&gt;..." for a replicate being loaded, sat under the
+    /// PREVIOUS directory's tolerances and peptide count. A stale explanation attached to a live
+    /// line is worse than no explanation.
+    /// </remarks>
+    private void SetIonStatus(string text, string? detail = null)
+    {
+        IonStatusText.Text = text;
+        IonStatusText.ToolTip = detail;
     }
 }
