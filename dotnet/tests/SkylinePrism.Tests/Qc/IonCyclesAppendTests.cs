@@ -195,9 +195,13 @@ public class IonCyclesAppendTests : IDisposable
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
             fs.SetLength(offset);
 
+        // 30 ms against the reader's 5 x 75 ms budget, so a loaded CI runner has 270 ms of slack
+        // before this turns into a spurious failure on someone else's pull request. Long enough that
+        // the read below is overwhelmingly likely to have started and found the file headless, which
+        // is the state being tested.
         var finish = Task.Run(() =>
         {
-            Thread.Sleep(120);
+            Thread.Sleep(30);
             using var fs = new FileStream(
                 path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
             fs.SetLength(0);
@@ -232,6 +236,67 @@ public class IonCyclesAppendTests : IDisposable
 
         Assert.Empty(IonAccountingStore.SamplesWithCycles(dir, out var damaged));
         Assert.True(damaged);
+    }
+
+    /// <summary>
+    /// A backup that is not shaped like a footer is not written over the file it claims to fix.
+    /// </summary>
+    /// <remarks>
+    /// The repair truncates to the offset the backup records, so acting on a torn or foreign backup
+    /// would discard bytes in exchange for a footer describing nothing - turning one broken state
+    /// into a different one. The blob is checked for its own trailing PAR1 and a self-consistent
+    /// length first.
+    /// </remarks>
+    [Fact]
+    public void ADamagedBackupIsNotActedOn()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 40), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 40), "key");
+
+        var backup = ParquetWideWriter.FooterBackupOf(path);
+        var offset = BitConverter.ToInt64(File.ReadAllBytes(backup), 0);
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
+            fs.SetLength(offset);
+        var torn = new FileInfo(path).Length;
+
+        // Truncated mid-write: the offset still reads, the footer behind it does not.
+        var blob = File.ReadAllBytes(backup);
+        File.WriteAllBytes(backup, blob[..(blob.Length / 2)]);
+
+        Assert.False(IonAccountingStore.RepairCycles(dir));
+        Assert.Equal(torn, new FileInfo(path).Length);
+    }
+
+    /// <summary>
+    /// A live measurement is never rewound by a reader that looked at the wrong moment.
+    /// </summary>
+    /// <remarks>
+    /// Mid-append and interrupted-append are the same thing from outside - no footer either way -
+    /// so the only thing separating them is whether a measurement is running. The guard lives in
+    /// RepairCycles so every caller gets it rather than the ones that remembered.
+    /// </remarks>
+    [Fact]
+    public void RepairRefusesWhileAMeasurementIsRunning()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 40), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 40), "key");
+        var offset = BitConverter.ToInt64(
+            File.ReadAllBytes(ParquetWideWriter.FooterBackupOf(path)), 0);
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
+            fs.SetLength(offset);
+
+        using (IonAccountingStore.MarkMeasuring(dir))
+            Assert.False(IonAccountingStore.RepairCycles(dir));
+
+        // ...and once it is over, the same file is repaired.
+        Assert.True(IonAccountingStore.RepairCycles(dir));
+        Assert.Equal(40, IonAccountingStore.ReadCycles(dir).Count);
     }
 
     /// <summary>A file that is intact is never rewound, however stale the backup beside it.</summary>

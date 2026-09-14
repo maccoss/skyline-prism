@@ -1166,44 +1166,67 @@ public partial class MainWindow : Window
         _isRunning = true;
         UpdateRunEnabled();
 
-        if (_inputs.Count == 0)
+        // Everything between the claim and the run can throw - a control that will not parse, a
+        // share that cannot be listed, a label collision - and this is an `async void` handler, so an
+        // escaping exception never reaches the finally further down that releases the claim. The Run
+        // button would then stay disabled until the tool was restarted, which is a worse outcome than
+        // the double-start the claim exists to prevent. So: one gate, released on every exit that is
+        // not the run actually beginning.
+        var starting = false;
+        try
         {
-            Log("No inputs. Add a document or an exported report on the Inputs tab.");
-            ShowAnalysis(AnalysisPane.Inputs);
-            _isRunning = false;
-            UpdateRunEnabled();
-            return;
-        }
+            if (_inputs.Count == 0)
+            {
+                Log("No inputs. Add a document or an exported report on the Inputs tab.");
+                ShowAnalysis(AnalysisPane.Inputs);
+                return;
+            }
 
-        // Asked BEFORE anything is touched - this is the last moment a person can change their mind,
-        // and the answer decides whether a cohort's results survive.
-        //
-        // Silent when the previous run used the same version and the same settings: re-running to
-        // regenerate a report or to top up a partial ion accounting is ordinary, and a dialog on
-        // the ordinary case is one people learn to dismiss without reading.
-        //
-        // The controls are read here, on the UI thread; the directory is then looked at off it,
-        // because an output directory is routinely a network share and a stat of six file names
-        // plus a JSON read is not something to make the window sit through.
-        var outputDirToCheck = OutputDirBox.Text;
-        var configToCheck = BuildConfigFromUi();
-        var existing = await Task.Run(() => ExistingResults.Inspect(outputDirToCheck, configToCheck));
-        if (existing.Warning() is { } warning)
+            // Asked BEFORE anything is touched - this is the last moment a person can change their
+            // mind, and the answer decides whether a cohort's results survive.
+            //
+            // Silent when the previous run used the same version and the same settings: re-running
+            // to regenerate a report or to top up a partial ion accounting is ordinary, and a dialog
+            // on the ordinary case is one people learn to dismiss without reading.
+            //
+            // The controls are read here, on the UI thread; the directory is then looked at off it,
+            // because an output directory is routinely a network share and a stat of six file names
+            // plus a JSON read is not something to make the window sit through.
+            var outputDirToCheck = OutputDirBox.Text;
+            var configToCheck = BuildConfigFromUi();
+            var existing = await Task.Run(
+                () => ExistingResults.Inspect(outputDirToCheck, configToCheck));
+            if (existing.Warning() is { } warning)
+            {
+                var answer = MessageBox.Show(
+                    warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
+                    "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes)
+                    return;
+            }
+
+            // Labels double as exported file stems and as batch labels, so they must be unique
+            // before the run.
+            PrismInput.EnsureUniqueLabels(_inputs);
+            InputsGrid.Items.Refresh();
+            starting = true;
+        }
+        catch (Exception ex)
         {
-            var answer = MessageBox.Show(
-                warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
-                "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.Yes)
+            Log("ERROR: the run could not be started - " + ex.Message);
+            App.WriteLog("Run setup failed: " + ex);
+        }
+        finally
+        {
+            if (!starting)
             {
                 _isRunning = false;
                 UpdateRunEnabled();
-                return;
             }
         }
 
-        // Labels double as exported file stems and as batch labels, so they must be unique before the run.
-        PrismInput.EnsureUniqueLabels(_inputs);
-        InputsGrid.Items.Refresh();
+        if (!starting)
+            return;
 
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();

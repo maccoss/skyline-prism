@@ -112,32 +112,41 @@ public static class ParquetWideWriter
         // that throws - once per unit of work, for the rest of the run, with nothing ever repairing
         // it. Starting such a file over loses nothing, because there is nothing in it.
         var info = new FileInfo(path);
-        var exists = !replace && info.Exists && info.Length > 0;
-
-        // An append is NOT atomic, and the file it damages is the whole file rather than the row
-        // group being written. Parquet keeps its metadata at the END, so appending overwrites the
-        // existing footer with the new row group and writes a fresh footer after it; between those
-        // two the file has no footer at all, and a reader gets nothing - not "everything except the
-        // replicate in flight", nothing. Measured: truncating a four-replicate file at the footer
-        // offset, which is exactly what the first write of an append does, takes ReadCycles from
-        // 4,000 rows to 0.
-        //
-        // So the bytes about to be overwritten are kept first, and TryRepair puts them back. The
-        // footer is ~1,577 bytes per row group (measured across 8 to 120 groups, linear), so the
-        // whole protection costs about 188 MB over a 500-replicate run against 376 MB of data - as
-        // against the 92 GB that rewriting the table each time would have cost.
-        if (exists)
-            SaveFooter(path, FooterBackupOf(path));
-        else
-            TryDelete(FooterBackupOf(path));
+        var mightAppend = !replace && info.Exists && info.Length > 0;
 
         // Appending needs the existing footer read back, so the stream is ReadWrite rather than the
         // write-only one Write uses. Sharing Read for the same reason every writer here does: a
         // reader must be able to look while a run is in progress - see ParquetColumnIo.OpenRead.
-        await using (var fs = await OpenAppendWithRetryAsync(path, exists))
+        await using (var fs = await OpenAppendWithRetryAsync(path, mightAppend))
         {
+            // Decided from the OPEN file, never from the stat above: between that stat and this open
+            // the file can be replaced or emptied, and asking parquet to append to a file with no
+            // footer throws.
+            var append = !replace && fs.Length > 0;
+
+            // An append is NOT atomic, and the file it damages is the whole file rather than the row
+            // group being written. Parquet keeps its metadata at the END, so appending overwrites
+            // the existing footer with the new row group and writes a fresh footer after it; between
+            // those two the file has no footer at all, and a reader gets nothing - not "everything
+            // except the replicate in flight", nothing. Measured: truncating a four-replicate file
+            // at the footer offset, which is exactly what the first write of an append does, takes
+            // ReadCycles from 4,000 rows to 0.
+            //
+            // So the bytes about to be overwritten are kept first, and TryRepair puts them back. The
+            // footer is ~1,577 bytes per row group (measured across 8 to 120 groups, linear), so the
+            // whole protection costs about 188 MB over a 500-replicate run against 376 MB of data -
+            // as against the 92 GB that rewriting the table each time would have cost.
+            //
+            // Read through the stream this append OWNS, rather than reopening the path: taken before
+            // the open, the copy describes a state another writer can leave behind in between, and a
+            // later repair would then truncate away a row group it never saw.
+            if (append)
+                SaveFooter(fs, FooterBackupOf(path));
+            else
+                TryDelete(FooterBackupOf(path));
+
             await using var writer = await ParquetWriter.CreateAsync(
-                schema, fs, ParquetColumnIo.Options(), append: exists);
+                schema, fs, ParquetColumnIo.Options(), append: append);
 
             using var rg = writer.CreateRowGroup();
             for (var i = 0; i < metaColumns.Count; i++)
@@ -157,11 +166,11 @@ public static class ParquetWideWriter
     /// refuse to write. A torn backup is harmless on its own - it is only ever read when the file it
     /// describes will not parse, and <see cref="TryRepair"/> verifies the result.
     /// </remarks>
-    private static void SaveFooter(string path, string backup)
+    private static void SaveFooter(FileStream fs, string backup)
     {
+        var resume = fs.Position;
         try
         {
-            using var fs = ParquetColumnIo.OpenRead(path);
             if (fs.Length < 12)
                 return;
 
@@ -185,6 +194,11 @@ public static class ParquetWideWriter
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
+        finally
+        {
+            // Handed straight to ParquetWriter next, which expects to decide its own position.
+            fs.Seek(resume, SeekOrigin.Begin);
+        }
     }
 
     /// <summary>
@@ -207,7 +221,7 @@ public static class ParquetWideWriter
         try
         {
             var blob = File.ReadAllBytes(backup);
-            if (blob.Length <= 8)
+            if (!IsWellFormedFooter(blob))
                 return false;
             var offset = BitConverter.ToInt64(blob, 0);
             if (offset < 4 || offset > new FileInfo(path).Length)
@@ -225,6 +239,25 @@ public static class ParquetWideWriter
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Whether a saved footer is shaped like one, before it is written over a file.
+    /// </summary>
+    /// <remarks>
+    /// The repair truncates to the recorded offset, so acting on a backup that was itself torn -
+    /// <see cref="SaveFooter"/> writes it in one go, but a machine can stop mid-write - would
+    /// discard bytes in exchange for a footer that describes nothing. The blob is
+    /// [8-byte offset][metadata][4-byte length][PAR1], so its own declared length has to account for
+    /// exactly what is there.
+    /// </remarks>
+    private static bool IsWellFormedFooter(byte[] blob)
+    {
+        if (blob.Length < 24)
+            return false;
+        if (blob[^4] != (byte)'P' || blob[^3] != (byte)'A' || blob[^2] != (byte)'R' || blob[^1] != (byte)'1')
+            return false;
+        return BitConverter.ToInt32(blob, blob.Length - 8) == blob.Length - 16;
     }
 
     private static void TryDelete(string path)

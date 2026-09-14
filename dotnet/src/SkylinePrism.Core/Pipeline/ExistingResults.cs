@@ -79,11 +79,9 @@ public sealed record ExistingResults(
         var what = Version is null
             ? "a previous run"
             : $"a run of PRISM {Version}" + (Date is null ? "" : $" from {Date}");
-        var why = !SameVersion
-            ? "a different version of PRISM, which recomputes every stage"
-            : Recomputed.Count == 0
-                ? "different settings"
-                : $"different settings for {Describe(Recomputed)}";
+        var why = SameVersion
+            ? $"different settings for {Describe(Recomputed)}"
+            : "a different version of PRISM, which recomputes every stage";
         var names = string.Join(", ", Files.Take(4))
             + (Files.Count > 4 ? $" and {Files.Count - 4:N0} more" : "");
 
@@ -157,7 +155,7 @@ public sealed record ExistingResults(
 
         var provenance = Path.Combine(outputDir, Provenance.FileName);
         if (!File.Exists(provenance))
-            return new ExistingResults(true, null, null, false, Chain, present, false);
+            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false);
 
         // ONE read of the file, on a directory that is routinely a network share.
         string json;
@@ -174,7 +172,7 @@ public sealed record ExistingResults(
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return new ExistingResults(true, null, null, false, Chain, present, false);
+            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false);
         }
 
         PrismConfig recorded;
@@ -189,20 +187,37 @@ public sealed record ExistingResults(
         catch (Exception ex) when (ex is JsonException or InvalidOperationException
                                        or NotSupportedException or ArgumentException)
         {
-            return new ExistingResults(true, version, date, false, Chain, present, false);
+            return new ExistingResults(true, version, date, false, Chain.ToArray(), present, false);
         }
 
         var sameVersion = string.Equals(version, PrismVersion.Current, StringComparison.Ordinal);
         var cache = StageCache.Load(outputDir);
 
+        // Both exact checks need both things: the merge needs the input files, the transition rollup
+        // needs a recorded stage cache. With either missing the answer is a prediction and the
+        // warning has to say so rather than presenting a lower bound as a complete list.
+        var exact = inputs is { Count: > 0 } && !cache.IsEmpty;
+
         // A version change invalidates every stage by construction: Fingerprint folds PrismVersion in
         // deliberately, because a change to a rollup's arithmetic leaves no trace in the config.
-        var from = sameVersion ? FirstChanged(recorded, config, cache, inputs, outputDir) : 0;
+        int from;
+        try
+        {
+            from = sameVersion ? FirstChanged(recorded, config, cache, inputs, outputDir) : 0;
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException
+                                       or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            // Stamping the input files touches the filesystem, and a path the caller has not
+            // validated yet can be rejected outright. This runs BEFORE the pipeline, whose job it is
+            // to report that properly - so the check must not be what fails the run. Treat it as
+            // "cannot tell", which reports rather than reassures.
+            from = 0;
+        }
         if (from < 0)
         {
             return new ExistingResults(
-                true, version, date, true, Array.Empty<string>(), Array.Empty<string>(),
-                inputs is { Count: > 0 });
+                true, version, date, true, Array.Empty<string>(), Array.Empty<string>(), exact);
         }
 
         var recomputed = Chain.Skip(from).ToArray();
@@ -218,7 +233,7 @@ public sealed record ExistingResults(
         // nothing to name - fall back to the outputs a reader would recognize.
         return new ExistingResults(
             true, version, date, sameVersion, recomputed,
-            files.Length > 0 ? files : present, inputs is { Count: > 0 });
+            files.Length > 0 ? files : present, exact);
     }
 
     /// <summary>

@@ -217,6 +217,43 @@ public class ExistingResultsTests : IDisposable
         Assert.Null(existing.Warning());
     }
 
+    /// <summary>
+    /// An input path the filesystem rejects does not take the run down with it.
+    /// </summary>
+    /// <remarks>
+    /// Stamping the input files touches the filesystem, and this check runs BEFORE the pipeline -
+    /// whose job it is to report a bad input properly. A courtesy warning must never be the thing
+    /// that fails the run, so a comparison that cannot be made is reported rather than thrown.
+    /// </remarks>
+    [Fact]
+    public void AnInputPathThatCannotBeStampedIsReportedNotThrown()
+    {
+        var config = new PrismConfig();
+        Results(config);
+
+        var existing = ExistingResults.Inspect(
+            _dir, config, new[] { "no:such|file .csv", Path.Combine(_dir, "missing.csv") });
+
+        // Cannot tell, so it says something rather than reassuring.
+        Assert.True(existing.WouldReplace);
+        Assert.NotNull(existing.Warning());
+    }
+
+    /// <summary>
+    /// Without a stage cache the answer is a prediction, and the warning says so.
+    /// </summary>
+    [Fact]
+    public void AWarningWithoutAStageCacheSaysItIsALowerBound()
+    {
+        Results(new PrismConfig());
+        var changed = new PrismConfig();
+        changed.ProteinRollup.Method = "sum";
+
+        // No stage_cache.json here, so the transition rollup was never actually checked.
+        Assert.Contains(
+            "lower bound", ExistingResults.Inspect(_dir, changed).Warning()!, StringComparison.Ordinal);
+    }
+
     /// <summary>Writes what a completed run leaves: the reported outputs plus its provenance.</summary>
     private void Results(PrismConfig config)
     {

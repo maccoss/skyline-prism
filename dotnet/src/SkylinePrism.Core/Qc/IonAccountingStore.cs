@@ -507,6 +507,14 @@ public static class IonAccountingStore
     /// </remarks>
     public static bool RepairCycles(string outputDir, Action<string>? log = null)
     {
+        // NEVER while a measurement is running. An append in flight looks exactly like an
+        // interrupted one from outside, and rewinding a live run to its previous footer would be the
+        // worst possible reading of a transient state. TryRepair opens exclusively and would be
+        // refused anyway, but that is a share-mode interaction in another file; this is the guard,
+        // and it is here so that every caller gets it rather than the ones that remembered.
+        if (IsMeasuring(outputDir))
+            return false;
+
         var path = Path.Combine(outputDir, CyclesFile);
         if (!File.Exists(path) || !File.Exists(ParquetWideWriter.FooterBackupOf(path)))
             return false;
@@ -935,9 +943,10 @@ public static class IonAccountingStore
             return null;
 
         // The first thing anything does with this directory, so a measurement whose cycles write
-        // was blocked, or whose append was interrupted, is put right before anyone notices it was.
+        // was blocked is put right before anyone notices it was. A torn cycles file is NOT repaired
+        // here - this reads the summary, and repairing on the read that actually fails costs one
+        // footer parse instead of one per read. See ReadCyclesFile.
         RecoverStagedCycles(outputDir, log);
-        RepairCycles(outputDir, log);
 
         try
         {
@@ -1063,40 +1072,62 @@ public static class IonAccountingStore
     /// be read at all - which is NOT the same answer as "there is nothing in it", and the callers that
     /// decide whether to re-measure a cohort must not confuse the two.
     /// </summary>
-    private static T? WithAppendRetry<T>(Func<T> read)
+    private static (T? Value, Exception? Failure) WithAppendRetry<T>(Func<T> read)
         where T : class
     {
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                var value = read();
-                LastReadFailure = null;
-                return value;
+                return (read(), null);
             }
-            catch (Exception) when (attempt < CycleReadAttempts)
+            catch (Exception ex) when (attempt < CycleReadAttempts && IsWorthRetrying(ex))
             {
                 Thread.Sleep(CycleReadDelayMs);
             }
             catch (Exception ex)
             {
-                // Kept so the caller can SAY why, rather than reporting an empty measurement. Only
-                // ever read immediately after the call that set it.
-                LastReadFailure = ex;
-                return null;
+                return (null, ex);
             }
         }
     }
 
-    /// <summary>Why the last retried read gave up, for the message. See <see cref="WithAppendRetry"/>.</summary>
-    [ThreadStatic]
-    private static Exception? LastReadFailure;
+    /// <summary>Whether waiting could plausibly change the answer.</summary>
+    /// <remarks>
+    /// A missing file, a missing directory or a refused permission will say the same thing in
+    /// 300 ms, and sleeping through four delays to be told so again is latency on every read of a
+    /// directory the user cannot see. Cancellation and exhaustion must not be slept through at all.
+    /// </remarks>
+    private static bool IsWorthRetrying(Exception ex) =>
+        ex is not (OperationCanceledException or FileNotFoundException or DirectoryNotFoundException
+            or UnauthorizedAccessException or OutOfMemoryException);
+
+    /// <summary>
+    /// Read the cycles file: wait out an append, and only then consider the file damaged.
+    /// </summary>
+    /// <remarks>
+    /// That order is the whole of it. A file being appended to and a file left torn by an
+    /// interrupted append are indistinguishable from outside - both simply have no footer - and only
+    /// one of them should be acted on. Waiting first tells them apart for free.
+    ///
+    /// <para>Repair is attempted only after a read has actually failed. Probing for damage before
+    /// every read costs a second full footer parse each time - about 790 KB over the share on a
+    /// 500-replicate file - to ask a question whose answer is almost always no.</para>
+    /// </remarks>
+    private static (T? Value, Exception? Failure) ReadCyclesFile<T>(string outputDir, Func<T> read)
+        where T : class
+    {
+        var (value, failure) = WithAppendRetry(read);
+        if (value is not null || !RepairCycles(outputDir))
+            return (value, failure);
+        return WithAppendRetry(read);
+    }
 
     public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
     {
         foreach (var path in CyclesPathsFor(outputDir))
         {
-            var rows = WithAppendRetry<IReadOnlyList<IonCycleRow>>(() =>
+            var (rows, _) = ReadCyclesFile<IReadOnlyList<IonCycleRow>>(outputDir, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 var samples = reader.ReadStrings("sample");
@@ -1176,7 +1207,7 @@ public static class IonAccountingStore
         // truncated and never finished, and the intact measurement is then the other one.
         foreach (var path in CyclesPathsFor(outputDir, log))
         {
-            var found = WithAppendRetry<IReadOnlyList<string>>(() =>
+            var (found, failure) = ReadCyclesFile<IReadOnlyList<string>>(outputDir, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 if (expectKey is not null && reader.HasColumn("settings_key"))
@@ -1200,7 +1231,7 @@ public static class IonAccountingStore
 
             if (found is not null)
                 return found;
-            unreadable = LastReadFailure;
+            unreadable = failure;
         }
 
         // Absent and unreadable are different answers, and only one of them is about the data.
@@ -1448,13 +1479,6 @@ public static class IonAccountingStore
     {
         var path = Path.Combine(outputDir, CyclesFile);
         var staging = path + ".new";
-
-        // Not while a measurement is running: an append in flight looks exactly like an interrupted
-        // one from outside, and rewinding a live run to its previous footer would be the worst
-        // possible reading of a transient state. TryRepair opens exclusively and so refuses anyway;
-        // this keeps it from being attempted at all.
-        if (!IsMeasuring(outputDir))
-            RepairCycles(outputDir, log);
 
         if (IsMeasuring(outputDir) || !File.Exists(staging))
             return File.Exists(path) ? path : null;
