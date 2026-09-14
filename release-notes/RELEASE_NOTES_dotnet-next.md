@@ -279,6 +279,19 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **The RT-binned plots say which minutes each bin covers.** The bars sit at positions 0 to 7, which
+  ScottPlot treated as an ordinary numeric axis - so it labelled the midpoints too and eight bins came
+  out as `-0.5, 0, 0.5, 1 ... 7.5`, which is neither eight of anything nor a retention time. The axis
+  now carries one tick per bin, labelled with the retention times that bin actually covers
+  (`2-10`, `10-18`, ... in whole minutes), and is titled "Retention time (min)".
+
+  The index was the deeper problem. The reason to plot CV against RT is to find *when* in the
+  gradient a run is noisy, and "bin 6" cannot be held against a chromatogram, an acquisition method,
+  or the same question asked of another cohort - all of which are in minutes. The bin edges were
+  already being computed and simply never shown. Applies to both **RT-binned CV** and the **RT-bin
+  boxplot**, in the QC report and in the tool. A gradient short enough for sub-minute bins keeps the
+  decimals it needs rather than printing `12-12` three times over.
+
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
   different empty states: QC Plots rendered nothing at all before the first run, leaving ScottPlot's
   raw default with an unstyled numbered grid to no scale; after a run it reset the chrome but never

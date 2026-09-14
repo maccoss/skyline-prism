@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using ScottPlot;
 using SkylinePrism.Core.Qc;
@@ -1069,10 +1070,11 @@ public static partial class PlotRenderer
                 bars.Add(new ScottPlot.Bar { Position = i + 0.2, Value = double.IsNaN(cvA) ? 0 : cvA, Size = 0.38, FillColor = after });
             }
             plt.Add.Bars(bars);
+            LabelRtBins(plt, rtMin, rtMax, nBins);
         }
 
         plt.Title(title + " (light = before, solid = after)");
-        plt.XLabel("RT bin");
+        plt.XLabel("Retention time (min)");
         plt.YLabel("Median CV (%)");
         plt.Axes.Margins(bottom: 0); // bars sit on the x-axis (y starts at 0)
         StyleQcPlot(plt);
@@ -1144,13 +1146,61 @@ public static partial class PlotRenderer
             }
             if (boxes.Count > 0)
                 plt.Add.Boxes(boxes);
+            LabelRtBins(plt, rtMin, rtMax, nBins);
         }
 
         plt.Title(title);
-        plt.XLabel("RT bin");
+        plt.XLabel("Retention time (min)");
         plt.YLabel("log2 abundance");
         StyleQcPlot(plt);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>
+    /// Put the RETENTION TIMES each bin covers on the axis, in place of its index.
+    /// </summary>
+    /// <remarks>
+    /// The bars and boxes sit at 0..n-1, which ScottPlot treats as an ordinary numeric axis - so it
+    /// labels the midpoints as well and a reader gets "-0.5, 0, 0.5, 1 ..." across eight bins, which
+    /// is neither eight of anything nor a retention time. Manual ticks, one per bin, fix that.
+    ///
+    /// <para>But the index was the deeper problem. The reason to plot CV against RT is to find WHEN
+    /// in the gradient a run is noisy, and "bin 6" cannot be held against a chromatogram, an
+    /// acquisition method, or the same question asked of another cohort - all of which are in
+    /// minutes. The bin edges were already computed here and simply never shown.</para>
+    /// </remarks>
+    private static void LabelRtBins(Plot plt, double rtMin, double rtMax, int nBins)
+    {
+        var pos = new double[nBins];
+        for (var i = 0; i < nBins; i++)
+            pos[i] = i;
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
+            pos, RtBinLabels(rtMin, rtMax, nBins));
+    }
+
+    /// <summary>
+    /// One "start-stop" label per bin, in minutes.
+    /// </summary>
+    /// <remarks>
+    /// Whole minutes, which is what these are read in - except that a gradient short enough for a bin
+    /// to be under a minute and a half would round two edges to the same integer and print "12-12",
+    /// so the precision follows the bin width instead of being fixed. The last bin ends at the last
+    /// peptide's RT rather than at the open-ended edge the binning uses, because an axis saying
+    /// "66-Infinity" would be true and useless.
+    /// </remarks>
+    internal static string[] RtBinLabels(double rtMin, double rtMax, int nBins)
+    {
+        var step = (rtMax - rtMin) / nBins;
+        var format = step >= 1.5 ? "0" : step >= 0.15 ? "0.#" : "0.##";
+        var labels = new string[nBins];
+        for (var i = 0; i < nBins; i++)
+        {
+            var lo = rtMin + i * step;
+            var hi = i == nBins - 1 ? rtMax : rtMin + (i + 1) * step;
+            labels[i] = lo.ToString(format, CultureInfo.InvariantCulture)
+                + "-" + hi.ToString(format, CultureInfo.InvariantCulture);
+        }
+        return labels;
     }
 
     private static double MedianBinCv(
