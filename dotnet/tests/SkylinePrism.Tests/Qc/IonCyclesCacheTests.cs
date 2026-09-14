@@ -276,30 +276,24 @@ public class IonCyclesCacheTests : IDisposable
         IonAccountingStore.Write(dir, Result("A", cycles: 2));
 
         var lines = new List<string>();
-        bool refused;
 
-        // Held exclusively for the whole write, so nothing can replace it.
-        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        // Read-only rather than held open, on both counts deliberately. It is refused identically
+        // on every platform - FileShare is emulated on POSIX and a create is not always stopped by
+        // it - and it fails FAST: ParquetWideWriter retries an IOException fifteen times at 300 ms
+        // but lets UnauthorizedAccessException straight through, so the test does not sit out a
+        // retry budget it is not testing.
+        using (ShortWriteBudget())
+        using (ReadOnlyFile(path))
         {
             // Forty-eight instrument files and an hour. Throwing over a file NAME reported all of
             // it as "Ion accounting failed" when every cycle was on disk and readable.
             IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
-
-            // Windows refuses to open a file held exclusively; POSIX's FileShare emulation does
-            // not stop a create, so the write genuinely succeeds on Linux and macOS. Both outcomes
-            // are a success - asserting the Windows one everywhere is what broke this on the other
-            // two - so which one happened is read off the staging file rather than assumed.
-            refused = File.Exists(path + ".new");
         }
 
-        // The measurement survives either way, which is the whole point.
+        Assert.True(File.Exists(path + ".new"), "the measurement should have been staged");
         Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
         Assert.DoesNotContain(lines, l => l.Contains("WARNING", StringComparison.Ordinal));
-        if (refused)
-        {
-            Assert.Contains(
-                lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
-        }
+        Assert.Contains(lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -349,6 +343,96 @@ public class IonCyclesCacheTests : IDisposable
         var present = IonAccountingStore.DescribeMissingCycles(dir);
         Assert.Contains("could not be read", present, StringComparison.Ordinal);
         Assert.DoesNotContain("rename", present, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A target the write truncated but never finished must not shadow the intact staging file.
+    /// </summary>
+    /// <remarks>
+    /// FileMode.Create truncates on OPEN, so a write that fails part way leaves a file that parses
+    /// as nothing and carries a FRESH timestamp - newer than the staging file, which is what the
+    /// readers prefer. Left alone it loses a whole cohort to tidy up after a failure, which is the
+    /// exact shape of the bug this file exists for.
+    /// </remarks>
+    [Fact]
+    public void ATruncatedRealFileDoesNotShadowTheStagedMeasurement()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        // The staging file holds a complete measurement; the real one was left part-written after
+        // it, so it is both newer AND unreadable.
+        IonAccountingStore.Write(dir, Result("A", cycles: 7), log: null, finalize: false);
+        File.WriteAllBytes(path, new byte[] { 0x50, 0x41, 0x52, 0x31, 0, 0, 0, 0 });
+        File.SetLastWriteTimeUtc(path + ".new", DateTime.UtcNow.AddHours(-1));
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+
+        Assert.Equal(7, IonAccountingStore.ReadCycles(dir, "A").Count);
+        Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir));
+    }
+
+    /// <summary>
+    /// A refused write leaves the CURRENT measurement staged, not whatever was staged before.
+    /// </summary>
+    /// <remarks>
+    /// A progress save that fails leaves a short staging file behind and the run carries on, so
+    /// writing one only when it is absent would promise a complete measurement about a file missing
+    /// replicates. The message says "nothing is lost"; it has to be true.
+    /// </remarks>
+    [Fact]
+    public void ARefusedWriteStagesThisMeasurementOverAnOlderOne()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        // A short progress file from earlier in the same run, and a real file held exclusively so
+        // the end-of-run write cannot land.
+        IonAccountingStore.Write(dir, Result("A", cycles: 2), log: null, finalize: false);
+        IonAccountingStore.Write(dir, Result("A", cycles: 2));
+
+        var lines = new List<string>();
+        using (ShortWriteBudget())
+        using (ReadOnlyFile(path))
+        {
+            IonAccountingStore.Write(dir, Result("A", cycles: 9), lines.Add);
+        }
+
+        // Nine, not the two the earlier progress save left - whichever file it comes from.
+        Assert.Equal(9, IonAccountingStore.ReadCycles(dir, "A").Count);
+    }
+
+    /// <summary>
+    /// Make a file unwritable for the life of the scope, and writable again afterwards - or the
+    /// directory cleanup in Dispose cannot remove it.
+    /// </summary>
+    private static IDisposable ReadOnlyFile(string path)
+    {
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        return new Restore(
+            () => File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly));
+    }
+
+    /// <summary>The product waits about 30 s; a test waiting that long is a test nobody runs.</summary>
+    private static IDisposable ShortWriteBudget()
+    {
+        var attempts = IonAccountingStore.WriteAttempts;
+        var delay = IonAccountingStore.WriteDelayMs;
+        IonAccountingStore.WriteAttempts = 2;
+        IonAccountingStore.WriteDelayMs = 1;
+        return new Restore(() =>
+        {
+            IonAccountingStore.WriteAttempts = attempts;
+            IonAccountingStore.WriteDelayMs = delay;
+        });
+    }
+
+    private sealed class Restore : IDisposable
+    {
+        private readonly Action _undo;
+
+        internal Restore(Action undo) => _undo = undo;
+
+        public void Dispose() => _undo();
     }
 
     /// <summary>A row with both quantities, for the ranking test.</summary>

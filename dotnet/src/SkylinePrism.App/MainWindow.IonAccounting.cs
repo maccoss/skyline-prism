@@ -437,9 +437,11 @@ public partial class MainWindow
         if (representatives is null || representatives.Count == 0)
             return 0;
 
-        // Representatives() returns best, median, worst; the median is the middle one when there are
-        // three and the only sensible pick when there are fewer.
-        var median = representatives.Count >= 3 ? representatives[1] : representatives[0];
+        // Representatives() returns best first at every size, so the MIDDLE element is the median
+        // when there are three and the worse of two when there are two - which is the conservative
+        // one to open on. Indexing [0] for short cohorts would open on the best replicate while this
+        // method's whole point is to open on a typical one.
+        var median = representatives[representatives.Count / 2];
         var index = IonReplicateCombo.Items.IndexOf(median.Sample);
         return index >= 0 ? index : 0;
     }
