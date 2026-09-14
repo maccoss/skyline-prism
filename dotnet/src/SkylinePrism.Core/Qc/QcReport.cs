@@ -575,7 +575,11 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
                 if (img.Png.Length > 0)
                     sb.Append($"<img src=\"data:image/png;base64,{Convert.ToBase64String(img.Png)}\" alt=\"{HtmlEncode(img.Caption)}\" />");
                 if (!string.IsNullOrEmpty(img.Caption))
-                    sb.Append($"<div class=\"cap\">{HtmlEncode(img.Caption)}</div>");
+                {
+                    // Encoded FIRST, then the line breaks put back - so a caption can be a short
+                    // list instead of a paragraph, and nothing in it can inject markup.
+                    sb.Append($"<div class=\"cap\">{HtmlEncode(img.Caption).Replace("\n", "<br />")}</div>");
+                }
                 sb.Append("</div>");
             }
             sb.Append("</div></div>");

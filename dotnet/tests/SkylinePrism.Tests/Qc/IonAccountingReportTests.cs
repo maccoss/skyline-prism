@@ -122,6 +122,53 @@ public class IonAccountingReportTests
         }
     }
 
+    /// <summary>
+    /// The captions are bullets, and short ones.
+    /// </summary>
+    /// <remarks>
+    /// They were paragraphs: the explained caption alone ran to sixty words of mass-balance
+    /// reasoning, repeated under every panel along with the settings. A QC report is skimmed, and a
+    /// wall of prose under a plot is not read at all - so the prose that mattered moved into the
+    /// XML docs, where the next person to change this will actually find it.
+    /// </remarks>
+    [Fact]
+    public void EveryCaptionIsABulletAndNotAParagraph()
+    {
+        var usable = new[]
+        {
+            WithExplained("s1", quantified: 200, explained: 700),
+            WithExplained("s2", quantified: 300, explained: 800),
+        };
+
+        foreach (var line in new[]
+                 {
+                     QcReport.FractionCaption(usable, PlotRenderer.IonLevel.Ms2),
+                     QcReport.ExplainedCaption(usable, PlotRenderer.IonLevel.Ms2),
+                 })
+        {
+            Assert.NotEqual("", line);
+            Assert.DoesNotContain("\n", line);
+
+            // One sentence or two, not a paragraph. The longest legitimate one here names a median,
+            // a range and what the lighter bar is; 320 characters is roomy for that and half what
+            // the old explained caption ran to.
+            Assert.True(
+                line.Length <= 320,
+                $"A caption grew back into a paragraph ({line.Length} chars): {line}");
+        }
+
+        // The explained one is a bullet in its own right, since the caller joins it with newlines.
+        Assert.StartsWith("- ", QcReport.ExplainedCaption(usable, PlotRenderer.IonLevel.Ms2));
+    }
+
+    private static IonAccountingRow WithExplained(
+        string sample, double quantified, double explained) =>
+        new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 1, 167,
+            Ms1Acquired: 1000, Ms2Acquired: 1000,
+            Ms1Assigned: quantified, Ms2Assigned: quantified,
+            Ms2Explained: explained, HasExplained: true,
+            0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
+
     private static IonAccountingRow Row(string sample, double percent) =>
         new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 1, 167,
             Ms1Acquired: 1000, Ms2Acquired: 1000,

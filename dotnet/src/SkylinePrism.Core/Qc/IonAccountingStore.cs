@@ -202,11 +202,17 @@ public sealed record IonAccountingResult(
     /// whole run did. Rows whose fraction is not physical are excluded - see
     /// <see cref="IonAccountingRow.Exceeded"/>.</para>
     /// </summary>
-    public IReadOnlyList<IonAccountingRow> Representatives()
+    /// <param name="signal">
+    /// Rank on the summed TIC rather than on the ion count. The two are different quantities with
+    /// different fractions, so "worst" is a different replicate in each - and a panel captioned as
+    /// one while chosen by the other is wrong in a way nothing on the page could reveal.
+    /// </param>
+    public IReadOnlyList<IonAccountingRow> Representatives(bool signal = false)
     {
         var ranked = Rows
-            .Where(r => r.IsUsable && !r.Exceeded && double.IsFinite(r.Ms2Fraction))
-            .OrderBy(r => r.Ms2Fraction)
+            .Where(r => r.IsUsable && !r.ExceededIn(signal)
+                && double.IsFinite(r.Ms2FractionIn(signal)))
+            .OrderBy(r => r.Ms2FractionIn(signal))
             .ToArray();
         if (ranked.Length == 0)
             return Array.Empty<IonAccountingRow>();
