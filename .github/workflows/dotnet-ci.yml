@@ -211,6 +211,13 @@ jobs:
       - name: Package SkylinePrism.zip (no raw reader)
         run: dotnet msbuild build/package.proj /p:Configuration=Release /p:AllowNoPwiz=true
 
+      # Everything a Skyline tool needs that a build cannot notice the loss of: the manifest and
+      # the Tool Store logo. Without -RequireReader, because this job packages with AllowNoPwiz on
+      # purpose (see above). The release workflow runs the same script WITH it.
+      - name: Check the package contents
+        shell: pwsh
+        run: ./build/verify-zip-contents.ps1 -Zip publish/SkylinePrism.zip
+
       # Extracts the zip and runs the exe: the only check that exercises what a user actually installs.
       # The unit tests cannot see a startup crash - MainWindow needs a real dispatcher - and a
       # "the zip is complete" file check cannot either. Added after a WPF initialization-order bug

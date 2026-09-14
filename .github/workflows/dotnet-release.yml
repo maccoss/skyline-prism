@@ -74,6 +74,13 @@ jobs:
           /p:PwizSharpDir="${{ env.PWIZ_SHARP_DIR }}"
           /p:IAgreeToVendorLicenses=true
 
+      # Before it is uploaded, not after. The manifest, the Tool Store logo and the reader are
+      # all things whose absence is silent: the zip builds, extracts, launches and installs without
+      # them. This is the last point at which a published release can still be stopped.
+      - name: Check the package contents
+        shell: pwsh
+        run: ./build/verify-zip-contents.ps1 -Zip publish/SkylinePrism.zip -RequireReader
+
       - uses: actions/upload-artifact@v7
         with:
           name: skyline-tool
