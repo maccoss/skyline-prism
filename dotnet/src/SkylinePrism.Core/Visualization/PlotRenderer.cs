@@ -1332,7 +1332,27 @@ public static partial class PlotRenderer
     /// The acquired-total bar: deliberately a flat neutral, so it reads as the CONTAINER the colored
     /// per-sample-type bars sit inside rather than as another category competing with them.
     /// </summary>
-    private static readonly Color AcquiredBarColor = Colors.Gray.WithAlpha(0.30);
+    /// <summary>
+    /// The neutral fill for an ACQUIRED total - the background every other series is read against.
+    /// </summary>
+    /// <remarks>
+    /// Dark enough to read as a shape at a glance, light enough not to compete with the colored
+    /// series drawn over it. Both were lighter: the profile band came out at roughly 88% white on a
+    /// white page, so the TIC envelope - the thing the assigned trace is a fraction OF - was faint
+    /// on screen and gone in print.
+    /// </remarks>
+    private static readonly Color AcquiredBarColor = Colors.Gray.WithAlpha(0.42);
+
+    /// <summary>
+    /// The same idea as a filled area under a line rather than a bar behind one.
+    /// </summary>
+    /// <remarks>
+    /// Its own value rather than <see cref="AcquiredBarColor"/>: a band spans the whole plot and a
+    /// bar does not, so the same alpha reads heavier as a band. The blue-gray hue is kept - a
+    /// neutral gray under a blue trace looks muddy where this does not.
+    /// </remarks>
+    private static readonly Color AcquiredBandColor =
+        Color.FromHex("#969da8").WithAlpha((byte)165);
 
     private const string NewLine = "\n";
 

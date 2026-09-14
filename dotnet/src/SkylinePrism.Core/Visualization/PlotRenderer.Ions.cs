@@ -319,7 +319,7 @@ public static partial class PlotRenderer
         // partition.
         var band = plt.Add.FillY(
             x, new double[x.Length], acquired.Select(v => v / scale).ToArray());
-        band.FillColor = Color.FromHex("#c8ccd4").WithAlpha((byte)140);
+        band.FillColor = AcquiredBandColor;
         band.LineWidth = 0;
         band.MarkerSize = 0;
         band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
