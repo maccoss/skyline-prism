@@ -328,14 +328,14 @@ public static partial class PlotRenderer
         if (showExplained)
         {
             var explainedLine = plt.Add.Scatter(x, explained.Select(v => v / scale).ToArray());
-            explainedLine.Color = ExplainedBarColor;
+            explainedLine.Color = ExplainedLineColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained by any b/y or precursor ion";
         }
 
         var line = plt.Add.Scatter(x, assigned.Select(v => v / scale).ToArray());
-        line.Color = Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedLineColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained ? "quantified" : "assigned to a peptide";
@@ -406,7 +406,7 @@ public static partial class PlotRenderer
             var explainedLine = plt.Add.Scatter(
                 explainedPoints.Select(p => p.RtMin).ToArray(),
                 explainedPoints.Select(p => p.Fraction).ToArray());
-            explainedLine.Color = ExplainedBarColor;
+            explainedLine.Color = ExplainedLineColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained fraction";
@@ -414,7 +414,7 @@ public static partial class PlotRenderer
 
         var line = plt.Add.Scatter(
             points.Select(p => p.RtMin).ToArray(), points.Select(p => p.Fraction).ToArray());
-        line.Color = Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedLineColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained
@@ -513,6 +513,33 @@ public static partial class PlotRenderer
     /// assigned bar, because the quantity it shows nests between them.
     /// </summary>
     private static readonly Color ExplainedBarColor = Color.FromHex("#8fa8c8");
+
+    /// <summary>
+    /// The EXPLAINED trace on the gradient profiles - the fraction of the acquisition this analysis
+    /// can account for at all, which is the question those plots exist to answer.
+    /// </summary>
+    /// <remarks>
+    /// <para>It used to be drawn in the muted blue the bars use, and against the acquired band it was
+    /// barely there. The band is deliberately a blue-GRAY (<c>#969da8</c>, so a blue trace over it
+    /// does not look muddy), which means a pale blue line shares both its hue and its lightness -
+    /// the two ways a line can be told from a background. Making the band lighter is not the fix
+    /// either: it was darkened on purpose, having once rendered at about 88% white and been
+    /// invisible itself.</para>
+    ///
+    /// <para>So the two traces are separated by LIGHTNESS within one hue, rather than by a second
+    /// hue. Orange and red would read well on the band but both already mean something in this
+    /// report - <c>qc</c> and <c>reference</c> in <see cref="PlotRenderer.TypeColors"/> - and a
+    /// color that means a sample type on one plot should not mean a quantity on the next. Keeping
+    /// both traces blue also puts the emphasis where it belongs: explained is the headline number
+    /// and now carries the strongest color on the plot.</para>
+    /// </remarks>
+    private static readonly Color ExplainedLineColor = Color.FromHex("#1f77b4");
+
+    /// <summary>
+    /// The QUANTIFIED trace, nested inside the explained one - a darker blue, so it reads against
+    /// both the band and the line it sits under. <see cref="ExplainedLineColor"/> says why.
+    /// </summary>
+    private static readonly Color QuantifiedLineColor = Color.FromHex("#08306b");
 
     /// <summary>
     /// Group cycles into retention-time bins. Bin membership is by the cycle's START time, so a
