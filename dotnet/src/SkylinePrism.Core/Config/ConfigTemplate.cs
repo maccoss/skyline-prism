@@ -46,7 +46,7 @@ parsimony:
 
 # Transition -> peptide rollup: "sum", "median_polish", "topn", "consensus", or "library_assist".
 transition_rollup:
-  method: "median_polish"
+  method: "sum"
   min_transitions: 3
   topn_count: 3             # for method: topn
   topn_selection: "correlation"  # correlation | intensity (correlation needs Shape Correlation)
@@ -166,7 +166,7 @@ qc_report:
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
 
 transition_rollup:
-  method: "median_polish"   # sum | median_polish | library_assist
+  method: "sum"             # sum | median_polish | library_assist
 
 global_normalization:
   method: "rt_lowess"       # rt_lowess | median | quantile | vsn | none

@@ -909,7 +909,7 @@ The data flows through multiple rollup stages. Each stage can use median polish 
 
 ### Key Design Principles
 
-1. **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use Tukey median polish by default. This provides robust estimation that automatically downweights outliers (interfered transitions, problematic peptides) without requiring explicit quality metrics or pre-filtering.
+1. **Tukey median polish is the peptide→protein default**: the protein rollup uses it, and it is available for transition→peptide, which defaults to `sum`. Where it is used it provides robust estimation that automatically downweights outliers (interfered transitions, problematic peptides) without requiring explicit quality metrics or pre-filtering.
 
 2. **Complete data matrix**: Skyline imputes integration boundaries for peptides not detected in specific replicates, so we have actual measurements (including zeros) everywhere. No missing value handling is needed.
 

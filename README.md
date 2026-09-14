@@ -208,7 +208,7 @@ experiment cannot otherwise separate. See
 `prism config-template` emits a commented YAML file with every option and its default. Key sections:
 
 ```yaml
-transition_rollup:    # sum | median_polish (default) | topn | consensus | library_assist
+transition_rollup:    # sum (default) | median_polish | topn | consensus | library_assist
 global_normalization: # rt_lowess (default) | median | quantile | vsn | none
 batch_correction:     # ComBat; peptide/protein levels; reference_anchored: true|false
 parsimony:            # fasta_path; shared_peptide_handling; enzyme (default trypsin) + enzyme_specificity

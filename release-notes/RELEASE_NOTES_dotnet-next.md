@@ -198,6 +198,18 @@ as the GitHub Release description and fails if it is missing.
   the headless equivalent - resolve the windows, record them, print what they are. With no `-r` it
   reports what the directory already knows, which works with no data files present at all.
 
+- **One default per setting, whichever way a run is started.** `transition_rollup.method` defaulted
+  to `sum` with no config file and `median_polish` in the config `prism config-template` generates,
+  so a run started from the GUI summed transitions while a run started from a generated config
+  median-polished them - different numbers, both plausible, with nothing anywhere saying the two
+  entry points disagreed. The templates now emit the real defaults: **`sum`** for
+  transition -> peptide, **`median_polish`** for peptide -> protein, **`rt_lowess`** for peptide
+  normalization. A test compares every one of them against the code rather than trusting prose.
+
+  **If you generated a config before this release and kept it, nothing changes** - your file says
+  `median_polish` and will keep median-polishing. A config generated from now on says `sum`, which
+  is what a run with no config has always done.
+
 - **The run log says which build wrote it.** Its first line, the first line of an ion accounting
   measurement, and the tooltip on the version in the window now carry the build time and the folder
   PRISM loaded from:

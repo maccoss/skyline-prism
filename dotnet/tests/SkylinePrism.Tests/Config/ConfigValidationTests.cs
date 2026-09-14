@@ -185,6 +185,81 @@ public class ConfigValidationTests
         new PrismConfig().Validate(); // must not throw
     }
 
+    /// <summary>
+    /// The generated template must emit the SAME default the code uses with no config at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>These drifted, and the drift was invisible: <c>transition_rollup.method</c> defaulted to
+    /// <c>sum</c> in <see cref="PrismConfig"/> and the template emitted <c>median_polish</c>, so a
+    /// run started from the GUI summed transitions while a run started from
+    /// <c>prism config-template</c> median-polished them. Both are legitimate methods, both produce
+    /// plausible numbers, and nothing anywhere said the two entry points disagreed - the parameter
+    /// reference eventually documented it as a fact of life rather than a bug.</para>
+    ///
+    /// <para>Checked through the template TEXT rather than by round-tripping it, because the text is
+    /// what a user reads and edits. A template that parses to the right value while showing the
+    /// wrong one is the same defect.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData("transition_rollup", "sum")]
+    [InlineData("global_normalization", "rt_lowess")]
+    [InlineData("protein_rollup", "median_polish")]
+    public void ConfigTemplate_EmitsTheSameDefaultTheCodeUses(string section, string expected)
+    {
+        var fromCode = new PrismConfig();
+        var codeDefault = section switch
+        {
+            "transition_rollup" => fromCode.TransitionRollup.Method,
+            "global_normalization" => fromCode.GlobalNormalization.Method,
+            "protein_rollup" => fromCode.ProteinRollup.Method,
+            _ => throw new ArgumentOutOfRangeException(nameof(section)),
+        };
+        Assert.Equal(expected, codeDefault);
+
+        foreach (var template in new[] { ConfigTemplate.Default(), ConfigTemplate.Minimal() })
+        {
+            var emitted = MethodUnder(template, section);
+            Assert.True(
+                emitted is not null,
+                $"the template has no {section}: method: line to check");
+            Assert.True(
+                string.Equals(emitted, codeDefault, StringComparison.Ordinal),
+                $"{section}.method is \"{codeDefault}\" with no config but the template emits "
+                + $"\"{emitted}\" - so the same run gives different numbers depending on whether it "
+                + "was started from a generated config or from nothing.");
+        }
+    }
+
+    /// <summary>The value on the first <c>method:</c> line inside a top-level section.</summary>
+    private static string? MethodUnder(string yaml, string section)
+    {
+        var lines = yaml.Replace("\r\n", "\n").Split('\n');
+        var inside = false;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith(section + ":", StringComparison.Ordinal))
+            {
+                inside = true;
+                continue;
+            }
+            if (!inside)
+                continue;
+            // A new top-level key ends the section.
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0]) && !line.StartsWith("#", StringComparison.Ordinal))
+                return null;
+
+            var trimmed = line.TrimStart();
+            if (!trimmed.StartsWith("method:", StringComparison.Ordinal))
+                continue;
+            var value = trimmed["method:".Length..].Trim();
+            var comment = value.IndexOf('#');
+            if (comment >= 0)
+                value = value[..comment].Trim();
+            return value.Trim('"');
+        }
+        return null;
+    }
+
     [Fact]
     public void ConfigTemplate_HasNoUnknownKeysAndValidates()
     {

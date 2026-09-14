@@ -37,7 +37,7 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
 | `library_fitting_method` | `median_polish` | `median_polish` or `least_squares`. `least_squares` **aborts** in C#. |
 | `library_assist:` *(nested)* | — | `library_path`, `min_matched_fragments`, `mz_tolerance`, `outlier_threshold`, `remove_outliers`, `fitting_method`. Folded onto the flat `library_*` keys (nested wins).² |
 
-¹ The built-in default with no config block is **`sum`**, while the generated templates emit `median_polish` — always set `method` explicitly rather than relying on either.
+¹ The default is **`sum`**, with no config block and in the generated templates alike. It used to differ between the two — a run started from the GUI summed, a run started from `prism config-template` median-polished, and nothing said so — which is why this footnote once told you to set `method` explicitly. You no longer have to.
 ² Precedence when a setting is given more than once: nested `library_assist:` > flat `library_*`. An empty `library_assist:` block is treated as absent.
 
 ---

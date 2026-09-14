@@ -26,7 +26,7 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 ### Key Concepts
 
 - **Transition-level input required**: PRISM expects transition-level data from Skyline (not peptide or protein summaries)
-- **Tukey median polish as default**: Both transition→peptide and peptide→protein rollups use median polish by default for robust outlier handling
+- **Rollup defaults differ by stage**: transition→peptide defaults to **`sum`**, peptide→protein to **Tukey median polish**. Median polish is available at both levels and is the robust choice where a row can be an outlier - an interfered transition, a badly-behaved peptide - but summing transitions is what the transition→peptide stage does unless asked otherwise. Peptide normalization defaults to **`rt_lowess`**.
 - **Reference-anchored ComBat batch correction**: Uses inter-experiment reference samples for QC evaluation, with automatic fallback if correction degrades quality
 - **Dual-control validation**: Uses intra-experiment QC samples to validate corrections without overfitting
 - **Sample outlier detection**: Automatic detection of samples with abnormally low signal (one-sided, on LINEAR scale). Can report or exclude outliers.
@@ -907,7 +907,8 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    > avoid double correction by hand, so it is the one most likely to be misread. Leaving it silent
    > was a deliberate call (small, mostly in-lab user base); do not "fix" it by reintroducing the
    > coupling, which is the thing being removed.
-3. **Median polish as default**: Quality-weighted is an alternative, not the primary method
+3. **Median polish is the PROTEIN rollup default**: peptide→protein uses it; transition→peptide
+   defaults to `sum`. Quality-weighted is an alternative to median polish, not the primary method.
 4. **All charge states as transitions**: Don't separate precursor→peptide rollup; treat all transitions equally
 5. **Cross-platform CLI, Windows-only GUI** (decided, not an interim state): the `prism` CLI ships for
    Windows/Linux/macOS and `SkylinePrism.Core` stays platform-neutral, while the GUI stays **WPF on
