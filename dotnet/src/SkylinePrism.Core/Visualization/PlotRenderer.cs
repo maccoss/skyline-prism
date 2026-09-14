@@ -465,8 +465,12 @@ public static partial class PlotRenderer
             var dots = plt.Add.ScatterPoints(
                 background.Select(e => (double)e.Rank).ToArray(),
                 background.Select(e => e.Log10Abundance).ToArray());
-            dots.Color = Color.FromHex("#9e9e9e").WithAlpha(0.55);
-            dots.MarkerSize = 6;
+            // Sized against Skyline's own relative-abundance plot, which sets no symbol size and
+            // so takes ZedGraph's default of 7 POINTS - about 9-10 px at 96 DPI, where this was 6 px
+            // at 55% alpha. Smaller and fainter, which on a plot of several thousand ranked points
+            // read as a thin line rather than as a cloud of proteins.
+            dots.Color = Color.FromHex("#9e9e9e").WithAlpha(0.75);
+            dots.MarkerSize = 9;
         }
 
         foreach (var (label, colorHex, entries) in highlights)

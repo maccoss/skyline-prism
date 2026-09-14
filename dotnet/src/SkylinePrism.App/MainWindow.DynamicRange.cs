@@ -770,8 +770,33 @@ public partial class MainWindow
                 ? $"; {rollup} rollup"
                   + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
                 : "")
+            + TransitionsUsed(_rangeOutputDir)
             + (_rangeRollupNote.Length > 0 ? $" [{_rangeRollupNote}]" : "")
             + (matched > 0 ? $"; {matched:N0} in {highlights.Count} list(s)" : "");
+    }
+
+    /// <summary>
+    /// Which transitions the abundances were built from, for the status line.
+    /// </summary>
+    /// <remarks>
+    /// <para>The one thing that makes this plot comparable to Skyline's relative-abundance view, and
+    /// the one thing neither plot showed. Skyline's peptide quantification settings choose the MS
+    /// level too - "All" there means <c>MsLevel == null</c>, which skips nothing and sums MS1
+    /// precursor areas alongside the MS2 fragments. PRISM has its own switch,
+    /// <c>transition_rollup.use_ms1</c>, off by default.</para>
+    ///
+    /// <para>Set differently, the two plots sit about two orders of magnitude apart on DIA data,
+    /// where the precursor areas dominate - and nothing on either plot says why. It cost a real
+    /// afternoon, so the answer is now on the plot that prompts the question.</para>
+    /// </remarks>
+    private string TransitionsUsed(string? outputDir)
+    {
+        var config = outputDir is null ? null : RangeRunConfig(outputDir);
+        if (config is null)
+            return "";
+        return config.TransitionRollup.UseMs1
+            ? "; MS1 precursor + MS2 fragment transitions"
+            : "; MS2 fragment transitions only (set transition_rollup.use_ms1 to include precursors)";
     }
 
     private int SelectedReplicateCount()
