@@ -299,6 +299,60 @@ public class IonCyclesAppendTests : IDisposable
         Assert.Equal(40, IonAccountingStore.ReadCycles(dir).Count);
     }
 
+    /// <summary>
+    /// A repair is reported, because a replicate was lost and a crash was survived.
+    /// </summary>
+    /// <remarks>
+    /// Recovering silently leaves the next reader unable to explain why the replicate count moved,
+    /// which is the same failure as reporting an unreadable file as an empty one: the machine copes
+    /// and the person is not told.
+    /// </remarks>
+    [Fact]
+    public void ARepairIsSaidOutLoud()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 20), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 20), "key");
+        var offset = BitConverter.ToInt64(
+            File.ReadAllBytes(ParquetWideWriter.FooterBackupOf(path)), 0);
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
+            fs.SetLength(offset);
+
+        var log = new List<string>();
+        Assert.Equal(new[] { "a" }, IonAccountingStore.SamplesWithCycles(dir, log.Add));
+
+        Assert.Contains(log, line => line.Contains("repaired", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A failure reading the staging file does not send the repair at a different file.
+    /// </summary>
+    /// <remarks>
+    /// Repair only ever rebuilds the real cycles file. Triggering it from a failed read of
+    /// <c>.new</c> would examine a file this read is not looking at, and a success there would send
+    /// the caller back to re-read the corrupt one.
+    /// </remarks>
+    [Fact]
+    public void ACorruptStagingFileDoesNotTriggerARepairOfTheRealOne()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        IonAccountingStore.AppendCycles(dir, Cycles("real", 12), "key", replace: true);
+        var intact = new FileInfo(path).Length;
+
+        // Newer than the real file, and not parquet at all.
+        var staging = path + ".new";
+        File.WriteAllBytes(staging, new byte[64]);
+        File.SetLastWriteTimeUtc(staging, DateTime.UtcNow.AddMinutes(5));
+
+        // Whatever it makes of the pair, the real file is not rebuilt on the staging file's account.
+        _ = IonAccountingStore.ReadCycles(dir);
+        Assert.Equal(intact, new FileInfo(path).Length);
+    }
+
     /// <summary>A file that is intact is never rewound, however stale the backup beside it.</summary>
     [Fact]
     public void RepairLeavesAReadableFileAlone()

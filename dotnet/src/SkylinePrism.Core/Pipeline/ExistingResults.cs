@@ -42,7 +42,8 @@ public sealed record ExistingResults(
     bool SameVersion,
     IReadOnlyList<string> Recomputed,
     IReadOnlyList<string> Files,
-    bool Measured)
+    bool Measured,
+    bool InputsChanged = false)
 {
     /// <summary>Nothing was there to begin with.</summary>
     public static readonly ExistingResults None =
@@ -79,9 +80,14 @@ public sealed record ExistingResults(
         var what = Version is null
             ? "a previous run"
             : $"a run of PRISM {Version}" + (Date is null ? "" : $" from {Date}");
-        var why = SameVersion
-            ? $"different settings for {Describe(Recomputed)}"
-            : "a different version of PRISM, which recomputes every stage";
+        // What actually changed, not what usually changes. An input file rewritten under settings
+        // that did not move invalidates the merge and everything below it, and reporting that as
+        // "different settings" sends the reader to a config diff that shows nothing.
+        var why = !SameVersion
+            ? "a different version of PRISM, which recomputes every stage"
+            : InputsChanged
+                ? "input files that have changed since that run, so every stage below the merge"
+                : $"different settings for {Describe(Recomputed)}";
         var names = string.Join(", ", Files.Take(4))
             + (Files.Count > 4 ? $" and {Files.Count - 4:N0} more" : "");
 
@@ -97,16 +103,20 @@ public sealed record ExistingResults(
 
     /// <summary>Stage ids as a reader would name them.</summary>
     private static string Describe(IReadOnlyList<string> stages) =>
-        string.Join(", ", stages.Select(s => s switch
-        {
-            StageDependencies.Merge => "the merge",
-            StageDependencies.TransitionRollup => "the transition rollup",
-            StageDependencies.PeptideNormalize => "peptide normalization",
-            StageDependencies.ProteinRollup => "the protein rollup",
-            StageDependencies.ProteinNormalize => "protein normalization",
-            StageDependencies.MarkerNormalize => "marker normalization",
-            _ => s,
-        }));
+        stages.Count >= Chain.Length
+            // Which is what the three cannot-compare paths report, and naming all six there buries
+            // the file list that follows behind a sentence that only means "all of them".
+            ? "every stage"
+            : string.Join(", ", stages.Select(s => s switch
+            {
+                StageDependencies.Merge => "the merge",
+                StageDependencies.TransitionRollup => "the transition rollup",
+                StageDependencies.PeptideNormalize => "peptide normalization",
+                StageDependencies.ProteinRollup => "the protein rollup",
+                StageDependencies.ProteinNormalize => "protein normalization",
+                StageDependencies.MarkerNormalize => "marker normalization",
+                _ => s,
+            }));
 
     /// <summary>
     /// The files a completed run leaves that a reader would recognize as "there are results here".
@@ -200,20 +210,9 @@ public sealed record ExistingResults(
 
         // A version change invalidates every stage by construction: Fingerprint folds PrismVersion in
         // deliberately, because a change to a rollup's arithmetic leaves no trace in the config.
-        int from;
-        try
-        {
-            from = sameVersion ? FirstChanged(recorded, config, cache, inputs, outputDir) : 0;
-        }
-        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException
-                                       or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            // Stamping the input files touches the filesystem, and a path the caller has not
-            // validated yet can be rejected outright. This runs BEFORE the pipeline, whose job it is
-            // to report that properly - so the check must not be what fails the run. Treat it as
-            // "cannot tell", which reports rather than reassures.
-            from = 0;
-        }
+        var (from, inputsChanged) = sameVersion
+            ? FirstChanged(recorded, config, cache, inputs, outputDir)
+            : (0, false);
         if (from < 0)
         {
             return new ExistingResults(
@@ -233,14 +232,14 @@ public sealed record ExistingResults(
         // nothing to name - fall back to the outputs a reader would recognize.
         return new ExistingResults(
             true, version, date, sameVersion, recomputed,
-            files.Length > 0 ? files : present, exact);
+            files.Length > 0 ? files : present, exact, inputsChanged);
     }
 
     /// <summary>
     /// The index in <see cref="Chain"/> of the first stage this run would recompute, or -1 when it
-    /// would recompute none.
+    /// would recompute none - and whether it was the INPUT FILES rather than the settings that moved.
     /// </summary>
-    private static int FirstChanged(
+    private static (int From, bool InputsChanged) FirstChanged(
         PrismConfig recorded, PrismConfig config, StageCache cache, IReadOnlyList<string>? inputs,
         string outputDir)
     {
@@ -250,28 +249,51 @@ public sealed record ExistingResults(
         // once the merge has produced them - so this is where certainty stops, not where care stops.
         if (inputs is { Count: > 0 })
         {
-            // The merge is NOT in the stage cache - it keeps its own sidecar beside merged_data, and
-            // its fingerprint appears in stage_cache.json only as the rollup's upstream ingredient.
-            // Asking CanReuse about it therefore always says no, and a warning that fires on every
-            // re-run is the failure this whole check exists to avoid.
-            var source = SourceFingerprint.Compute(inputs)
-                + "|" + StageDependencies.Values(StageDependencies.Merge, config);
-            var mergeFp = StageCache.Fingerprint(
-                StageDependencies.Merge, config, extraInputs: new[] { source });
-
-            var mergedPath = Path.Combine(outputDir, "merged_data");
-            var merged = SourceFingerprint.TryRead(mergedPath + ".cache.json");
-            if (merged is null
-                || !string.Equals(merged.Fingerprint, source, StringComparison.Ordinal)
-                || !MergedDataset.Exists(mergedPath))
+            // Only the filesystem work is guarded, and deliberately not the comparison below it.
+            // Stamping the inputs touches paths the caller has not validated yet, and this runs
+            // BEFORE the pipeline whose job it is to report a bad input properly - so it must not be
+            // what fails the run. Wrapping the whole method instead would turn a defect in
+            // StageDependencies into a silent "warn about everything", which is a bug that hides
+            // itself.
+            try
             {
-                return 0;
-            }
+                // The merge is NOT in the stage cache - it keeps its own sidecar beside merged_data,
+                // and its fingerprint appears in stage_cache.json only as the rollup's upstream
+                // ingredient. Asking CanReuse about it therefore always says no, and a warning that
+                // fires on every re-run is the failure this whole check exists to avoid.
+                var source = SourceFingerprint.Compute(inputs)
+                    + "|" + StageDependencies.Values(StageDependencies.Merge, config);
+                var mergeFp = StageCache.Fingerprint(
+                    StageDependencies.Merge, config, extraInputs: new[] { source });
 
-            var rollupFp = StageCache.Fingerprint(
-                StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
-            if (!cache.IsEmpty && !cache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
-                return 1;
+                var mergedPath = Path.Combine(outputDir, "merged_data");
+                var merged = SourceFingerprint.TryRead(mergedPath + ".cache.json");
+                if (merged is null
+                    || !string.Equals(merged.Fingerprint, source, StringComparison.Ordinal)
+                    || !MergedDataset.Exists(mergedPath))
+                {
+                    // The merge stamp covers the input files AND the merge's own settings. When
+                    // those settings are unchanged, the files are what moved - which is the half a
+                    // config comparison can never see, and worth naming as itself.
+                    var sameMergeSettings = string.Equals(
+                        StageDependencies.Values(StageDependencies.Merge, recorded),
+                        StageDependencies.Values(StageDependencies.Merge, config),
+                        StringComparison.Ordinal);
+                    return (0, sameMergeSettings);
+                }
+
+                var rollupFp = StageCache.Fingerprint(
+                    StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
+                if (!cache.IsEmpty && !cache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
+                    return (1, false);
+            }
+            catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException
+                                           or UnauthorizedAccessException
+                                           or System.Security.SecurityException)
+            {
+                // Cannot stamp the inputs, so cannot tell - which reports rather than reassures.
+                return (0, false);
+            }
         }
 
         for (var i = 0; i < Chain.Length; i++)
@@ -281,9 +303,9 @@ public sealed record ExistingResults(
                     StageDependencies.Values(Chain[i], config),
                     StringComparison.Ordinal))
             {
-                return i;
+                return (i, false);
             }
         }
-        return -1;
+        return (-1, false);
     }
 }

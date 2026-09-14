@@ -1215,6 +1215,9 @@ public partial class MainWindow : Window
         {
             Log("ERROR: the run could not be started - " + ex.Message);
             App.WriteLog("Run setup failed: " + ex);
+            // Where the message is. The empty-inputs path above shows its own pane for the same
+            // reason: a button that flickers and a window that does nothing is not a report.
+            ShowAnalysis(AnalysisPane.Log);
         }
         finally
         {

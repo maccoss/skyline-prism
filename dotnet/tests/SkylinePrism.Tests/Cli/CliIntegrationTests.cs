@@ -227,7 +227,11 @@ public class CliIntegrationTests
             var changed = Invoke("run", "-i", a, b, "-o", outDir, "-c", Config);
             Assert.Equal(0, changed.Code);
             Assert.Contains("already holds results", changed.Output, StringComparison.Ordinal);
-            Assert.Contains("the merge", changed.Output, StringComparison.Ordinal);
+
+            // Named as what it is. Not one setting moved, so reporting this as "different settings"
+            // would send the reader to a config diff that shows nothing at all.
+            Assert.Contains("input files that have changed", changed.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("different settings", changed.Output, StringComparison.Ordinal);
         }
         finally
         {

@@ -196,8 +196,17 @@ public static class ParquetWideWriter
         }
         finally
         {
-            // Handed straight to ParquetWriter next, which expects to decide its own position.
-            fs.Seek(resume, SeekOrigin.Begin);
+            // Handed straight to ParquetWriter next, which expects to decide its own position. Its
+            // own failure must never replace the one on its way out: a dropped share faults the read
+            // above AND this seek, and the seek is the less useful of the two diagnoses.
+            try
+            {
+                fs.Seek(resume, SeekOrigin.Begin);
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException
+                                           or NotSupportedException)
+            {
+            }
         }
     }
 
@@ -284,8 +293,15 @@ public static class ParquetWideWriter
                 // Create truncates an existing file in the same operation that opens it, which is
                 // what makes "start over" safe: a separate delete can be refused and then succeed a
                 // moment later, leaving the next open to find the file and append to it.
+                //
+                // OpenOrCreate rather than Open for the other case, because `exists` came from a stat
+                // that is already stale: a file deleted in between would make Open throw
+                // FileNotFoundException - an IOException, so the retry would sit on it for 4.5
+                // seconds and then report it as another process holding the file, sending the next
+                // investigation to the wrong place. Creating it instead lets the caller's length
+                // check decide correctly that there is nothing to append to.
                 return new FileStream(
-                    path, exists ? FileMode.Open : FileMode.Create,
+                    path, exists ? FileMode.OpenOrCreate : FileMode.Create,
                     FileAccess.ReadWrite, FileShare.Read);
             }
             catch (IOException ex)

@@ -1114,20 +1114,48 @@ public static class IonAccountingStore
     /// every read costs a second full footer parse each time - about 790 KB over the share on a
     /// 500-replicate file - to ask a question whose answer is almost always no.</para>
     /// </remarks>
-    private static (T? Value, Exception? Failure) ReadCyclesFile<T>(string outputDir, Func<T> read)
+    /// <param name="path">
+    /// The candidate being read. Repair only ever rebuilds the REAL cycles file, so a failure
+    /// reading the staging file left by an older build must not trigger it: the repair would examine
+    /// a different file, and a success there would send this caller back to re-read the corrupt one.
+    /// </param>
+    /// <param name="log">
+    /// Told when a file had to be repaired. A recovery is a replicate lost and a crash survived, and
+    /// a silent one leaves the next reader unable to explain why the replicate count moved.
+    /// </param>
+    private static (T? Value, Exception? Failure) ReadCyclesFile<T>(
+        string outputDir, string path, Func<T> read, Action<string>? log = null)
         where T : class
     {
         var (value, failure) = WithAppendRetry(read);
-        if (value is not null || !RepairCycles(outputDir))
+        if (value is not null)
+            return (value, null);
+
+        // Only a failure that could BE a missing footer is worth taking the file apart for. The
+        // classification that decided against retrying already knows a refused permission or a
+        // vanished file is not one.
+        if (failure is null || !IsWorthRetrying(failure))
             return (value, failure);
+        if (!string.Equals(path, Path.Combine(outputDir, CyclesFile), StringComparison.Ordinal))
+            return (value, failure);
+        if (!RepairCycles(outputDir, log))
+            return (value, failure);
+
         return WithAppendRetry(read);
     }
 
-    public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
+    /// <param name="log">
+    /// Told when the file exists and could not be read. Returning nothing looks identical whether
+    /// there are no traces or the read failed, and every caller draws the first of those - so the
+    /// second has to be said out loud somewhere.
+    /// </param>
+    public static IReadOnlyList<IonCycleRow> ReadCycles(
+        string outputDir, string? sample = null, Action<string>? log = null)
     {
+        Exception? unreadable = null;
         foreach (var path in CyclesPathsFor(outputDir))
         {
-            var (rows, _) = ReadCyclesFile<IReadOnlyList<IonCycleRow>>(outputDir, () =>
+            var (rows, failure) = ReadCyclesFile<IReadOnlyList<IonCycleRow>>(outputDir, path, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 var samples = reader.ReadStrings("sample");
@@ -1166,7 +1194,11 @@ public static class IonAccountingStore
             // the other candidate. An empty list from a file that parsed is a real answer.
             if (rows is not null)
                 return rows;
+            unreadable = failure;
         }
+
+        if (unreadable is not null)
+            log?.Invoke($"  Could not read {CyclesFile}: {unreadable.Message}");
         return Array.Empty<IonCycleRow>();
     }
 
@@ -1207,7 +1239,7 @@ public static class IonAccountingStore
         // truncated and never finished, and the intact measurement is then the other one.
         foreach (var path in CyclesPathsFor(outputDir, log))
         {
-            var (found, failure) = ReadCyclesFile<IReadOnlyList<string>>(outputDir, () =>
+            var (found, failure) = ReadCyclesFile<IReadOnlyList<string>>(outputDir, path, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 if (expectKey is not null && reader.HasColumn("settings_key"))
@@ -1227,15 +1259,19 @@ public static class IonAccountingStore
                 // A file written before the key column existed cannot be checked, and is taken as
                 // before rather than thrown away: it was written by a run whose summary matched.
                 return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
-            });
+            }, log);
 
             if (found is not null)
                 return found;
             unreadable = failure;
         }
 
-        // Absent and unreadable are different answers, and only one of them is about the data.
-        couldNotRead = unreadable is not null;
+        // Absent and unreadable are different answers, and only one of them is about the data - and
+        // a file that disappeared between the existence check and the open is ABSENT, however it was
+        // reported. Calling that one damaged sends the caller looking for a corrupt file to keep a
+        // copy of, in the case (a dropped share) where there is nothing wrong with the file at all.
+        couldNotRead = unreadable is not null
+            and not (FileNotFoundException or DirectoryNotFoundException);
         log?.Invoke(unreadable is null
             ? $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it."
             : $"  Could not read {CyclesFile}: {unreadable.Message}");
@@ -1369,6 +1405,19 @@ public static class IonAccountingStore
         if (File.Exists(path)
             && File.GetLastWriteTimeUtc(staging) <= File.GetLastWriteTimeUtc(path))
         {
+            return;
+        }
+
+        // Newer is not the same as better. The copy below truncates the real file first, so
+        // promoting a staging file that cannot be read replaces a good measurement with a broken one
+        // and then DELETES the evidence - and a run killed while writing its progress leaves exactly
+        // such a file, which is the case this whole path exists to serve. The guard above covers a
+        // run that is still going; this covers the one that died.
+        if (File.Exists(path) && !Parses(staging))
+        {
+            log?.Invoke(
+                $"  {Path.GetFileName(staging)} is newer than {CyclesFile} but cannot be read, so it "
+                + "has been left alone rather than written over a measurement that can be.");
             return;
         }
 
