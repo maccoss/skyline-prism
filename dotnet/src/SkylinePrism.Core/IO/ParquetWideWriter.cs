@@ -103,7 +103,12 @@ public static class ParquetWideWriter
         // Appending needs the existing footer read back, so the stream is ReadWrite rather than the
         // write-only one Write uses. Sharing Read for the same reason every writer here does: a
         // reader must be able to look while a run is in progress - see ParquetColumnIo.OpenRead.
-        var exists = File.Exists(path);
+        // Appendable means the file HAS A FOOTER, not merely that it is there. A first append
+        // killed between creating the file and flushing leaves zero bytes, and asking for append on
+        // that throws - once per unit of work, for the rest of the run, with nothing ever repairing
+        // it. Starting such a file over loses nothing, because there is nothing in it.
+        var info = new FileInfo(path);
+        var exists = info.Exists && info.Length > 0;
         await using var fs = await OpenAppendWithRetryAsync(path, exists);
         await using var writer = await ParquetWriter.CreateAsync(
             schema, fs, ParquetColumnIo.Options(), append: exists);

@@ -1156,10 +1156,22 @@ public partial class MainWindow : Window
 
     private async void OnRun(object sender, RoutedEventArgs e)
     {
+        // Claimed BEFORE the first await, not after it. Everything from the click to the pipeline
+        // starting used to be synchronous, so WPF could not deliver a second click in between; the
+        // existence check below runs off-thread and yields the dispatcher, and a second click on a
+        // still-enabled button would start a second pipeline into the same output directory.
+        // UpdateRunEnabled owns the button's state, so every exit from here goes back through it.
+        if (_isRunning)
+            return;
+        _isRunning = true;
+        UpdateRunEnabled();
+
         if (_inputs.Count == 0)
         {
             Log("No inputs. Add a document or an exported report on the Inputs tab.");
             ShowAnalysis(AnalysisPane.Inputs);
+            _isRunning = false;
+            UpdateRunEnabled();
             return;
         }
 
@@ -1182,15 +1194,17 @@ public partial class MainWindow : Window
                 warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
                 "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes)
+            {
+                _isRunning = false;
+                UpdateRunEnabled();
                 return;
+            }
         }
 
         // Labels double as exported file stems and as batch labels, so they must be unique before the run.
         PrismInput.EnsureUniqueLabels(_inputs);
         InputsGrid.Items.Refresh();
 
-        _isRunning = true;
-        RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
         ShowAnalysis(AnalysisPane.Log); // show progress as it runs

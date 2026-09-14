@@ -67,6 +67,27 @@ public class IonCyclesAppendTests : IDisposable
     }
 
     /// <summary>
+    /// A file that exists but holds no footer is started over, not appended to.
+    /// </summary>
+    /// <remarks>
+    /// An append killed between creating the file and flushing its footer leaves zero bytes behind.
+    /// Deciding appendability on existence alone asks parquet to append to a file with nothing to
+    /// append to, which throws - and would then throw for every remaining replicate of the run,
+    /// because nothing repairs it. Restarting an empty file loses nothing.
+    /// </remarks>
+    [Fact]
+    public void AnEmptyFileIsStartedOverRatherThanAppendedTo()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        File.WriteAllBytes(path, Array.Empty<byte>());
+
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 3), "key");
+
+        Assert.Equal(3, IonAccountingStore.ReadCycles(dir).Count);
+    }
+
+    /// <summary>
     /// What a run leaves when it stops partway is a valid file, under the real name.
     /// </summary>
     [Fact]

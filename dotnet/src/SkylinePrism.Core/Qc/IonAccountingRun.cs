@@ -254,14 +254,47 @@ public static class IonAccountingRun
             }
         }
 
-        // The cycles file starts here, under its REAL name, and grows a row group per replicate.
-        // Everything measured is in ion_cycles.parquet the moment that replicate finishes - no
-        // staging file to recover and no rename to be refused, because the file being written is the
-        // file everything reads. Replicates carried over from a previous run go in first, since the
-        // old file is replaced rather than appended to.
-        IonAccountingStore.BeginCycles(outputDir);
-        if (reusedCycles.Count > 0)
-            IonAccountingStore.AppendCycles(outputDir, reusedCycles, settingsKey);
+        // The cycles file grows under its REAL name, a row group per replicate: everything measured
+        // is in ion_cycles.parquet the moment that replicate finishes, with no staging file to
+        // recover and no rename to be refused, because the file being written is the file everything
+        // reads.
+        //
+        // Two things this has to get right, and neither is the happy path.
+        //
+        // The old file is REPLACED, not appended to, or a re-run would carry the previous run's
+        // replicates forward silently - but not until there is something to put in its place. A run
+        // that reads nothing at all (a raw directory that has moved, a share that is not mounted)
+        // must not be the reason a measurement that took hours disappears; deleting up front made it
+        // exactly that. This is the guard the whole-table path used to spell as a row-count check.
+        //
+        // And a failed save is not a failed measurement. Appending can be refused - something else
+        // holds the file, the share went away - and this is the longest operation in the product, so
+        // ending the run over it would throw away every instrument read done so far. That sentence,
+        // "Ion accounting failed" after forty-eight files, is the one this whole area exists to
+        // avoid. The replicate is simply not in the file, so the next run measures it again:
+        // SamplesWithCycles decides reuse and it reads the file, not this list.
+        var cyclesStarted = false;
+        void SaveCycles(IReadOnlyList<IonCycleRow> toSave)
+        {
+            if (toSave.Count == 0)
+                return;
+            try
+            {
+                if (!cyclesStarted)
+                {
+                    IonAccountingStore.BeginCycles(outputDir);
+                    cyclesStarted = true;
+                }
+                IonAccountingStore.AppendCycles(outputDir, toSave, settingsKey);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                log?.Invoke(
+                    $"  WARNING: could not save {toSave[0].Sample}'s cycles - {ex.Message}");
+            }
+        }
+
+        SaveCycles(reusedCycles);
 
         log?.Invoke(
             $"  Ion accounting over {resolution.Matched.Count:N0} replicate(s): "
@@ -390,10 +423,10 @@ public static class IonAccountingRun
                                 // table rewritten, which is O(n^2) in bytes and was measured at
                                 // 883 MB to persist 36 MB over 48 replicates, about 92 GB projected
                                 // at 500. The summary is small enough to keep rewriting whole.
-                                IonAccountingStore.AppendCycles(outputDir, measured, settingsKey);
+                                SaveCycles(measured);
                                 SaveProgress(
                                     outputDir, settingsKey, productText, precursorText, schemeText,
-                                    classified, rows, cycles, log);
+                                    classified, rows, log);
                             }
                         }
                         finally
@@ -444,16 +477,18 @@ public static class IonAccountingRun
     private static void SaveProgress(
         string outputDir, string settingsKey, string productText, string precursorText,
         string schemeText, AssignedPeptides.Classified classified,
-        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles,
-        Action<string>? log = null)
+        IReadOnlyList<IonAccountingRow> rows, Action<string>? log = null)
     {
         try
         {
+            // No cycles: they are appended as each replicate finishes, under their own name, so this
+            // writes the summary and the per-list totals only.
             IonAccountingStore.Write(
                 outputDir,
                 new IonAccountingResult(
                     settingsKey, productText, precursorText, schemeText, classified.ListNames,
-                    classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles),
+                    classified.AssignedPeptides, classified.HasGroupColumns, rows,
+                    Array.Empty<IonCycleRow>()),
                 log, writeCycles: false);
         }
         catch (IOException ex)
@@ -463,10 +498,9 @@ public static class IonAccountingRun
             // and silently kept none of it. A locked cache file did exactly that.
             //
             // What it must NOT say is that nothing was saved, which is what it used to say and was
-            // not true: the cycles are in the staging file and the summary is written separately.
-            // Reading "nothing measured so far has been saved" after two hours of instrument reads
-            // is alarming, and it was alarming about the wrong thing. A cycles file that cannot be
-            // replaced no longer reaches here at all - see IonAccountingStore.PlaceStagedCycles.
+            // not true: this replicate's cycles were appended before this call, and the summary is a
+            // separate file. Reading "nothing measured so far has been saved" after two hours of
+            // instrument reads is alarming, and it was alarming about the wrong thing.
             log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}");
         }
     }

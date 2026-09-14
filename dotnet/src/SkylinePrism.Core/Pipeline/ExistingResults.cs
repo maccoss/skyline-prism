@@ -107,11 +107,14 @@ public sealed record ExistingResults(
         if (!File.Exists(provenance))
             return new ExistingResults(true, null, null, false, false, files);
 
+        // ONE read of the file, on a directory that is routinely a network share.
+        string json;
         string? version = null;
         string? date = null;
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(provenance));
+            json = File.ReadAllText(provenance);
+            using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("pipeline_version", out var v))
                 version = v.GetString();
             if (doc.RootElement.TryGetProperty("processing_date", out var d))
@@ -127,16 +130,21 @@ public sealed record ExistingResults(
         bool sameSettings;
         try
         {
+            // ConfigFromJson, not LoadConfig: the latter redirects a FASTA whose original path has
+            // gone to the copy the run archived, which is right for re-running and wrong for
+            // comparing - it would report "different settings" for the config that produced these
+            // very results, and only once the archive had become load-bearing.
+            //
             // Through ConfigWriter so the comparison is over the settings that are round-tripped and
             // recorded, not over object identity - two configs that write the same YAML produce the
             // same outputs, which is the question being asked.
             sameSettings = string.Equals(
-                ConfigWriter.ToYaml(Provenance.LoadConfig(provenance)),
+                ConfigWriter.ToYaml(Provenance.ConfigFromJson(json, provenance)),
                 ConfigWriter.ToYaml(config),
                 StringComparison.Ordinal);
         }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException
-                                       or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException
+                                       or NotSupportedException or ArgumentException)
         {
             sameSettings = false;
         }

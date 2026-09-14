@@ -87,11 +87,9 @@ public static class Provenance
     /// </summary>
     public static PrismConfig LoadConfig(string metadataJsonPath, out IReadOnlyList<string> redirectedFasta)
     {
-        using var doc = JsonDocument.Parse(File.ReadAllText(metadataJsonPath));
-        if (!doc.RootElement.TryGetProperty("processing_parameters", out var pp))
-            throw new InvalidOperationException(
-                $"'{metadataJsonPath}' has no 'processing_parameters' (not a PRISM provenance file).");
-        var config = JsonSerializer.Deserialize<PrismConfig>(pp.GetRawText(), Options()) ?? new PrismConfig();
+        var json = File.ReadAllText(metadataJsonPath);
+        var config = ConfigFromJson(json, metadataJsonPath);
+        using var doc = JsonDocument.Parse(json);
 
         redirectedFasta = Array.Empty<string>();
         if (doc.RootElement.TryGetProperty("fasta_files", out var fasta)
@@ -105,6 +103,26 @@ public static class Provenance
             }
         }
         return config;
+    }
+
+    /// <summary>
+    /// The config a run recorded, exactly as it recorded it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LoadConfig(string)"/> is for RE-RUNNING that config, so it redirects a FASTA whose
+    /// original path has gone to the copy the run archived. That is right for running and wrong for
+    /// COMPARING: the redirect rewrites <c>parsimony.fasta_path</c> to a path inside the output
+    /// directory, so a result whose database has since moved would compare as "different settings"
+    /// against the very config that produced it - and the comparison would fail exactly when the
+    /// archive had done its job.
+    /// </remarks>
+    public static PrismConfig ConfigFromJson(string json, string describePath)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("processing_parameters", out var pp))
+            throw new InvalidOperationException(
+                $"'{describePath}' has no 'processing_parameters' (not a PRISM provenance file).");
+        return JsonSerializer.Deserialize<PrismConfig>(pp.GetRawText(), Options()) ?? new PrismConfig();
     }
 
     /// <summary>

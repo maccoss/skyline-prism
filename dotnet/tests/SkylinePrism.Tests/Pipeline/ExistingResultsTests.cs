@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.Pipeline;
+using FastaArchive = SkylinePrism.Core.Pipeline.FastaArchive;
 using Xunit;
 
 namespace SkylinePrism.Tests.Pipeline;
@@ -123,6 +124,50 @@ public class ExistingResultsTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_dir, "merged_data"));
 
         Assert.False(ExistingResults.Inspect(_dir, new PrismConfig()).Any);
+    }
+
+    /// <summary>
+    /// The case that made the comparison worth getting right: a run whose FASTA has since moved.
+    /// </summary>
+    /// <remarks>
+    /// <c>Provenance.LoadConfig</c> exists for RE-RUNNING a recorded config, so when the original
+    /// database is gone it redirects <c>parsimony.fasta_path</c> to the copy the run archived beside
+    /// its outputs. Comparing through it would report "different settings" for the very config that
+    /// produced these results - and only once the archive had become load-bearing, which is the one
+    /// time nobody wants a spurious prompt. The comparison reads what was RECORDED instead.
+    /// </remarks>
+    [Fact]
+    public void AnArchivedFastaDoesNotMakeAnIdenticalRunLookDifferent()
+    {
+        var config = new PrismConfig
+        {
+            Parsimony = { FastaPath = Path.Combine(_dir, "gone", "human.fasta") },
+        };
+
+        var archive = Path.Combine(_dir, "fasta");
+        Directory.CreateDirectory(archive);
+        File.WriteAllText(Path.Combine(archive, "human.fasta"), ">sp|P1|A\nPEPTIDER\n");
+
+        File.WriteAllText(Path.Combine(_dir, "corrected_peptides.parquet"), "x");
+        Provenance.Write(
+            Path.Combine(_dir, Provenance.FileName), config, new[] { "report.csv" },
+            new Provenance.Stats(1, 10, 5, 5), "2026-01-01T00:00:00.0000000Z",
+            new[]
+            {
+                new FastaArchive.Entry(
+                    "parsimony.fasta_path", config.Parsimony.FastaPath!,
+                    Path.Combine("fasta", "human.fasta")),
+            });
+
+        // The original is not on disk, so LoadConfig - the re-run path - redirects to the copy.
+        // That is the behavior this must not be built on.
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(archive, "human.fasta")),
+            Provenance.LoadConfig(Path.Combine(_dir, Provenance.FileName)).Parsimony.FastaPath);
+
+        var existing = ExistingResults.Inspect(_dir, config);
+        Assert.True(existing.SameSettings);
+        Assert.Null(existing.Warning());
     }
 
     /// <summary>Writes what a completed run leaves: the reported outputs plus its provenance.</summary>
