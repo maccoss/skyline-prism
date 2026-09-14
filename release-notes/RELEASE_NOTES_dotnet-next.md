@@ -312,7 +312,9 @@ as the GitHub Release description and fails if it is missing.
   sentence repeated under every panel; they are short bullets now, with the settings stated once per
   section. The across-the-gradient section drew three fraction panels and then one of absolute MS2
   ions, so two quantities in two units sat under one heading - it is now best, median and worst by
-  fraction of acquired MS2 signal, and nothing else.
+  fraction of acquired MS2 signal, and nothing else. A cache measured before the summed TIC was
+  recorded still gets the section, in ions; either way the whole section is one quantity and the
+  heading names it.
 
 - **The acquired TIC is visible against the trace drawn over it.** It rendered at roughly 88% white
   on a white page, so the envelope the assigned trace is a fraction *of* was faint on screen and

@@ -49,11 +49,6 @@ public class PrismVersionTests
     }
 
     /// <summary>
-    /// The version the user actually sees comes out of parameters.json, not out of the process that
-    /// renders the report - <c>prism qc -d</c> re-renders from the file. So the stored form is the one
-    /// that matters.
-    /// </summary>
-    /// <summary>
     /// The build stamp answers what the version cannot: WHICH build is running.
     /// </summary>
     /// <remarks>
@@ -87,6 +82,11 @@ public class PrismVersionTests
             Assert.True(Directory.Exists(PrismVersion.BuildLocation));
     }
 
+    /// <summary>
+    /// The version the user actually sees comes out of parameters.json, not out of the process that
+    /// renders the report - <c>prism qc -d</c> re-renders from the file. So the stored form is the one
+    /// that matters.
+    /// </summary>
     [Fact]
     public void ProvenanceRecordsTheUnpaddedVersion()
     {

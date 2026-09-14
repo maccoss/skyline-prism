@@ -482,61 +482,80 @@ public static class IonAccountingStore
             // across runs. Repeated per row and dictionary-encoded to nothing.
             ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
         };
-        ParquetWideWriter.Write(
-            staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
         if (!finalize)
+        {
+            ParquetWideWriter.Write(
+                staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
             return;
+        }
 
-        PlaceStagedCycles(staging, path, log);
+        // THE END OF A RUN WRITES THE REAL NAME DIRECTLY, from memory. There is no rename.
+        //
+        // There used to be one, and it was solving a problem that no longer exists: the real file
+        // could not be overwritten because a reader held it, so the write went beside it and was
+        // renamed into place. Readers stopped taking files hostage (ParquetColumnIo.OpenRead), which
+        // removed that problem - and left a rename that had become one of its own.
+        //
+        // A rename-over is the strictest operation Windows offers, refused while ANY handle is open
+        // on the target. Worse, the handle that blocked it was on the SOURCE: PRISM's own freshly
+        // written 37.8 MB staging file, which over SMB the redirector can still hold at the server
+        // after the local handle is closed. The run then reported failure quoting the DESTINATION
+        // path - a file that did not exist, because the folder had been deleted before the run - and
+        // that sentence sent three investigations to the wrong place.
+        //
+        // Writing the real name directly touches neither the staging handle nor a rename. The
+        // staging file was written after the last replicate, so it already holds this same
+        // measurement: if the write below fails, it stays and CyclesPathFor reads it in place.
+        try
+        {
+            ParquetWideWriter.Write(
+                path, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // NOT an exception out of here. The measurement succeeded - every replicate was read
+            // and every cycle is on disk under a name the readers know. Reporting "Ion accounting
+            // failed" after forty-eight instrument files and an hour, because a file NAME was
+            // unavailable, was the worst sentence in the product.
+            if (!File.Exists(staging))
+            {
+                ParquetWideWriter.Write(
+                    staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+            }
+            log?.Invoke($"  NOTE: {CyclesFile} could not be written - {ex.Message}");
+            log?.Invoke($"  {Held(staging, path)}");
+            log?.Invoke(
+                $"  The measurement is complete and is in {Path.GetFileName(staging)} beside it, "
+                + "which is where PRISM reads it from. Nothing is lost and there is nothing to do "
+                + "by hand.");
+            return;
+        }
+
+        DiscardStaging(staging, log);
     }
 
     /// <summary>
-    /// Put the staged cycles under the real name - the one time a run does it.
+    /// Drop the progress file once the real one carries the same measurement.
     /// </summary>
     /// <remarks>
-    /// Renaming is tried first because it cannot half-succeed. It is also the strictest operation
-    /// there is: Windows refuses a rename-over while ANY handle is open on the target, even one
-    /// shared for write and delete, so it fails in exactly the case this is meant to survive. An
-    /// overwriting copy is not refused by a well-behaved reader, which is why it is the fallback
-    /// rather than the failure. Both directions were measured, not assumed.
+    /// Failing to remove it never fails a write that succeeded: it is a duplicate of a file that now
+    /// exists and is older than it, so <see cref="RecoverStagedCycles"/> leaves it alone and the
+    /// next run overwrites it.
     /// </remarks>
-    /// <summary>
-    /// How long to wait for a file a scanner has just opened, as attempts x milliseconds. Settable
-    /// only so the give-up path can be exercised in a second rather than half a minute; nothing
-    /// outside tests changes it.
-    /// </summary>
-    internal static int PlacementAttempts = 30;
-
-    /// <inheritdoc cref="PlacementAttempts"/>
-    internal static int PlacementDelayMs = 1000;
-
-    private static void PlaceStagedCycles(string staging, string path, Action<string>? log)
+    private static void DiscardStaging(string staging, Action<string>? log)
     {
-        var maxAttempts = Math.Max(1, PlacementAttempts);
-        var delayMs = Math.Max(0, PlacementDelayMs);
-        Exception? last = null;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        if (!File.Exists(staging))
+            return;
+        try
         {
-            if (TryPlace(staging, path, ref last))
-            {
-                RemoveStaging(staging, path, log);
-                return;
-            }
-            if (attempt < maxAttempts)
-                Thread.Sleep(delayMs);
+            File.Delete(staging);
         }
-
-        // NOT an exception. The measurement succeeded - every replicate was read and every cycle is
-        // on disk under a name the readers know to look for. Throwing here reported "Ion accounting
-        // failed" after forty-eight files and several hours, for a file NAME that could not be
-        // claimed. See CyclesPathFor: the staging file is read where it lies.
-        log?.Invoke(
-            $"  NOTE: this measurement could not be put under {CyclesFile} after {maxAttempts} "
-            + $"attempts over {maxAttempts * delayMs / 1000.0:0.#} s - {last?.Message}");
-        log?.Invoke($"  {Held(staging, path)}");
-        log?.Invoke(
-            $"  It is complete and is in {Path.GetFileName(staging)} beside it, which is where "
-            + "PRISM reads it from. Nothing is lost and there is nothing to do by hand.");
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke(
+                $"  {Path.GetFileName(staging)} could not be removed now that {CyclesFile} carries "
+                + $"the same measurement; it is a duplicate: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -599,52 +618,6 @@ public static class IonAccountingStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return true;
-        }
-    }
-
-    /// <summary>One attempt: rename if it can, copy if it cannot.</summary>
-    private static bool TryPlace(string staging, string path, ref Exception? last)
-    {
-        try
-        {
-            File.Move(staging, path, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            last = ex;
-        }
-
-        try
-        {
-            File.Copy(staging, path, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            last = ex;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Drop the staging file once its content is under the real name. A copy leaves it behind; a
-    /// rename does not, so this is a no-op in the ordinary case. Failing to remove it is never worth
-    /// failing a write that succeeded - it is a duplicate, and the next run replaces it.
-    /// </summary>
-    private static void RemoveStaging(string staging, string path, Action<string>? log)
-    {
-        if (!File.Exists(staging))
-            return;
-        try
-        {
-            File.Delete(staging);
-        }
-        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-        {
-            log?.Invoke(
-                $"  {Path.GetFileName(staging)} could not be removed after {CyclesFile} was "
-                + "written from it; it is a duplicate and the next run replaces it.");
         }
     }
 

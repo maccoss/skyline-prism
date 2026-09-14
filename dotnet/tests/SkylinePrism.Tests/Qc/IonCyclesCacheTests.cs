@@ -275,32 +275,21 @@ public class IonCyclesCacheTests : IDisposable
         var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
         IonAccountingStore.Write(dir, Result("A", cycles: 2));
 
-        var attempts = IonAccountingStore.PlacementAttempts;
-        var delay = IonAccountingStore.PlacementDelayMs;
-        IonAccountingStore.PlacementAttempts = 2;
-        IonAccountingStore.PlacementDelayMs = 1;
         var lines = new List<string>();
         bool refused;
-        try
-        {
-            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
-            {
-                // Forty-eight instrument files and several hours. Throwing over a file NAME
-                // reported all of it as "Ion accounting failed" when every cycle was on disk and
-                // readable.
-                IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
 
-                // Windows refuses every way of replacing a file something holds exclusively.
-                // POSIX does not - a rename over an open file is ordinary there - so the placement
-                // genuinely succeeds on Linux and macOS. Both outcomes are a success; asserting
-                // the Windows one everywhere is what broke this on the other two.
-                refused = File.Exists(path + ".new");
-            }
-        }
-        finally
+        // Held exclusively for the whole write, so nothing can replace it.
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            IonAccountingStore.PlacementAttempts = attempts;
-            IonAccountingStore.PlacementDelayMs = delay;
+            // Forty-eight instrument files and an hour. Throwing over a file NAME reported all of
+            // it as "Ion accounting failed" when every cycle was on disk and readable.
+            IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
+
+            // Windows refuses to open a file held exclusively; POSIX's FileShare emulation does
+            // not stop a create, so the write genuinely succeeds on Linux and macOS. Both outcomes
+            // are a success - asserting the Windows one everywhere is what broke this on the other
+            // two - so which one happened is read off the staging file rather than assumed.
+            refused = File.Exists(path + ".new");
         }
 
         // The measurement survives either way, which is the whole point.
@@ -350,7 +339,13 @@ public class IonCyclesCacheTests : IDisposable
         Assert.DoesNotContain("rename", absent, StringComparison.OrdinalIgnoreCase);
 
         // Present but unreadable is a different sentence, and must not read as "never measured".
-        IonAccountingStore.Write(dir, Result("A", cycles: 3));
+        // Written as bytes that are NOT parquet: IonAccountingStore.Write would produce a valid
+        // file, which exercises only the file-exists branch and would pass whatever the unreadable
+        // path did.
+        File.WriteAllBytes(
+            Path.Combine(dir, IonAccountingStore.CyclesFile), new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        Assert.Empty(IonAccountingStore.ReadCycles(dir, "A"));
+
         var present = IonAccountingStore.DescribeMissingCycles(dir);
         Assert.Contains("could not be read", present, StringComparison.Ordinal);
         Assert.DoesNotContain("rename", present, StringComparison.OrdinalIgnoreCase);

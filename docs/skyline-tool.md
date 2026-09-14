@@ -380,9 +380,12 @@ fraction rather than the first alphabetically. **The nav entry does not appear a
 files exist** — every plot on it needs a measured denominator, and a fraction taken against a
 guessed one reads as coverage without being coverage.
 
-You may see `ion_cycles.parquet.new` beside the cache. That is a completed measurement that could
-not claim the real name because something else had it open — PRISM reads it where it lies and puts
-it in place on a later run. Nothing is lost, and there is nothing to do by hand.
+You may see `ion_cycles.parquet.new` beside the cache. That is the file a measurement writes its
+progress to, so it holds **either a completed measurement whose write to the real name was refused,
+or the progress of a run that was interrupted** — whichever it is, PRISM reads it where it lies and
+replaces it on the next run. Nothing measured is lost by its presence and there is nothing to do by
+hand, but do not read it as proof that the cohort is complete: how many replicates it covers is what
+the pane and the report show, exactly as for the real file.
 
 ### What it costs, and why it is a separate step
 
