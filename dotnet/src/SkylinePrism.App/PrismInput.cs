@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
+using SkylinePrism.Core.RawData;
 using SkylinePrism.Skyline;
 
 namespace SkylinePrism.App;
@@ -522,8 +523,9 @@ public sealed class PrismInput : INotifyPropertyChanged
         // is no cycle to find. Skip the ~10 s Skyline launch instead of provoking that error.
         if (info.AcquisitionMethod is not null && !info.IsDia)
         {
-            log($"Acquisition method is {info.AcquisitionMethod}, not DIA - isolation windows cannot be "
-                + "read from the data files (Skyline can only import a repeating DIA cycle).");
+            log($"Acquisition method is {info.AcquisitionMethod}, not DIA - isolation windows cannot "
+                + "be read from the data files, because only DIA has a repeating isolation cycle to "
+                + "read. Scheduled methods acquire different windows at different retention times.");
             return null;
         }
         if (info.SampleFilePaths.Count == 0)
@@ -537,6 +539,42 @@ public sealed class PrismInput : INotifyPropertyChanged
             return null;
         }
 
+        // OUR OWN READER FIRST. The windows are scan headers in the first couple of acquisition
+        // cycles, so pwiz answers for the cost of opening the file - measured at 4.2 s on a 3.3 GB
+        // Thermo .raw over SMB, against ~10 s to launch Skyline and drive it through a scratch
+        // document, and verified to give the same 167 windows edge for edge on the acquisition this
+        // was built against.
+        //
+        // Reading them ourselves also removes three things that were never worth paying for: a
+        // Skyline installation as a requirement for a step that only looks at a data file (the
+        // standalone GUI and the CLI have no Skyline at all), a temporary document written to the
+        // temp folder, and that document's audit trail - which reported Skyline's defaults for a
+        // brand new document, "Product mass analyzer changed from None to QIT", in the middle of a
+        // run on Astral data. Filtering that message was treating the symptom; not creating the
+        // document is the cure.
+        if (IsolationWindowProbe.Available)
+        {
+            log($"Reading isolation windows from {System.IO.Path.GetFileName(dataFile)}...");
+            var windows = IsolationWindowProbe.Read(dataFile, null, cancellationToken);
+            if (windows.Count > 0)
+            {
+                var read = new IsolationScheme(
+                    System.IO.Path.GetFileNameWithoutExtension(dataFile), windows);
+                log($"Isolation windows read from the data file: {read.Describe()}.");
+                return read;
+            }
+
+            // No repeating cycle. Skyline would not find one either - it looks for the same thing -
+            // so there is nothing to gain by launching it.
+            log($"{System.IO.Path.GetFileName(dataFile)} reports no repeating isolation windows, so "
+                + "it has no scheme to read. The Spectrum density tab will ask which saved "
+                + "scheme to use.");
+            return null;
+        }
+
+        // No reader in this build. Every PUBLISHED build carries one - the release workflow and CI
+        // both assert it - so this is the developer build that packaged without pwiz.
+        //
         // preferCmd because this probe uses --new (a throwaway document, so the user's is never
         // touched), and --new hangs through the app runner - it prints the "opened" line and then
         // nothing. SkylineCmd reads the same 4.9 GB Thermo .raw in 8.7 s. NOT because it is a
