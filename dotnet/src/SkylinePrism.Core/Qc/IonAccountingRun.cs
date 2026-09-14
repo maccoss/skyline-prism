@@ -254,6 +254,15 @@ public static class IonAccountingRun
             }
         }
 
+        // The cycles file starts here, under its REAL name, and grows a row group per replicate.
+        // Everything measured is in ion_cycles.parquet the moment that replicate finishes - no
+        // staging file to recover and no rename to be refused, because the file being written is the
+        // file everything reads. Replicates carried over from a previous run go in first, since the
+        // old file is replaced rather than appended to.
+        IonAccountingStore.BeginCycles(outputDir);
+        if (reusedCycles.Count > 0)
+            IonAccountingStore.AppendCycles(outputDir, reusedCycles, settingsKey);
+
         log?.Invoke(
             $"  Ion accounting over {resolution.Matched.Count:N0} replicate(s): "
             + IonAccountingStore.SummarizeSettings(
@@ -357,9 +366,11 @@ public static class IonAccountingRun
                                 rows.Add(ToRow(
                                     sample, sampleTypes, path, record, loaded,
                                     classified.ListNames.Count));
+
+                                var measured = new List<IonCycleRow>(record.Cycles.Count);
                                 foreach (var cycle in record.Cycles)
                                 {
-                                    cycles.Add(new IonCycleRow(
+                                    measured.Add(new IonCycleRow(
                                         sample, cycle.Index, cycle.RtStartMin, cycle.RtStopMin,
                                         cycle.Ms1Count, cycle.Ms2Count,
                                         cycle.Ms1Acquired, cycle.Ms2Acquired,
@@ -369,20 +380,20 @@ public static class IonAccountingRun
                                         cycle.Ms1SignalAssigned, cycle.Ms2SignalAssigned,
                                         cycle.Ms2SignalExplained));
                                 }
+                                cycles.AddRange(measured);
 
-                                // Written after EVERY replicate, not once at the end. This is the
-                                // longest operation in the product, and the first real run of it
-                                // was interrupted after an hour and left nothing behind at all. A
-                                // partial cache carries a settings key that stops matching once
-                                // more replicates are added, so the next run recomputes rather
-                                // than trusting a short file.
+                                // Saved after EVERY replicate. This is the longest operation in the
+                                // product, and the first real run of it was interrupted after an
+                                // hour and left nothing behind at all.
                                 //
-                                // The cycles go to the STAGING file (finalize: false), so the real
-                                // one is created once, at the end. Replacing it every replicate is
-                                // how a run came to lose a race against a reader of its own.
+                                // THIS replicate's cycles are appended - not the whole accumulated
+                                // table rewritten, which is O(n^2) in bytes and was measured at
+                                // 883 MB to persist 36 MB over 48 replicates, about 92 GB projected
+                                // at 500. The summary is small enough to keep rewriting whole.
+                                IonAccountingStore.AppendCycles(outputDir, measured, settingsKey);
                                 SaveProgress(
                                     outputDir, settingsKey, productText, precursorText, schemeText,
-                                    classified, rows, cycles, log, finalize: false);
+                                    classified, rows, cycles, log);
                             }
                         }
                         finally
@@ -420,7 +431,9 @@ public static class IonAccountingRun
             settingsKey, productText, precursorText, schemeText, classified.ListNames,
             classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles);
 
-        IonAccountingStore.Write(outputDir, result, log);
+        // The cycles are already on disk, a row group at a time, under their real name - so this
+        // writes the summary and the per-list totals only.
+        IonAccountingStore.Write(outputDir, result, log, writeCycles: false);
         ReportTotals(result, clock, log);
         return result;
     }
@@ -432,7 +445,7 @@ public static class IonAccountingRun
         string outputDir, string settingsKey, string productText, string precursorText,
         string schemeText, AssignedPeptides.Classified classified,
         IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles,
-        Action<string>? log = null, bool finalize = true)
+        Action<string>? log = null)
     {
         try
         {
@@ -441,7 +454,7 @@ public static class IonAccountingRun
                 new IonAccountingResult(
                     settingsKey, productText, precursorText, schemeText, classified.ListNames,
                     classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles),
-                log, finalize);
+                log, writeCycles: false);
         }
         catch (IOException ex)
         {

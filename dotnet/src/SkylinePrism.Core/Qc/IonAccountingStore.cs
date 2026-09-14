@@ -345,9 +345,14 @@ public static class IonAccountingStore
     /// False for a progress save mid-run, which leaves <c>ion_cycles.parquet</c> alone and keeps the
     /// cycles in the staging file beside it. See <see cref="WriteCycles"/> for why that matters.
     /// </param>
+    /// <param name="writeCycles">
+    /// False when the caller is accumulating the cycles itself, one replicate at a time, through
+    /// <see cref="BeginCycles"/> and <see cref="AppendCycles"/> - which is what a measurement does.
+    /// The summary and the per-list totals are still written.
+    /// </param>
     public static void Write(
         string outputDir, IonAccountingResult result, Action<string>? log = null,
-        bool finalize = true)
+        bool finalize = true, bool writeCycles = true)
     {
         var rows = result.Rows;
         var n = rows.Count;
@@ -414,9 +419,63 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(
-            outputDir, result.Cycles, result.SettingsKey, result.Rows.Count, log, finalize);
+        if (writeCycles)
+        {
+            WriteCycles(
+                outputDir, result.Cycles, result.SettingsKey, result.Rows.Count, log, finalize);
+        }
         WriteLists(outputDir, result);
+    }
+
+    /// <summary>
+    /// Start a fresh cycles file for a measurement that is about to begin.
+    /// </summary>
+    /// <remarks>
+    /// <para>The real name, from the first replicate onward. Everything a run measures is in
+    /// <c>ion_cycles.parquet</c> as soon as that replicate finishes - there is no staging file to
+    /// recover from and no rename to be refused, because the file being written IS the file.</para>
+    ///
+    /// <para>A measurement replaces what was there: the old file is removed here rather than
+    /// appended to, or a re-run would silently carry the previous run's replicates forward. Partial
+    /// results from an interrupted run are NOT preserved across a re-run, which is deliberate - what
+    /// a re-run reuses is decided by coverage against the summary, and a half-file from settings
+    /// nobody remembers is not worth the ambiguity.</para>
+    /// </remarks>
+    public static void BeginCycles(string outputDir)
+    {
+        foreach (var path in new[]
+                 {
+                     Path.Combine(outputDir, CyclesFile),
+                     Path.Combine(outputDir, CyclesFile + ".new"),
+                 })
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Left for the append to fail on, where the message can say what was being written.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Add one replicate's cycles to the file, as a row group.
+    /// </summary>
+    /// <remarks>
+    /// Writing the whole accumulated table again after every replicate is O(n^2) in bytes - measured
+    /// on a real 48-replicate cache, 883 MB written to persist 36 MB, and about 92 GB projected at
+    /// 500 replicates. This writes each row once. The file is valid after every append, so a run
+    /// that stops leaves everything it had measured under the name everything reads.
+    /// </remarks>
+    public static void AppendCycles(
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, string settingsKey)
+    {
+        if (cycles.Count == 0)
+            return;
+        ParquetWideWriter.Append(Path.Combine(outputDir, CyclesFile), CycleColumns(cycles, settingsKey));
     }
 
     /// <param name="rowCount">
@@ -454,34 +513,7 @@ public static class IonAccountingStore
         // .new file is left where a later run or a hand rename recovers the whole measurement.
         var staging = path + ".new";
 
-        var meta = new List<ParquetWideWriter.MetaColumn>
-        {
-            ParquetWideWriter.Strings("sample", cycles.Select(c => c.Sample).ToArray()),
-            ParquetWideWriter.Longs("cycle", cycles.Select(c => (long)c.Cycle).ToArray()),
-            ParquetWideWriter.Doubles("rt_start_min", cycles.Select(c => c.RtStartMin).ToArray()),
-            ParquetWideWriter.Doubles("rt_stop_min", cycles.Select(c => c.RtStopMin).ToArray()),
-            ParquetWideWriter.Longs("ms1_count", cycles.Select(c => (long)c.Ms1Count).ToArray()),
-            ParquetWideWriter.Longs("ms2_count", cycles.Select(c => (long)c.Ms2Count).ToArray()),
-            ParquetWideWriter.Doubles("ms1_acquired", cycles.Select(c => c.Ms1Acquired).ToArray()),
-            ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
-            ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
-            ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
-            ParquetWideWriter.Doubles("ms1_signal", cycles.Select(c => c.Ms1Signal).ToArray()),
-            ParquetWideWriter.Doubles("ms2_signal", cycles.Select(c => c.Ms2Signal).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms1_signal_assigned", cycles.Select(c => c.Ms1SignalAssigned).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms2_signal_assigned", cycles.Select(c => c.Ms2SignalAssigned).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
-            ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
-            // The same key the summary carries, so the two files can be checked against each other.
-            // They are written separately and the summary is written FIRST, so a failure between
-            // them leaves a new summary beside an older set of traces - and without this the only
-            // thing tying a trace to a measurement was the replicate name, which is identical
-            // across runs. Repeated per row and dictionary-encoded to nothing.
-            ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
-        };
+        var meta = CycleColumns(cycles, settingsKey);
         if (!finalize)
         {
             ParquetWideWriter.Write(
@@ -737,6 +769,54 @@ public static class IonAccountingStore
             return true;
         }
     }
+
+    /// <summary>
+    /// The cycles file's columns, in the ONE place that defines them.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the whole-table write and the per-replicate append, because appending a row
+    /// group requires a schema IDENTICAL to what is already in the file - same names, same types,
+    /// same order - and parquet will not tell you when it is not. Two copies of this list would
+    /// be two chances to diverge and no way to notice.
+    /// </remarks>
+    private static List<ParquetWideWriter.MetaColumn> CycleColumns(
+        IReadOnlyList<IonCycleRow> cycles, string settingsKey) =>
+        new()
+        {
+            ParquetWideWriter.Strings("sample", cycles.Select(c => c.Sample).ToArray()),
+            ParquetWideWriter.Longs("cycle", cycles.Select(c => (long)c.Cycle).ToArray()),
+            ParquetWideWriter.Doubles("rt_start_min", cycles.Select(c => c.RtStartMin).ToArray()),
+            ParquetWideWriter.Doubles("rt_stop_min", cycles.Select(c => c.RtStopMin).ToArray()),
+            ParquetWideWriter.Longs("ms1_count", cycles.Select(c => (long)c.Ms1Count).ToArray()),
+            ParquetWideWriter.Longs("ms2_count", cycles.Select(c => (long)c.Ms2Count).ToArray()),
+            ParquetWideWriter.Doubles("ms1_acquired", cycles.Select(c => c.Ms1Acquired).ToArray()),
+            ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
+            ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms1_signal", cycles.Select(c => c.Ms1Signal).ToArray()),
+            ParquetWideWriter.Doubles("ms2_signal", cycles.Select(c => c.Ms2Signal).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms1_signal_assigned", cycles.Select(c => c.Ms1SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_assigned", cycles.Select(c => c.Ms2SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
+            ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
+            // The same key the summary carries, so the two files can be checked against each other.
+            // They are written separately and the summary is written FIRST, so a failure between
+            // them leaves a new summary beside an older set of traces - and without this the only
+            // thing tying a trace to a measurement was the replicate name, which is identical
+            // across runs.
+            //
+            // "Repeated per row and dictionary-encoded to nothing" is what this comment used to say,
+            // and it was measured wrong: the key is ~650 bytes, and in ONE row group of 49,010 rows
+            // Snappy stored it plainly - 31.5 MB of a 36 MB file, 87% of it, for a single repeated
+            // value. Appending one replicate per row group leaves one distinct value per group,
+            // which does encode away; the same 48 replicates come to 4.8 MB. The whole-table path
+            // still pays it, which is a reason to prefer AppendCycles and, eventually, to move the
+            // key into the file's own metadata where one copy would do.
+            ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
+        };
 
     private static void WriteLists(string outputDir, IonAccountingResult result)
     {

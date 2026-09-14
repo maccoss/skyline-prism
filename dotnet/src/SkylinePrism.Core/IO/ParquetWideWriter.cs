@@ -67,6 +67,80 @@ public static class ParquetWideWriter
     }
 
     /// <summary>
+    /// Add one row group to <paramref name="path"/>, creating the file if it is not there yet.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>For output that accumulates over a long run.</b> Writing the whole table again after
+    /// every unit of work is O(n^2) in bytes: measured on a real 48-replicate ion accounting cache,
+    /// 883 MB written to persist 36 MB, and about 92 GB projected to persist 376 MB at 500
+    /// replicates. Appending writes each row once.</para>
+    ///
+    /// <para><b>The file is complete after every append.</b> Parquet.Net rewrites the footer on
+    /// close, so a run killed between appends leaves a valid file holding everything up to the last
+    /// one - which is the property that matters here, and is why this is worth more than the bytes.
+    /// Verified over SMB: 500 appends, each closing and reopening the file, readable with the
+    /// correct cumulative row count throughout.</para>
+    ///
+    /// <para><b>The schema must match</b> what is already in the file - same names, same types, same
+    /// order. Appending a different shape is a defect, and parquet will not detect it for you.</para>
+    ///
+    /// <para>NOT thread-safe, deliberately: two appends at once would interleave footers. The caller
+    /// serializes, which <c>IonAccountingRun</c> already does for its progress saves.</para>
+    /// </remarks>
+    public static void Append(string path, IReadOnlyList<MetaColumn> metaColumns) =>
+        AppendAsync(path, metaColumns).GetAwaiter().GetResult();
+
+    /// <inheritdoc cref="Append"/>
+    public static async Task AppendAsync(string path, IReadOnlyList<MetaColumn> metaColumns)
+    {
+        var fields = new List<Field>(metaColumns.Count);
+        foreach (var mc in metaColumns)
+            fields.Add(MakeField(mc.Name, mc.ElementType));
+        var schema = new ParquetSchema(fields);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+
+        // Appending needs the existing footer read back, so the stream is ReadWrite rather than the
+        // write-only one Write uses. Sharing Read for the same reason every writer here does: a
+        // reader must be able to look while a run is in progress - see ParquetColumnIo.OpenRead.
+        var exists = File.Exists(path);
+        await using var fs = await OpenAppendWithRetryAsync(path, exists);
+        await using var writer = await ParquetWriter.CreateAsync(
+            schema, fs, ParquetColumnIo.Options(), append: exists);
+
+        using var rg = writer.CreateRowGroup();
+        for (var i = 0; i < metaColumns.Count; i++)
+            await ParquetColumnIo.WriteColumnAsync(rg, (DataField)fields[i], metaColumns[i].Values);
+    }
+
+    /// <inheritdoc cref="OpenWriteWithRetryAsync"/>
+    private static async Task<FileStream> OpenAppendWithRetryAsync(
+        string path, bool exists, int maxAttempts = 15, int delayMs = 300)
+    {
+        IOException? last = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                return new FileStream(
+                    path, exists ? FileMode.Open : FileMode.Create,
+                    FileAccess.ReadWrite, FileShare.Read);
+            }
+            catch (IOException ex)
+            {
+                last = ex;
+                await Task.Delay(delayMs);
+            }
+        }
+        throw new IOException(
+            $"Could not append to '{path}' after {maxAttempts} attempts - another process is holding "
+            + "it open. On a network share that can be a program on ANOTHER machine, and the lock can "
+            + "outlive it: a client that was killed or lost its connection leaves the server holding "
+            + "the file until the session times out.",
+            last);
+    }
+
+    /// <summary>
     /// Open the output file for writing, retrying on transient IO locks. New parquet files in
     /// watched folders (e.g. Downloads) are briefly locked by Windows Defender / the search
     /// indexer / cloud sync; a short backoff clears those.
