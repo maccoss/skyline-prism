@@ -4,44 +4,71 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using SkylinePrism.Core.Config;
+using SkylinePrism.Core.IO;
 
 namespace SkylinePrism.Core.Pipeline;
 
 /// <summary>
-/// What a run is about to write over, and whether it would be writing anything different.
+/// What a run is about to write over, decided stage by stage.
 /// </summary>
 /// <remarks>
 /// <para>Pointing PRISM at a directory that already holds a cohort's results said nothing at all. It
-/// would recompute what the settings changed - <see cref="StageCache"/> gets that right - and
-/// replace the rest without a word. The person who did it by pasting the wrong path found out from
-/// the file timestamps.</para>
+/// would recompute what the settings changed and replace the rest without a word; the person who did
+/// it by pasting the wrong path found out from the file timestamps.</para>
 ///
-/// <para><b>Silent when nothing changes.</b> Re-running the same version with the same settings is
-/// how a QC report gets regenerated and how a partial ion accounting gets topped up; warning there
-/// would be noise, and noise is how a warning stops being read. So the previous run's version and
-/// settings are compared with this one's, and only a genuine difference is reported.</para>
+/// <para><b>It asks the question the pipeline asks.</b> The first version of this compared the whole
+/// recorded config's YAML against the whole current one, which is wrong in both directions: it fired
+/// on keys that change nothing any stage reads, and it stayed silent when an input file had been
+/// edited in place under settings that had not moved. The comparison is now per stage, over
+/// <see cref="StageDependencies"/> - the same declarations <see cref="StageCache"/> keys on - and the
+/// files it names are the ones those stages actually recorded, read back from
+/// <c>stage_cache.json</c> rather than assumed.</para>
 ///
-/// <para>This is a PREDICTION, from <c>parameters.json</c>, not a promise: the stage cache decides
-/// per stage at run time and also weighs the input files, which can change underneath identical
-/// settings. It is deliberately the conservative direction - it can warn about a run that turns out
-/// to reuse everything, and does not stay silent about one that replaces things.</para>
+/// <para><b>Exact where it can be, a prediction where it cannot, and it says which.</b> Given the
+/// input files, the two most expensive stages are answered rather than guessed, each the way the
+/// pipeline answers it: the merge against its own sidecar beside <c>merged_data</c> (it is not in
+/// the stage cache - its fingerprint appears there only as the rollup's upstream ingredient), and
+/// the transition rollup through <see cref="StageCache.CanReuse"/>. That is what catches an input
+/// file edited in place under settings that did not move. The three stages below them fold in the
+/// RESOLVED sample types and batches, which do not exist until the merge has run, so their
+/// fingerprints cannot be computed in advance at all; those are compared on their declared settings
+/// alone. The warning can therefore under-report, and says so; a stage whose settings changed is
+/// always listed.</para>
 /// </remarks>
 public sealed record ExistingResults(
     bool Any,
     string? Version,
     string? Date,
     bool SameVersion,
-    bool SameSettings,
-    IReadOnlyList<string> Files)
+    IReadOnlyList<string> Recomputed,
+    IReadOnlyList<string> Files,
+    bool Measured)
 {
     /// <summary>Nothing was there to begin with.</summary>
     public static readonly ExistingResults None =
-        new(false, null, null, true, true, Array.Empty<string>());
+        new(false, null, null, true, Array.Empty<string>(), Array.Empty<string>(), false);
 
     /// <summary>
-    /// Whether this run would replace results that are meaningfully different from what it produces.
+    /// The stages in the order the pipeline runs them. Each depends on the ones before it, so the
+    /// first one to change carries everything after it with it - which is exactly how the
+    /// fingerprints chain through <c>upstream</c>. Marker normalization is last because it takes
+    /// both the peptide and the protein matrix.
     /// </summary>
-    public bool WouldReplace => Any && !(SameVersion && SameSettings);
+    private static readonly string[] Chain =
+    {
+        StageDependencies.Merge,
+        StageDependencies.TransitionRollup,
+        StageDependencies.PeptideNormalize,
+        StageDependencies.ProteinRollup,
+        StageDependencies.ProteinNormalize,
+        StageDependencies.MarkerNormalize,
+    };
+
+    /// <summary>Whether every stage would reuse what is already here.</summary>
+    public bool SameSettings => Recomputed.Count == 0;
+
+    /// <summary>Whether this run would replace results that differ from what it produces.</summary>
+    public bool WouldReplace => Any && Files.Count > 0;
 
     /// <summary>The warning, or null when there is nothing worth saying.</summary>
     public string? Warning()
@@ -52,27 +79,45 @@ public sealed record ExistingResults(
         var what = Version is null
             ? "a previous run"
             : $"a run of PRISM {Version}" + (Date is null ? "" : $" from {Date}");
-        var why = (SameVersion, SameSettings) switch
-        {
-            (false, false) => "a different version and different settings",
-            (false, true) => "a different version",
-            _ => "different settings",
-        };
+        var why = !SameVersion
+            ? "a different version of PRISM, which recomputes every stage"
+            : Recomputed.Count == 0
+                ? "different settings"
+                : $"different settings for {Describe(Recomputed)}";
         var names = string.Join(", ", Files.Take(4))
             + (Files.Count > 4 ? $" and {Files.Count - 4:N0} more" : "");
 
         return $"This output directory already holds results from {what}. This run uses {why}, so "
             + $"those results will be replaced: {names}. Stages whose inputs and settings are "
-            + "unchanged are reused rather than recomputed; everything else is overwritten.";
+            + "unchanged are reused rather than recomputed"
+            + (Measured
+                ? "."
+                : " - and a stage can also be recomputed for a reason that is only visible once the "
+                  + "run has started, such as an input file edited in place, so this list is a lower "
+                  + "bound.");
     }
+
+    /// <summary>Stage ids as a reader would name them.</summary>
+    private static string Describe(IReadOnlyList<string> stages) =>
+        string.Join(", ", stages.Select(s => s switch
+        {
+            StageDependencies.Merge => "the merge",
+            StageDependencies.TransitionRollup => "the transition rollup",
+            StageDependencies.PeptideNormalize => "peptide normalization",
+            StageDependencies.ProteinRollup => "the protein rollup",
+            StageDependencies.ProteinNormalize => "protein normalization",
+            StageDependencies.MarkerNormalize => "marker normalization",
+            _ => s,
+        }));
 
     /// <summary>
     /// The files a completed run leaves that a reader would recognize as "there are results here".
     /// </summary>
     /// <remarks>
-    /// Deliberately the REPORTED outputs rather than every file: intermediates and caches are
-    /// working state that a re-run is expected to churn, and listing them would bury the two files
-    /// someone actually cares about losing.
+    /// Two jobs. It decides whether the directory holds results at all, and it names them when no
+    /// stage cache was recorded. Deliberately the REPORTED outputs rather than every file:
+    /// intermediates and caches are working state a re-run is expected to churn, and listing them
+    /// would bury the two files someone actually cares about losing.
     /// </remarks>
     private static readonly string[] Reported =
     {
@@ -87,25 +132,32 @@ public sealed record ExistingResults(
     /// <summary>
     /// Look at <paramref name="outputDir"/> and decide what <paramref name="config"/> would replace.
     /// </summary>
+    /// <param name="inputs">
+    /// The report files this run will merge, when they are known. Given them, the merge and the
+    /// transition rollup are answered exactly rather than predicted - including an input edited in
+    /// place under settings that did not change. The tool does not have them at the point it asks
+    /// (the documents have not been exported yet), which is why they are optional.
+    /// </param>
     /// <remarks>
-    /// Never throws: an unreadable or half-written <c>parameters.json</c> means the version and
-    /// settings cannot be compared, which is reported as "different" rather than as "fine" - the
-    /// safe direction when the question is whether someone is about to lose a cohort.
+    /// Never throws: an unreadable or half-written <c>parameters.json</c> means the run cannot be
+    /// compared, which is reported as "different" rather than as "fine" - the safe direction when the
+    /// question is whether someone is about to lose a cohort.
     /// </remarks>
-    public static ExistingResults Inspect(string outputDir, PrismConfig config)
+    public static ExistingResults Inspect(
+        string outputDir, PrismConfig config, IReadOnlyList<string>? inputs = null)
     {
         if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
             return None;
 
-        var files = Reported
+        var present = Reported
             .Where(name => File.Exists(Path.Combine(outputDir, name)))
             .ToArray();
-        if (files.Length == 0)
+        if (present.Length == 0)
             return None;
 
         var provenance = Path.Combine(outputDir, Provenance.FileName);
         if (!File.Exists(provenance))
-            return new ExistingResults(true, null, null, false, false, files);
+            return new ExistingResults(true, null, null, false, Chain, present, false);
 
         // ONE read of the file, on a directory that is routinely a network share.
         string json;
@@ -122,33 +174,101 @@ public sealed record ExistingResults(
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return new ExistingResults(true, null, null, false, false, files);
+            return new ExistingResults(true, null, null, false, Chain, present, false);
         }
 
-        var sameVersion = string.Equals(version, PrismVersion.Current, StringComparison.Ordinal);
-
-        bool sameSettings;
+        PrismConfig recorded;
         try
         {
             // ConfigFromJson, not LoadConfig: the latter redirects a FASTA whose original path has
             // gone to the copy the run archived, which is right for re-running and wrong for
             // comparing - it would report "different settings" for the config that produced these
             // very results, and only once the archive had become load-bearing.
-            //
-            // Through ConfigWriter so the comparison is over the settings that are round-tripped and
-            // recorded, not over object identity - two configs that write the same YAML produce the
-            // same outputs, which is the question being asked.
-            sameSettings = string.Equals(
-                ConfigWriter.ToYaml(Provenance.ConfigFromJson(json, provenance)),
-                ConfigWriter.ToYaml(config),
-                StringComparison.Ordinal);
+            recorded = Provenance.ConfigFromJson(json, provenance);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException
                                        or NotSupportedException or ArgumentException)
         {
-            sameSettings = false;
+            return new ExistingResults(true, version, date, false, Chain, present, false);
         }
 
-        return new ExistingResults(true, version, date, sameVersion, sameSettings, files);
+        var sameVersion = string.Equals(version, PrismVersion.Current, StringComparison.Ordinal);
+        var cache = StageCache.Load(outputDir);
+
+        // A version change invalidates every stage by construction: Fingerprint folds PrismVersion in
+        // deliberately, because a change to a rollup's arithmetic leaves no trace in the config.
+        var from = sameVersion ? FirstChanged(recorded, config, cache, inputs, outputDir) : 0;
+        if (from < 0)
+        {
+            return new ExistingResults(
+                true, version, date, true, Array.Empty<string>(), Array.Empty<string>(),
+                inputs is { Count: > 0 });
+        }
+
+        var recomputed = Chain.Skip(from).ToArray();
+        var files = recomputed
+            .SelectMany(cache.OutputsOf)
+            .Select(o => Path.IsPathRooted(o) ? Path.GetFileName(o) : o)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(o => File.Exists(Path.Combine(outputDir, o)))
+            .OrderBy(o => o, StringComparer.Ordinal)
+            .ToArray();
+
+        // A directory written before the stage cache existed, or one whose cache was cleared, has
+        // nothing to name - fall back to the outputs a reader would recognize.
+        return new ExistingResults(
+            true, version, date, sameVersion, recomputed,
+            files.Length > 0 ? files : present, inputs is { Count: > 0 });
+    }
+
+    /// <summary>
+    /// The index in <see cref="Chain"/> of the first stage this run would recompute, or -1 when it
+    /// would recompute none.
+    /// </summary>
+    private static int FirstChanged(
+        PrismConfig recorded, PrismConfig config, StageCache cache, IReadOnlyList<string>? inputs,
+        string outputDir)
+    {
+        // Exact for as far as the chain can be computed without having run: the merge folds in a
+        // stamp of the input files and its own declared keys, and the transition rollup folds in the
+        // merge. Everything below them needs the resolved sample types and batches, which only exist
+        // once the merge has produced them - so this is where certainty stops, not where care stops.
+        if (inputs is { Count: > 0 })
+        {
+            // The merge is NOT in the stage cache - it keeps its own sidecar beside merged_data, and
+            // its fingerprint appears in stage_cache.json only as the rollup's upstream ingredient.
+            // Asking CanReuse about it therefore always says no, and a warning that fires on every
+            // re-run is the failure this whole check exists to avoid.
+            var source = SourceFingerprint.Compute(inputs)
+                + "|" + StageDependencies.Values(StageDependencies.Merge, config);
+            var mergeFp = StageCache.Fingerprint(
+                StageDependencies.Merge, config, extraInputs: new[] { source });
+
+            var mergedPath = Path.Combine(outputDir, "merged_data");
+            var merged = SourceFingerprint.TryRead(mergedPath + ".cache.json");
+            if (merged is null
+                || !string.Equals(merged.Fingerprint, source, StringComparison.Ordinal)
+                || !MergedDataset.Exists(mergedPath))
+            {
+                return 0;
+            }
+
+            var rollupFp = StageCache.Fingerprint(
+                StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
+            if (!cache.IsEmpty && !cache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
+                return 1;
+        }
+
+        for (var i = 0; i < Chain.Length; i++)
+        {
+            if (!string.Equals(
+                    StageDependencies.Values(Chain[i], recorded),
+                    StageDependencies.Values(Chain[i], config),
+                    StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 }

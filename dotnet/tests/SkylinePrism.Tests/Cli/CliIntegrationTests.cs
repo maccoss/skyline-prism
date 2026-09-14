@@ -191,6 +191,52 @@ public class CliIntegrationTests
     }
 
     /// <summary>
+    /// An input edited in place is caught, even though not one setting moved.
+    /// </summary>
+    /// <remarks>
+    /// This is the direction a config comparison cannot see at all, and it is the one that matters
+    /// most: the YAML is identical, so comparing it says "nothing will change" while the merge and
+    /// everything below it is about to be recomputed from different data. The merge is checked the
+    /// way the pipeline checks it - against its own sidecar beside <c>merged_data</c>, which stamps
+    /// each input's path, size and write time.
+    /// </remarks>
+    [Fact]
+    public void Run_WarnsWhenAnInputChangedUnderUnchangedSettings()
+    {
+        var outDir = TempDir();
+        var inputDir = TempDir();
+        try
+        {
+            var a = Path.Combine(inputDir, "plate1.csv");
+            var b = Path.Combine(inputDir, "plate2.csv");
+            File.Copy(Input1, a);
+            File.Copy(Input2, b);
+
+            Assert.Equal(0, Invoke("run", "-i", a, b, "-o", outDir, "-c", Config).Code);
+
+            // Same settings, same inputs: silent.
+            var repeat = Invoke("run", "-i", a, b, "-o", outDir, "-c", Config);
+            Assert.Equal(0, repeat.Code);
+            Assert.DoesNotContain("already holds results", repeat.Output, StringComparison.Ordinal);
+
+            // The same bytes, written again - which is what an export re-run looks like. Nothing in
+            // the config has moved; only the file's stamp has.
+            File.WriteAllBytes(a, File.ReadAllBytes(a));
+            File.SetLastWriteTimeUtc(a, DateTime.UtcNow.AddSeconds(5));
+
+            var changed = Invoke("run", "-i", a, b, "-o", outDir, "-c", Config);
+            Assert.Equal(0, changed.Code);
+            Assert.Contains("already holds results", changed.Output, StringComparison.Ordinal);
+            Assert.Contains("the merge", changed.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+            Cleanup(inputDir);
+        }
+    }
+
+    /// <summary>
     /// Running onto a directory that already holds results says so - and only when the results would
     /// actually differ, which is what keeps the warning worth reading.
     /// </summary>

@@ -261,6 +261,22 @@ as the GitHub Release description and fails if it is missing.
   QC report gets regenerated and a partial ion accounting gets topped up. A warning that fires on the
   ordinary case stops being read.
 
+  The question is asked **per stage**, against the same declarations the stage cache keys on, so a
+  setting no stage reads - thread count, whether plots are saved - says nothing, and a setting that
+  moves only the protein rollup names the protein rollup and what follows it rather than implying the
+  peptide results are going too. The files listed are the ones those stages actually recorded.
+
+  The CLI, which knows its input files, answers the two most expensive stages **exactly** rather than
+  predicting them: a report re-exported from Skyline with not one setting changed is caught, because
+  the merge is checked against the same stamp of path, size and write time the pipeline itself uses.
+  A config comparison cannot see that case at all.
+
+- **Re-measuring ion accounting with different settings says what it is about to discard.** The log
+  noted that the cache "is being recomputed"; it now names how many measured replicates are in the
+  directory, what they were measured with and what this run uses, and says plainly that re-measuring
+  reads every instrument file again. It is the most expensive output PRISM writes - hours of
+  instrument reads - and it was the one output with no warning in front of it.
+
 ## Bug Fixes
 
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
@@ -324,6 +340,25 @@ as the GitHub Release description and fails if it is missing.
   went wrong, so a locked staging file was reported as `ion_cycles.parquet is being used by another
   process` - about a file that did not exist. Two rounds of investigation went to the wrong file.
   The message now probes both files and names whichever is actually unavailable.
+
+- **A process killed mid-save no longer loses the whole ion accounting measurement.** Parquet keeps
+  its metadata at the end of the file, so adding a replicate overwrites the existing footer and
+  writes a new one after it - and a process killed in between leaves a file that reads as **nothing**,
+  not as everything up to that point. Measured: a four-replicate file truncated at its footer offset,
+  which is exactly what the first write of an append does, gives 0 rows instead of 3,000. This
+  repository documents ion accounting dying that way twice, to a native fault no catch block sees.
+
+  The bytes each save is about to overwrite are now kept beside the file, and PRISM puts them back
+  by itself the next time anything reads the directory - recovering every replicate that had been
+  saved, and losing only the one that was in flight, which never finished. The footer is about 1,577
+  bytes per replicate, so the protection costs roughly 188 MB over a 500-replicate run against 376 MB
+  of data.
+
+- **Starting a new measurement can no longer mix itself into the previous one.** Replacing the cycles
+  file was a delete followed by an open. A delete refused by a scanner or an SMB holder was logged
+  nowhere, and if that holder let go during the open's own retry window the new replicates were
+  appended to the old measurement instead - two settings keys in one file, with nothing said. The
+  replacement is now part of the open, so it either happens or does not.
 
 - **A run that stops keeps the replicates it measured.** `ion_cycles.parquet` was written whole at
   the end of a run, with each progress save going to a staging file beside it, so a run killed at

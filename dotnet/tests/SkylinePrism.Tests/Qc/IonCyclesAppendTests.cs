@@ -105,6 +105,83 @@ public class IonCyclesAppendTests : IDisposable
     }
 
     /// <summary>
+    /// A process killed mid-append loses the replicate in flight, not the whole measurement.
+    /// </summary>
+    /// <remarks>
+    /// <para>Parquet keeps its metadata at the END of the file, so an append overwrites the existing
+    /// footer with the new row group and writes a fresh one after it. A process killed in between -
+    /// and this repository documents ion accounting dying that way twice, to a native fault no catch
+    /// block sees - leaves a file with no footer at all. That reads as NOTHING, which is the case
+    /// this test pins: not "everything except the replicate in flight", zero.</para>
+    ///
+    /// <para>So the bytes each append is about to overwrite are kept beside the file first, and
+    /// everything saved before the interrupted append comes back.</para>
+    /// </remarks>
+    [Fact]
+    public void AnInterruptedAppendCostsOnlyTheReplicateInFlight()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        for (var r = 1; r <= 3; r++)
+            IonAccountingStore.AppendCycles(dir, Cycles($"rep{r}", 100), "key", replace: r == 1);
+
+        // A fourth append runs, which is what writes the backup describing the first three. Killing
+        // the process inside it leaves the file overwritten from that footer's offset onward.
+        IonAccountingStore.AppendCycles(dir, Cycles("rep4", 100), "key");
+        var backup = ParquetWideWriter.FooterBackupOf(path);
+        var offset = BitConverter.ToInt64(File.ReadAllBytes(backup), 0);
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
+        {
+            fs.SetLength(offset + 64);
+            fs.Seek(offset, SeekOrigin.Begin);
+            fs.Write(new byte[64], 0, 64);
+        }
+
+        // The WHOLE file is gone, not just the last replicate - 300 saved rows and parquet cannot
+        // open it at all. This is the measured fact the backup exists for.
+        Assert.ThrowsAny<Exception>(() => ParquetColumnReader.Open(path).Dispose());
+
+        Assert.True(IonAccountingStore.RepairCycles(dir));
+        Assert.Equal(300, IonAccountingStore.ReadCycles(dir).Count);
+        Assert.Equal(
+            new[] { "rep1", "rep2", "rep3" },
+            IonAccountingStore.SamplesWithCycles(dir).OrderBy(s => s, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// And nobody has to ask: reading the directory repairs it, because the reader is where the
+    /// damage is noticed.
+    /// </summary>
+    [Fact]
+    public void ReadingATornFileRepairsItWithoutBeingAsked()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 50), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 50), "key");
+        var offset = BitConverter.ToInt64(
+            File.ReadAllBytes(ParquetWideWriter.FooterBackupOf(path)), 0);
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
+            fs.SetLength(offset);
+
+        Assert.Equal(50, IonAccountingStore.ReadCycles(dir).Count);
+    }
+
+    /// <summary>A file that is intact is never rewound, however stale the backup beside it.</summary>
+    [Fact]
+    public void RepairLeavesAReadableFileAlone()
+    {
+        var dir = NewDir();
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 7), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 7), "key");
+
+        Assert.False(IonAccountingStore.RepairCycles(dir));
+        Assert.Equal(14, IonAccountingStore.ReadCycles(dir).Count);
+    }
+
+    /// <summary>
     /// A measurement REPLACES the previous one rather than growing it.
     /// </summary>
     /// <remarks>
@@ -120,7 +197,14 @@ public class IonCyclesAppendTests : IDisposable
         Assert.Equal(9, IonAccountingStore.ReadCycles(dir).Count);
 
         IonAccountingStore.BeginCycles(dir);
-        IonAccountingStore.AppendCycles(dir, Cycles("new", 4), "key-2");
+
+        // The replacement is part of the OPEN, not a delete before it: a delete can be refused and
+        // then succeed a moment later, inside the append's own retry window, and the new rows would
+        // land on top of the old measurement with a second settings key and nothing said.
+        Assert.True(
+            File.Exists(Path.Combine(dir, IonAccountingStore.CyclesFile)),
+            "BeginCycles must not delete the file the first append replaces");
+        IonAccountingStore.AppendCycles(dir, Cycles("new", 4), "key-2", replace: true);
 
         Assert.Equal(4, IonAccountingStore.ReadCycles(dir).Count);
         Assert.Equal(new[] { "new" }, IonAccountingStore.SamplesWithCycles(dir));

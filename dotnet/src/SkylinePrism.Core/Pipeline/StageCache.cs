@@ -74,6 +74,19 @@ public sealed class StageCache
     }
 
     /// <summary>
+    /// The outputs a recorded stage claimed, or nothing when this directory has no entry for it.
+    /// </summary>
+    /// <remarks>
+    /// What a stage ACTUALLY wrote, recorded after the fact - so a caller asking what a re-run would
+    /// replace can name the real files rather than a list of what a run usually produces.
+    /// </remarks>
+    public IReadOnlyList<string> OutputsOf(string stageId) =>
+        _entries.TryGetValue(stageId, out var entry) ? entry.Outputs : Array.Empty<string>();
+
+    /// <summary>Whether nothing has been recorded - a directory from before this cache existed.</summary>
+    public bool IsEmpty => _entries.Count == 0;
+
+    /// <summary>
     /// The fingerprint of a stage: its declared config keys, the external files it reads, its upstream
     /// stages, and the PRISM version. Returned so the caller can pass it to <see cref="Record"/> and
     /// on to downstream stages.

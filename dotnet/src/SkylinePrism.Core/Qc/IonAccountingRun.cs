@@ -248,9 +248,23 @@ public static class IonAccountingRun
             }
             else if (cached is not null)
             {
+                // Named, not just mentioned. This is the most expensive output PRISM writes - the
+                // measured cohort is several hours of instrument reads - and it is about to be
+                // replaced wholesale because a tolerance or a file stamp moved. The pipeline's own
+                // outputs get a warning before the run starts; this one is only knowable here,
+                // after the cache has been read, so it is said here and said plainly.
+                var alreadyMeasured = cached.Rows.Count(r => r.IsUsable);
                 log?.Invoke(
-                    "  Ion accounting: the cache was computed for different settings or different "
-                    + "files, so it is being recomputed.");
+                    $"  WARNING: the ion accounting cache in this directory holds {alreadyMeasured:N0} "
+                    + "measured replicate(s) under DIFFERENT settings or different files, so none "
+                    + "of it can be reused and all of it is about to be replaced.");
+                log?.Invoke(
+                    $"    it was measured with {IonAccountingStore.SummarizeSettings(cached.ProductTolerance, cached.PrecursorTolerance, cached.IsolationScheme, cached.ListNames.Count)}");
+                log?.Invoke(
+                    $"    this run uses {IonAccountingStore.SummarizeSettings(productText, precursorText, schemeText, lists.Count)}");
+                log?.Invoke(
+                    "    Stop now and point -d at another directory if those replicates are worth "
+                    + "keeping; re-measuring them reads every instrument file again.");
             }
         }
 
@@ -281,11 +295,14 @@ public static class IonAccountingRun
             try
             {
                 if (!cyclesStarted)
-                {
                     IonAccountingStore.BeginCycles(outputDir);
-                    cyclesStarted = true;
-                }
-                IonAccountingStore.AppendCycles(outputDir, toSave, settingsKey);
+
+                // The FIRST save truncates; the rest add to it. cyclesStarted is set only after the
+                // write returns, so a refused first save is retried as a replacement by the next
+                // replicate rather than appending this measurement onto the previous one.
+                IonAccountingStore.AppendCycles(
+                    outputDir, toSave, settingsKey, replace: !cyclesStarted);
+                cyclesStarted = true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

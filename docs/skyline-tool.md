@@ -382,7 +382,14 @@ guessed one reads as coverage without being coverage.
 
 `ion_cycles.parquet` is written **a replicate at a time**, appended as each instrument file is
 measured, so a run that is interrupted — or one you stop yourself — leaves every replicate it got
-through, readable under that name. There is no separate progress file and nothing to recover by hand.
+through, readable under that name. There is no separate progress file and nothing to recover by hand:
+if a process is killed in the middle of a save, PRISM repairs the file from the copy of the footer it
+keeps beside it, the next time anything reads the directory.
+
+**Re-measuring with different settings replaces the whole cache**, and the log says so before the
+reads begin — how many replicates are there, what they were measured with, and what this run uses.
+Two settings cannot be merged into one cache, so if those replicates are worth keeping, stop and
+point the output at another directory; re-measuring reads every instrument file again.
 
 You may still see `ion_cycles.parquet.new` beside the cache in a directory written by an older
 build, which staged its progress there and renamed it into place at the end of a run. PRISM reads
@@ -490,14 +497,21 @@ this run would produce different ones, the tool says whose they are — the PRIS
 lists the files that would be replaced, and asks whether to go ahead. Answering no costs nothing; the
 run has not started.
 
-It asks only when something would actually change. Re-running the same version with the same settings
-is how a QC report gets regenerated and a partial ion accounting gets topped up, so that case is
-silent, and stages whose inputs and settings are unchanged are reused rather than recomputed either
-way. The check reads `parameters.json`, so a folder with results but no provenance beside them — or
-an unreadable one — is reported rather than assumed to match.
+It asks only when something would actually change, and it asks **per stage**. A setting no stage reads
+— thread count, whether plots are saved — changes nothing and says nothing; a setting that moves only
+the protein rollup names the protein rollup and the stages below it, and leaves the peptide results
+out of it. Re-running the same version with the same settings is how a QC report gets regenerated and
+a partial ion accounting gets topped up, so that case is silent. The check reads `parameters.json`, so
+a folder with results but no provenance beside them — or an unreadable one — is reported rather than
+assumed to match.
 
 The `prism` CLI does the same check and logs a `WARNING:` line, then carries on: a command-line run is
-usually scripted, and stopping to ask a question is worse than the surprise it prevents.
+usually scripted, and stopping to ask a question is worse than the surprise it prevents. Because the
+CLI knows its input files, it answers the two most expensive stages exactly rather than predicting
+them — a report re-exported from Skyline with no setting changed at all is still caught, since the
+merge is checked against the same stamp of path, size and write time the pipeline itself uses. The
+tool cannot do that at the moment it asks, because the documents have not been exported yet, so its
+answer covers settings only.
 
 ---
 

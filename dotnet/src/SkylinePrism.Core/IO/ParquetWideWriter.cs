@@ -87,11 +87,18 @@ public static class ParquetWideWriter
     /// <para>NOT thread-safe, deliberately: two appends at once would interleave footers. The caller
     /// serializes, which <c>IonAccountingRun</c> already does for its progress saves.</para>
     /// </remarks>
-    public static void Append(string path, IReadOnlyList<MetaColumn> metaColumns) =>
-        AppendAsync(path, metaColumns).GetAwaiter().GetResult();
+    /// <param name="replace">
+    /// Start the file over rather than adding to it. The truncation happens in the OPEN, so it
+    /// cannot half-succeed: there is no delete-then-open window in which a holder releases and the
+    /// new rows land on top of an older measurement carrying a different settings key.
+    /// </param>
+    public static void Append(
+        string path, IReadOnlyList<MetaColumn> metaColumns, bool replace = false) =>
+        AppendAsync(path, metaColumns, replace).GetAwaiter().GetResult();
 
     /// <inheritdoc cref="Append"/>
-    public static async Task AppendAsync(string path, IReadOnlyList<MetaColumn> metaColumns)
+    public static async Task AppendAsync(
+        string path, IReadOnlyList<MetaColumn> metaColumns, bool replace = false)
     {
         var fields = new List<Field>(metaColumns.Count);
         foreach (var mc in metaColumns)
@@ -100,22 +107,136 @@ public static class ParquetWideWriter
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
 
-        // Appending needs the existing footer read back, so the stream is ReadWrite rather than the
-        // write-only one Write uses. Sharing Read for the same reason every writer here does: a
-        // reader must be able to look while a run is in progress - see ParquetColumnIo.OpenRead.
-        // Appendable means the file HAS A FOOTER, not merely that it is there. A first append
-        // killed between creating the file and flushing leaves zero bytes, and asking for append on
+        // Appendable means the file HAS A FOOTER, not merely that it is there. A first append killed
+        // between creating the file and flushing leaves zero bytes, and asking parquet to append to
         // that throws - once per unit of work, for the rest of the run, with nothing ever repairing
         // it. Starting such a file over loses nothing, because there is nothing in it.
         var info = new FileInfo(path);
-        var exists = info.Exists && info.Length > 0;
-        await using var fs = await OpenAppendWithRetryAsync(path, exists);
-        await using var writer = await ParquetWriter.CreateAsync(
-            schema, fs, ParquetColumnIo.Options(), append: exists);
+        var exists = !replace && info.Exists && info.Length > 0;
 
-        using var rg = writer.CreateRowGroup();
-        for (var i = 0; i < metaColumns.Count; i++)
-            await ParquetColumnIo.WriteColumnAsync(rg, (DataField)fields[i], metaColumns[i].Values);
+        // An append is NOT atomic, and the file it damages is the whole file rather than the row
+        // group being written. Parquet keeps its metadata at the END, so appending overwrites the
+        // existing footer with the new row group and writes a fresh footer after it; between those
+        // two the file has no footer at all, and a reader gets nothing - not "everything except the
+        // replicate in flight", nothing. Measured: truncating a four-replicate file at the footer
+        // offset, which is exactly what the first write of an append does, takes ReadCycles from
+        // 4,000 rows to 0.
+        //
+        // So the bytes about to be overwritten are kept first, and TryRepair puts them back. The
+        // footer is ~1,577 bytes per row group (measured across 8 to 120 groups, linear), so the
+        // whole protection costs about 188 MB over a 500-replicate run against 376 MB of data - as
+        // against the 92 GB that rewriting the table each time would have cost.
+        if (exists)
+            SaveFooter(path, FooterBackupOf(path));
+        else
+            TryDelete(FooterBackupOf(path));
+
+        // Appending needs the existing footer read back, so the stream is ReadWrite rather than the
+        // write-only one Write uses. Sharing Read for the same reason every writer here does: a
+        // reader must be able to look while a run is in progress - see ParquetColumnIo.OpenRead.
+        await using (var fs = await OpenAppendWithRetryAsync(path, exists))
+        {
+            await using var writer = await ParquetWriter.CreateAsync(
+                schema, fs, ParquetColumnIo.Options(), append: exists);
+
+            using var rg = writer.CreateRowGroup();
+            for (var i = 0; i < metaColumns.Count; i++)
+                await ParquetColumnIo.WriteColumnAsync(rg, (DataField)fields[i], metaColumns[i].Values);
+        }
+    }
+
+    /// <summary>Where the bytes an append is about to overwrite are kept.</summary>
+    public static string FooterBackupOf(string path) => path + ".footer";
+
+    /// <summary>
+    /// Copy the footer of an existing parquet file - the region the next append overwrites - beside
+    /// it, as [8-byte offset][footer bytes].
+    /// </summary>
+    /// <remarks>
+    /// Silent on anything unexpected: this is protection, and failing to take it is not a reason to
+    /// refuse to write. A torn backup is harmless on its own - it is only ever read when the file it
+    /// describes will not parse, and <see cref="TryRepair"/> verifies the result.
+    /// </remarks>
+    private static void SaveFooter(string path, string backup)
+    {
+        try
+        {
+            using var fs = ParquetColumnIo.OpenRead(path);
+            if (fs.Length < 12)
+                return;
+
+            var tail = new byte[8];
+            fs.Seek(-8, SeekOrigin.End);
+            fs.ReadExactly(tail);
+            if (tail[4] != (byte)'P' || tail[5] != (byte)'A' || tail[6] != (byte)'R' || tail[7] != (byte)'1')
+                return;
+
+            var footerLength = BitConverter.ToInt32(tail, 0);
+            var offset = fs.Length - 8 - footerLength;
+            if (footerLength <= 0 || offset < 4)
+                return;
+
+            var blob = new byte[8 + footerLength + 8];
+            BitConverter.TryWriteBytes(blob.AsSpan(0, 8), offset);
+            fs.Seek(offset, SeekOrigin.Begin);
+            fs.ReadExactly(blob.AsSpan(8));
+            File.WriteAllBytes(backup, blob);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Put back the footer an interrupted append destroyed, returning true only if the file parses
+    /// afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <para>What this recovers is everything written before the interrupted append - the row groups
+    /// themselves are untouched, and only the metadata that describes them was overwritten. The
+    /// replicate that was in flight is lost, which is right: it was never finished.</para>
+    ///
+    /// <para>Refuses while a writer is live (it opens exclusively), so a run in progress is never
+    /// rewound by a reader that happened to look during an append.</para>
+    /// </remarks>
+    public static bool TryRepair(string path, Func<string, bool> parses)
+    {
+        var backup = FooterBackupOf(path);
+        if (!File.Exists(path) || !File.Exists(backup))
+            return false;
+        try
+        {
+            var blob = File.ReadAllBytes(backup);
+            if (blob.Length <= 8)
+                return false;
+            var offset = BitConverter.ToInt64(blob, 0);
+            if (offset < 4 || offset > new FileInfo(path).Length)
+                return false;
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                fs.SetLength(offset);
+                fs.Seek(offset, SeekOrigin.Begin);
+                fs.Write(blob, 8, blob.Length - 8);
+            }
+            return parses(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <inheritdoc cref="OpenWriteWithRetryAsync"/>
@@ -127,6 +248,9 @@ public static class ParquetWideWriter
         {
             try
             {
+                // Create truncates an existing file in the same operation that opens it, which is
+                // what makes "start over" safe: a separate delete can be refused and then succeed a
+                // moment later, leaving the next open to find the file and append to it.
                 return new FileStream(
                     path, exists ? FileMode.Open : FileMode.Create,
                     FileAccess.ReadWrite, FileShare.Read);

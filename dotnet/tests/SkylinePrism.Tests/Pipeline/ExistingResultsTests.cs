@@ -90,6 +90,53 @@ public class ExistingResultsTests : IDisposable
     }
 
     /// <summary>
+    /// A setting no stage reads changes nothing, so it says nothing.
+    /// </summary>
+    /// <remarks>
+    /// The first version of this compared the whole config's YAML, so ANY key that moved produced a
+    /// warning that a cohort's results would be replaced - including keys StageDependencies lists as
+    /// output-irrelevant. <c>processing.n_workers</c> is thread count; the rollup is asserted
+    /// reproducible run to run, so it cannot move a number. Warning about it is how a warning stops
+    /// being read.
+    /// </remarks>
+    [Fact]
+    public void ASettingNoStageReadsIsSilent()
+    {
+        var config = new PrismConfig();
+        Results(config);
+
+        var faster = new PrismConfig();
+        faster.Processing.NWorkers = 8;
+        faster.QcReport.SavePlots = !faster.QcReport.SavePlots;
+
+        var existing = ExistingResults.Inspect(_dir, faster);
+        Assert.True(existing.SameSettings);
+        Assert.Empty(existing.Recomputed);
+        Assert.Null(existing.Warning());
+    }
+
+    /// <summary>
+    /// A changed setting names the stages it changes, not every stage.
+    /// </summary>
+    [Fact]
+    public void OnlyTheStagesBelowTheChangeAreListed()
+    {
+        Results(new PrismConfig());
+
+        var changed = new PrismConfig();
+        changed.ProteinRollup.Method = "sum";
+
+        var existing = ExistingResults.Inspect(_dir, changed);
+
+        // The protein rollup and what follows it. The transition rollup and peptide normalization
+        // are upstream of the change and keep their outputs.
+        Assert.Contains("the protein rollup", existing.Warning()!, StringComparison.Ordinal);
+        Assert.DoesNotContain("the transition rollup", existing.Warning()!, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "peptide normalization", existing.Warning()!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Results with no provenance beside them cannot be compared, so they are reported rather than
     /// assumed to match - the safe direction when the question is whether a cohort survives.
     /// </summary>

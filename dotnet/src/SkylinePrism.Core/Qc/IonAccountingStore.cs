@@ -435,18 +435,24 @@ public static class IonAccountingStore
     /// <c>ion_cycles.parquet</c> as soon as that replicate finishes - there is no staging file to
     /// recover from and no rename to be refused, because the file being written IS the file.</para>
     ///
-    /// <para>A measurement replaces what was there: the old file is removed here rather than
-    /// appended to, or a re-run would silently carry the previous run's replicates forward. Partial
-    /// results from an interrupted run are NOT preserved across a re-run, which is deliberate - what
-    /// a re-run reuses is decided by coverage against the summary, and a half-file from settings
-    /// nobody remembers is not worth the ambiguity.</para>
+    /// <para>A measurement replaces what was there, or a re-run would silently carry the previous
+    /// run's replicates forward. The replacement is NOT done by deleting here: the first append
+    /// opens with truncation instead, so that "start over" is one operation that either happens or
+    /// does not. A delete can be refused and then succeed a moment later - a scanner or an SMB
+    /// holder letting go inside the append's own retry window - and the new rows would land on top
+    /// of the old measurement, mixing two settings keys in one file with nothing said.</para>
+    ///
+    /// <para>What IS removed here is the staging file a build before dotnet-vNEXT would have left,
+    /// so a stale one cannot shadow the file this run is about to write. Failing to remove it is
+    /// harmless and therefore silent: the real file is rewritten continuously from here, so it is
+    /// the newer of the two within moments.</para>
     /// </remarks>
     public static void BeginCycles(string outputDir)
     {
         foreach (var path in new[]
                  {
-                     Path.Combine(outputDir, CyclesFile),
                      Path.Combine(outputDir, CyclesFile + ".new"),
+                     ParquetWideWriter.FooterBackupOf(Path.Combine(outputDir, CyclesFile)),
                  })
         {
             try
@@ -456,7 +462,7 @@ public static class IonAccountingStore
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Left for the append to fail on, where the message can say what was being written.
+                // Harmless: neither file can outrank what this run is about to write.
             }
         }
     }
@@ -470,12 +476,76 @@ public static class IonAccountingStore
     /// 500 replicates. This writes each row once. The file is valid after every append, so a run
     /// that stops leaves everything it had measured under the name everything reads.
     /// </remarks>
+    /// <param name="replace">
+    /// True for the FIRST save of a measurement, which starts the file over rather than adding to
+    /// what a previous measurement left. The truncation is part of the open - see
+    /// <see cref="BeginCycles"/> for why it is not a delete.
+    /// </param>
     public static void AppendCycles(
-        string outputDir, IReadOnlyList<IonCycleRow> cycles, string settingsKey)
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, string settingsKey,
+        bool replace = false)
     {
         if (cycles.Count == 0)
             return;
-        ParquetWideWriter.Append(Path.Combine(outputDir, CyclesFile), CycleColumns(cycles, settingsKey));
+        ParquetWideWriter.Append(
+            Path.Combine(outputDir, CyclesFile), CycleColumns(cycles, settingsKey), replace);
+    }
+
+    /// <summary>
+    /// Put back a cycles file whose footer an interrupted append destroyed.
+    /// </summary>
+    /// <remarks>
+    /// <para>Parquet keeps its metadata at the end, so an append overwrites the footer with the new
+    /// row group and writes a fresh one after it. A process killed in between - and this repository
+    /// documents ion accounting dying that way twice, to a native fault no catch block sees - leaves
+    /// a file with no footer, which reads as NOTHING rather than as everything up to that point.
+    /// Measured: a four-replicate file truncated at its footer offset gives 0 rows, not 3,000.</para>
+    ///
+    /// <para>The bytes are kept beside the file before each append, so what comes back is every
+    /// replicate that had been saved. The one in flight is lost, which is correct - it never
+    /// finished.</para>
+    /// </remarks>
+    public static bool RepairCycles(string outputDir, Action<string>? log = null)
+    {
+        var path = Path.Combine(outputDir, CyclesFile);
+        if (!File.Exists(path) || !File.Exists(ParquetWideWriter.FooterBackupOf(path)))
+            return false;
+        if (Parses(path))
+            return false;
+
+        if (!ParquetWideWriter.TryRepair(path, Parses))
+            return false;
+
+        log?.Invoke(
+            $"  {CyclesFile} was left without a footer by an interrupted write and has been "
+            + $"repaired from the copy beside it ({RowsIn(path):N0} cycles recovered).");
+        return true;
+    }
+
+    private static bool Parses(string path)
+    {
+        try
+        {
+            using var reader = ParquetColumnReader.Open(path);
+            _ = reader.RowGroupCount;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static long RowsIn(string path)
+    {
+        try
+        {
+            return ParquetColumnReader.RowCountOf(path);
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     /// <param name="rowCount">
@@ -865,8 +935,9 @@ public static class IonAccountingStore
             return null;
 
         // The first thing anything does with this directory, so a measurement whose cycles write
-        // was blocked is put right before anyone notices it was.
+        // was blocked, or whose append was interrupted, is put right before anyone notices it was.
         RecoverStagedCycles(outputDir, log);
+        RepairCycles(outputDir, log);
 
         try
         {
@@ -1302,6 +1373,13 @@ public static class IonAccountingStore
     {
         var path = Path.Combine(outputDir, CyclesFile);
         var staging = path + ".new";
+
+        // Not while a measurement is running: an append in flight looks exactly like an interrupted
+        // one from outside, and rewinding a live run to its previous footer would be the worst
+        // possible reading of a transient state. TryRepair opens exclusively and so refuses anyway;
+        // this keeps it from being attempted at all.
+        if (!IsMeasuring(outputDir))
+            RepairCycles(outputDir, log);
 
         if (IsMeasuring(outputDir) || !File.Exists(staging))
             return File.Exists(path) ? path : null;

@@ -115,7 +115,10 @@ public static class Program
         // about to go and carries on. It is silent when the previous run used the same version and
         // the same settings, which is how a QC report gets regenerated and a partial ion accounting
         // topped up; a warning that fires on the ordinary case stops being read.
-        if (ExistingResults.Inspect(outputDir, config).Warning() is { } warning)
+        // With the inputs, so the merge and the transition rollup are answered by the same
+        // CanReuse the pipeline will call rather than predicted - which is what catches an input
+        // file edited in place under settings that did not move.
+        if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
             Log("WARNING: " + warning);
 
         Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
