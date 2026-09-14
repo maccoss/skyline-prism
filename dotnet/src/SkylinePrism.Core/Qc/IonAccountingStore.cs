@@ -513,6 +513,9 @@ public static class IonAccountingStore
         var attempts = Math.Max(1, WriteAttempts);
         var delayMs = Math.Max(0, WriteDelayMs);
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        // What the target looked like before anything was attempted, so a failure afterwards can
+        // tell "never opened it" from "truncated it and did not finish". See DiscardPartial.
+        var before = Snapshot(path);
         Exception? last = null;
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
@@ -540,7 +543,7 @@ public static class IonAccountingStore
         // part way leaves a torn file that is NEWER than the staging file - and the readers take the
         // newer of the two, which would hand them a corrupt file in preference to the intact
         // measurement sitting beside it.
-        DiscardPartial(path, log);
+        DiscardPartial(path, before, log);
 
         // Written UNCONDITIONALLY, not only when the staging file is absent. A progress save that
         // failed leaves a short one behind (IonAccountingRun.SaveProgress logs and carries on), and
@@ -592,19 +595,31 @@ public static class IonAccountingStore
     internal static int WriteDelayMs = 500;
 
     /// <summary>
-    /// Remove a target the write truncated but never finished.
+    /// Remove a target THIS write truncated but never finished - and nothing else.
     /// </summary>
     /// <remarks>
-    /// <see cref="FileMode.Create"/> truncates on OPEN, so a write that fails part way leaves a file
-    /// that parses as nothing and carries a fresh timestamp. The readers take the newer of the real
-    /// file and the staging file, so leaving it would hand them a corrupt file in preference to the
-    /// intact measurement beside it - losing a cohort to tidy up after a failure, which is the exact
-    /// shape of the bug that started this.
+    /// <para><see cref="FileMode.Create"/> truncates on OPEN, so a write that fails part way leaves
+    /// a file that parses as nothing and carries a fresh timestamp. The readers take the newer of
+    /// the real file and the staging file, so leaving it would hand them a corrupt file in
+    /// preference to the intact measurement beside it - losing a cohort to tidy up after a failure,
+    /// which is the exact shape of the bug that started this.</para>
+    ///
+    /// <para><b>The snapshot is what makes this safe.</b> A write refused at the OPEN - the file is
+    /// read-only, or something holds it exclusively - never touched the target, and the previous
+    /// run's cycles are still in it. Deleting on any failure would destroy a perfectly good file
+    /// because this run could not replace it, which is worse than the problem being solved. So only
+    /// a target whose size or timestamp MOVED is treated as this write's wreckage.</para>
     /// </remarks>
-    private static void DiscardPartial(string path, Action<string>? log)
+    private static void DiscardPartial(string path, (bool Exists, long Length, DateTime Written) before,
+        Action<string>? log)
     {
         if (!File.Exists(path))
             return;
+
+        var now = Snapshot(path);
+        if (before.Exists && now.Length == before.Length && now.Written == before.Written)
+            return;   // never opened, so never truncated: the file is the one that was already there
+
         try
         {
             File.Delete(path);
@@ -614,6 +629,21 @@ public static class IonAccountingStore
             log?.Invoke(
                 $"  {CyclesFile} was left part-written and could not be removed: {ex.Message}. It "
                 + "may not be readable; re-running ion accounting rewrites it.");
+        }
+    }
+
+    /// <summary>Enough of a file's identity to tell whether a write touched it.</summary>
+    private static (bool Exists, long Length, DateTime Written) Snapshot(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (true, info.Length, info.LastWriteTimeUtc) : (false, 0L, default);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Unknowable is treated as "not there": the only cost is declining to delete.
+            return (false, 0L, default);
         }
     }
 

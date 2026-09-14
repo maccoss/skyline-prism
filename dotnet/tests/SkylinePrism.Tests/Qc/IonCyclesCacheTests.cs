@@ -291,6 +291,12 @@ public class IonCyclesCacheTests : IDisposable
         }
 
         Assert.True(File.Exists(path + ".new"), "the measurement should have been staged");
+
+        // The write was refused at the OPEN, so it never touched the target - and the two cycles
+        // the previous run left in it are still there. Deleting a good file because this run could
+        // not replace it would be worse than the problem being solved.
+        Assert.True(File.Exists(path), "a target this write never opened must not be deleted");
+
         Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
         Assert.DoesNotContain(lines, l => l.Contains("WARNING", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
@@ -408,8 +414,13 @@ public class IonCyclesCacheTests : IDisposable
     private static IDisposable ReadOnlyFile(string path)
     {
         File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
-        return new Restore(
-            () => File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly));
+        return new Restore(() =>
+        {
+            // The file may be gone: POSIX lets a read-only file be unlinked from a writable
+            // directory, so a run that decided to remove it succeeds there and fails on Windows.
+            if (File.Exists(path))
+                File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        });
     }
 
     /// <summary>The product waits about 30 s; a test waiting that long is a test nobody runs.</summary>
