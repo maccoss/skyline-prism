@@ -213,7 +213,7 @@ public static partial class PlotRenderer
                     // the quantified bar it is required to nest ABOVE, which the report elsewhere
                     // calls impossible - while the title on the same image quoted the right share.
                     Value = Finite(explainedOf(rows[i])) / scale,
-                    FillColor = ExplainedBarColor,
+                    FillColor = ExplainedColor,
                     LineWidth = 0,
                     Size = 0.85,
                 });
@@ -224,7 +224,7 @@ public static partial class PlotRenderer
             var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
             explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
             explainedKey.MarkerStyle.Size = 14;
-            explainedKey.MarkerStyle.FillColor = ExplainedBarColor;
+            explainedKey.MarkerStyle.FillColor = ExplainedColor;
             explainedKey.MarkerStyle.LineWidth = 0;
             explainedKey.LegendText = measured == rows.Count
                 ? "explained by any b/y or precursor ion"
@@ -245,9 +245,7 @@ public static partial class PlotRenderer
                 // colors mean something and wrong here: a cohort with no sample types is one
                 // category, and a rainbow across it reads as several. Cycle only on a type that is
                 // present and unknown to GroupColor.
-                FillColor = string.IsNullOrWhiteSpace(rows[i].SampleType)
-                    ? Color.FromHex(TypeColors["experimental"])
-                    : GroupColor(rows[i].SampleType, i),
+                FillColor = QuantifiedBarColor(rows[i].SampleType, i),
                 LineWidth = 0,
                 Size = 0.85,
             });
@@ -260,9 +258,7 @@ public static partial class PlotRenderer
             var key = plt.Add.Marker(double.NaN, double.NaN);
             key.MarkerStyle.Shape = MarkerShape.FilledSquare;
             key.MarkerStyle.Size = 14;
-            key.MarkerStyle.FillColor = string.IsNullOrWhiteSpace(type)
-                ? Color.FromHex(TypeColors["experimental"])
-                : GroupColor(type, 0);
+            key.MarkerStyle.FillColor = QuantifiedBarColor(type, 0);
             key.MarkerStyle.LineWidth = 0;
             // "quantified" only once there is an explained series to tell it apart from; on its
             // own the old wording is what every existing report says and means the same thing.
@@ -328,14 +324,14 @@ public static partial class PlotRenderer
         if (showExplained)
         {
             var explainedLine = plt.Add.Scatter(x, explained.Select(v => v / scale).ToArray());
-            explainedLine.Color = ExplainedLineColor;
+            explainedLine.Color = ExplainedColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained by any b/y or precursor ion";
         }
 
         var line = plt.Add.Scatter(x, assigned.Select(v => v / scale).ToArray());
-        line.Color = showExplained ? QuantifiedLineColor : Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained ? "quantified" : "assigned to a peptide";
@@ -406,7 +402,7 @@ public static partial class PlotRenderer
             var explainedLine = plt.Add.Scatter(
                 explainedPoints.Select(p => p.RtMin).ToArray(),
                 explainedPoints.Select(p => p.Fraction).ToArray());
-            explainedLine.Color = ExplainedLineColor;
+            explainedLine.Color = ExplainedColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained fraction";
@@ -414,7 +410,7 @@ public static partial class PlotRenderer
 
         var line = plt.Add.Scatter(
             points.Select(p => p.RtMin).ToArray(), points.Select(p => p.Fraction).ToArray());
-        line.Color = showExplained ? QuantifiedLineColor : Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained
@@ -512,11 +508,30 @@ public static partial class PlotRenderer
     /// The explained series' color: between the neutral acquired background and the saturated
     /// assigned bar, because the quantity it shows nests between them.
     /// </summary>
-    private static readonly Color ExplainedBarColor = Color.FromHex("#8fa8c8");
+    /// <summary>
+    /// A quantified bar's color: its sample type, except that EXPERIMENTAL takes the same navy the
+    /// gradient profiles use for the quantified trace.
+    /// </summary>
+    /// <remarks>
+    /// <para>Explained is the strong blue on every plot in this family now, and experimental's own
+    /// color IS that blue - so an experimental bar and the explained bar nested above it would be one
+    /// shape, which is the thing the nesting exists to show.</para>
+    ///
+    /// <para>Only experimental moves. qc and reference keep orange and red, because that is what
+    /// coloring these bars is for: a control replicate stays findable along a row of two hundred.
+    /// Dropping the types to match the gradient exactly was the alternative and it costs more than it
+    /// buys - the gradient plots have no types to lose.</para>
+    /// </remarks>
+    internal static Color QuantifiedBarColor(string? sampleType, int index) =>
+        string.IsNullOrWhiteSpace(sampleType)
+        || sampleType.Trim().Equals("experimental", StringComparison.OrdinalIgnoreCase)
+        || sampleType.Trim().Equals("unknown", StringComparison.OrdinalIgnoreCase)
+            ? QuantifiedColor
+            : GroupColor(sampleType, index);
 
     /// <summary>
-    /// The EXPLAINED trace on the gradient profiles - the fraction of the acquisition this analysis
-    /// can account for at all, which is the question those plots exist to answer.
+    /// The EXPLAINED series, on every ion plot - the fraction of the acquisition this analysis can
+    /// account for at all, which is the question these plots exist to answer.
     /// </summary>
     /// <remarks>
     /// <para>It used to be drawn in the muted blue the bars use, and against the acquired band it was
@@ -533,13 +548,16 @@ public static partial class PlotRenderer
     /// both traces blue also puts the emphasis where it belongs: explained is the headline number
     /// and now carries the strongest color on the plot.</para>
     /// </remarks>
-    private static readonly Color ExplainedLineColor = Color.FromHex("#1f77b4");
+    private static readonly Color ExplainedColor = Color.FromHex(ExplainedColorHex);
+
+    /// <inheritdoc cref="ExplainedColor"/>
+    internal const string ExplainedColorHex = "#1F77B4";
 
     /// <summary>
-    /// The QUANTIFIED trace, nested inside the explained one - a darker blue, so it reads against
-    /// both the band and the line it sits under. <see cref="ExplainedLineColor"/> says why.
+    /// The QUANTIFIED series, nested inside the explained one - a darker blue, so it reads against
+    /// both the acquired band and the series it sits under. <see cref="ExplainedColor"/> says why.
     /// </summary>
-    private static readonly Color QuantifiedLineColor = Color.FromHex("#08306b");
+    private static readonly Color QuantifiedColor = Color.FromHex("#08306b");
 
     /// <summary>
     /// Group cycles into retention-time bins. Bin membership is by the cycle's START time, so a
