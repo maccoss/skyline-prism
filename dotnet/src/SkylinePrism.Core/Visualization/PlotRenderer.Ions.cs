@@ -213,22 +213,30 @@ public static partial class PlotRenderer
                     // the quantified bar it is required to nest ABOVE, which the report elsewhere
                     // calls impossible - while the title on the same image quoted the right share.
                     Value = Finite(explainedOf(rows[i])) / scale,
-                    FillColor = ExplainedColor,
+                    FillColor = ExplainedBarColor(rows[i].SampleType, i),
                     LineWidth = 0,
                     Size = 0.85,
                 });
             }
             plt.Add.Bars(explainedBars);
 
+            // One key per TYPE now, not one for the series: the explained bars carry each
+            // replicate's own hue, so a single swatch would be a color half of them are not.
             var measured = rows.Count(r => r.HasExplained && drawExplained(r));
-            var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
-            explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
-            explainedKey.MarkerStyle.Size = 14;
-            explainedKey.MarkerStyle.FillColor = ExplainedColor;
-            explainedKey.MarkerStyle.LineWidth = 0;
-            explainedKey.LegendText = measured == rows.Count
-                ? "explained by any b/y or precursor ion"
-                : $"explained by any b/y or precursor ion ({measured:N0} of {rows.Count:N0})";
+            var counted = measured == rows.Count
+                ? ""
+                : $" ({measured:N0} of {rows.Count:N0})";
+            foreach (var type in ExplainedTypes(rows, drawExplained))
+            {
+                var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
+                explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
+                explainedKey.MarkerStyle.Size = 14;
+                explainedKey.MarkerStyle.FillColor = ExplainedBarColor(type, 0);
+                explainedKey.MarkerStyle.LineWidth = 0;
+                explainedKey.LegendText = string.IsNullOrWhiteSpace(type)
+                    ? "explained by any b/y or precursor ion" + counted
+                    : $"explained ({type}){counted}";
+            }
         }
 
         var assignedBars = new List<Bar>(rows.Count);
@@ -509,25 +517,58 @@ public static partial class PlotRenderer
     /// assigned bar, because the quantity it shows nests between them.
     /// </summary>
     /// <summary>
-    /// A quantified bar's color: its sample type, except that EXPERIMENTAL takes the same navy the
-    /// gradient profiles use for the quantified trace.
+    /// The EXPLAINED bar for a replicate: its sample type's own color.
     /// </summary>
     /// <remarks>
-    /// <para>Explained is the strong blue on every plot in this family now, and experimental's own
-    /// color IS that blue - so an experimental bar and the explained bar nested above it would be one
-    /// shape, which is the thing the nesting exists to show.</para>
-    ///
-    /// <para>Only experimental moves. qc and reference keep orange and red, because that is what
-    /// coloring these bars is for: a control replicate stays findable along a row of two hundred.
-    /// Dropping the types to match the gradient exactly was the alternative and it costs more than it
-    /// buys - the gradient plots have no types to lose.</para>
+    /// Every ion plot draws the same three quantities nested - acquired, then explained, then
+    /// quantified - and each replicate also belongs to a sample type. Two things to encode, so they
+    /// take the two axes a color has: the HUE says whose replicate it is, and the SHADE says which of
+    /// the two nested quantities. A control stays a control at a glance, and the pair still reads as
+    /// one inside the other.
     /// </remarks>
-    internal static Color QuantifiedBarColor(string? sampleType, int index) =>
+    internal static Color ExplainedBarColor(string? sampleType, int index) =>
         string.IsNullOrWhiteSpace(sampleType)
-        || sampleType.Trim().Equals("experimental", StringComparison.OrdinalIgnoreCase)
-        || sampleType.Trim().Equals("unknown", StringComparison.OrdinalIgnoreCase)
-            ? QuantifiedColor
+            ? Color.FromHex(TypeColors["experimental"])
             : GroupColor(sampleType, index);
+
+    /// <summary>
+    /// The QUANTIFIED bar for a replicate: the darker shade of the same hue.
+    /// </summary>
+    /// <remarks>
+    /// <para>Darker rather than lighter, and that is the whole reason this started: the explained bar
+    /// sits on the acquired one and the gradient trace sits on the acquired band, so a pale tint
+    /// disappears into a light gray background. Darkening moves away from it instead.</para>
+    ///
+    /// <para>Hand-picked per type rather than computed, because scaling a color toward black turns
+    /// orange to brown and red to maroon - the hue stops saying what it said. Anything not in the
+    /// table falls back to the computed shade, which is right for a cohort with its own type names
+    /// where no pair could have been chosen in advance.</para>
+    /// </remarks>
+    internal static Color QuantifiedBarColor(string? sampleType, int index)
+    {
+        var key = (sampleType ?? "").Trim().ToLowerInvariant().Replace(" ", "");
+        return key switch
+        {
+            "" or "experimental" or "unknown" => QuantifiedColor,
+            "qc" or "qualitycontrol" => Color.FromHex("#B35309"),
+            "reference" or "standard" or "std" => Color.FromHex("#7F1416"),
+            _ => Darker(GroupColor(sampleType, index)),
+        };
+    }
+
+    /// <summary>A color's darker shade, for a type with no hand-picked pair.</summary>
+    private static Color Darker(Color c) =>
+        new((byte)(c.R * 0.52), (byte)(c.G * 0.52), (byte)(c.B * 0.52), c.A);
+
+    /// <summary>
+    /// The sample types that actually have an explained bar drawn, in the rows' own order - so the
+    /// legend lists a swatch for each and only for those.
+    /// </summary>
+    private static IEnumerable<string> ExplainedTypes(
+        IReadOnlyList<IonAccountingRow> rows, Func<IonAccountingRow, bool> drawExplained) =>
+        rows.Where(r => r.HasExplained && drawExplained(r))
+            .Select(r => r.SampleType ?? "")
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The EXPLAINED series, on every ion plot - the fraction of the acquisition this analysis can
