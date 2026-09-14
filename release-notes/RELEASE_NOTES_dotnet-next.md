@@ -103,6 +103,13 @@ as the GitHub Release description and fails if it is missing.
   view, quantity or bin width is instant. The pane opens on the *median* replicate by assigned
   fraction rather than the first one alphabetically, with the best and worst a click away.
 
+  It opens on **Signal (TIC)** - what the instrument reports and what a mass spectrometrist reads a
+  run in - falling back to Ions on a cache measured before the summed TIC was recorded, so an older
+  directory still gets a plot rather than an error. The gradient bin defaults to **0.01 min**: at
+  0.6 s that is shorter than one acquisition cycle on these instruments, so it bins essentially
+  nothing and the trace is drawn at the rate the run was acquired at. The QC report uses the same
+  bin.
+
   The nav entry is hidden entirely until the output directory carries measured ion accounting. Every
   plot on it needs a denominator, and a fraction computed against a guessed one reads as coverage
   without being coverage - so there is nothing to offer rather than a pane that cannot draw.
@@ -191,6 +198,26 @@ as the GitHub Release description and fails if it is missing.
   the headless equivalent - resolve the windows, record them, print what they are. With no `-r` it
   reports what the directory already knows, which works with no data files present at all.
 
+- **The run log says which build wrote it.** Its first line, the first line of an ion accounting
+  measurement, and the tooltip on the version in the window now carry the build time and the folder
+  PRISM loaded from:
+
+  ```
+  PRISM 26.24.3, built 2026-09-13 12:19 from C:\Users\...\Tools\SkylinePrism
+  ```
+
+  The version alone cannot answer "am I running the fix?" - PRISM versions at RELEASE time, so every
+  build between two releases reports the same number. Two multi-hour measurements were run against a
+  build that predated the fix they were testing, and nothing on screen could have said so. The
+  folder is half the answer: the Skyline tool runs the copy installed under Skyline's own Tools
+  directory, which a freshly built zip sitting on disk does not touch.
+
+- **When a file cannot be written, PRISM names the process holding it.** On Windows, through the
+  Restart Manager - no elevation needed - so "locked by another process" becomes
+  `open on this machine by: MsMpEng (pid 1234)`. When nothing on this machine has it, it says that
+  too, which for a file on a share is the useful half of the answer: the holder is another client or
+  the file server itself.
+
 - **The Marker score plot reads out replicate names on hover**, the way the PCA plot does. Its points
   are jittered within their column so overlapping scores stay separable, which means the horizontal
   position carries no information - hovering is the only way to tell which injection an outlying score
@@ -244,6 +271,58 @@ as the GitHub Release description and fails if it is missing.
 
   This reaches beyond ion accounting. Every parquet PRISM writes went through the same exclusive
   open, so viewing any output file while a run rewrote it could fail the write.
+
+- **A small cohort labelled its worst replicate "Best".** The across-the-gradient panels are picked
+  as best, median and worst by assigned fraction and captioned by position, but with three or fewer
+  measured replicates the picker returned them worst-first - so the labels were exactly inverted.
+  Four or more replicates were always right, which is why it survived: every test that checked the
+  order used four.
+
+- **A measurement no longer fails over a file name it cannot claim.** When the cycles file is held
+  by something PRISM cannot argue with, the staged measurement is read where it lies - taking the
+  newer of the two, so a stale file cannot shadow a current one - and the run reports success,
+  because it succeeded. "Ion accounting failed" after forty-eight instrument files and several hours,
+  for a rename, was the worst sentence in the product.
+
+- **The error named a file that was not on disk.** `File.Move` reports the DESTINATION path whatever
+  went wrong, so a locked staging file was reported as `ion_cycles.parquet is being used by another
+  process` - about a file that did not exist. Two rounds of investigation went to the wrong file.
+  The message now probes both files and names whichever is actually unavailable.
+
+- **`ion_cycles.parquet` carries the settings key its summary does.** The two files are written
+  separately with the summary first, so a failure between them left a new summary beside an older
+  set of traces - and replicate names are identical from run to run, so the name alone could not
+  tell a stale trace from the current one. Reuse now checks the key and re-measures rather than
+  mixing two measurements.
+
+- **Every number beside a plot is the quantity the plot is drawing.** Ions and signal have different
+  fractions - the ion count weights each scan by its ion injection time and the summed TIC does not
+  - so with Quantity set to Signal the plot drew TIC percentages while the status line, the hover
+  readout and the per-replicate line all reported ion-weighted ones. Three surfaces each picked a
+  fraction independently; they now share one selector.
+
+- **A fraction over 100% is never drawn.** It is impossible, so it means a defect - a units
+  mismatch, an isolation scheme that does not match the acquisition, or claims merged too loosely -
+  and clamping it would turn a visible bug into a plausible reading. The per-replicate fraction view
+  now withholds those replicates entirely and says how many in the title; the gradient profile names
+  impossible bins rather than dropping them, since dropping a point makes the line sail over exactly
+  the stretch that is wrong.
+
+- **The QC report's ion sections are readable.** The captions were paragraphs with the same settings
+  sentence repeated under every panel; they are short bullets now, with the settings stated once per
+  section. The across-the-gradient section drew three fraction panels and then one of absolute MS2
+  ions, so two quantities in two units sat under one heading - it is now best, median and worst by
+  fraction of acquired MS2 signal, and nothing else.
+
+- **The acquired TIC is visible against the trace drawn over it.** It rendered at roughly 88% white
+  on a white page, so the envelope the assigned trace is a fraction *of* was faint on screen and
+  gone in print.
+
+- **The tool zip is checked for what it must contain.** The Skyline Tool Store logo reached the zip
+  through a single line in `SkylinePrism.App.csproj` and nothing verified it: move the image and
+  every release would ship a tool that lists with a blank logo, with CI still green. The manifest,
+  the logo and the instrument-file reader are now asserted by one script that the local ship gate,
+  CI and the release workflow all run - in the release, before the artifact is uploaded.
 
 - **The ion accounting plots stacked every redraw instead of replacing it.** ScottPlot's `Add`
   methods append, and legend entries ride on the plottables, so each change of view, level,

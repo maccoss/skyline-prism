@@ -313,6 +313,62 @@ public class IonCyclesCacheTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// "Best" and "worst" of WHAT. The two quantities rank the cohort differently, so a panel picked
+    /// by one and captioned as the other names the wrong replicate - and nothing on the page could
+    /// reveal it, because both numbers are real.
+    /// </summary>
+    [Fact]
+    public void RepresentativesRankOnTheQuantityAskedFor()
+    {
+        // Ions say b is worst; signal says a is. Both are true: the ion count weights each scan by
+        // its injection time and the summed TIC does not.
+        var a = Row("a", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 50);
+        var b = Row("b", ms2Acquired: 1000, ms2Assigned: 50, ms2SignalAssigned: 300, ms2Signal: 1000);
+        var result = new IonAccountingResult(
+            "k", "10 ppm", "10 ppm", "scheme", Array.Empty<string>(), 1, false,
+            new[] { a, b }, Array.Empty<IonCycleRow>());
+
+        // Best first, so the head of the list is the HIGHEST fraction in that quantity.
+        Assert.Equal("a", result.Representatives(signal: false)[0].Sample);
+        Assert.Equal("b", result.Representatives(signal: false)[^1].Sample);
+        Assert.Equal("b", result.Representatives(signal: true)[0].Sample);
+        Assert.Equal("a", result.Representatives(signal: true)[^1].Sample);
+    }
+
+    /// <summary>
+    /// The empty state names the file and a remedy, and never asks anyone to rename anything - the
+    /// staged file is read in place, so a staged file that exists is a file that was read.
+    /// </summary>
+    [Fact]
+    public void TheEmptyStateSaysWhatToDoAboutIt()
+    {
+        var dir = NewDir();
+        var absent = IonAccountingStore.DescribeMissingCycles(dir);
+        Assert.Contains(IonAccountingStore.CyclesFile, absent, StringComparison.Ordinal);
+        Assert.Contains("Re-run", absent, StringComparison.Ordinal);
+        Assert.DoesNotContain("rename", absent, StringComparison.OrdinalIgnoreCase);
+
+        // Present but unreadable is a different sentence, and must not read as "never measured".
+        IonAccountingStore.Write(dir, Result("A", cycles: 3));
+        var present = IonAccountingStore.DescribeMissingCycles(dir);
+        Assert.Contains("could not be read", present, StringComparison.Ordinal);
+        Assert.DoesNotContain("rename", present, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A row with both quantities, for the ranking test.</summary>
+    private static IonAccountingRow Row(
+        string sample, double ms2Acquired, double ms2Assigned,
+        double ms2Signal, double ms2SignalAssigned) =>
+        new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 10, 100,
+            Ms1Acquired: 1000, Ms2Acquired: ms2Acquired,
+            Ms1Assigned: 100, Ms2Assigned: ms2Assigned,
+            Ms2Explained: 0, HasExplained: false,
+            0, 30, 0, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>(),
+            AcquiredUtc: null, Ms1Signal: 1000, Ms2Signal: ms2Signal,
+            Ms1SignalAssigned: 100, Ms2SignalAssigned: ms2SignalAssigned,
+            Ms2SignalExplained: 0, HasSignal: true);
+
     private string NewDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "prism-cycles-" + Guid.NewGuid().ToString("N"));

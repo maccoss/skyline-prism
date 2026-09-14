@@ -53,6 +53,40 @@ public class PrismVersionTests
     /// renders the report - <c>prism qc -d</c> re-renders from the file. So the stored form is the one
     /// that matters.
     /// </summary>
+    /// <summary>
+    /// The build stamp answers what the version cannot: WHICH build is running.
+    /// </summary>
+    /// <remarks>
+    /// PRISM versions at release time, so every build between two releases reports the same number.
+    /// Two multi-hour measurements were run against a build that predated the fix they were testing
+    /// because nothing on screen could say so.
+    ///
+    /// <para>Deliberately NOT part of <see cref="PrismVersion.Current"/>, which feeds the stage-cache
+    /// fingerprint, provenance and the export sidecar - a build time there would invalidate all
+    /// three on every rebuild. That separation is what this asserts.</para>
+    /// </remarks>
+    [Fact]
+    public void TheBuildStampExtendsTheVersionWithoutChangingIt()
+    {
+        Assert.StartsWith(PrismVersion.Current, PrismVersion.BuildStamp, StringComparison.Ordinal);
+        Assert.Contains("built ", PrismVersion.BuildStamp, StringComparison.Ordinal);
+
+        // Nothing that computes anything may carry it.
+        Assert.DoesNotContain("built", PrismVersion.Current, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The folder is half the answer: the Skyline tool runs the copy installed under Skyline's own
+    /// Tools directory, which a freshly built zip sitting on disk does not touch.
+    /// </summary>
+    [Fact]
+    public void TheBuildLocationIsTheFolderPrismLoadedFrom()
+    {
+        Assert.NotNull(PrismVersion.BuildLocation);
+        if (PrismVersion.BuildLocation.Length > 0)
+            Assert.True(Directory.Exists(PrismVersion.BuildLocation));
+    }
+
     [Fact]
     public void ProvenanceRecordsTheUnpaddedVersion()
     {

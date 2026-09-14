@@ -216,8 +216,14 @@ public sealed record IonAccountingResult(
             .ToArray();
         if (ranked.Length == 0)
             return Array.Empty<IonAccountingRow>();
+
+        // BEST FIRST, always. Callers label these positionally - "Best", "Median", "Worst" - so the
+        // order IS the meaning. This returned the ascending array for three or fewer, which is worst
+        // first, so a cohort of two or three had its worst replicate captioned "Best" and its best
+        // one "Worst" in the QC report. Every test that checked the order used four replicates or
+        // more, which takes the branch below; the short path was covered only for membership.
         if (ranked.Length <= 3)
-            return ranked;
+            return ranked.Reverse().ToArray();
 
         // Distinct by sample, so a three-replicate cohort does not list one row three times.
         var picks = new List<IonAccountingRow> { ranked[^1], ranked[ranked.Length / 2], ranked[0] };

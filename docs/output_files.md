@@ -39,6 +39,7 @@ output_dir/
 ├── isolation_schemes.xml           # The acquisition's DIA isolation windows, if any were learned
 ├── ion_accounting.parquet          # Ions acquired/assigned/explained per replicate (if `prism ion-accounting`)
 ├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
+├── ion_cycles.parquet.new          # ...a measurement that could not claim the name above (read in place)
 ├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
@@ -54,6 +55,7 @@ file in the cohort, which is often a terabyte over a network share.
 |---|---|---|
 | `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. The same four totals **unweighted** as `ms1_signal`, `ms2_signal`, `ms1_signal_assigned`, `ms2_signal_assigned`, `ms2_signal_explained` with a `has_signal` flag - see below. Also `acquired_utc` (when the instrument started the run), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
 | `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read. Carries the same `settings_key` as the summary, so a trace left by an earlier measurement is never reused as this one's |
+| `ion_cycles.parquet.new` | acquisition cycle | **Normally absent.** The staging file a measurement writes its cycles to; it is renamed over `ion_cycles.parquet` once, at the end of a run. It survives when something else has the real file open - PRISM then reads the measurement from here and tells you so, and puts it under the real name on a later run. Nothing is lost by its presence and there is nothing to do by hand |
 | `ion_accounting_lists.parquet` | replicate x protein list | each selected list's fraction of the assigned total; deleted when no lists are selected |
 
 **The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity

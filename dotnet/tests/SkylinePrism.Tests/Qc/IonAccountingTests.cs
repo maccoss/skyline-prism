@@ -103,6 +103,40 @@ public class IonAccountingTests
         Assert.Equal(new[] { "best", "median", "worst" }, picks);
     }
 
+    /// <summary>
+    /// A SHORT cohort is ordered best-first too.
+    /// </summary>
+    /// <remarks>
+    /// This is the case that shipped wrong. Callers label these positionally - "Best", "Median",
+    /// "Worst" - so the order is the meaning, and the three-or-fewer path returned the ascending
+    /// array, which is worst first. A two- or three-replicate cohort therefore had its worst
+    /// replicate captioned "Best" in the QC report and its best one "Worst".
+    ///
+    /// <para>It survived because every test that checked ORDER used four replicates or more, which
+    /// takes the other branch; the short path was covered only for membership and count. Hence one
+    /// test per branch here rather than one test for the method.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void RepresentativesAreBestFirstAtEveryCohortSize(int count)
+    {
+        // 10%, 20%, ... so the best is unambiguous and the worst is the first row.
+        var rows = Enumerable.Range(1, count)
+            .Select(i => Row(100, 100, i * 10, i * 10, $"r{i}"))
+            .ToArray();
+
+        var picks = Result(rows).Representatives();
+
+        Assert.Equal($"r{count}", picks[0].Sample);
+        if (count > 1)
+            Assert.Equal("r1", picks[^1].Sample);
+        Assert.True(picks.Count <= 3);
+    }
+
     [Fact]
     public void RepresentativesExcludeRowsWhoseFractionIsImpossible()
     {

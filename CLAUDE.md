@@ -381,6 +381,37 @@ dotnet test --filter "FullyQualifiedName~QcReportTests.MedianCv_MatchesHandCompu
 - XML doc comments on public types/members, especially the scale a matrix argument expects
 
 > [!CAUTION]
+> **A reader must never take a file hostage, and a writer must not demand exclusivity.**
+> `File.OpenRead` shares Read and NOTHING else, so while it is open nobody can write, replace or
+> delete the file - including the program that owns it. PRISM reads its own output directory from
+> the GUI while the pipeline writes to it, so that default turned an ordinary read into a lock: a
+> 48-replicate ion accounting measurement, hours of instrument reads, failed to save because PRISM
+> was holding the file it was trying to write. Every parquet reader now goes through
+> `ParquetColumnIo.OpenRead` (`FileShare.ReadWrite | Delete`) and every writer opens with
+> `FileShare.Read`, which still excludes a second writer.
+>
+> Measured on Windows with one holder open and everything else tried against it. Do not reason
+> about this from first principles - the answers are not symmetric:
+>
+> | holder shares | create-write | copy-over | rename-over | delete |
+> |---|---|---|---|---|
+> | `Read` (what `File.OpenRead` gives) | refused | refused | refused | refused |
+> | `ReadWrite \| Delete` | OK | OK | **refused** | OK |
+>
+> So **a rename-over is the strictest operation available**: it is refused while ANY handle is open
+> on the target, even a fully permissive one. An "atomic rename" is therefore not automatically
+> safer than an overwriting copy - it fails in exactly the case it tends to be reached for, and
+> shipping one here made a narrow failure wider.
+>
+> **And `File.Move` reports the DESTINATION path in its error whatever went wrong**, so a locked
+> source is reported against a file that may not even exist. Two rounds of investigation went to
+> the wrong file on the strength of that sentence. The two cases do have distinct text - a held
+> source gives "The process cannot access the file ... because it is being used by another
+> process", a held destination gives "Access to the path is denied" - but both quote the
+> destination. Use `FileHolders.Describe` to name the actual holder (Restart Manager, no elevation
+> required) rather than trusting the message.
+
+> [!CAUTION]
 > **`dotnet build SkylinePrism.sln` does NOT build `SkylinePrism.Pwiz`.** The reader is opt-in
 > (`-p:PrismWithPwiz=true`), so a warning in it - or a break in it - is invisible to the ordinary
 > solution build, to `dotnet test`, and to the cross-platform CI jobs. It surfaces only in the ship
@@ -484,6 +515,12 @@ Key sections:
 - `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
   `AssignedPeptides`: ion accounting - how many ions reached the detector and what fraction a peptide
   sequence explains, at each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
+  **The cycles file is written ONCE, at the end of a run**, with every progress save going to
+  `ion_cycles.parquet.new` beside it; a run that cannot claim the real name leaves the measurement
+  staged there and `IonAccountingStore.CyclesPathFor` reads it in place, taking the newer of the
+  two. Do not "simplify" that back to writing the real name per replicate - a 48-replicate run
+  then replaces it 48 times and races whatever watches the directory, which is how a whole
+  measurement was lost.
   **The cache is keyed on `IonAccountingStore.SettingsKeyFor`, and the key is stored in the file:**
   it covers both extraction tolerances, the isolation scheme, the selected lists AND a fingerprint of
   the instrument files and `merged_data/`. Add anything that changes the numbers and it must go in

@@ -374,7 +374,7 @@ the release matrix.
 **Both are asserted, not assumed**, because the failure is silent: a publish that quietly dropped the
 reference produces a CLI that builds, runs, and cannot count ions. The release workflow checks each
 published CLI directory for `SkylinePrism.Pwiz.dll` and `Pwiz.Data.MsData.dll` and fails if either is
-missing; `package-and-verify.ps1` checks the same for the zip, where the symptom would be a tool that
+missing; `build/verify-zip-contents.ps1` checks the same for the zip, where the symptom would be a tool that
 launches, passes its smoke test, and never shows the Ion accounting pane - it hides itself when
 nothing has been measured.
 
