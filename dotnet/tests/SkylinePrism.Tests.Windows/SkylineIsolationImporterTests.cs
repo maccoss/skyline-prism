@@ -22,11 +22,13 @@ public class SkylineIsolationImporterTests
     {
         private readonly string? _schemeXml;
         private readonly Exception? _failWith;
+        private readonly string[] _chatter;
 
-        public FakeRunner(string? schemeXml, Exception? failWith = null)
+        public FakeRunner(string? schemeXml, Exception? failWith = null, params string[] chatter)
         {
             _schemeXml = schemeXml;
             _failWith = failWith;
+            _chatter = chatter;
         }
 
         public List<string[]> Invocations { get; } = new();
@@ -54,6 +56,8 @@ public class SkylineIsolationImporterTests
                 + "    </transition_settings>\r\n"
                 + "  </settings_summary>\r\n"
                 + "</srm_settings>\r\n");
+            foreach (var line in _chatter)
+                log(line);
             log("Saving file...");
         }
     }
@@ -91,6 +95,68 @@ public class SkylineIsolationImporterTests
             Assert.Equal(3.0014, scheme.Windows[0].Width, 4);
             // Named after the data file, so the UI can show where the windows came from.
             Assert.Equal(Path.GetFileNameWithoutExtension(raw), scheme.Name);
+        }
+        finally
+        {
+            File.Delete(raw);
+        }
+    }
+
+    /// <summary>
+    /// Skyline's audit trail for the SCRATCH document never reaches the run log.
+    /// </summary>
+    /// <remarks>
+    /// Those lines are true of a brand new empty document that lives for seconds in the temp folder,
+    /// and they read as a report of changes to the document being analyzed: "Product mass analyzer
+    /// changed from None to QIT", "Resolution changed from Missing to 0.7". On Astral data, whose
+    /// real setting is centroided at 10 ppm, that reads as PRISM having downgraded the instrument -
+    /// and it was reported as exactly that. Nothing was changed; the log was.
+    /// </remarks>
+    [Fact]
+    public void ImportFromDataFile_DoesNotLogTheScratchDocumentsAuditTrail()
+    {
+        var raw = TempDataFile();
+        var runner = new FakeRunner(
+            ForbiddenZoneScheme, null,
+            "Transition Settings -- Full-Scan changed",
+            "Settings > Transition Settings -- Full-Scan > Acquisition method changed from \"None\" to \"DIA\"",
+            "Settings > Transition Settings -- Full-Scan > Product mass analyzer changed from \"None\" to \"QIT\"",
+            "Settings > Transition Settings -- Full-Scan > Resolution changed from Missing to \"0.7\"",
+            "Prespecified isolation windows: 400.4 to 403.4");
+        var lines = new List<string>();
+        try
+        {
+            var scheme = SkylineIsolationImporter.ImportFromDataFile(raw, runner, lines.Add);
+            Assert.NotNull(scheme);
+
+            var log = string.Join("\n", lines);
+            Assert.DoesNotContain("QIT", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("Product mass analyzer", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("0.7", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("Prespecified", log, StringComparison.Ordinal);
+
+            // And it says whose document is being written, because the answer is "not yours".
+            Assert.Contains("throwaway", log, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(raw);
+        }
+    }
+
+    /// <summary>A failure still reaches the log - silence is the default, not the rule.</summary>
+    [Fact]
+    public void ImportFromDataFile_StillLogsAFailureFromSkyline()
+    {
+        var raw = TempDataFile();
+        var runner = new FakeRunner(
+            ForbiddenZoneScheme, null, "Error: could not open the data file");
+        var lines = new List<string>();
+        try
+        {
+            SkylineIsolationImporter.ImportFromDataFile(raw, runner, lines.Add);
+            Assert.Contains(
+                lines, l => l.Contains("could not open the data file", StringComparison.Ordinal));
         }
         finally
         {

@@ -62,6 +62,20 @@ public static class SkylineIsolationImporter
     }
 
     /// <summary>
+    /// Whether a line from the scratch-document probe is worth putting in the run log.
+    /// </summary>
+    /// <remarks>
+    /// Everything Skyline says about that document describes a temporary file, so the default is
+    /// silence; only something that went wrong earns a line. <c>SkylineAppRunner</c> has no exit
+    /// code - failure is visible only as an <c>Error:</c> prefix in the piped output - so the words
+    /// are the signal.
+    /// </remarks>
+    private static bool IsFailure(string message) =>
+        message.Contains("Error", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Warning", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Failed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Import the isolation scheme from <paramref name="dataFilePath"/> (.raw file or .d folder, anything
     /// Skyline can open). Returns null when the file is unreachable, Skyline reports an error, or the
     /// result has no windows - this is a best-effort enrichment, never a reason to fail a run.
@@ -84,7 +98,9 @@ public static class SkylineIsolationImporter
         try
         {
             Directory.CreateDirectory(tempDir);
-            log($"Reading isolation windows from {Path.GetFileName(dataFilePath)} via Skyline...");
+            log($"Reading isolation windows from {Path.GetFileName(dataFilePath)} - through a "
+                + "throwaway Skyline document in your temp folder, so YOUR document is not opened, "
+                + "changed or saved.");
             runner.Run(
                 new[]
                 {
@@ -94,11 +110,22 @@ public static class SkylineIsolationImporter
                     "--full-scan-isolation-scheme=" + dataFilePath,
                     "--save",
                 },
-                // Skyline logs one line per imported window; at 167 windows that would bury the run log,
-                // so only the failures are surfaced.
+                // ONLY failures reach the run log.
+                //
+                // Skyline emits an audit trail for the scratch document, and it reads as a report of
+                // changes to the user's own settings: "Product mass analyzer changed from None to
+                // QIT", "Resolution changed from Missing to 0.7". Those are Skyline's defaults being
+                // applied to a BRAND NEW EMPTY document that exists for a few seconds in %TEMP% -
+                // true of that file, alarming and wrong about the document being analyzed. On Astral
+                // data, whose real setting is centroided at 10 ppm, it reads as PRISM having
+                // downgraded the instrument.
+                //
+                // It also logs one line per imported window, which at 167 windows buries everything
+                // else. Neither is worth showing: the windows are reported in one line below, and a
+                // failure here is non-fatal and already explained by the caller.
                 message =>
                 {
-                    if (!message.Contains("Prespecified isolation windows", StringComparison.Ordinal))
+                    if (IsFailure(message))
                         log(message);
                 },
                 cancellationToken,
