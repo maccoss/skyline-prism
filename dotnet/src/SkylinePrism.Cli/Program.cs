@@ -252,6 +252,16 @@ public static class Program
             }
         }
 
+        // Recorded where they are known, for the same reason the isolation windows are: an
+        // archived directory has to be able to say what its numbers were extracted with. Non-fatal
+        // and additive - a directory with no parameters.json simply gets nothing.
+        if (Provenance.RecordExtraction(dir, product, precursor, "command line"))
+        {
+            Console.WriteLine(
+                "Recorded the extraction windows in parameters.json, so the numbers stay "
+                + "interpretable once the document has moved on.");
+        }
+
         OptionalReaders.Register(Console.WriteLine);
         if (!IonAccountingReaders.Available)
         {

@@ -406,6 +406,23 @@ that looks exactly as plausible as the right one. `isolation_schemes.xml` beside
 the tool reads back; this is the same thing in the file that travels with a result, window edges
 included, so the grid can be reconstructed from provenance alone.
 
+**`extraction`**: the mass-extraction windows the ion accounting used, recorded for the same reason
+and at the same time. Each of `product` and `precursor` carries the four values a tolerance actually
+is - `analyzer`, `resolution`, `resolution_mz` (the m/z a resolving power is calibrated at, null for
+the analyzers that do not have one) and `selective_extraction` - plus a `summary` a human reads.
+`source` says where they came from: the document, the command line, or the boxes in the tool.
+
+All four are written because a tolerance is not a string. A centroided or QIT window is a single
+number and reads back as `"10 ppm"` or `"0.7 m/z"`, but TOF, Orbitrap and FT-ICR state a resolving
+power - and Orbitrap and FT-ICR need the m/z it applies at - while selective extraction halves the
+window for every analyzer except centroided. An earlier version of this recorded the single-number
+form and therefore recorded **nothing at all** on those instruments, while reading as though it
+worked because the common case was fine.
+
+It matters as much as the windows: the extraction window decides how much fragment sharing is found
+between co-isolated peptides, so every assigned figure in the directory moves with it. A result whose
+document has moved on can still say which window produced its numbers.
+
 Written by `prism isolation-scheme`, by `prism ion-accounting`, and by the Skyline tool when it
 resolves the windows for a run. `--from-provenance` ignores it - it is a record of the acquisition,
 not a processing parameter.

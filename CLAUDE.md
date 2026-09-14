@@ -549,6 +549,12 @@ Key sections:
   reads the windows for the cost of opening ONE file - they are scan headers in the first two
   acquisition cycles - so never reach for `Ms2SignalReaders.Read` to get them: that measures the
   whole run to use one field of the answer.
+- `Pipeline/Provenance.RecordExtraction` / `ReadExtraction`: the EXTRACTION windows, recorded in
+  `parameters.json` for the same reason the isolation windows are - the tolerances live in the
+  Skyline document and a result outlives it. **Record the quadruple** (analyzer, resolution,
+  resolution_mz, selective_extraction), never a setting string: `ProductMassTolerance.ToSetting()`
+  returns null for tof, orbitrap, ft_icr and selective-extraction QIT, and an earlier version of
+  this recorded exactly nothing on those instruments while looking correct on centroided.
 - `Visualization/PlotRenderer`: every plot (ScottPlot/SkiaSharp), rendered headlessly
 
 ### dotnet/Directory.Build.props

@@ -1603,6 +1603,18 @@ public partial class MainWindow : Window
                     : $", precursor {precursor.Describe()}")
                 + $" ({source}).");
 
+            // Written down while it is known. The tolerances come from the Skyline document, and a
+            // result outlives its document as surely as it outlives the instrument files - after
+            // which nothing in the directory can say which window produced its assigned figures,
+            // and the window is what decides how much fragment sharing is found. AFTER
+            // Provenance.Write, which truncates parameters.json wholesale at Stage 5; this is the
+            // same ordering RecordIsolationProvenance needs and for the same reason.
+            if (Provenance.RecordExtraction(outputDir, product, precursor, source))
+            {
+                Log("Recorded the extraction windows in parameters.json, so the numbers stay "
+                    + "interpretable once the document has moved on.");
+            }
+
             var scheme = IsolationSchemeResolver.Resolve(outputDir, rawDir, Log);
             if (scheme is null)
             {

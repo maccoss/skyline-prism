@@ -210,6 +210,20 @@ as the GitHub Release description and fails if it is missing.
   `median_polish` and will keep median-polishing. A config generated from now on says `sum`, which
   is what a run with no config has always done.
 
+- **A result can say what its numbers were extracted with, after the document has moved on.**
+  `parameters.json` gains an `extraction` block beside `isolation_schemes`, recording the product and
+  precursor windows the ion accounting used. The extraction window decides how much fragment sharing
+  is found between co-isolated peptides, so every assigned figure moves with it - and the tolerances
+  live in the Skyline document, which a result outlives as surely as it outlives the instrument
+  files.
+
+  All four values are recorded - analyzer, resolution, the m/z a resolving power is calibrated at,
+  and whether selective extraction halves the window - rather than the single-number setting string.
+  A centroided or QIT window is one number; TOF, Orbitrap and FT-ICR are not, and selective
+  extraction changes the window for every analyzer except centroided. An earlier attempt at this
+  recorded the string form and therefore recorded nothing at all on those instruments, while reading
+  as though it worked because the common case was fine.
+
 - **The run log says which build wrote it.** Its first line, the first line of an ion accounting
   measurement, and the tooltip on the version in the window now carry the build time and the folder
   PRISM loaded from:

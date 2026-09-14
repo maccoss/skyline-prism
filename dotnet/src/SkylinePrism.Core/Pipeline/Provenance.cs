@@ -194,6 +194,135 @@ public static class Provenance
     }
 
     /// <summary>
+    /// Record the extraction windows a run used, under <c>extraction</c>. Returns true only when the
+    /// file was actually changed.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why this is here at all.</b> The tolerances live in the Skyline document, and a result
+    /// outlives the document as surely as it outlives the instrument files. Without them an archived
+    /// output directory cannot say what its ion accounting was extracted with - and the extraction
+    /// window decides how much fragment sharing is found between co-isolated peptides, so every
+    /// assigned figure moves with it. Same argument as <see cref="RecordIsolationSchemes"/>, same
+    /// file, for the same reason.</para>
+    ///
+    /// <para><b>The quadruple, not a string.</b> An earlier version of this recorded
+    /// <c>ProductMassTolerance.ToSetting()</c>, which is documented to return <b>null</b> for tof,
+    /// orbitrap and ft_icr, and for QIT with selective extraction - so on a resolving-power
+    /// instrument it silently recorded nothing at all, and the feature read as working because the
+    /// common centroided case did. The other string form, <c>Describe()</c>, is a caption and does
+    /// not parse back. A tolerance is four values - analyzer, resolution, the m/z that resolving
+    /// power is calibrated at, and whether selective extraction halves the window - and all four are
+    /// written, with the caption beside them for a human. The edges of an isolation scheme are
+    /// recorded rather than its summary for exactly the same reason.</para>
+    ///
+    /// <para><b>Additive and non-fatal</b>, like the schemes above: the document is re-read and one
+    /// property set, so <c>processing_parameters</c> does not move.</para>
+    /// </remarks>
+    public static bool RecordExtraction(
+        string outputDir, ProductMassTolerance? product, ProductMassTolerance? precursor,
+        string? source = null)
+    {
+        if (product is null && precursor is null)
+            return false;
+        var path = Path.Combine(outputDir, FileName);
+        if (!File.Exists(path))
+            return false;
+
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root)
+                return false;
+
+            var entry = new JsonObject();
+            if (source is not null)
+                entry["source"] = source;
+            if (product is not null)
+                entry["product"] = Describe(product);
+            if (precursor is not null)
+                entry["precursor"] = Describe(precursor);
+
+            // Re-recording what the file already says is not a change. No timestamp is written, so
+            // the comparison is over the settings themselves and a re-run of the same document is
+            // correctly silent.
+            if (string.Equals(
+                    root["extraction"]?.ToJsonString(), entry.ToJsonString(), StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            root["extraction"] = entry;
+            File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The extraction settings a previous run recorded, or (null, null) when it recorded none.
+    /// </summary>
+    /// <remarks>
+    /// The point of writing them: a directory whose document has moved on can still say what its
+    /// numbers were extracted with, and can be re-measured the same way without one.
+    /// </remarks>
+    public static (ProductMassTolerance? Product, ProductMassTolerance? Precursor) ReadExtraction(
+        string outputDir)
+    {
+        var path = Path.Combine(outputDir, FileName);
+        if (!File.Exists(path))
+            return (null, null);
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("extraction", out var extraction))
+                return (null, null);
+            return (Tolerance(extraction, "product"), Tolerance(extraction, "precursor"));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return (null, null);
+        }
+    }
+
+    /// <summary>All four values a tolerance is, plus the caption a human reads.</summary>
+    private static JsonObject Describe(ProductMassTolerance tolerance) =>
+        new()
+        {
+            ["analyzer"] = tolerance.Analyzer,
+            ["resolution"] = tolerance.Resolution,
+            ["resolution_mz"] = tolerance.ResolutionMz,
+            ["selective_extraction"] = tolerance.SelectiveExtraction,
+            ["summary"] = tolerance.Describe(),
+        };
+
+    /// <inheritdoc cref="Describe"/>
+    private static ProductMassTolerance? Tolerance(JsonElement extraction, string name)
+    {
+        if (!extraction.TryGetProperty(name, out var e) || e.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!e.TryGetProperty("analyzer", out var analyzer)
+            || analyzer.ValueKind != JsonValueKind.String
+            || !e.TryGetProperty("resolution", out var resolution)
+            || !resolution.TryGetDouble(out var res))
+        {
+            return null;
+        }
+
+        double? resMz = null;
+        if (e.TryGetProperty("resolution_mz", out var mz) && mz.ValueKind == JsonValueKind.Number
+            && mz.TryGetDouble(out var mzValue))
+        {
+            resMz = mzValue;
+        }
+        var selective = e.TryGetProperty("selective_extraction", out var s)
+            && s.ValueKind == JsonValueKind.True;
+
+        return new ProductMassTolerance(analyzer.GetString()!, res, resMz, selective);
+    }
+
+    /// <summary>
     /// One entry per scheme worth recording: the measured ones first, then any document that declared
     /// real windows of its own. A document that declares none ("Results only", the normal DIA setting)
     /// contributes nothing - there is no geometry in it to preserve.
