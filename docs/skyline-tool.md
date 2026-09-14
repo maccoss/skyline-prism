@@ -380,12 +380,15 @@ fraction rather than the first alphabetically. **The nav entry does not appear a
 files exist** — every plot on it needs a measured denominator, and a fraction taken against a
 guessed one reads as coverage without being coverage.
 
-You may see `ion_cycles.parquet.new` beside the cache. That is the file a measurement writes its
-progress to, so it holds **either a completed measurement whose write to the real name was refused,
-or the progress of a run that was interrupted** — whichever it is, PRISM reads it where it lies and
-replaces it on the next run. Nothing measured is lost by its presence and there is nothing to do by
-hand, but do not read it as proof that the cohort is complete: how many replicates it covers is what
-the pane and the report show, exactly as for the real file.
+`ion_cycles.parquet` is written **a replicate at a time**, appended as each instrument file is
+measured, so a run that is interrupted — or one you stop yourself — leaves every replicate it got
+through, readable under that name. There is no separate progress file and nothing to recover by hand.
+
+You may still see `ion_cycles.parquet.new` beside the cache in a directory written by an older
+build, which staged its progress there and renamed it into place at the end of a run. PRISM reads
+whichever of the two is newer and replaces it on the next measurement. Nothing is lost by its
+presence, but do not read either file as proof that the cohort is complete: how many replicates it
+covers is what the pane and the report show.
 
 ### What it costs, and why it is a separate step
 
@@ -477,6 +480,24 @@ gone, saying so rather than substituting a database silently.
 
 The rollup picker offers `topn`, `maxlfq` and `ibaq` alongside `median_polish` and `sum`; iBAQ was
 previously absent because nothing in the tool could give it a database.
+
+---
+
+## Running onto a folder that already holds results
+
+**Run** checks the output folder before anything is touched. If a previous run's results are there and
+this run would produce different ones, the tool says whose they are — the PRISM version and the date —
+lists the files that would be replaced, and asks whether to go ahead. Answering no costs nothing; the
+run has not started.
+
+It asks only when something would actually change. Re-running the same version with the same settings
+is how a QC report gets regenerated and a partial ion accounting gets topped up, so that case is
+silent, and stages whose inputs and settings are unchanged are reused rather than recomputed either
+way. The check reads `parameters.json`, so a folder with results but no provenance beside them — or
+an unreadable one — is reported rather than assumed to match.
+
+The `prism` CLI does the same check and logs a `WARNING:` line, then carries on: a command-line run is
+usually scripted, and stopping to ask a question is worse than the surprise it prevents.
 
 ---
 

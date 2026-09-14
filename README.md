@@ -169,6 +169,12 @@ prism run -i plate1.csv plate2.csv -o output/ -c config.yaml -m replicates.csv
 report to the output directory (see [Output](#output)). Run `prism --help` or `prism <command> --help`
 for details.
 
+Pointing a run at a directory that already holds results logs a `WARNING:` naming the version, the
+date and the files that would be replaced, then proceeds — a scripted run should not stop to ask. It
+is silent when the previous run used the same version and the same settings, which is the case for
+regenerating a report or topping up a partial ion accounting. The Skyline tool asks instead of
+warning.
+
 ### Commands
 
 | Command | Purpose |

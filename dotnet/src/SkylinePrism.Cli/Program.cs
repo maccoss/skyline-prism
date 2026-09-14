@@ -110,6 +110,14 @@ public static class Program
         if (provenanceLoaded)
             Log($"PRISM: loaded settings from provenance {provenancePath}");
 
+        // Warned about, not refused. A CLI run is usually scripted, and something that stops a
+        // pipeline to ask a question is worse than the surprise it prevents - so this says what is
+        // about to go and carries on. It is silent when the previous run used the same version and
+        // the same settings, which is how a QC report gets regenerated and a partial ion accounting
+        // topped up; a warning that fires on the ordinary case stops being read.
+        if (ExistingResults.Inspect(outputDir, config).Warning() is { } warning)
+            Log("WARNING: " + warning);
+
         Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
         var result = PrismPipeline.Run(
             inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);

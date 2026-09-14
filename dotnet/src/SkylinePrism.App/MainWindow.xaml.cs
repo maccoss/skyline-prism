@@ -1163,6 +1163,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Asked BEFORE anything is touched - this is the last moment a person can change their mind,
+        // and the answer decides whether a cohort's results survive.
+        //
+        // Silent when the previous run used the same version and the same settings: re-running to
+        // regenerate a report or to top up a partial ion accounting is ordinary, and a dialog on
+        // the ordinary case is one people learn to dismiss without reading.
+        //
+        // The controls are read here, on the UI thread; the directory is then looked at off it,
+        // because an output directory is routinely a network share and a stat of six file names
+        // plus a JSON read is not something to make the window sit through.
+        var outputDirToCheck = OutputDirBox.Text;
+        var configToCheck = BuildConfigFromUi();
+        var existing = await Task.Run(() => ExistingResults.Inspect(outputDirToCheck, configToCheck));
+        if (existing.Warning() is { } warning)
+        {
+            var answer = MessageBox.Show(
+                warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
+                "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+                return;
+        }
+
         // Labels double as exported file stems and as batch labels, so they must be unique before the run.
         PrismInput.EnsureUniqueLabels(_inputs);
         InputsGrid.Items.Refresh();

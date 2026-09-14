@@ -251,6 +251,16 @@ as the GitHub Release description and fails if it is missing.
   axis labels are set at nearly twice the size, while being the one piece of text a user leans in to
   read.
 
+- **PRISM says what is already in the output directory before it writes there.** Pointing a run at a
+  folder that holds a previous cohort's results said nothing at all - it recomputed what the settings
+  changed and replaced the rest, and the person who got there by pasting the wrong path found out
+  from the file timestamps. The CLI now logs a warning naming the version, the date and the files it
+  would replace, and carries on; the tool asks first and does not start unless you say so.
+
+  Both stay silent when the previous run used the same version and the same settings, which is how a
+  QC report gets regenerated and a partial ion accounting gets topped up. A warning that fires on the
+  ordinary case stops being read.
+
 ## Bug Fixes
 
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
@@ -314,6 +324,20 @@ as the GitHub Release description and fails if it is missing.
   went wrong, so a locked staging file was reported as `ion_cycles.parquet is being used by another
   process` - about a file that did not exist. Two rounds of investigation went to the wrong file.
   The message now probes both files and names whichever is actually unavailable.
+
+- **A run that stops keeps the replicates it measured.** `ion_cycles.parquet` was written whole at
+  the end of a run, with each progress save going to a staging file beside it, so a run killed at
+  replicate 499 of 500 left its measurement under a name nothing was looking for. That happened: a
+  48-replicate run died after its last progress save with a complete measurement on disk under the
+  staged name. The file is now created at the start and one row group is appended per replicate, so
+  it is valid, current and readable under its own name from the first replicate onward. A staging
+  file left by the previous build is still picked up.
+
+  Rewriting the whole accumulated table every time also cost more than it looked: 883 MB written to
+  persist 36 MB across 48 replicates, and about 92 GB projected at 500. Appending writes each
+  replicate once. It also shrank the file - the ~650-byte settings key repeated on all 49,010 rows of
+  a single row group was 31.5 MB of that 36 MB, and one distinct value per row group encodes away, so
+  the same 48 replicates now come to 4.8 MB.
 
 - **`ion_cycles.parquet` carries the settings key its summary does.** The two files are written
   separately with the summary first, so a failure between them left a new summary beside an older

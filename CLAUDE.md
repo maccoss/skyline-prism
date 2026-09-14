@@ -515,12 +515,18 @@ Key sections:
 - `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
   `AssignedPeptides`: ion accounting - how many ions reached the detector and what fraction a peptide
   sequence explains, at each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
-  **The cycles file is written ONCE, at the end of a run**, with every progress save going to
-  `ion_cycles.parquet.new` beside it; a run that cannot claim the real name leaves the measurement
-  staged there and `IonAccountingStore.CyclesPathFor` reads it in place, taking the newer of the
-  two. Do not "simplify" that back to writing the real name per replicate - a 48-replicate run
-  then replaces it 48 times and races whatever watches the directory, which is how a whole
-  measurement was lost.
+  **The cycles file is created at the start of a measurement and one row group is APPENDED per
+  replicate** (`IonAccountingStore.BeginCycles` / `AppendCycles`), so `ion_cycles.parquet` is valid
+  and current under its own name from the first replicate onward - parquet rewrites its footer on
+  every close, so a run killed at replicate 499 of 500 leaves 499 readable replicates. Two shapes
+  this must never turn back into. **Rewriting the whole accumulated table** each time is O(N^2):
+  measured at 883 MB written to persist 36 MB over 48 replicates, ~92 GB projected at 500. **Writing
+  to a staging file and renaming it over the real one** is worse than it sounds - a rename-over is
+  the strictest operation available (see the file-sharing table under "Code Style"), refused while
+  ANY handle is open on the target, so it fails in exactly the case it is reached for; that shipped
+  once and made a narrow failure wider. `RecoverStagedCycles` / `CyclesPathFor` still read an
+  `ion_cycles.parquet.new` left by a build before dotnet-vNEXT, taking the newer of the two. That is
+  a migration path for one release, not a design to extend.
   **The cache is keyed on `IonAccountingStore.SettingsKeyFor`, and the key is stored in the file:**
   it covers both extraction tolerances, the isolation scheme, the selected lists AND a fingerprint of
   the instrument files and `merged_data/`. Add anything that changes the numbers and it must go in

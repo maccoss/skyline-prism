@@ -189,4 +189,43 @@ public class CliIntegrationTests
         Assert.Equal(0, code);
         Assert.Contains($"Usage: prism {cmd}", output);
     }
+
+    /// <summary>
+    /// Running onto a directory that already holds results says so - and only when the results would
+    /// actually differ, which is what keeps the warning worth reading.
+    /// </summary>
+    /// <remarks>
+    /// The decision itself is covered by <c>ExistingResultsTests</c>; this drives the real command
+    /// three times so the wiring is proven end to end rather than by inspection. A run is about a
+    /// second on the mini fixture.
+    /// </remarks>
+    [Fact]
+    public void Run_WarnsOnlyWhenItWouldReplaceDifferentResults()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+
+            var (repeatCode, repeatOutput) = Invoke("run", "-i", Input1, Input2, "-o", outDir, "-c", Config);
+            Assert.Equal(0, repeatCode);
+            Assert.DoesNotContain("already holds results", repeatOutput, StringComparison.Ordinal);
+
+            // One setting changed, which moves the transition rollup and everything downstream of it.
+            var changed = Path.Combine(outDir, "changed-config.yaml");
+            File.WriteAllText(
+                changed, File.ReadAllText(Config).Replace("min_transitions: 1", "min_transitions: 2"));
+
+            var (changedCode, changedOutput) =
+                Invoke("run", "-i", Input1, Input2, "-o", outDir, "-c", changed);
+            Assert.Equal(0, changedCode);
+            Assert.Contains("WARNING:", changedOutput, StringComparison.Ordinal);
+            Assert.Contains("already holds results", changedOutput, StringComparison.Ordinal);
+            Assert.Contains("corrected_peptides.parquet", changedOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
 }

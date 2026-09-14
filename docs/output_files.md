@@ -39,7 +39,7 @@ output_dir/
 ├── isolation_schemes.xml           # The acquisition's DIA isolation windows, if any were learned
 ├── ion_accounting.parquet          # Ions acquired/assigned/explained per replicate (if `prism ion-accounting`)
 ├── ion_cycles.parquet              # ...the same per acquisition cycle, for the gradient plots
-├── ion_cycles.parquet.new          # ...a measurement that could not claim the name above (read in place)
+├── ion_cycles.parquet.new          # ...normally absent: a measurement staged by a pre-vNEXT build
 ├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
@@ -54,8 +54,8 @@ file in the cohort, which is often a terabyte over a network share.
 | File | One row per | Holds |
 |---|---|---|
 | `ion_accounting.parquet` | replicate | `ms1_acquired`, `ms2_acquired`, `ms1_assigned`, `ms2_assigned` (all LINEAR counts of ions), plus `ms2_explained` and its `has_explained` flag - what every theoretical b/y and precursor ion would account for, which is absent rather than zero on an export with no `Precursor Charge` column. The same four totals **unweighted** as `ms1_signal`, `ms2_signal`, `ms1_signal_assigned`, `ms2_signal_assigned`, `ms2_signal_explained` with a `has_signal` flag - see below. Also `acquired_utc` (when the instrument started the run), scan counts, `claims`, `scans_outside_scheme`, `missing_injection_time`, and the settings that produced them |
-| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read. Carries the same `settings_key` as the summary, so a trace left by an earlier measurement is never reused as this one's |
-| `ion_cycles.parquet.new` | acquisition cycle | **Normally absent.** The progress file a measurement writes its cycles to after every replicate; the real file above is written once, at the end of a run, and this one is then removed. It survives in two cases, and they look identical on disk: a completed measurement whose write to the real name was refused, and a run that was interrupted partway. PRISM reads whichever it is in place, so nothing measured is lost - but the file is not itself evidence that the cohort is complete |
+| `ion_cycles.parquet` | acquisition cycle | the same totals per cycle including `ms2_explained` and the five `*_signal*` columns, with `rt_start_min` / `rt_stop_min` — what the across-the-gradient plots read. Written a replicate at a time, appended as each one is measured, so it is complete and readable under this name throughout a run rather than only at the end. Carries the same `settings_key` as the summary, so a trace left by an earlier measurement is never reused as this one's |
+| `ion_cycles.parquet.new` | acquisition cycle | **Normally absent, and no longer written.** Builds before dotnet-vNEXT staged their cycle progress here and renamed it into place at the end of a run. One left by such a build is still read where it lies - the newer of the two files wins - but nothing creates one now, and its presence is not evidence that the cohort is complete: how many replicates it covers is |
 | `ion_accounting_lists.parquet` | replicate x protein list | each selected list's fraction of the assigned total; deleted when no lists are selected |
 
 **The unit is ions**: the reported intensity is a rate in ions per second, so each scan's intensity
