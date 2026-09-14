@@ -412,7 +412,10 @@ themselves as well as on the settings.
 
 A map of how many peptide precursors were detected in each DIA spectrum of a run: retention time across,
 precursor m/z up, color = precursors per cell. Pick the run from the drop-down, set the **RT bin**
-(default 0.1 min) and the **max q-value** that counts as a detection (default 0.01). Hovering reads out
+(default 0.01 min, which is 0.6 s — several acquisition cycles, and the same bin the Ion accounting
+views use) and the **max q-value** that counts as a detection (default 0.01). A very wide m/z range
+widens the RT bin to keep the grid bounded; the status line always names the bin actually used.
+Hovering reads out
 the isolation window and exact count under the cursor.
 
 **The rows are the acquisition's real isolation windows**, not an assumed bin width, so a cell really is

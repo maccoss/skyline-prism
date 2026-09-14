@@ -203,11 +203,34 @@ public static class PrecursorDensity
     /// <summary>Default bin for the APPROXIMATE uniform fallback only (Cadenza's value).</summary>
     public const double DefaultMzBinTh = 2.0;
 
-    /// <summary>Cadenza's default RT bin, in minutes.</summary>
-    public const double DefaultRtBinMin = 0.1;
+    /// <summary>
+    /// The default RT bin, in minutes.
+    /// </summary>
+    /// <remarks>
+    /// 0.01 min is 0.6 s, which is several acquisition cycles rather than a fraction of one - the
+    /// same bin the ion accounting views default to, and for the same reason: a coarser bin averages
+    /// away the thing these plots are looked at to find. It was 0.1, inherited from Cadenza.
+    /// </remarks>
+    public const double DefaultRtBinMin = 0.01;
 
-    /// <summary>Widen the requested bins if needed to keep the grid (and the render) bounded.</summary>
+    /// <summary>Widen the requested m/z bin if needed to keep the grid (and the render) bounded.</summary>
     private const int MaxBinsPerAxis = 4000;
+
+    /// <summary>
+    /// The RT axis gets its own, larger bound, because it is the axis a fine bin is actually wanted
+    /// on: 0.01 min over a two-hour gradient is 12,000 bins, and the old shared cap of 4,000 would
+    /// have widened it back to 0.03 - silently returning a coarser map than the one asked for.
+    /// </summary>
+    private const int MaxRtBins = 20000;
+
+    /// <summary>
+    /// The real bound, which neither axis cap expresses on its own: the grid is
+    /// <c>nMz x nRt</c> ints, so a fine bin on both axes at once is what runs the machine out of
+    /// memory. At 4 bytes a cell this is about 48 MB, and the RT bin is the one widened to stay
+    /// inside it - the m/z rows are the acquisition's own isolation windows and are not PRISM's to
+    /// coarsen.
+    /// </summary>
+    private const long MaxCells = 12_000_000;
 
     /// <summary>
     /// The merged-parquet columns this view needs, resolved to their actual spelling (the CSV export
@@ -317,7 +340,7 @@ public static class PrecursorDensity
         if (precursors.Count == 0)
             return new PrecursorDensityMap(scheme.Windows, 0, rtBinMin, new int[0, 0], scheme.Name);
 
-        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme);
+        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme, scheme.Windows.Count);
         var counts = new int[scheme.Windows.Count, nRt];
         var outside = 0;
         foreach (var p in precursors)
@@ -378,7 +401,7 @@ public static class PrecursorDensity
         for (var i = 0; i < nMz; i++)
             rows[i] = new IsolationWindow(mzLo + i * mzBinTh, mzLo + (i + 1) * mzBinTh);
 
-        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin);
+        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, nMz: nMz);
         var counts = new int[nMz, nRt];
         foreach (var p in precursors)
         {
@@ -397,7 +420,8 @@ public static class PrecursorDensity
         $"uniform {mzBinTh.ToString("0.###", CultureInfo.InvariantCulture)} Th bins (approximate)";
 
     private static (double RtLow, int Bins, double BinSize) RtGrid(
-        IReadOnlyList<DetectedPrecursor> precursors, double rtBinMin, IsolationScheme? scheme = null)
+        IReadOnlyList<DetectedPrecursor> precursors, double rtBinMin, IsolationScheme? scheme = null,
+        int nMz = 1)
     {
         double rtLo = double.PositiveInfinity, rtHi = double.NegativeInfinity;
         foreach (var p in precursors)
@@ -418,7 +442,11 @@ public static class PrecursorDensity
                 if (w.RtStop > rtHi) rtHi = w.RtStop;
             }
         }
-        var bin = Math.Max(rtBinMin, (rtHi - rtLo) / MaxBinsPerAxis);
+        // Both bounds, and the cell budget is the one that usually bites: a map with many
+        // isolation windows can afford fewer RT bins than one with few, and the axis cap alone cannot
+        // know that. Reported back in the map, so the plot never claims a bin it did not use.
+        var maxBins = (int)Math.Max(1, Math.Min(MaxRtBins, MaxCells / Math.Max(1, nMz)));
+        var bin = Math.Max(rtBinMin, (rtHi - rtLo) / maxBins);
         return (rtLo, Math.Max(1, (int)Math.Ceiling((rtHi - rtLo) / bin)), bin);
     }
 

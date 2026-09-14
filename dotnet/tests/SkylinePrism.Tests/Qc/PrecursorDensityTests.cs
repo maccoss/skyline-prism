@@ -17,6 +17,56 @@ public class PrecursorDensityTests
 {
     private static string MergedGolden => Fixtures.Path2("mini", "merge", "merged_data.parquet");
 
+    /// <summary>
+    /// 0.01 min, the same bin the ion accounting views use - 0.6 s, several acquisition cycles.
+    /// </summary>
+    [Fact]
+    public void TheDefaultRtBinIsSixHundredMilliseconds()
+    {
+        Assert.Equal(0.01, PrecursorDensity.DefaultRtBinMin);
+    }
+
+    /// <summary>
+    /// A fine bin is actually honored over a real gradient, rather than widened back.
+    /// </summary>
+    /// <remarks>
+    /// The RT axis used to share the m/z axis's 4,000-bin cap, so 0.01 min over an hour - 6,000
+    /// bins - came back as 0.015 with nothing but the status line to say so. Making it the default
+    /// while that cap stood would have delivered a coarser map than the one asked for.
+    /// </remarks>
+    [Fact]
+    public void AFineBinSurvivesAnHourLongGradient()
+    {
+        var map = PrecursorDensity.Bin(
+            new[] { new DetectedPrecursor(500.4, 1.0, 61.0) },
+            mzBinTh: 2.0, rtBinMin: PrecursorDensity.DefaultRtBinMin);
+
+        Assert.Equal(0.01, map.RtBinMin, 6);
+        Assert.True(map.RtBins > 5900, $"{map.RtBins} RT bins is coarser than asked for");
+    }
+
+    /// <summary>
+    /// And it gives way when the grid would not fit, because the map reports the bin it used.
+    /// </summary>
+    /// <remarks>
+    /// The real bound is cells, not bins on one axis: the grid is nMz x nRt ints, so a fine bin on
+    /// both at once is what runs a machine out of memory. The RT bin is the one that widens - the
+    /// m/z rows are the acquisition's own isolation windows and are not PRISM's to coarsen.
+    /// </remarks>
+    [Fact]
+    public void AVeryWideMzRangeWidensTheRtBinRatherThanExhaustingMemory()
+    {
+        // 0.05 Th over 400 Th is 8,000 m/z rows; at 0.01 min the full hour would be 48M cells.
+        var map = PrecursorDensity.Bin(
+            new[] { new DetectedPrecursor(500.4, 1.0, 61.0), new DetectedPrecursor(899.0, 1.0, 61.0) },
+            mzBinTh: 0.05, rtBinMin: 0.01);
+
+        Assert.True(map.RtBinMin > 0.01, "the RT bin did not widen");
+        Assert.True(
+            (long)map.MzBins * map.RtBins <= 12_000_000,
+            $"{map.MzBins} x {map.RtBins} is over the cell budget");
+    }
+
     [Fact]
     public void Bin_CountsEveryRtBinThePeakSpans()
     {
