@@ -213,8 +213,23 @@ public static class IonAccountingRun
                 // measurements; replicate names are identical across runs, so without the key a
                 // stale trace is indistinguishable from this run's.
                 var haveCycles = IonAccountingStore
-                    .SamplesWithCycles(outputDir, log, settingsKey)
+                    .SamplesWithCycles(outputDir, out var cyclesUnreadable, log, settingsKey)
                     .ToHashSet(StringComparer.Ordinal);
+
+                // An unreadable cycles file is not an empty one, and the difference is worth hours.
+                // Every replicate summarized as measured is about to be measured again - every
+                // instrument file read a second time - because one file could not be opened. That
+                // decision is correct (a summary without traces is the gap this check exists to
+                // find) but it must never be silent, which it was: both cases returned an empty
+                // list and the run simply started reading.
+                if (cyclesUnreadable)
+                {
+                    log?.Invoke(
+                        $"  WARNING: {IonAccountingStore.CyclesFile} exists but could not be read, "
+                        + "so no replicate can be shown to have traces and all of them will be "
+                        + "measured again. If it was not deleted by hand, keep a copy before "
+                        + "re-running - this is the file, not the data, that is damaged.");
+                }
                 foreach (var row in cached.Rows)
                 {
                     if (row.IsUsable && (row.CycleCount == 0 || haveCycles.Contains(row.Sample)))

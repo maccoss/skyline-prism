@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.RawData;
@@ -167,6 +169,69 @@ public class IonCyclesAppendTests : IDisposable
             fs.SetLength(offset);
 
         Assert.Equal(50, IonAccountingStore.ReadCycles(dir).Count);
+    }
+
+    /// <summary>
+    /// A read that lands in the middle of an append waits it out instead of reporting no data.
+    /// </summary>
+    /// <remarks>
+    /// For the width of one append the file has no footer - momentarily headless rather than
+    /// damaged, which is why the repair refuses to touch it while a writer is live. Measured with a
+    /// writer appending back to back, 4.6% of opens failed and a single 50 ms retry recovered every
+    /// one. The backup is deleted here so the repair cannot stand in for the retry being tested.
+    /// </remarks>
+    [Fact]
+    public async Task AReadWaitsOutAnAppendRatherThanReportingNothing()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+        IonAccountingStore.AppendCycles(dir, Cycles("a", 40), "key", replace: true);
+        IonAccountingStore.AppendCycles(dir, Cycles("b", 40), "key");
+
+        var whole = File.ReadAllBytes(path);
+        var offset = whole.Length - 8 - BitConverter.ToInt32(whole, whole.Length - 8);
+        File.Delete(ParquetWideWriter.FooterBackupOf(path));
+
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            fs.SetLength(offset);
+
+        var finish = Task.Run(() =>
+        {
+            Thread.Sleep(120);
+            using var fs = new FileStream(
+                path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            fs.SetLength(0);
+            fs.Write(whole, 0, whole.Length);
+        });
+
+        var rows = IonAccountingStore.ReadCycles(dir);
+        await finish;
+
+        Assert.Equal(80, rows.Count);
+    }
+
+    /// <summary>
+    /// "Could not read it" and "there is nothing in it" are different answers.
+    /// </summary>
+    /// <remarks>
+    /// They used to be the same empty list, and the caller that decides what to reuse turned it into
+    /// "no replicate has traces" - re-measuring the whole cohort, every instrument file again, with
+    /// nothing said. The file being damaged is not a fact about the data.
+    /// </remarks>
+    [Fact]
+    public void AnUnreadableFileIsNotReportedAsAnEmptyOne()
+    {
+        var dir = NewDir();
+
+        Assert.Empty(IonAccountingStore.SamplesWithCycles(dir, out var absent));
+        Assert.False(absent);
+
+        // There, and not parquet at all - with no backup, so the repair cannot rescue it either.
+        File.WriteAllBytes(
+            Path.Combine(dir, IonAccountingStore.CyclesFile), new byte[32]);
+
+        Assert.Empty(IonAccountingStore.SamplesWithCycles(dir, out var damaged));
+        Assert.True(damaged);
     }
 
     /// <summary>A file that is intact is never rewound, however stale the backup beside it.</summary>

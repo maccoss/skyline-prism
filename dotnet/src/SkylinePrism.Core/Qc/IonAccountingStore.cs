@@ -1037,11 +1037,66 @@ public static class IonAccountingStore
     /// summary is small and this is not: a cohort's cycles run to hundreds of thousands of rows, and
     /// the time plots only ever show one replicate at a time.
     /// </summary>
+    /// <summary>
+    /// How long a read of the cycles file keeps trying while a measurement is appending to it.
+    /// </summary>
+    /// <remarks>
+    /// <para>An append overwrites the footer before writing a new one, so for the width of one append
+    /// the file cannot be parsed at all - it is momentarily headless rather than damaged, and
+    /// <see cref="RepairCycles"/> deliberately will not touch it while a writer is live. A reader that
+    /// happens to land there gets an exception, and every caller turns that into "no cycles", which is
+    /// a statement about the DATA rather than about the read.</para>
+    ///
+    /// <para>Measured with a writer appending back to back - far harsher than a real measurement,
+    /// where the append is ~20 ms once per replicate and a replicate takes minutes to read: 4.6% of
+    /// opens failed, and a single 50 ms retry recovered every one of them. The budget here is five
+    /// attempts 75 ms apart, which covers the slowest append seen (155 ms) with room over. It costs
+    /// nothing when the read succeeds, which is the overwhelming majority of the time.</para>
+    /// </remarks>
+    private const int CycleReadAttempts = 5;
+
+    /// <inheritdoc cref="CycleReadAttempts"/>
+    private const int CycleReadDelayMs = 75;
+
+    /// <summary>
+    /// Read the cycles file, retrying briefly while an append has it headless. Null when it could not
+    /// be read at all - which is NOT the same answer as "there is nothing in it", and the callers that
+    /// decide whether to re-measure a cohort must not confuse the two.
+    /// </summary>
+    private static T? WithAppendRetry<T>(Func<T> read)
+        where T : class
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var value = read();
+                LastReadFailure = null;
+                return value;
+            }
+            catch (Exception) when (attempt < CycleReadAttempts)
+            {
+                Thread.Sleep(CycleReadDelayMs);
+            }
+            catch (Exception ex)
+            {
+                // Kept so the caller can SAY why, rather than reporting an empty measurement. Only
+                // ever read immediately after the call that set it.
+                LastReadFailure = ex;
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Why the last retried read gave up, for the message. See <see cref="WithAppendRetry"/>.</summary>
+    [ThreadStatic]
+    private static Exception? LastReadFailure;
+
     public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
     {
         foreach (var path in CyclesPathsFor(outputDir))
         {
-            try
+            var rows = WithAppendRetry<IReadOnlyList<IonCycleRow>>(() =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 var samples = reader.ReadStrings("sample");
@@ -1063,22 +1118,23 @@ public static class IonAccountingStore
                 var ms2sigA = Nums(reader, "ms2_signal_assigned", samples.Length);
                 var ms2sigE = Nums(reader, "ms2_signal_explained", samples.Length);
 
-                var rows = new List<IonCycleRow>();
+                var found = new List<IonCycleRow>();
                 for (var i = 0; i < samples.Length; i++)
                 {
                     if (sample is not null && !string.Equals(samples[i], sample, StringComparison.Ordinal))
                         continue;
-                    rows.Add(new IonCycleRow(
+                    found.Add(new IonCycleRow(
                         samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
                         ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i],
                         ms1sig[i], ms2sig[i], ms1sigA[i], ms2sigA[i], ms2sigE[i]));
                 }
+                return found;
+            });
+
+            // Null means the read FAILED, which is not the same as finding nothing: fall through to
+            // the other candidate. An empty list from a file that parsed is a real answer.
+            if (rows is not null)
                 return rows;
-            }
-            catch (Exception)
-            {
-                // Unreadable - try the other file rather than reporting no data.
-            }
         }
         return Array.Empty<IonCycleRow>();
     }
@@ -1095,15 +1151,32 @@ public static class IonAccountingStore
     /// replicate names are identical across runs, so the name alone cannot tell them apart.
     /// </param>
     public static IReadOnlyList<string> SamplesWithCycles(
-        string outputDir, Action<string>? log = null, string? expectKey = null)
+        string outputDir, Action<string>? log = null, string? expectKey = null) =>
+        SamplesWithCycles(outputDir, out _, log, expectKey);
+
+    /// <param name="couldNotRead">
+    /// True when the file EXISTS and could not be read, rather than holding nothing.
+    /// </param>
+    /// <remarks>
+    /// The distinction is the whole point of this overload, and it is worth hours. A caller deciding
+    /// what to reuse turns an empty list into "no replicate has traces" and re-measures the cohort -
+    /// every instrument file again - so a read that failed for a moment, or a file that is corrupt,
+    /// must not be allowed to look like an answer about the data. The retry above handles the moment;
+    /// this handles everything else, by refusing to answer rather than answering wrongly.
+    /// </remarks>
+    /// <inheritdoc cref="SamplesWithCycles(string, Action{string}, string)"/>
+    public static IReadOnlyList<string> SamplesWithCycles(
+        string outputDir, out bool couldNotRead, Action<string>? log = null,
+        string? expectKey = null)
     {
         Exception? unreadable = null;
+        couldNotRead = false;
 
         // Each candidate in turn, exactly as ReadCycles does: the preferred file can be one a write
         // truncated and never finished, and the intact measurement is then the other one.
         foreach (var path in CyclesPathsFor(outputDir, log))
         {
-            try
+            var found = WithAppendRetry<IReadOnlyList<string>>(() =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 if (expectKey is not null && reader.HasColumn("settings_key"))
@@ -1123,13 +1196,15 @@ public static class IonAccountingStore
                 // A file written before the key column existed cannot be checked, and is taken as
                 // before rather than thrown away: it was written by a run whose summary matched.
                 return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
-            }
-            catch (Exception ex)
-            {
-                unreadable = ex;
-            }
+            });
+
+            if (found is not null)
+                return found;
+            unreadable = LastReadFailure;
         }
 
+        // Absent and unreadable are different answers, and only one of them is about the data.
+        couldNotRead = unreadable is not null;
         log?.Invoke(unreadable is null
             ? $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it."
             : $"  Could not read {CyclesFile}: {unreadable.Message}");

@@ -354,6 +354,18 @@ as the GitHub Release description and fails if it is missing.
   bytes per replicate, so the protection costs roughly 188 MB over a 500-replicate run against 376 MB
   of data.
 
+- **Reading the ion accounting cache while it is being written no longer reports an empty one.** For
+  the width of one append the file has no footer - momentarily headless rather than damaged - and a
+  reader landing there got an exception that every caller turned into "no cycles". Measured with a
+  writer appending back to back, which is far harsher than a real measurement: 4.6% of opens failed,
+  and a single 50 ms retry recovered every one. Reads now wait an append out.
+
+  More importantly, **an unreadable cache is no longer reported as an empty one.** The two returned
+  the same empty list, so a file that could not be opened - for a moment, or permanently - made the
+  run conclude that no replicate had traces and measure the whole cohort again, reading every
+  instrument file a second time without a word. That decision is still the safe one, but it now says
+  why it is being made.
+
 - **Starting a new measurement can no longer mix itself into the previous one.** Replacing the cycles
   file was a delete followed by an open. A delete refused by a scanner or an SMB holder was logged
   nowhere, and if that holder let go during the open's own retry window the new replicates were
