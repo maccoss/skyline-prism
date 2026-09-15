@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using SkylinePrism.App;
 using SkylinePrism.Core.Pipeline;
+using SkylinePrism.Skyline;
 using Xunit;
 
 namespace SkylinePrism.Tests.Windows;
@@ -118,6 +120,44 @@ public class ExportReuseTests : IDisposable
         // Delete the report and the export is no longer something to stand on.
         File.Delete(report);
         Assert.False(StageCache.Load(outputDir).CanReuse(stage, fingerprint));
+    }
+
+    /// <summary>
+    /// Inputs are exported concurrently, and no worker's entry may be lost.
+    /// </summary>
+    /// <remarks>
+    /// <c>stage_cache.json</c> is read whole and written whole. Each worker holding its own instance
+    /// meant each wrote back a snapshot taken before the others recorded, so the last write erased the
+    /// rest - and the next run re-exported whichever documents lost, silently, which is the failure
+    /// this whole change exists to remove.
+    /// </remarks>
+    [Fact]
+    public void ConcurrentExportsDoNotEraseEachOther()
+    {
+        var outputDir = Path.Combine(_dir, "concurrent", "PRISM-Output");
+        var reportsDir = Path.Combine(outputDir, "skyline-reports");
+        Directory.CreateDirectory(reportsDir);
+
+        const int plates = 24;
+        var fingerprints = new string[plates];
+        Parallel.For(0, plates, i =>
+        {
+            var label = "Plate" + i;
+            var report = Path.Combine(reportsDir, label + ".parquet");
+            File.WriteAllText(report, "report " + i);
+            fingerprints[i] = "stamp-" + i;
+            PrismInput.RecordExport(
+                outputDir, PrismInput.ExportStageId(label), fingerprints[i],
+                new ExportedReports(report, true, null, "doc.sky", label));
+        });
+
+        var cache = StageCache.Load(outputDir);
+        for (var i = 0; i < plates; i++)
+        {
+            Assert.True(
+                cache.CanReuse(PrismInput.ExportStageId("Plate" + i), fingerprints[i]),
+                $"Plate{i}'s export entry was lost");
+        }
     }
 
     /// <summary>A document file with fixed content and write time, under its own directory.</summary>

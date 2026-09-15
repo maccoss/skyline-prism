@@ -114,6 +114,32 @@ public class SourceFingerprintTests : IDisposable
     }
 
     /// <summary>
+    /// A sibling directory that merely shares a prefix is outside, not under.
+    /// </summary>
+    /// <remarks>
+    /// A prefix test is not a boundary test: <c>.../outside/report.csv</c> starts with
+    /// <c>.../out</c>, and stamping it relative as <c>../outside/report.csv</c> would let two unrelated
+    /// files of the same size and time collide when their directories are mounted differently.
+    /// </remarks>
+    [Fact]
+    public void ASiblingSharingAPrefixIsNotUnderTheOutputDirectory()
+    {
+        var outDir = Path.Combine(_dir, "out");
+        Directory.CreateDirectory(outDir);
+        var sibling = Path.Combine(_dir, "outside");
+        Directory.CreateDirectory(sibling);
+        var report = Path.Combine(sibling, "report.csv");
+        File.WriteAllText(report, "rows");
+        File.SetLastWriteTimeUtc(report, new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc));
+        var inputs = new[] { report };
+
+        // Outside means outside: the stamp is the one it has with no output directory at all.
+        Assert.Equal(
+            SourceFingerprint.Compute(inputs),
+            SourceFingerprint.Compute(inputs, outDir));
+    }
+
+    /// <summary>
     /// A directory already stamped the old way keeps that stamp while it still describes the inputs,
     /// so its whole chain of stage fingerprints survives this change rather than recomputing once.
     /// </summary>

@@ -190,16 +190,13 @@ public sealed class PrismInput : INotifyPropertyChanged
                 // stage_cache.json, as one more stage beside the merge and the rollups.
                 var stage = ExportStageId(label);
                 var fingerprint = ExportFingerprint(Path, label, metadataReportName, batchAnnotation);
-                var cache = outputDir is null || fingerprint is null ? null : StageCache.Load(outputDir);
-                if (cache is not null && cache.CanReuse(stage, fingerprint!))
+                var cacheable = outputDir is not null && fingerprint is not null;
+                if (cacheable
+                    && TryReuseExport(outputDir!, stage, fingerprint!, Path!, label) is { } reused)
                 {
-                    var reused = ReuseExport(cache, stage, outputDir!, Path!, label);
-                    if (reused is not null)
-                    {
-                        scoped($"Reusing the report already exported from {DisplayName} - the document "
-                            + "has not changed since it was written.");
-                        return reused;
-                    }
+                    scoped($"Reusing the report already exported from {DisplayName} - the document "
+                        + "has not changed since it was written.");
+                    return reused;
                 }
 
                 var document = ResolveDocumentForExport(outputDir, scoped, cancellationToken);
@@ -208,7 +205,8 @@ public sealed class PrismInput : INotifyPropertyChanged
                     document, reportsDir, label, batchAnnotation, cancellationToken);
                 // After the export, never before: an entry written first would survive a failure and
                 // vouch for a report that was never finished. StageCache.Record claims only what exists.
-                cache?.Record(stage, fingerprint!, exported.InputPath, exported.ReplicatesCsv);
+                if (cacheable)
+                    RecordExport(outputDir!, stage, fingerprint!, exported);
                 return exported;
             }
 
@@ -238,11 +236,71 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// The run's output directory - where an extraction goes when the archive's own folder cannot be
     /// written to. Null is allowed; the extraction then falls back to the temp directory.
     /// </param>
+    internal string ResolveDocumentForExport(
+        string? outputDir, Action<string> log, CancellationToken cancellationToken) =>
+        IsSharedArchive
+            ? SharedDocumentArchive.Extract(Path, outputDir, log, cancellationToken)
+            : Path;
+
     /// <summary>
     /// The stage id an input's export is recorded under. One per batch label, because that is what
     /// names the exported file and therefore what a second document would collide with.
     /// </summary>
     internal static string ExportStageId(string label) => "export." + label;
+
+    /// <summary>
+    /// Serializes this pane's reads and writes of <c>stage_cache.json</c>.
+    /// </summary>
+    /// <remarks>
+    /// Inputs are exported CONCURRENTLY (<c>Parallel.For</c> over the input list), and
+    /// <see cref="StageCache"/> is a read-whole-file, write-whole-file sidecar: two workers that each
+    /// loaded it before either recorded would each write back a snapshot taken before the other's
+    /// entry existed, so the second write erased the first - and the next run re-exported whichever
+    /// document lost, silently. Loading INSIDE this lock rather than once per worker is the point: a
+    /// shared instance would still be a stale snapshot by the time the second worker wrote it.
+    /// </remarks>
+    private static readonly object ExportCacheLock = new();
+
+    /// <summary>
+    /// The reports an already-recorded export claimed, or null when there is nothing to stand on.
+    /// </summary>
+    internal static ExportedReports? TryReuseExport(
+        string outputDir, string stage, string fingerprint, string documentPath, string label)
+    {
+        lock (ExportCacheLock)
+        {
+            var cache = StageCache.Load(outputDir);
+            // CanReuse has checked the entry's fingerprint and that its files exist and are not empty.
+            if (!cache.CanReuse(stage, fingerprint))
+                return null;
+
+            var recorded = cache.OutputsOf(stage);
+            if (recorded.Count == 0)
+                return null;
+
+            // Recorded relative to the output directory (StageCache.Relative), which is what lets one
+            // machine read what another wrote; Path.Combine returns an absolute entry unchanged.
+            var report = System.IO.Path.Combine(outputDir, recorded[0]);
+            var metadata = recorded.Count > 1 ? System.IO.Path.Combine(outputDir, recorded[1]) : null;
+            return new ExportedReports(
+                report,
+                System.IO.Path.GetExtension(report).Equals(".parquet", StringComparison.OrdinalIgnoreCase),
+                metadata,
+                documentPath,
+                label);
+        }
+    }
+
+    /// <summary>Record a finished export, against the cache as it stands at this moment.</summary>
+    internal static void RecordExport(
+        string outputDir, string stage, string fingerprint, ExportedReports exported)
+    {
+        lock (ExportCacheLock)
+        {
+            StageCache.Load(outputDir)
+                .Record(stage, fingerprint, exported.InputPath, exported.ReplicatesCsv);
+        }
+    }
 
     /// <summary>
     /// What makes an already-exported report still current: the document, plus everything about the
@@ -277,35 +335,6 @@ public sealed class PrismInput : INotifyPropertyChanged
             return null;
         }
     }
-
-    /// <summary>
-    /// The reports a recorded export claimed, or null when the entry does not describe a usable pair.
-    /// <see cref="StageCache.CanReuse"/> has already checked that they exist and are not empty.
-    /// </summary>
-    private static ExportedReports? ReuseExport(
-        StageCache cache, string stage, string outputDir, string documentPath, string label)
-    {
-        var recorded = cache.OutputsOf(stage);
-        if (recorded.Count == 0)
-            return null;
-
-        // Recorded relative to the output directory (StageCache.Relative), which is what lets one
-        // machine read what another wrote; Path.Combine returns an absolute entry unchanged.
-        var report = System.IO.Path.Combine(outputDir, recorded[0]);
-        var metadata = recorded.Count > 1 ? System.IO.Path.Combine(outputDir, recorded[1]) : null;
-        return new ExportedReports(
-            report,
-            System.IO.Path.GetExtension(report).Equals(".parquet", StringComparison.OrdinalIgnoreCase),
-            metadata,
-            documentPath,
-            label);
-    }
-
-    internal string ResolveDocumentForExport(
-        string? outputDir, Action<string> log, CancellationToken cancellationToken) =>
-        IsSharedArchive
-            ? SharedDocumentArchive.Extract(Path, outputDir, log, cancellationToken)
-            : Path;
 
     /// <summary>
     /// Prefix every message with <paramref name="label"/> so interleaved output from concurrent exports

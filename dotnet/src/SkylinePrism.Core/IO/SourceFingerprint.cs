@@ -72,10 +72,17 @@ public static class SourceFingerprint
             return full;
         try
         {
-            var root = Path.GetFullPath(relativeTo);
-            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-                ? Path.GetRelativePath(root, full)
-                : full;
+            var relative = Path.GetRelativePath(Path.GetFullPath(relativeTo), full);
+            // Kept only when it really is UNDER the directory. A prefix test is not a boundary test:
+            // "/data/outside/report.csv" starts with "/data/out", and stamping it as
+            // "../outside/report.csv" both contradicts the rule above and lets two unrelated files of
+            // the same size and time collide when the directories are mounted differently.
+            // GetRelativePath returns a rooted path when there is no common root at all.
+            return Path.IsPathRooted(relative) || relative == ".."
+                   || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                   || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+                ? full
+                : relative;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException
                                        or PathTooLongException or System.Security.SecurityException)
