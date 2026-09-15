@@ -35,11 +35,21 @@ public sealed record PrecursorDensityMap(
     /// Whether the RT bin had to be widened past what the caller asked for.
     /// </summary>
     /// <remarks>
-    /// The same class of fact as <see cref="RowsAreWindows"/>, on the other axis. A cell answers "how
-    /// many peptides did one spectrum have to deal with", and that is a question about ONE
-    /// acquisition cycle: bin much wider than a cycle and the cell unions precursors that were never
-    /// in the same spectrum, so the count comes out artifactually large. A widened bin is therefore
-    /// not a resolution detail, it is a different quantity - and the reader has to be told.
+    /// <para>The same class of fact as <see cref="RowsAreWindows"/>, on the other axis: what a cell
+    /// counts is the one thing a reader must not be told wrongly.</para>
+    ///
+    /// <para><b>It no longer means the counts run high.</b> It did when a cell held the union of
+    /// everything that eluted during its column - widening then pooled cycles and inflated the
+    /// number. A cell now holds the greatest number of precursors co-eluting at any ONE INSTANT
+    /// inside its column, so the maximum over the map is the same however the columns are cut. That
+    /// bin independence is the whole point of the sweep, and it retired the inflation this flag was
+    /// added to warn about.</para>
+    ///
+    /// <para>What widening still changes is WHICH spectrum each cell speaks for. At about one
+    /// acquisition cycle a column is one spectrum, and the cell is what that spectrum resolved.
+    /// Wider, every cell reports the worst spectrum inside it rather than a typical one - so the map
+    /// reads hotter across the board and <see cref="Histogram"/> shifts right, while the extreme
+    /// stays honest. The peak is reliable either way; the distribution is not.</para>
     /// </remarks>
     public bool RtBinWidened => RtBinRequested > 0 && RtBinMin > RtBinRequested * 1.001;
 
