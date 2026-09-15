@@ -665,13 +665,13 @@ public partial class MainWindow
         DensityStatusText.Text =
             $"{total:N0} precursors; busiest {cellNoun} {map.MaxCount:N0}; "
             + $"{map.RowSource}; {map.MzBins:N0} rows x {map.RtBins:N0} RT bins of {map.RtBinMin:0.###} min"
-            // A widened bin is a DIFFERENT QUANTITY, not a coarser picture of the same one: a cell
-            // answers "how many peptides did one spectrum have to deal with", and once it spans
-            // several cycles it unions precursors that were never in the same spectrum. Printing the
-            // bin alone left that to be noticed.
+            // A cell holds the greatest concurrency inside its column. At about one cycle that is
+            // what one spectrum saw; wider, it is the WORST spectrum in the column rather than a
+            // typical one, so the map and the histogram both read high. Not pooling - that was the
+            // old counting, and this message described it until the counting changed underneath.
             + (map.RtBinWidened
-                ? $" (widened from {map.RtBinRequested:0.###} to fit the grid - each cell now pools "
-                  + "more than one acquisition cycle, so the counts run high)"
+                ? $" (widened from {map.RtBinRequested:0.###} to fit the grid - each cell now shows "
+                  + "the worst spectrum in its column rather than a typical one)"
                 : "")
             + (nonDia is not null
                 ? $"; WARNING: this is a {nonDia} acquisition, and this map assumes DIA - the rows are not "

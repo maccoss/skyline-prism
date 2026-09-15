@@ -147,6 +147,107 @@ public class PrecursorDensityTests
         Assert.Equal(1, Max(map));
     }
 
+    /// <summary>
+    /// A scheduled window is credited only while it was firing.
+    /// </summary>
+    /// <remarks>
+    /// The sweep replaced a per-bin <c>IsOnAt(binCentre)</c> test with a clip of the peak to the
+    /// window's firing interval. They agree because IsOnAt is exactly that interval - but nothing
+    /// exercised it, and this is the path where getting it wrong credits a precursor to a same-m/z
+    /// window that fired in a different RT segment, which is what the Covers() check exists to stop.
+    /// </remarks>
+    [Fact]
+    public void AScheduledWindowIsCreditedOnlyWhileItWasFiring()
+    {
+        var scheme = new IsolationScheme(
+            "scheduled", new[] { new IsolationWindow(500.0, 510.0, 0, 10.0, 20.0) });
+
+        // The peak runs on past the end of the window's schedule.
+        var map = PrecursorDensity.Bin(
+            new[] { new DetectedPrecursor(505.0, 18.0, 25.0) }, scheme, rtBinMin: 1.0);
+
+        Assert.Equal(1, At(map, 0, 19.0));
+        Assert.Equal(0, At(map, 0, 23.0));
+    }
+
+    /// <summary>And a peak wholly outside the schedule is not credited to it at all.</summary>
+    [Fact]
+    public void APeakOutsideTheScheduleCountsAsOutsideTheRows()
+    {
+        var scheme = new IsolationScheme(
+            "scheduled", new[] { new IsolationWindow(500.0, 510.0, 0, 10.0, 20.0) });
+
+        var map = PrecursorDensity.Bin(
+            new[] { new DetectedPrecursor(505.0, 30.0, 35.0) }, scheme, rtBinMin: 1.0);
+
+        Assert.Equal(1, map.PrecursorsOutsideRows);
+    }
+
+    /// <summary>
+    /// A column about one cycle wide says WHICH spectra saw the co-detection; a wide one says they all did.
+    /// </summary>
+    /// <remarks>
+    /// The worst case is the same either way - that is the bin-independence the sweep buys. What the
+    /// fine column adds is that only a few spectra carried both peptides, where a wide column reports
+    /// its worst spectrum for the whole stretch. This is the case that distinguishes "max within the
+    /// column" from "concurrency at an instant", and the premise the default bin rests on.
+    /// </remarks>
+    [Fact]
+    public void AFineColumnLocalizesCoDetectionThatAWideOneSpreads()
+    {
+        var peaks = new[]
+        {
+            new DetectedPrecursor(500.4, 10.00, 10.30),
+            new DetectedPrecursor(500.5, 10.28, 10.60),   // overlaps for 0.02 min
+        };
+
+        var fine = PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 0.01);
+        var coarse = PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 1.0);
+
+        Assert.Equal(2, Max(fine));
+        Assert.Equal(2, Max(coarse));
+
+        Assert.True(fine.RtBins > 50, $"{fine.RtBins} columns is not a fine grid");
+        Assert.True(Cells(fine, 2) <= 5, $"{Cells(fine, 2)} columns show both, expected a handful");
+        Assert.Equal(coarse.RtBins, Cells(coarse, 2));   // every column it has
+    }
+
+    /// <summary>A non-finite boundary is skipped, not thrown over.</summary>
+    /// <remarks>
+    /// Load drops these, but Bin is public. A NaN compares unequal to itself, so it would reach the
+    /// event comparator, make it inconsistent, and surface as "IComparer.Compare() method returns
+    /// inconsistent results" from inside a plotting routine.
+    /// </remarks>
+    [Fact]
+    public void ANonFiniteBoundaryIsSkippedRatherThanThrowing()
+    {
+        var map = PrecursorDensity.Bin(
+            new[]
+            {
+                new DetectedPrecursor(500.4, double.NaN, 10.2),
+                new DetectedPrecursor(500.5, 10.0, 10.2),
+            },
+            mzBinTh: 2.0, rtBinMin: 0.01);
+
+        Assert.Equal(1, Max(map));
+    }
+
+    private static int At(PrecursorDensityMap map, int row, double rt)
+    {
+        var col = (int)((rt - map.RtLow) / map.RtBinMin);
+        return col >= 0 && col < map.RtBins ? map.Counts[row, col] : 0;
+    }
+
+    private static int Cells(PrecursorDensityMap map, int value)
+    {
+        var n = 0;
+        for (var i = 0; i < map.MzBins; i++)
+            for (var j = 0; j < map.RtBins; j++)
+                if (map.Counts[i, j] == value)
+                    n++;
+        return n;
+    }
+
     private static int Max(PrecursorDensityMap map)
     {
         var best = 0;

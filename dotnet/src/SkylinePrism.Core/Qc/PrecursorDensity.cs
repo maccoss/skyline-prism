@@ -114,8 +114,16 @@ public sealed record PrecursorDensityMap(
     }
 
     /// <summary>
-    /// How many SPECTRA had each precursor load: <c>result[n]</c> is the number of spectra that had to
-    /// resolve exactly <c>n</c> precursors, for n = 0..<see cref="MaxCount"/>.
+    /// The distribution of the map's cells: <c>result[n]</c> is the number of cells whose load is
+    /// exactly <c>n</c>, for n = 0..<see cref="MaxCount"/>.
+    /// <para>
+    /// <b>Cells, and a cell is a spectrum only while a column is about one cycle wide.</b> A cell holds
+    /// the greatest number of precursors co-eluting at any instant inside its column, so at the default
+    /// bin - roughly one acquisition cycle - it is what one spectrum had to resolve, and this reads as
+    /// "how many spectra carried what load". Widen the column and each cell reports the WORST spectrum
+    /// inside it instead of a typical one, so the distribution shifts right; that is what
+    /// <see cref="PrecursorDensityMap.RtBinWidened"/> exists to say.
+    /// </para>
     /// <para>
     /// The heatmap shows where the load is; this shows how it is distributed. A long tail says a few
     /// spectra are carrying many co-isolated precursors, which is what limits identification - and it is
@@ -148,6 +156,12 @@ public sealed record PrecursorDensityMap(
     /// This is the load over the gradient - where the instrument is working hardest. The spread between
     /// min and max at one time says whether the load is even across the m/z range or concentrated in a
     /// few windows, which the mean alone hides.
+    /// </para>
+    /// <para>
+    /// Averaged across WINDOWS at one time, of each window's greatest concurrency inside that column.
+    /// At the default bin the column is about one cycle, so that is the load the spectra acquired at
+    /// that moment actually carried; widen it and each window contributes its worst spectrum rather
+    /// than its typical one.
     /// </para>
     /// <para>
     /// A time with no acquired spectrum at all yields NaN for all three rather than zero, so a gap in
@@ -390,7 +404,10 @@ public static class PrecursorDensity
                 outside++;
         }
         for (var row = 0; row < scheme.Windows.Count; row++)
+        {
             FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
+            peaks[row] = null!;   // a row's intervals are dead once swept
+        }
         return new PrecursorDensityMap(
             scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
@@ -440,7 +457,10 @@ public static class PrecursorDensity
             (peaks[row] ??= new List<(double, double)>()).Add((p.RtStart, p.RtStop));
         }
         for (var row = 0; row < nMz; row++)
+        {
             FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
+            peaks[row] = null!;   // a row's intervals are dead once swept
+        }
         return new PrecursorDensityMap(
             rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
             RtBinRequested: rtBinMin);
@@ -478,13 +498,24 @@ public static class PrecursorDensity
         var events = new List<(double Time, int Delta)>(peaks.Count * 2);
         foreach (var (start, stop) in peaks)
         {
+            // A non-finite boundary would make the comparator below inconsistent - NaN compares
+            // unequal to itself, so the first branch is taken and List.Sort throws "IComparer.Compare()
+            // method returns inconsistent results" from inside a plotting routine. Load already drops
+            // these, but Bin is public and takes whatever it is given.
+            if (!double.IsFinite(start) || !double.IsFinite(stop))
+                continue;
+
             events.Add((start, 1));
             events.Add((stop, -1));
 
             // A peak with no width still happened. Without this it would open and close at the same
             // instant, leave a zero-length segment, and vanish from a plot whose job is to say what
-            // was there.
-            var at = (int)((start - rtLo) / rtBin);
+            // was there. Only for those peaks: the sweep covers every peak that has width, and doing
+            // this for all of them would put values in the grid before the sweep that the sweep then
+            // has to overwrite.
+            if (stop > start)
+                continue;
+            var at = (int)Math.Floor((start - rtLo) / rtBin);
             if (at >= 0 && at < nRt && counts[row, at] < 1)
                 counts[row, at] = 1;
         }
