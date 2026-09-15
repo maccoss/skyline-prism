@@ -2053,9 +2053,10 @@ public partial class MainWindow : Window
     private ScottPlot.Plottables.Marker? _hoverMarker;
     private ScottPlot.Plottables.Text? _hoverText;
     private string? _qcOutputDir;
-    // Replicate annotations from the exported Replicates report: replicate -> (column -> value).
-    private readonly Dictionary<string, Dictionary<string, string>> _replicateAnn = new(StringComparer.Ordinal);
-    private List<string> _groupColumns = new();
+    // The QC pane's own snapshot of the Replicates-report annotations for _qcOutputDir. Its own, not the
+    // window's: the Ion accounting pane holds a separate one for the directory IT is showing, so neither
+    // pane can install annotations the other's cached data was not exported with.
+    private ReplicateAnnotations _qcAnnotations = ReplicateAnnotations.Empty;
     private bool _suppressQcRender;
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
@@ -2072,7 +2073,7 @@ public partial class MainWindow : Window
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
             _markerReport = MarkerNormalizationReport.Read(outputDir);
-            LoadReplicatesReports(Path.Combine(outputDir, "skyline-reports"));
+            _qcAnnotations = ReplicateAnnotations.Read(Path.Combine(outputDir, "skyline-reports"));
         }
         catch (Exception ex)
         {
@@ -2110,100 +2111,6 @@ public partial class MainWindow : Window
         _qcData[key] = (m, sampleCols, meanRt);
     }
 
-    /// <summary>
-    /// Load every per-document Replicates report in the export directory ("&lt;label&gt;.metadata.csv", plus
-    /// the legacy single-document "Metadata.csv"). Each file's rows are stored under BOTH the
-    /// document-qualified sample ID ("&lt;replicate&gt;__@__&lt;label&gt;") and the bare replicate name, so a QC
-    /// injection named the same in several documents keeps its own document's annotations in the plots.
-    /// </summary>
-    private void LoadReplicatesReports(string reportsDir)
-    {
-        _replicateAnn.Clear();
-        _groupColumns = new List<string>();
-        if (!Directory.Exists(reportsDir))
-            return;
-
-        var files = Directory.EnumerateFiles(reportsDir, "*.metadata.csv")
-            .Concat(Directory.EnumerateFiles(reportsDir, "Metadata.csv"))
-            // A sidecar is named after its destination, so an unfinished
-            // ".prism-partial-<hex>.<label>.metadata.csv" matches the glob above. Left by a stopped run,
-            // it would be read as a document's replicate metadata under the bogus label
-            // ".prism-partial-<hex>.<label>" - and, because a leading dot sorts first, its rows would
-            // seed every bare replicate-name key before the real files are read.
-            .Where(f => !HeadlessSkylineExporter.IsSidecar(f))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var file in files)
-        {
-            var name = Path.GetFileName(file);
-            // "<label>.metadata.csv" -> "<label>"; the legacy "Metadata.csv" has no document label.
-            var label = name.EndsWith(".metadata.csv", StringComparison.OrdinalIgnoreCase)
-                ? name[..^".metadata.csv".Length]
-                : null;
-            LoadReplicatesReport(file, label);
-        }
-    }
-
-    // Parse one exported Replicates report (dynamic annotation columns) into replicate -> column -> value.
-    private void LoadReplicatesReport(string path, string? documentLabel)
-    {
-        if (!File.Exists(path))
-            return;
-        var lines = File.ReadAllLines(path);
-        if (lines.Length < 2)
-            return;
-        var header = SplitCsvLine(lines[0]);
-        var repIdx = -1;
-        foreach (var cand in new[] { "Replicate", "Replicate Name", "ReplicateName", "ReplicateLocator" })
-        {
-            repIdx = Array.FindIndex(header, h => h.Trim().Equals(cand, StringComparison.OrdinalIgnoreCase));
-            if (repIdx >= 0)
-                break;
-        }
-        if (repIdx < 0)
-            return;
-
-        var cols = new List<(string Name, int Idx)>();
-        for (var i = 0; i < header.Length; i++)
-            if (i != repIdx && !string.IsNullOrWhiteSpace(header[i]))
-                cols.Add((header[i].Trim(), i));
-        // Union across documents: a column present in any Replicates report can be grouped by.
-        foreach (var name in cols.Select(c => c.Name))
-            if (!_groupColumns.Contains(name, StringComparer.Ordinal))
-                _groupColumns.Add(name);
-
-        for (var r = 1; r < lines.Length; r++)
-        {
-            if (string.IsNullOrWhiteSpace(lines[r]))
-                continue;
-            var f = SplitCsvLine(lines[r]);
-            if (f.Length <= repIdx)
-                continue;
-            var rep = f[repIdx].Trim();
-            if (rep.Length == 0)
-                continue;
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (name, idx) in cols)
-                map[name] = idx < f.Length ? f[idx].Trim() : "";
-            // Document-qualified key first (this is the merged Sample ID), then the bare replicate name as
-            // a fallback for single-document runs and legacy Metadata.csv exports.
-            if (!string.IsNullOrEmpty(documentLabel))
-                _replicateAnn[rep + "__@__" + documentLabel] = map;
-            if (!_replicateAnn.ContainsKey(rep) || string.IsNullOrEmpty(documentLabel))
-                _replicateAnn[rep] = map;
-        }
-    }
-
-    // Sample IDs are "<replicate>__@__<batch>"; the Replicates report is keyed by replicate.
-    private static string ReplicateOf(string sampleId)
-    {
-        const string sep = "__@__";
-        var i = sampleId.IndexOf(sep, StringComparison.Ordinal);
-        return i >= 0 ? sampleId[..i] : sampleId;
-    }
-
     // Sample IDs carry a "<replicate>__@__<batch>" suffix, added during merge so identical replicate names
     // from different batches / source documents stay distinct. When every sample in the dataset shares the
     // SAME suffix (a single batch/source), it is redundant noise, so strip it for display. When suffixes
@@ -2230,49 +2137,27 @@ public partial class MainWindow : Window
         }).ToList();
     }
 
+    /// <summary>
+    /// A QC sample's value in a Group-by column, from the QC pane's own annotation snapshot; the
+    /// synthetic Sample Type column falls back to sample_metadata.csv when no Replicates report is available.
+    /// </summary>
     private string SampleAnnotation(string sampleId, string column)
     {
-        // The full sample ID is the document-qualified key; fall back to the bare replicate name.
-        if (_replicateAnn.TryGetValue(sampleId, out var qualified) && qualified.TryGetValue(column, out var qv))
-            return qv;
-        if (_replicateAnn.TryGetValue(ReplicateOf(sampleId), out var m) && m.TryGetValue(column, out var v))
-            return v;
-        // Fallback for the synthetic Sample Type column when no Replicates report is available.
+        var value = _qcAnnotations.ValueOf(sampleId, column);
+        if (!string.IsNullOrEmpty(value))
+            return value;
         if (column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase))
             return _qcTypes.GetValueOrDefault(sampleId, "");
         return "";
-    }
-
-    private static string[] SplitCsvLine(string line)
-    {
-        var fields = new List<string>();
-        var sb = new System.Text.StringBuilder();
-        var inQuotes = false;
-        for (var i = 0; i < line.Length; i++)
-        {
-            var c = line[i];
-            if (inQuotes)
-            {
-                if (c == '"')
-                {
-                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
-                    else inQuotes = false;
-                }
-                else sb.Append(c);
-            }
-            else if (c == '"') inQuotes = true;
-            else if (c == ',') { fields.Add(sb.ToString()); sb.Clear(); }
-            else sb.Append(c);
-        }
-        fields.Add(sb.ToString());
-        return fields.ToArray();
     }
 
     // Fill the Group-by column combo from the Replicates report (default Sample Type) and its values.
     private void PopulateGroupCombos()
     {
         _suppressQcRender = true;
-        var columns = _groupColumns.Count > 0 ? _groupColumns : new List<string> { "Sample Type" };
+        var columns = _qcAnnotations.Columns.Count > 0
+            ? _qcAnnotations.Columns.ToList()
+            : new List<string> { "Sample Type" };
         QcGroupByCombo.Items.Clear();
         foreach (var c in columns)
             QcGroupByCombo.Items.Add(c);

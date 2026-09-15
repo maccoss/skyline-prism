@@ -73,6 +73,13 @@ public partial class MainWindow
     /// </summary>
     private List<QcGroupValue> _ionGroupValues = new();
 
+    /// <summary>
+    /// This pane's own snapshot of the Replicates-report annotations for <see cref="_ionOutputDir"/>,
+    /// read beside the accounting and installed with it - never the QC pane's, which may describe another
+    /// directory, and never installed for a directory the output box has since moved away from.
+    /// </summary>
+    private ReplicateAnnotations _ionAnnotations = ReplicateAnnotations.Empty;
+
     /// <summary>Set by the describe helpers, consumed by the caller that writes the status line.</summary>
     private string? _ionStatusDetail;
 
@@ -85,6 +92,7 @@ public partial class MainWindow
         _ionRequest++;
         _ionLoaded = false;
         _ionResult = null;
+        _ionAnnotations = ReplicateAnnotations.Empty;
         _ionCycles.Clear();
         _ionDrawn = Array.Empty<IonAccountingRow>();
         // The nav entry's answer is cached against the directory, so a run that has just WRITTEN
@@ -328,20 +336,20 @@ public partial class MainWindow
             if (!Directory.Exists(dir))
             {
                 return (Exists: false, Result: (IonAccountingResult?)null,
-                        Samples: (IReadOnlyList<string>)Array.Empty<string>());
+                        Samples: (IReadOnlyList<string>)Array.Empty<string>(),
+                        Annotations: ReplicateAnnotations.Empty);
             }
             var read = IonAccountingStore.Read(dir, App.WriteLog);
-            // The Group-by picker reads the same Replicates reports the QC pane does. Loaded here, off
-            // the UI thread, only when the QC pane has not loaded this directory itself - a previous
-            // run opened straight onto this pane has no QC data yet.
-            if (!string.Equals(_qcOutputDir, dir, StringComparison.OrdinalIgnoreCase))
-                LoadReplicatesReports(Path.Combine(dir, "skyline-reports"));
+            // The Group-by picker's annotations, read here as a snapshot of THIS directory and returned
+            // with the accounting rather than installed from the worker: they go into this pane's own
+            // field, below, only once the output box still names the directory they came from.
+            var annotations = ReplicateAnnotations.Read(Path.Combine(dir, "skyline-reports"));
             // The replicate list is a second trip to the same share, and only the profile views
             // need it - so it is skipped entirely when there is nothing to plot.
             var samples = read is null || read.Rows.Count == 0
                 ? (IReadOnlyList<string>)Array.Empty<string>()
                 : IonAccountingStore.SamplesWithCycles(dir, App.WriteLog);
-            return (Exists: true, Result: read, Samples: samples);
+            return (Exists: true, Result: read, Samples: samples, Annotations: annotations);
         });
 
         // The output directory can have moved on while a slow share was read.
@@ -355,6 +363,7 @@ public partial class MainWindow
         }
 
         _ionResult = probe.Result;
+        _ionAnnotations = probe.Annotations;
         _ionOutputDir = dir;
         _ionLoaded = true;
         _ionCycles.Clear();
@@ -488,13 +497,15 @@ public partial class MainWindow
         column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// A replicate's value in the Group-by column. Sample Type falls back to the type the measurement
-    /// itself recorded, so grouping still works on a directory whose Replicates reports are gone; any
-    /// other column with no value for a replicate reads "(none)", the way the PCA plot labels it.
+    /// A replicate's value in the Group-by column, from this pane's own snapshot of this directory's
+    /// Replicates reports. Sample Type falls back to the type the measurement itself recorded - the
+    /// row's own, not the QC pane's sample_metadata map, which may describe another directory - so
+    /// grouping still works on a directory whose Replicates reports are gone; any other column with no
+    /// value for a replicate reads "(none)", the way the PCA plot labels it.
     /// </summary>
     private string IonGroupLabel(IonAccountingRow row, string column)
     {
-        var value = SampleAnnotation(row.Sample, column);
+        var value = _ionAnnotations.ValueOf(row.Sample, column);
         if (!string.IsNullOrEmpty(value))
             return value;
         return IsSampleTypeColumn(column) ? row.SampleType ?? "" : "(none)";
@@ -511,7 +522,9 @@ public partial class MainWindow
         try
         {
             var previous = ComboText(IonGroupByCombo, "");
-            var columns = _groupColumns.Count > 0 ? _groupColumns : new List<string> { "Sample Type" };
+            var columns = _ionAnnotations.Columns.Count > 0
+                ? _ionAnnotations.Columns.ToList()
+                : new List<string> { "Sample Type" };
             IonGroupByCombo.Items.Clear();
             foreach (var c in columns)
                 IonGroupByCombo.Items.Add(c);
