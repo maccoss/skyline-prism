@@ -619,8 +619,10 @@ public partial class MainWindow : Window
     /// Offer the marker plots only while marker normalization is switched on. They read
     /// marker_normalization.csv, which only a run with it on writes, so with it off the two entries led
     /// to "This run did not record marker loadings" - a dead end reached from a drop-down. Hidden rather
-    /// than greyed out (see <see cref="QcPlotChrome.OffersPlotKind"/>), and a marker plot that was
-    /// showing falls back to PCA, so the picker never names a plot it no longer lists.
+    /// than grayed out (see <see cref="QcPlotChrome.OffersPlotKind"/>), AND disabled: WPF's arrow-key
+    /// and type-ahead selection on a closed ComboBox skip only disabled items, not collapsed ones, so a
+    /// hidden entry alone was still one keypress away. A marker plot that was showing falls back to
+    /// PCA, so the picker never names a plot it no longer lists.
     /// </summary>
     private void RefreshQcPlotKinds()
     {
@@ -630,6 +632,8 @@ public partial class MainWindow : Window
         var visibility = markers ? Visibility.Visible : Visibility.Collapsed;
         QcPlotMarkerScoreItem.Visibility = visibility;
         QcPlotMarkerLoadingsItem.Visibility = visibility;
+        QcPlotMarkerScoreItem.IsEnabled = markers;
+        QcPlotMarkerLoadingsItem.IsEnabled = markers;
         if (!QcPlotChrome.OffersPlotKind(ComboText(QcPlotCombo, "PCA"), markers))
             QcPlotCombo.SelectedIndex = 0; // PCA; its SelectionChanged re-renders the pane
     }
@@ -2068,12 +2072,15 @@ public partial class MainWindow : Window
             _qcOutputDir = outputDir;
             _qcTypes = ReadSampleTypes(Path.Combine(outputDir, "sample_metadata.csv"));
             _qcData.Clear();
+            // Reset BEFORE the reads, beside the matrices: a failure below must not leave the previous
+            // directory's annotations installed under this directory's data.
+            _qcAnnotations = ReplicateAnnotations.Empty;
             LoadQcMatrix("raw|peptide", Path.Combine(outputDir, "peptides_rollup.parquet"), isLinear: false);
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
             _markerReport = MarkerNormalizationReport.Read(outputDir);
-            _qcAnnotations = ReplicateAnnotations.Read(Path.Combine(outputDir, "skyline-reports"));
+            _qcAnnotations = ReplicateAnnotations.Read(Path.Combine(outputDir, "skyline-reports"), Log);
         }
         catch (Exception ex)
         {
@@ -2269,8 +2276,15 @@ public partial class MainWindow : Window
         if (_suppressQcRender)
             return;
         _suppressQcRender = true;
-        PopulateValueCombo();
-        _suppressQcRender = false;
+        try
+        {
+            PopulateValueCombo();
+        }
+        finally
+        {
+            // Or an exception here leaves the flag stuck and every later change to the pane silent.
+            _suppressQcRender = false;
+        }
         RenderQc();
     }
 

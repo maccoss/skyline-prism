@@ -36,8 +36,9 @@ internal static class QcPlotChrome
 
     /// <summary>
     /// Whether the Plot picker offers <paramref name="kind"/> with marker normalization switched on or
-    /// off in Settings. The marker plots are hidden, not greyed out, while it is off: a disabled entry
-    /// invites the question of how to enable it, and the answer is a checkbox on another tab.
+    /// off in Settings. The marker plots are hidden, not grayed out, while it is off: a disabled entry
+    /// invites the question of how to enable it, and the answer is a checkbox on another tab. (They are
+    /// disabled as well, out of sight, because keyboard selection skips only disabled items.)
     /// </summary>
     public static bool OffersPlotKind(string kind, bool markerNormalizationEnabled) =>
         markerNormalizationEnabled || !IsMarkerPlot(kind);

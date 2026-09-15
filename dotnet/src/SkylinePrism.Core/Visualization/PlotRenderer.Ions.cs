@@ -114,13 +114,18 @@ public static partial class PlotRenderer
         // hue whatever order the rows arrive in, and the legend swatch is that same hue. The ROW
         // index used to be passed instead, which cycled a different color onto every bar of a type
         // GroupColor did not know while keying the legend on index 0 - a rainbow across one group,
-        // under a swatch none of it matched. Sample types GroupColor knows keep their fixed colors.
+        // under a swatch none of it matched. Labels GroupColor knows keep their fixed colors and take
+        // no slot; the rest are numbered onto the palette slots those fixed colors do not occupy
+        // (CycledPaletteIndex), so a plate can never come out in the same orange as the QC injections.
         var group = groupOf ?? (r => r.SampleType ?? "");
-        var groupIndex = rows.Select(group)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(g => g, StringComparer.Ordinal)
-            .Select((g, i) => (Label: g, Index: i))
-            .ToDictionary(x => x.Label, x => x.Index, StringComparer.OrdinalIgnoreCase);
+        var groupIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var cycled = 0;
+        foreach (var label in rows.Select(group)
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(g => g, StringComparer.Ordinal))
+        {
+            groupIndex[label] = TryFixedGroupColor(label, out _) ? 0 : CycledPaletteIndex(cycled++);
+        }
 
         var acquiredRaw = Selector(level, acquired: true, quantity);
         var assignedRaw = Selector(level, acquired: false, quantity);

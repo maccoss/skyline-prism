@@ -342,8 +342,12 @@ public partial class MainWindow
             var read = IonAccountingStore.Read(dir, App.WriteLog);
             // The Group-by picker's annotations, read here as a snapshot of THIS directory and returned
             // with the accounting rather than installed from the worker: they go into this pane's own
-            // field, below, only once the output box still names the directory they came from.
-            var annotations = ReplicateAnnotations.Read(Path.Combine(dir, "skyline-reports"));
+            // field, below, only once the output box still names the directory they came from. Skipped
+            // when there is nothing to plot, like the replicate list; and Read never throws for a file
+            // it cannot open, so an unreadable report costs the grouping, never the pane.
+            var annotations = read is null || read.Rows.Count == 0
+                ? ReplicateAnnotations.Empty
+                : ReplicateAnnotations.Read(Path.Combine(dir, "skyline-reports"), App.WriteLog);
             // The replicate list is a second trip to the same share, and only the profile views
             // need it - so it is skipped entirely when there is nothing to plot.
             var samples = read is null || read.Rows.Count == 0
@@ -548,7 +552,13 @@ public partial class MainWindow
         if (_ionResult is not null)
         {
             foreach (var row in _ionResult.Rows)
-                values.Add(IonGroupLabel(row, column));
+            {
+                // A replicate with no value is not a group; offering a blank checkbox for it is not a
+                // filter anyone can read. Same rule as the QC pane's value list.
+                var label = IonGroupLabel(row, column);
+                if (!string.IsNullOrEmpty(label))
+                    values.Add(label);
+            }
         }
         _ionGroupValues = values
             .Select(v => new QcGroupValue { Name = v, Changed = OnIonGroupValueToggled })
@@ -780,18 +790,20 @@ public partial class MainWindow
             // answer the hover, and a renderer that sorted privately would leave it guessing.
             var ordered = IonRowOrder.Sort(rows, IonSort);
             _ionDrawn = ordered;
-            // Colored by the Group-by column when it is not Sample Type, so the bars answer the
-            // grouping that was asked for; Sample Type is the renderer's own default.
-            Func<IonAccountingRow, string>? groupOf = IsSampleTypeColumn(column)
-                ? null
-                : r => IonGroupLabel(r, column);
-            var title = IonBarTitle(result, level)
+            // Everything below describes what is DRAWN - the filtered, sorted rows. The plot, the
+            // title and the status line used to be handed different row sets, so ticking one plate
+            // left the status line summarizing the whole cohort under a plot of ten bars.
+            var shown = result with { Rows = ordered };
+            // Colored and labeled by the Group-by column, Sample Type included, so the legend, the
+            // value picker and the title share the one vocabulary the Replicates report gives them
+            // rather than the legend saying "qc" under a picker that says "Quality Control".
+            var title = IonBarTitle(shown, level)
                 + (selected.Count > 0 ? $" - {column} = {QcGroupFilter.Describe(selected)}" : "");
             PlotRenderer.DrawIonAccounting(
-                IonPlot.Plot, result with { Rows = ordered }, level,
-                title, 1.0, IonQuantity, IonAsFraction, groupOf);
+                IonPlot.Plot, shown, level, title, 1.0, IonQuantity, IonAsFraction,
+                r => IonGroupLabel(r, column));
             IonPlot.Refresh();
-            var line = DescribeIon(result, level) + IonOrderNote(result);
+            var line = DescribeIon(shown, level) + IonOrderNote(shown);
             SetIonStatus(line, _ionStatusDetail);
             IonHoverText.Text = "";
             return;

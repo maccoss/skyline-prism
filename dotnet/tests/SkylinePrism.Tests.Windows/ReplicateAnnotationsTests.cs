@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using SkylinePrism.App;
 using Xunit;
@@ -20,8 +21,9 @@ public class ReplicateAnnotationsTests
     }
 
     /// <summary>
-    /// Two documents naming the same QC injection: the merged Sample ID finds its own document's row,
-    /// the bare name falls back to the first document read, and the columns are the union of both.
+    /// Two documents naming the same QC injection: the merged Sample ID finds its own document's row
+    /// and nothing else's, a document that shipped no report borrows nothing, and the columns are the
+    /// union of both.
     /// </summary>
     [Fact]
     public void QualifiedSampleIdsKeepEachDocumentsOwnValues()
@@ -49,7 +51,8 @@ public class ReplicateAnnotationsTests
             Assert.Equal("P1", ann.ValueOf("QC1__@__A", "Plate"));
             Assert.Equal("", ann.ValueOf("QC1__@__B", "Plate"));          // B has no Plate column
             Assert.Equal("control, pooled", ann.ValueOf("QC1__@__B", "Condition")); // quoted field
-            Assert.Equal("P1", ann.ValueOf("QC1", "Plate"));               // bare name: first document
+            Assert.Equal("", ann.ValueOf("QC1", "Plate"));                 // labeled reports key no bare names
+            Assert.Equal("", ann.ValueOf("QC1__@__C", "Plate"));           // a document with no report borrows nothing
             Assert.Equal("treated", ann.ValueOf("S2__@__B", "Condition"));
             Assert.Equal("", ann.ValueOf("nobody", "Plate"));
         }
@@ -78,11 +81,63 @@ public class ReplicateAnnotationsTests
         }
     }
 
+    /// <summary>
+    /// The legacy single-document Metadata.csv has no label, so its rows are the fallback for any
+    /// qualified sample ID of its replicates - the one place a bare name is consulted.
+    /// </summary>
     [Fact]
-    public void ReplicateOfStripsTheBatchSuffixOnly()
+    public void ALegacyMetadataCsvAnswersForItsReplicatesUnderAnyBatch()
     {
-        Assert.Equal("QC1", ReplicateAnnotations.ReplicateOf("QC1__@__Plate 3"));
-        Assert.Equal("QC1", ReplicateAnnotations.ReplicateOf("QC1"));
-        Assert.Equal("", ReplicateAnnotations.ReplicateOf("__@__X"));
+        var dir = TempReports();
+        try
+        {
+            File.WriteAllLines(Path.Combine(dir, "Metadata.csv"), new[]
+            {
+                "Replicate,Sample Type,Plate",
+                "QC1,Quality Control,P9",
+            });
+
+            var ann = ReplicateAnnotations.Read(dir);
+
+            Assert.Equal("P9", ann.ValueOf("QC1__@__OldRun", "Plate"));
+            Assert.Equal("P9", ann.ValueOf("QC1", "Plate"));
+            Assert.Equal("", ann.ValueOf("QC2__@__OldRun", "Plate"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A report that cannot be opened is logged and skipped; the rest of the directory still counts.
+    /// Before, the exception left the Ion pane on "Reading the ion accounting..." with the readable
+    /// accounting never drawn.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableReportIsSkippedAndLoggedRatherThanThrown()
+    {
+        var dir = TempReports();
+        try
+        {
+            File.WriteAllLines(Path.Combine(dir, "A.metadata.csv"), new[] { "Replicate,Plate", "QC1,P1" });
+            var locked = Path.Combine(dir, "B.metadata.csv");
+            File.WriteAllLines(locked, new[] { "Replicate,Plate", "QC2,P2" });
+
+            var logged = new List<string>();
+            using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var ann = ReplicateAnnotations.Read(dir, logged.Add);
+
+                Assert.Equal("P1", ann.ValueOf("QC1__@__A", "Plate"));
+                Assert.Equal("", ann.ValueOf("QC2__@__B", "Plate"));
+            }
+            var message = Assert.Single(logged);
+            Assert.Contains("B.metadata.csv", message);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }

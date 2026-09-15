@@ -327,10 +327,12 @@ public static partial class PlotRenderer
         // Explicit limits rather than ScottPlot's margins: the default padding puts ticks either side of
         // the data, and a bar chart of counts has no negative loads and no spectra below zero to show.
         plt.Axes.SetLimits(-0.5, histogram.Length - 0.5, 0, Math.Max(1, tallest * 1.05));
-        // A load is a count of precursors, and the automatic ticks do not know that: on a short axis
-        // they label the steps between the bars too, and "0.5 precursors" is not a load any spectrum
-        // carried. Whole numbers only, thinned automatically when there are too many to label.
+        // Both axes are counts - precursors across, spectra up - and the automatic ticks do not know
+        // that: on a short axis they label the steps between the bars too, and "0.5 precursors" or
+        // "1.5 spectra" is not a load or a count anything carried. Whole numbers only, thinned
+        // automatically when there are too many to label.
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic { IntegerTicksOnly = true };
+        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic { IntegerTicksOnly = true };
     }
 
     /// <summary>
@@ -1314,17 +1316,44 @@ public static partial class PlotRenderer
     /// reference/qc/experimental names); any other value (e.g. a Condition annotation) gets a cycled color.
     /// </summary>
     public static Color GroupColor(string? label, int cycleIndex = 0)
+        => TryFixedGroupColor(label, out var fixedColor) ? fixedColor : SampleColor(cycleIndex);
+
+    /// <summary>
+    /// The fixed color a sample type has, in any of its spellings - Skyline's "Standard" / "Quality
+    /// Control" / "Unknown" or PRISM's reference / qc / experimental - or false for a label that gets a
+    /// cycled color instead. Exposed so a caller assigning cycled colors can tell which labels need one.
+    /// </summary>
+    public static bool TryFixedGroupColor(string? label, out Color color)
     {
         var key = (label ?? "").Trim().ToLowerInvariant().Replace(" ", "");
-        return key switch
+        var hex = key switch
         {
-            "reference" or "standard" or "std" => Color.FromHex(TypeColors["reference"]),
-            "qc" or "qualitycontrol" => Color.FromHex(TypeColors["qc"]),
-            "experimental" or "unknown" => Color.FromHex(TypeColors["experimental"]),
-            "blank" or "solvent" or "doubleblank" => Color.FromHex(TypeColors["unknown"]),
-            _ => SampleColor(cycleIndex),
+            "reference" or "standard" or "std" => TypeColors["reference"],
+            "qc" or "qualitycontrol" => TypeColors["qc"],
+            "experimental" or "unknown" => TypeColors["experimental"],
+            "blank" or "solvent" or "doubleblank" => TypeColors["unknown"],
+            _ => null,
         };
+        color = hex is null ? default : Color.FromHex(hex);
+        return hex is not null;
     }
+
+    /// <summary>
+    /// The palette slots the fixed sample-type colors occupy - Tab20 entries 0, 1, 3 and 7 are exactly
+    /// #1f77b4, #ff7f0e, #d62728 and #7f7f7f - so a cycled group color can be kept off them. Computed
+    /// from the two tables rather than listed, so editing either cannot silently reopen a collision.
+    /// </summary>
+    private static readonly int[] FreePaletteSlots = Enumerable.Range(0, Tab20.Length)
+        .Where(i => !TypeColors.Values.Contains(Tab20[i], StringComparer.OrdinalIgnoreCase))
+        .ToArray();
+
+    /// <summary>
+    /// The palette index for the <paramref name="k"/>-th label that has no fixed color, skipping the
+    /// slots the fixed sample-type colors occupy - so a group ranked beside "QC" on the same plot is
+    /// never drawn in the QC orange. Wraps like <see cref="SampleColor"/>.
+    /// </summary>
+    public static int CycledPaletteIndex(int k) =>
+        FreePaletteSlots[((k % FreePaletteSlots.Length) + FreePaletteSlots.Length) % FreePaletteSlots.Length];
 
     /// <summary>
     /// Overlay one Gaussian-KDE density curve per sample of the (features x samples) LOG2 matrix onto

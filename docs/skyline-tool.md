@@ -128,8 +128,9 @@ rather than implying a single assignment.
 
 ### Checking a marker normalization
 
-When a run used `marker_normalization`, two extra entries appear in the **Plot** picker on the QC Plots
-tab. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
+Two extra entries appear in the **Plot** picker on the QC Plots tab while **Normalize to a protein
+list** is ticked on the Settings tab - hidden otherwise, since only a run with it on writes the file
+they read. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
 run actually subtracted, not a recomputation — so **Level** and **View** are grayed out for them: there
 is one score per replicate for the whole run, with no before/after and no peptide/protein version.
 

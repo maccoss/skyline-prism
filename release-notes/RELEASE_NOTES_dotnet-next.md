@@ -294,7 +294,7 @@ as the GitHub Release description and fails if it is missing.
 - **The QC Plots picker offers Marker score and Marker loadings only while marker normalization is
   switched on in Settings.** Both plots read `marker_normalization.csv`, which only a run with it on
   writes, so with it off they led to "This run did not record marker loadings" - a dead end reached
-  from a drop-down. The two entries are hidden rather than greyed out, and a marker plot that was
+  from a drop-down. The two entries are hidden rather than grayed out, and a marker plot that was
   showing falls back to PCA when the box is unticked.
 
 - **The RT-binned plots say which minutes each bin covers.** The bars sit at positions 0 to 7, which
