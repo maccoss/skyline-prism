@@ -533,6 +533,28 @@ as the GitHub Release description and fails if it is missing.
 
 ## Performance
 
+- **A re-run from the tool reuses what has not changed, including across machines on a shared drive.**
+  Two things stopped it. The tool re-exported every closed document on every run, so the report came
+  back with a new write time, so the merge stamp moved, so the merge and every stage under it
+  recomputed - nothing could ever be reused from the tool however little had changed. And an input was
+  stamped by its full path, so a cohort on a share stamped differently from a machine mapping it as
+  `Z:` than from one mapping it as `Y:`, and a second person re-ran the lot to arrive at identical
+  numbers.
+
+  A closed document's export is now recorded in the run's own `stage_cache.json`, beside the merge and
+  the rollups, and is reused while the document and the export settings are unchanged - saving minutes
+  of Skyline per document, plus the extraction of a `.sky.zip`. Inputs under the output directory are
+  stamped by their path relative to it, the same rule the stage cache already uses for the outputs it
+  records; size and write time were always properties of the file itself and read the same from either
+  machine. No new files: both facts live in sidecars PRISM already writes.
+
+  A document open in Skyline is still exported every time. It can carry edits that were never saved,
+  so the file on disk does not describe what Skyline would export, and nothing in the tool interface
+  reports a document hash, a revision or a modified flag to ask with. An output directory written
+  before this release keeps the stamp it recorded for as long as that stamp still describes its inputs,
+  so nothing is recomputed on upgrade; it moves to the machine-independent form the next time the
+  inputs really do change.
+
 - **Ion accounting reads each instrument file once, and the masking is effectively free.** Measured
   on a 4.44 GB Thermo file of 168,920 spectra: 206.7 s in total, of which 204.5 s is decoding
   spectra and **1.0 s** is masking 465,307 claimed regions against every one of them. So the union

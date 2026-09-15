@@ -193,10 +193,16 @@ public sealed class StageCache
         try
         {
             var full = Path.GetFullPath(path);
-            var root = Path.GetFullPath(_outputDir);
-            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-                ? Path.GetRelativePath(root, full)
-                : full;
+            var relative = Path.GetRelativePath(Path.GetFullPath(_outputDir), full);
+            // Under the directory, not merely sharing a prefix with it: "…/outside/x" starts with
+            // "…/out" and would otherwise be recorded as "../outside/x". Harmless to resolve back,
+            // but it is not what this claims to store, and SourceFingerprint applies the same rule
+            // where it decides identity rather than just a path to re-open.
+            return Path.IsPathRooted(relative) || relative == ".."
+                   || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                   || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+                ? full
+                : relative;
         }
         catch
         {
