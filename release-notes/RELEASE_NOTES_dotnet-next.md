@@ -143,6 +143,14 @@ as the GitHub Release description and fails if it is missing.
   an existing output directory re-reads its files once and comes back with ions, signal and run
   order together.
 
+- **The Ion accounting pane's per-replicate view has the QC Plots' Group-by controls.** Pick any
+  column of the Replicates report - plate, condition, subject, or Sample Type as before - and the
+  bars take one color per value of it, with the legend naming the groups; tick values to show only
+  those replicates, or none to show them all. The plot title says which replicates are shown and the
+  hover readout names a replicate's group beside it. Grouping also fixed a latent coloring defect:
+  bars of a sample type the palette did not know were each given a different cycled color, under a
+  legend swatch that matched none of them; every bar of a group now shares the group's hue.
+
 - **The tool can be told the extraction tolerance when no document can state it.** Ion accounting
   refused to run against a guessed tolerance - rightly, since the extraction window decides how much
   fragment sharing is found between co-isolated peptides and every figure would move with nothing
@@ -278,6 +286,16 @@ as the GitHub Release description and fails if it is missing.
   instrument reads - and it was the one output with no warning in front of it.
 
 ## Bug Fixes
+
+- **The Load histogram labels only whole-number loads.** A spectrum carries 0, 1, 2 ... precursors,
+  but on a short axis ScottPlot labeled the half-steps too, so the Spectrum density tab's histogram
+  read "0.5 precursors" under a bar that cannot exist. The axis now carries integer ticks only.
+
+- **The QC Plots picker offers Marker score and Marker loadings only while marker normalization is
+  switched on in Settings.** Both plots read `marker_normalization.csv`, which only a run with it on
+  writes, so with it off they led to "This run did not record marker loadings" - a dead end reached
+  from a drop-down. The two entries are hidden rather than greyed out, and a marker plot that was
+  showing falls back to PCA when the box is unticked.
 
 - **The RT-binned plots say which minutes each bin covers.** The bars sit at positions 0 to 7, which
   ScottPlot treated as an ordinary numeric axis - so it labelled the midpoints too and eight bins came

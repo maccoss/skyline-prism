@@ -82,9 +82,16 @@ public static partial class PlotRenderer
     /// of this feature reported a fraction built from mismatched units for exactly that kind of
     /// reason, and it looked entirely plausible.</para>
     /// </remarks>
+    /// <param name="groupOf">
+    /// The label that colors a replicate's bars and names them in the legend - by default its sample
+    /// type. The tool's Group-by control hands in any column of the Replicates report instead, so the
+    /// bars answer the grouping a reader asked about. Every replicate of a group shares one hue, and
+    /// the legend carries one swatch per group in that hue.
+    /// </param>
     public static void DrawIonAccounting(
         Plot plt, IonAccountingResult result, IonLevel level, string? title = null,
-        double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions, bool asFraction = false)
+        double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions, bool asFraction = false,
+        Func<IonAccountingRow, string>? groupOf = null)
     {
         // Start from an empty plot. ScottPlot's Add methods APPEND - they do not replace, and
         // neither the plottables nor the legend entries they carry go away on their own - so a
@@ -102,6 +109,18 @@ public static partial class PlotRenderer
             DrawEmptyState(plt, title ?? "No ion accounting to show", fontScale);
             return;
         }
+
+        // One palette index per group VALUE, by ordinal label order, so every bar of a group shares a
+        // hue whatever order the rows arrive in, and the legend swatch is that same hue. The ROW
+        // index used to be passed instead, which cycled a different color onto every bar of a type
+        // GroupColor did not know while keying the legend on index 0 - a rainbow across one group,
+        // under a swatch none of it matched. Sample types GroupColor knows keep their fixed colors.
+        var group = groupOf ?? (r => r.SampleType ?? "");
+        var groupIndex = rows.Select(group)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g, StringComparer.Ordinal)
+            .Select((g, i) => (Label: g, Index: i))
+            .ToDictionary(x => x.Label, x => x.Index, StringComparer.OrdinalIgnoreCase);
 
         var acquiredRaw = Selector(level, acquired: true, quantity);
         var assignedRaw = Selector(level, acquired: false, quantity);
@@ -204,6 +223,7 @@ public static partial class PlotRenderer
                 if (!rows[i].HasExplained || !drawExplained(rows[i]))
                     continue;
 
+                var label = group(rows[i]);
                 explainedBars.Add(new Bar
                 {
                     Position = i,
@@ -213,7 +233,7 @@ public static partial class PlotRenderer
                     // the quantified bar it is required to nest ABOVE, which the report elsewhere
                     // calls impossible - while the title on the same image quoted the right share.
                     Value = Finite(explainedOf(rows[i])) / scale,
-                    FillColor = ExplainedBarColor(rows[i].SampleType, i),
+                    FillColor = ExplainedBarColor(label, groupIndex[label]),
                     LineWidth = 0,
                     Size = 0.85,
                 });
@@ -226,12 +246,12 @@ public static partial class PlotRenderer
             var counted = measured == rows.Count
                 ? ""
                 : $" ({measured:N0} of {rows.Count:N0})";
-            foreach (var type in ExplainedTypes(rows, drawExplained))
+            foreach (var type in ExplainedTypes(rows, drawExplained, group))
             {
                 var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
                 explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
                 explainedKey.MarkerStyle.Size = 14;
-                explainedKey.MarkerStyle.FillColor = ExplainedBarColor(type, 0);
+                explainedKey.MarkerStyle.FillColor = ExplainedBarColor(type, groupIndex[type]);
                 explainedKey.MarkerStyle.LineWidth = 0;
                 explainedKey.LegendText = string.IsNullOrWhiteSpace(type)
                     ? "explained by any b/y or precursor ion" + counted
@@ -245,28 +265,26 @@ public static partial class PlotRenderer
             if (!drawAssigned(rows[i]))
                 continue;
 
+            var label = group(rows[i]);
             assignedBars.Add(new Bar
             {
                 Position = i,
                 Value = Finite(assignedOf(rows[i])) / scale,
-                // GroupColor cycles a palette for an unrecognized type, which is right when the
-                // colors mean something and wrong here: a cohort with no sample types is one
-                // category, and a rainbow across it reads as several. Cycle only on a type that is
-                // present and unknown to GroupColor.
-                FillColor = QuantifiedBarColor(rows[i].SampleType, i),
+                // The replicate's GROUP, at the group's own palette index - see groupIndex above.
+                FillColor = QuantifiedBarColor(label, groupIndex[label]),
                 LineWidth = 0,
                 Size = 0.85,
             });
         }
         plt.Add.Bars(assignedBars);
 
-        foreach (var type in rows.Select(r => r.SampleType)
+        foreach (var type in rows.Select(group)
                      .Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var key = plt.Add.Marker(double.NaN, double.NaN);
             key.MarkerStyle.Shape = MarkerShape.FilledSquare;
             key.MarkerStyle.Size = 14;
-            key.MarkerStyle.FillColor = QuantifiedBarColor(type, 0);
+            key.MarkerStyle.FillColor = QuantifiedBarColor(type, groupIndex[type]);
             key.MarkerStyle.LineWidth = 0;
             // "quantified" only once there is an explained series to tell it apart from; on its
             // own the old wording is what every existing report says and means the same thing.
@@ -561,13 +579,14 @@ public static partial class PlotRenderer
         new((byte)(c.R * 0.52), (byte)(c.G * 0.52), (byte)(c.B * 0.52), c.A);
 
     /// <summary>
-    /// The sample types that actually have an explained bar drawn, in the rows' own order - so the
-    /// legend lists a swatch for each and only for those.
+    /// The groups (sample types by default) that actually have an explained bar drawn, in the rows'
+    /// own order - so the legend lists a swatch for each and only for those.
     /// </summary>
     private static IEnumerable<string> ExplainedTypes(
-        IReadOnlyList<IonAccountingRow> rows, Func<IonAccountingRow, bool> drawExplained) =>
+        IReadOnlyList<IonAccountingRow> rows, Func<IonAccountingRow, bool> drawExplained,
+        Func<IonAccountingRow, string> group) =>
         rows.Where(r => r.HasExplained && drawExplained(r))
-            .Select(r => r.SampleType ?? "")
+            .Select(group)
             .Distinct(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

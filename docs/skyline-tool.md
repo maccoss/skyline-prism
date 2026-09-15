@@ -374,6 +374,12 @@ you with an error. The gradient bin defaults to **0.01 min**: 0.6 s, shorter tha
 cycle on these instruments, so it bins essentially nothing and the trace is drawn at the rate the
 run was acquired at. The QC report uses the same bin.
 
+*Per replicate* also carries the QC Plots' **Group by** controls. Pick any column of the Replicates
+report (Sample Type by default) and every bar of a group takes the group's color, with the legend
+naming the groups; tick one or more values to show only those replicates, or tick none to show them
+all. The plot title says which replicates are shown, and the hover readout names a replicate's group
+beside it.
+
 The pane is a pure read of `ion_accounting.parquet` and `ion_cycles.parquet`, so switching replicate,
 level, view, quantity or bin width is instant. It opens on the **median** replicate by assigned
 fraction rather than the first alphabetically. **The nav entry does not appear at all until those

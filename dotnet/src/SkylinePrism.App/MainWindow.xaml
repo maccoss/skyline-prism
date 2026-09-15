@@ -492,6 +492,20 @@
                                     <ComboBoxItem Tag="FileName">File name</ComboBoxItem>
                                     <ComboBoxItem Tag="SampleType">Sample type</ComboBoxItem>
                                 </ComboBox>
+                                <TextBlock x:Name="IonGroupByLabel" Text="Group by:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="IonGroupByCombo" Width="150" SelectionChanged="OnIonGroupByChanged"
+                                          ToolTip="Column from the Replicates report to group replicates by (defaults to Sample Type). Every bar of a group takes the group's color, and the legend names the groups." />
+                                <TextBlock x:Name="IonGroupEqualsLabel" Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                <ComboBox x:Name="IonGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
+                                          ToolTip="Values to include. Tick more than one to compare them without the rest; tick none to show every replicate.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                                 <TextBlock x:Name="IonReplicateLabel" Text="Replicate:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
                                 <ComboBox x:Name="IonReplicateCombo" Width="240"

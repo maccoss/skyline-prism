@@ -272,6 +272,54 @@ public class IonPlotTests
         Assert.Equal(0, LegendEntries(plt));
     }
 
+    /// <summary>
+    /// The bars can be colored by any per-replicate label, not only the sample type - the tool's
+    /// Group-by control hands one in. Every replicate of a group shares its hue, the legend carries
+    /// one swatch per group in that same hue, and the sample type appears nowhere.
+    /// </summary>
+    [Fact]
+    public void GroupingColorsEveryBarOfAGroupAlikeAndNamesEachGroupOnce()
+    {
+        var result = Result(Row("s1", 40), Row("s2", 30), Row("s3", 35), Row("s4", 20));
+        var plate = new Dictionary<string, string>
+        {
+            ["s1"] = "Plate 1", ["s2"] = "Plate 1", ["s3"] = "Plate 2", ["s4"] = "Plate 2",
+        };
+        var plt = new Plot();
+
+        PlotRenderer.DrawIonAccounting(
+            plt, result, PlotRenderer.IonLevel.Ms2, groupOf: r => plate[r.Sample]);
+
+        // The quantified series is the last bar series added; its bars sit at 0..3 in row order.
+        var quantified = plt.GetPlottables<BarPlot>().Last().Bars.OrderBy(b => b.Position).ToList();
+        Assert.Equal(4, quantified.Count);
+        Assert.Equal(quantified[0].FillColor.ToHex(), quantified[1].FillColor.ToHex());
+        Assert.Equal(quantified[2].FillColor.ToHex(), quantified[3].FillColor.ToHex());
+        Assert.NotEqual(quantified[0].FillColor.ToHex(), quantified[2].FillColor.ToHex());
+
+        var keys = plt.GetPlottables<Marker>().Where(m => !string.IsNullOrEmpty(m.LegendText)).ToList();
+        var plate1 = Assert.Single(keys, k => k.LegendText.Contains("(Plate 1)"));
+        var plate2 = Assert.Single(keys, k => k.LegendText.Contains("(Plate 2)"));
+        Assert.DoesNotContain(keys, k => k.LegendText.Contains("experimental"));
+
+        // The swatch is the bars' own hue, so the legend can be read against the plot.
+        Assert.Equal(quantified[0].FillColor.ToHex(), plate1.MarkerStyle.FillColor.ToHex());
+        Assert.Equal(quantified[2].FillColor.ToHex(), plate2.MarkerStyle.FillColor.ToHex());
+    }
+
+    /// <summary>Without a group the bars are colored by sample type, as they always were.</summary>
+    [Fact]
+    public void WithoutAGroupTheLegendNamesTheSampleType()
+    {
+        var plt = new Plot();
+
+        PlotRenderer.DrawIonAccounting(
+            plt, Result(Row("s1", 40), Row("s2", 30)), PlotRenderer.IonLevel.Ms2);
+
+        var keys = plt.GetPlottables<Marker>().Where(m => !string.IsNullOrEmpty(m.LegendText)).ToList();
+        Assert.Single(keys, k => k.LegendText.Contains("(experimental)"));
+    }
+
     /// <summary>Legend entries come from the plottables, so this counts what a reader would see.</summary>
     private static int LegendEntries(Plot plt) =>
         plt.GetPlottables()

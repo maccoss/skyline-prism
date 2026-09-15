@@ -67,6 +67,12 @@ public partial class MainWindow
     /// </summary>
     private IReadOnlyList<IonAccountingRow> _ionDrawn = Array.Empty<IonAccountingRow>();
 
+    /// <summary>
+    /// The Group-by value list for the bar view, the same shape as the QC pane's: several values can
+    /// be ticked, and an empty selection means every replicate.
+    /// </summary>
+    private List<QcGroupValue> _ionGroupValues = new();
+
     /// <summary>Set by the describe helpers, consumed by the caller that writes the status line.</summary>
     private string? _ionStatusDetail;
 
@@ -325,6 +331,11 @@ public partial class MainWindow
                         Samples: (IReadOnlyList<string>)Array.Empty<string>());
             }
             var read = IonAccountingStore.Read(dir, App.WriteLog);
+            // The Group-by picker reads the same Replicates reports the QC pane does. Loaded here, off
+            // the UI thread, only when the QC pane has not loaded this directory itself - a previous
+            // run opened straight onto this pane has no QC data yet.
+            if (!string.Equals(_qcOutputDir, dir, StringComparison.OrdinalIgnoreCase))
+                LoadReplicatesReports(Path.Combine(dir, "skyline-reports"));
             // The replicate list is a second trip to the same share, and only the profile views
             // need it - so it is skipped entirely when there is nothing to plot.
             var samples = read is null || read.Rows.Count == 0
@@ -389,6 +400,7 @@ public partial class MainWindow
         }
 
         PopulateIonReplicates(probe.Samples);
+        PopulateIonGroupCombos();
         UpdateIonControls();
         await RenderIonAsync();
     }
@@ -456,11 +468,135 @@ public partial class MainWindow
         IonBinLabel.Visibility = visibility;
         IonBinBox.Visibility = visibility;
 
-        // The order only means anything where there is a bar per replicate; the profile views have
-        // one replicate and a retention-time axis.
+        // The order and the grouping only mean anything where there is a bar per replicate; the
+        // profile views have one replicate and a retention-time axis.
         var forBars = profile ? Visibility.Collapsed : Visibility.Visible;
         IonSortLabel.Visibility = forBars;
         IonSortCombo.Visibility = forBars;
+        IonGroupByLabel.Visibility = forBars;
+        IonGroupByCombo.Visibility = forBars;
+        IonGroupEqualsLabel.Visibility = forBars;
+        IonGroupCombo.Visibility = forBars;
+    }
+
+    // ------------------------------------------------------------------ group by
+
+    /// <summary>The Replicates-report column the bars are grouped by; Sample Type until chosen.</summary>
+    private string IonGroupColumn => ComboText(IonGroupByCombo, "Sample Type");
+
+    private static bool IsSampleTypeColumn(string column) =>
+        column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A replicate's value in the Group-by column. Sample Type falls back to the type the measurement
+    /// itself recorded, so grouping still works on a directory whose Replicates reports are gone; any
+    /// other column with no value for a replicate reads "(none)", the way the PCA plot labels it.
+    /// </summary>
+    private string IonGroupLabel(IonAccountingRow row, string column)
+    {
+        var value = SampleAnnotation(row.Sample, column);
+        if (!string.IsNullOrEmpty(value))
+            return value;
+        return IsSampleTypeColumn(column) ? row.SampleType ?? "" : "(none)";
+    }
+
+    /// <summary>
+    /// Fill the Group-by column picker from the Replicates reports (Sample Type by default), then its
+    /// values from the replicates actually measured. The same construction as the QC pane's
+    /// PopulateGroupCombos, over this pane's own rows.
+    /// </summary>
+    private void PopulateIonGroupCombos()
+    {
+        _suppressIonRender = true;
+        try
+        {
+            var previous = ComboText(IonGroupByCombo, "");
+            var columns = _groupColumns.Count > 0 ? _groupColumns : new List<string> { "Sample Type" };
+            IonGroupByCombo.Items.Clear();
+            foreach (var c in columns)
+                IonGroupByCombo.Items.Add(c);
+            // Keep the user's column across a reload where it survived; otherwise Sample Type.
+            var index = columns.FindIndex(c => c.Equals(previous, StringComparison.Ordinal));
+            if (index < 0)
+                index = columns.FindIndex(IsSampleTypeColumn);
+            IonGroupByCombo.SelectedIndex = index >= 0 ? index : 0;
+            PopulateIonValueCombo();
+        }
+        finally
+        {
+            _suppressIonRender = false;
+        }
+    }
+
+    private void PopulateIonValueCombo()
+    {
+        var column = IonGroupColumn;
+        var values = new SortedSet<string>(StringComparer.Ordinal);
+        if (_ionResult is not null)
+        {
+            foreach (var row in _ionResult.Rows)
+                values.Add(IonGroupLabel(row, column));
+        }
+        _ionGroupValues = values
+            .Select(v => new QcGroupValue { Name = v, Changed = OnIonGroupValueToggled })
+            .ToList();
+        IonGroupCombo.ItemsSource = _ionGroupValues;
+        UpdateIonGroupSummary();
+    }
+
+    /// <summary>The ticked values, or an empty set meaning "no filter - every replicate".</summary>
+    private HashSet<string> SelectedIonGroupValues()
+    {
+        var set = new HashSet<string>(QcGroupFilter.Comparer);
+        foreach (var v in _ionGroupValues.Where(v => v.IsSelected))
+            set.Add(v.Name);
+        return set;
+    }
+
+    /// <summary>The closed-state text: the dropdown itself shows tick boxes, not a selected item.</summary>
+    private void UpdateIonGroupSummary()
+    {
+        if (IonGroupCombo is null)
+            return;
+        var selected = _ionGroupValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        IonGroupCombo.Text = QcGroupFilter.Summarize(selected, _ionGroupValues.Count);
+    }
+
+    private async void OnIonGroupByChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _suppressIonRender)
+                return;
+            _suppressIonRender = true;
+            try
+            {
+                PopulateIonValueCombo();
+            }
+            finally
+            {
+                _suppressIonRender = false;
+            }
+            await RenderIonAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonGroupByChanged), ex);
+        }
+    }
+
+    private async void OnIonGroupValueToggled()
+    {
+        try
+        {
+            UpdateIonGroupSummary();
+            if (!_suppressIonRender)
+                await RenderIonAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnIonGroupValueToggled), ex);
+        }
     }
 
     /// <summary>
@@ -497,7 +633,13 @@ public partial class MainWindow
                 IonHoverText.Text = "";
                 return;
             }
-            IonHoverText.Text = DescribeIonBar(_ionDrawn[index], IonLevel, IonQuantity);
+            // The group beside the replicate, when the bars are grouped by something other than the
+            // sample type the readout already names.
+            var column = IonGroupColumn;
+            IonHoverText.Text = DescribeIonBar(_ionDrawn[index], IonLevel, IonQuantity)
+                + (IsSampleTypeColumn(column)
+                    ? ""
+                    : $"; {column} = {IonGroupLabel(_ionDrawn[index], column)}");
         }
         catch (Exception ex)
         {
@@ -604,13 +746,37 @@ public partial class MainWindow
             // _ionDrawn exists to prevent.
             _ionRequest++;
 
+            // The Group-by filter, as on the QC pane: ticked values show only those replicates, none
+            // ticked shows them all. Applied BEFORE the sort, so the hover still indexes what was drawn.
+            var column = IonGroupColumn;
+            var selected = SelectedIonGroupValues();
+            var rows = result.Rows;
+            if (selected.Count > 0)
+            {
+                var keep = QcGroupFilter.Matching(
+                    rows.Count, i => IonGroupLabel(rows[i], column), selected);
+                rows = keep.Select(i => rows[i]).ToList();
+                if (rows.Count == 0)
+                {
+                    ShowIonMessage($"No replicates with {column} = {QcGroupFilter.Describe(selected)}.");
+                    return;
+                }
+            }
+
             // Sorted HERE and not in the renderer: the pane has to keep the order it drew to
             // answer the hover, and a renderer that sorted privately would leave it guessing.
-            var ordered = IonRowOrder.Sort(result.Rows, IonSort);
+            var ordered = IonRowOrder.Sort(rows, IonSort);
             _ionDrawn = ordered;
+            // Colored by the Group-by column when it is not Sample Type, so the bars answer the
+            // grouping that was asked for; Sample Type is the renderer's own default.
+            Func<IonAccountingRow, string>? groupOf = IsSampleTypeColumn(column)
+                ? null
+                : r => IonGroupLabel(r, column);
+            var title = IonBarTitle(result, level)
+                + (selected.Count > 0 ? $" - {column} = {QcGroupFilter.Describe(selected)}" : "");
             PlotRenderer.DrawIonAccounting(
                 IonPlot.Plot, result with { Rows = ordered }, level,
-                IonBarTitle(result, level), 1.0, IonQuantity, IonAsFraction);
+                title, 1.0, IonQuantity, IonAsFraction, groupOf);
             IonPlot.Refresh();
             var line = DescribeIon(result, level) + IonOrderNote(result);
             SetIonStatus(line, _ionStatusDetail);
