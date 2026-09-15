@@ -101,8 +101,13 @@ public sealed record ExistingResults(
 
         var names = string.Join(", ", files.Take(4))
             + (files.Count > 4 ? $" and {files.Count - 4:N0} more" : "");
-        return $"This output directory already holds a finished analysis from {Describe()}. "
-            + $"Running here overwrites it, including {names}.";
+        // The files are named as what IS THERE, not as what this run will rewrite. A stage whose
+        // inputs and settings have not moved is reused rather than recomputed, so a particular file
+        // may survive untouched - and naming it as overwritten would be a claim this cannot make.
+        // What is certainly replaced is the analysis: its provenance, its report, and every output
+        // any stage does recompute.
+        return $"This output directory already holds a finished analysis from {Describe()}, "
+            + $"including {names}. Running here overwrites it.";
     }
 
     /// <summary>The run that produced what is here, as a reader would recognize it.</summary>
@@ -173,12 +178,22 @@ public sealed record ExistingResults(
     /// intermediates and caches are working state a re-run is expected to churn, and listing them
     /// would bury the two files someone actually cares about losing.
     /// </remarks>
+    /// <remarks>
+    /// Every extension <c>output.format</c> can produce, not just the default: a cohort written as
+    /// tsv leaves <c>corrected_peptides.tsv</c>, and listing only the parquet and csv spellings would
+    /// name <c>protein_groups.csv</c> and the report while omitting the two files someone actually
+    /// minds losing. (The directory is still recognized as holding results either way -
+    /// <c>protein_groups.csv</c> is rewritten on every run whatever the format - so this is about
+    /// naming them, not about noticing them.)
+    /// </remarks>
     private static readonly string[] Reported =
     {
         "corrected_peptides.parquet",
         "corrected_proteins.parquet",
         "corrected_peptides.csv",
         "corrected_proteins.csv",
+        "corrected_peptides.tsv",
+        "corrected_proteins.tsv",
         "protein_groups.csv",
         "qc_report.html",
     };
@@ -222,12 +237,9 @@ public sealed record ExistingResults(
         {
             json = File.ReadAllText(provenance);
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("pipeline_version", out var v))
-                version = v.GetString();
-            if (doc.RootElement.TryGetProperty("processing_date", out var d))
-                date = d.GetString();
-            if (doc.RootElement.TryGetProperty("host", out var h))
-                host = h.GetString();
+            version = Text(doc.RootElement, "pipeline_version");
+            date = Text(doc.RootElement, "processing_date");
+            host = Text(doc.RootElement, "host");
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -287,6 +299,21 @@ public sealed record ExistingResults(
             true, version, date, sameVersion, recomputed,
             files.Length > 0 ? files : present, exact, inputsChanged, host, present);
     }
+
+    /// <summary>
+    /// One string property of the provenance, or null when it is absent or is not a string.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="JsonElement.GetString"/> THROWS on a value of another kind, and
+    /// <see cref="InvalidOperationException"/> is not among the exceptions the caller catches - so a
+    /// provenance file carrying, say, a numeric host would have aborted the whole pre-run check and
+    /// with it the run, over a field used for nothing but a sentence. These three are display
+    /// metadata: absent, blank and malformed all mean the same thing here.
+    /// </remarks>
+    private static string? Text(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.String
+            ? e.GetString()
+            : null;
 
     /// <summary>
     /// The index in <see cref="Chain"/> of the first stage this run would recompute, or -1 when it

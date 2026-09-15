@@ -129,6 +129,57 @@ public class ExistingResultsTests : IDisposable
         Assert.Contains("SCARFELL", prompt, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A cohort written as tsv names its own outputs, not just the two files whose extension does not
+    /// depend on <c>output.format</c>.
+    /// </summary>
+    /// <remarks>
+    /// The directory was always recognized as holding results - protein_groups.csv is rewritten on
+    /// every run whatever the format - but the question named it and the report while leaving out the
+    /// two files someone actually minds losing.
+    /// </remarks>
+    [Fact]
+    public void ATsvAnalysisNamesItsOwnOutputs()
+    {
+        var config = new PrismConfig();
+        Results(config);
+        File.Delete(Path.Combine(_dir, "corrected_peptides.parquet"));
+        File.Delete(Path.Combine(_dir, "corrected_proteins.parquet"));
+        File.WriteAllText(Path.Combine(_dir, "corrected_peptides.tsv"), "x");
+        File.WriteAllText(Path.Combine(_dir, "corrected_proteins.tsv"), "x");
+
+        var prompt = ExistingResults.Inspect(_dir, config).OverwritePrompt()!;
+        Assert.Contains("corrected_peptides.tsv", prompt, StringComparison.Ordinal);
+        Assert.Contains("corrected_proteins.tsv", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A provenance field of the wrong type is ignored, not thrown over.
+    /// </summary>
+    /// <remarks>
+    /// <c>JsonElement.GetString()</c> throws on a value of another kind, and
+    /// <c>InvalidOperationException</c> is not among the exceptions Inspect catches - so a numeric
+    /// host aborted the whole pre-run check, and with it the run, over a field used for nothing but a
+    /// sentence.
+    /// </remarks>
+    [Fact]
+    public void AProvenanceFieldOfTheWrongTypeIsIgnored()
+    {
+        var config = new PrismConfig();
+        Results(config);
+        var path = Path.Combine(_dir, Provenance.FileName);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        json["host"] = 123;
+        json["pipeline_version"] = true;
+        File.WriteAllText(path, json.ToJsonString());
+
+        var existing = ExistingResults.Inspect(_dir, config);
+
+        var prompt = existing.OverwritePrompt()!;
+        Assert.Contains("already holds a finished analysis", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("123", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>Rewrite the recorded host, as a run on another computer would have left it.</summary>
     private void SetRecordedHost(string host)
     {
