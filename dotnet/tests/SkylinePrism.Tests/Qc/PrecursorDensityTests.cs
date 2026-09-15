@@ -151,7 +151,7 @@ public class PrecursorDensityTests
     /// A scheduled window is credited only while it was firing.
     /// </summary>
     /// <remarks>
-    /// The sweep replaced a per-bin <c>IsOnAt(binCentre)</c> test with a clip of the peak to the
+    /// The sweep replaced a per-bin <c>IsOnAt(binCenter)</c> test with a clip of the peak to the
     /// window's firing interval. They agree because IsOnAt is exactly that interval - but nothing
     /// exercised it, and this is the path where getting it wrong credits a precursor to a same-m/z
     /// window that fired in a different RT segment, which is what the Covers() check exists to stop.
@@ -202,14 +202,53 @@ public class PrecursorDensityTests
         };
 
         var fine = PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 0.01);
-        var coarse = PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 1.0);
+        var coarse = PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 0.3);
 
+        // The worst case is the same either way - that is the bin independence.
         Assert.Equal(2, Max(fine));
         Assert.Equal(2, Max(coarse));
 
-        Assert.True(fine.RtBins > 50, $"{fine.RtBins} columns is not a fine grid");
-        Assert.True(Cells(fine, 2) <= 5, $"{Cells(fine, 2)} columns show both, expected a handful");
-        Assert.Equal(coarse.RtBins, Cells(coarse, 2));   // every column it has
+        // What differs is how much of the run is TOLD it was that busy. Asserted as a fraction, and
+        // against a coarse grid with more than one column: a single-column coarse map would make the
+        // comparison 1 == 1, which any implementation passes, including the one this replaced.
+        Assert.True(coarse.RtBins > 1, "a one-column coarse map cannot show the contrast");
+        var fineShare = Cells(fine, 2) / (double)fine.RtBins;
+        var coarseShare = Cells(coarse, 2) / (double)coarse.RtBins;
+
+        Assert.True(fineShare < 0.10, $"fine grid flagged {fineShare:P0} of the run");
+        Assert.True(coarseShare >= 0.40, $"coarse grid flagged only {coarseShare:P0} of the run");
+    }
+
+    /// <summary>
+    /// A precursor the window never acquired adds nothing to the concurrency of one it did.
+    /// </summary>
+    /// <remarks>
+    /// <para>The exclusion is Covers(), which drops a precursor whose peak never overlaps the firing
+    /// interval at all - and this pins that it survived the move from counting to sweeping, with a
+    /// second precursor present so the two are actually combined.</para>
+    ///
+    /// <para>It does NOT isolate the clip that narrows a surviving peak to the firing interval, and
+    /// no test can: for two peaks to overlap each other only outside the window while each still
+    /// overlaps the window, they would have to touch it at disjoint ends, which leaves them not
+    /// overlapping at all. The clip's effect is on WHICH COLUMNS a peak marks, which is what
+    /// AScheduledWindowIsCreditedOnlyWhileItWasFiring asserts.</para>
+    /// </remarks>
+    [Fact]
+    public void APrecursorOutsideTheScheduleAddsNothingToConcurrency()
+    {
+        var scheme = new IsolationScheme(
+            "scheduled", new[] { new IsolationWindow(500.0, 510.0, 0, 10.0, 20.0) });
+
+        var map = PrecursorDensity.Bin(
+            new[]
+            {
+                new DetectedPrecursor(505.0, 12.0, 25.0),
+                new DetectedPrecursor(506.0, 22.0, 30.0),   // overlaps the first only after 22 min
+            },
+            scheme, rtBinMin: 1.0);
+
+        // The window stopped firing at 20; the overlap starts at 22.
+        Assert.Equal(1, Max(map));
     }
 
     /// <summary>A non-finite boundary is skipped, not thrown over.</summary>

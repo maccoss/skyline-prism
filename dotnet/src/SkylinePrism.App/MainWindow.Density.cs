@@ -713,7 +713,10 @@ public partial class MainWindow
         return row < 0 || col < 0 || col >= map.RtBins
             ? ""
             : $"m/z {map.Rows[row].Start:0.#}-{map.Rows[row].End:0.#} "
-              + $"at {map.RtLow + col * map.RtBinMin:0.##} min: {map.Counts[row, col]:N0} precursors";
+              // "co-eluting", not "precursors": the cell is the most that overlapped at any one
+              // instant, not a tally of everything that passed through the column.
+              + $"at {map.RtLow + col * map.RtBinMin:0.##} min: "
+              + $"{map.Counts[row, col]:N0} co-eluting precursors";
     }
 
     // The bars are at integer loads, so the bar under the cursor is the nearest whole number.

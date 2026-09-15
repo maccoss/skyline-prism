@@ -11,11 +11,20 @@ namespace SkylinePrism.Core.Qc;
 public readonly record struct DetectedPrecursor(double Mz, double RtStart, double RtStop);
 
 /// <summary>
-/// Precursor counts on an (m/z band x RT bin) grid. When the bands are the acquisition's real isolation
-/// windows, one cell IS one DIA spectrum: cell (i, j) counts the precursors whose m/z falls in window i
-/// and whose peak is eluting during RT bin j - i.e. how many peptide precursors that spectrum had to
-/// resolve. Rows are explicit [Low, High) bands rather than a uniform bin size, because real schemes are
-/// not obliged to be uniform, gapless or non-overlapping.
+/// Co-eluting precursor counts on an (m/z band x RT column) grid. Cell (i, j) is the GREATEST number of
+/// precursors whose m/z falls in window i and which were eluting AT ANY ONE INSTANT inside column j -
+/// how many peptide precursors a single spectrum had to resolve.
+/// <para>
+/// At an instant, not over the column: a cell is not a tally of everything that passed through that
+/// stretch of time. Two peptides, one finishing before the other starts, are one and one, never two -
+/// no spectrum ever saw both. That is what keeps the number from growing with the column width, and it
+/// is why cells cannot be summed or averaged across columns as though they were counts.
+/// </para>
+/// <para>
+/// When the bands are the acquisition's real isolation windows and the column is about one acquisition
+/// cycle, one cell IS one DIA spectrum. Rows are explicit [Low, High) bands rather than a uniform bin
+/// size, because real schemes are not obliged to be uniform, gapless or non-overlapping.
+/// </para>
 /// </summary>
 public sealed record PrecursorDensityMap(
     IReadOnlyList<IsolationWindow> Rows,
@@ -386,7 +395,7 @@ public static class PrecursorDensity
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme, scheme.Windows.Count);
         var counts = new int[scheme.Windows.Count, nRt];
-        var peaks = new List<(double Start, double Stop)>[scheme.Windows.Count];
+        var peaks = new List<(double Start, double Stop)>?[scheme.Windows.Count];
         var outside = 0;
         foreach (var p in precursors)
         {
@@ -414,10 +423,7 @@ public static class PrecursorDensity
                 outside++;
         }
         for (var row = 0; row < scheme.Windows.Count; row++)
-        {
             FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
-            peaks[row] = null!;   // a row's intervals are dead once swept
-        }
         return new PrecursorDensityMap(
             scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
@@ -460,17 +466,14 @@ public static class PrecursorDensity
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, nMz: nMz);
         var counts = new int[nMz, nRt];
-        var peaks = new List<(double Start, double Stop)>[nMz];
+        var peaks = new List<(double Start, double Stop)>?[nMz];
         foreach (var p in precursors)
         {
             var row = Math.Clamp((int)((p.Mz - mzLo) / mzBinTh), 0, nMz - 1);
             (peaks[row] ??= new List<(double, double)>()).Add((p.RtStart, p.RtStop));
         }
         for (var row = 0; row < nMz; row++)
-        {
             FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
-            peaks[row] = null!;   // a row's intervals are dead once swept
-        }
         return new PrecursorDensityMap(
             rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
             RtBinRequested: rtBinMin);
@@ -518,11 +521,11 @@ public static class PrecursorDensity
             events.Add((start, 1));
             events.Add((stop, -1));
 
-            // A peak with no width still happened. Without this it would open and close at the same
-            // instant, leave a zero-length segment, and vanish from a plot whose job is to say what
-            // was there. Only for those peaks: the sweep covers every peak that has width, and doing
-            // this for all of them would put values in the grid before the sweep that the sweep then
-            // has to overwrite.
+            // A peak with no width still happened. The sweep usually covers it anyway - its segment
+            // is zero-length, but floor and ceil of the same instant differ whenever it falls inside
+            // a column, so one column is filled. The exception is a peak landing exactly on a column
+            // edge, where floor equals ceil, no column is written, and the peak would vanish from a
+            // plot whose job is to say what was there. Cheaper to mark it than to test for the edge.
             if (stop > start)
                 continue;
             var at = (int)Math.Floor((start - rtLo) / rtBin);
