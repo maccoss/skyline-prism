@@ -23,12 +23,25 @@ public sealed record PrecursorDensityMap(
     int[,] Counts,
     string RowSource,
     int PrecursorsOutsideRows = 0,
-    bool RowsAreWindows = true)
+    bool RowsAreWindows = true,
+    double RtBinRequested = 0)
 {
     // RowsAreWindows: whether a cell IS a spectrum. True when Rows are the acquisition's real isolation
     // windows; false on the approximate uniform-bin fallback, where a row is a bin no single spectrum
     // covered. Carried explicitly rather than inferred from RowSource - a display string is not a
     // contract, and what a cell counts is the one thing a reader must not be told wrongly.
+
+    /// <summary>
+    /// Whether the RT bin had to be widened past what the caller asked for.
+    /// </summary>
+    /// <remarks>
+    /// The same class of fact as <see cref="RowsAreWindows"/>, on the other axis. A cell answers "how
+    /// many peptides did one spectrum have to deal with", and that is a question about ONE
+    /// acquisition cycle: bin much wider than a cycle and the cell unions precursors that were never
+    /// in the same spectrum, so the count comes out artifactually large. A widened bin is therefore
+    /// not a resolution detail, it is a different quantity - and the reader has to be told.
+    /// </remarks>
+    public bool RtBinWidened => RtBinRequested > 0 && RtBinMin > RtBinRequested * 1.001;
 
     public int MzBins => Counts.GetLength(0);
     public int RtBins => Counts.GetLength(1);
@@ -207,9 +220,16 @@ public static class PrecursorDensity
     /// The default RT bin, in minutes.
     /// </summary>
     /// <remarks>
-    /// 0.01 min is 0.6 s, which is several acquisition cycles rather than a fraction of one - the
-    /// same bin the ion accounting views default to, and for the same reason: a coarser bin averages
-    /// away the thing these plots are looked at to find. It was 0.1, inherited from Cadenza.
+    /// <para><b>This is a correctness bound, not a resolution preference.</b> A cell answers "how many
+    /// peptides did one spectrum have to deal with", which is a question about ONE acquisition cycle.
+    /// Bin much wider than a cycle and the cell unions precursors that were never co-isolated in the
+    /// same spectrum - they merely eluted within the same stretch of time - and the count comes out
+    /// artifactually large. The same applies to the load-over-time view, which reads the same
+    /// grid.</para>
+    ///
+    /// <para>0.01 min is 0.6 s, about one cycle on the cohorts this was built for, and the same bin
+    /// the ion accounting views default to. It was 0.1 - ten times a cycle - inherited from Cadenza.
+    /// Do not widen it for a smoother-looking plot: the smoothing is the artifact.</para>
     /// </remarks>
     public const double DefaultRtBinMin = 0.01;
 
@@ -362,7 +382,8 @@ public static class PrecursorDensity
             if (!matched)
                 outside++;
         }
-        return new PrecursorDensityMap(scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside);
+        return new PrecursorDensityMap(
+            scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
 
     /// <summary>
@@ -412,7 +433,8 @@ public static class PrecursorDensity
                 counts[row, j]++;
         }
         return new PrecursorDensityMap(
-            rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false);
+            rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
+            RtBinRequested: rtBinMin);
     }
 
     /// <summary>Label that marks a map as approximate, so it can never be mistaken for real windows.</summary>

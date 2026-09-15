@@ -43,6 +43,7 @@ public class PrecursorDensityTests
 
         Assert.Equal(0.01, map.RtBinMin, 6);
         Assert.True(map.RtBins > 5900, $"{map.RtBins} RT bins is coarser than asked for");
+        Assert.False(map.RtBinWidened, "an honored bin must not report itself as widened");
     }
 
     /// <summary>
@@ -62,6 +63,12 @@ public class PrecursorDensityTests
             mzBinTh: 0.05, rtBinMin: 0.01);
 
         Assert.True(map.RtBinMin > 0.01, "the RT bin did not widen");
+
+        // And it SAYS so. A cell that spans several cycles unions precursors that were never in one
+        // spectrum, so the co-detection counts run high - a different quantity, not a coarser view
+        // of the same one, and not something a reader should have to infer from the bin width.
+        Assert.True(map.RtBinWidened);
+        Assert.Equal(0.01, map.RtBinRequested, 6);
         Assert.True(
             (long)map.MzBins * map.RtBins <= 12_000_000,
             $"{map.MzBins} x {map.RtBins} is over the cell budget");
