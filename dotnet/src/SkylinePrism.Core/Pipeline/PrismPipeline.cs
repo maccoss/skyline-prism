@@ -98,11 +98,15 @@ public sealed class PrismPipeline
         // partitioning follows the peptide column, so a changed data.* override makes the merged table
         // wrong even though every input file is untouched. Fingerprinting only the files meant the
         // merge was reused while everything below it recomputed - from a stale table.
-        var fingerprint = SourceFingerprint.Compute(inputs)
-            + "|" + StageDependencies.Values(StageDependencies.Merge, config);
+        var cached = forceReprocess ? null : SourceFingerprint.TryRead(cachePath);
+        // Relative to the output directory where it can be, so the same cohort on a share stamps the
+        // same from any machine - but keeping whatever form this directory already recorded while it
+        // still holds, because this stamp is the upstream of every stage fingerprint below it.
+        var fingerprint = SourceFingerprint.Preferred(
+            cached?.Fingerprint, inputs, outputDir,
+            "|" + StageDependencies.Values(StageDependencies.Merge, config));
 
         DuckDbMerge.MergeResult merge;
-        var cached = forceReprocess ? null : SourceFingerprint.TryRead(cachePath);
         if (cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath))
         {
             // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before the

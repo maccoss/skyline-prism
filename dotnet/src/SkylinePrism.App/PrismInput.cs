@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.RawData;
 using SkylinePrism.Skyline;
@@ -174,15 +175,41 @@ public sealed class PrismInput : INotifyPropertyChanged
                 var session = Session
                     ?? throw new InvalidOperationException($"{DisplayName}: no Skyline connection for this input.");
                 var driver = new SkylineReportDriver(session, scoped);
+                // Deliberately never reused. An open document can carry edits that have not been
+                // saved, so the file on disk does not describe what Skyline would export - and there
+                // is no way to ask: neither the tool service nor the JSON-RPC surface reports a
+                // document hash, a revision or a modified flag. Exporting is the only honest answer.
                 return driver.Export(reportsDir, metadataReportName, batchAnnotation, label);
             }
 
             case PrismInputKind.ClosedDocument:
             {
+                // A closed document cannot have changed without its file changing, so an export whose
+                // document and settings are unchanged is still current - and exporting is minutes of
+                // Skyline per document, plus an extraction for a .sky.zip. Recorded in the run's own
+                // stage_cache.json, as one more stage beside the merge and the rollups.
+                var stage = ExportStageId(label);
+                var fingerprint = ExportFingerprint(Path, label, metadataReportName, batchAnnotation);
+                var cache = outputDir is null || fingerprint is null ? null : StageCache.Load(outputDir);
+                if (cache is not null && cache.CanReuse(stage, fingerprint!))
+                {
+                    var reused = ReuseExport(cache, stage, outputDir!, Path!, label);
+                    if (reused is not null)
+                    {
+                        scoped($"Reusing the report already exported from {DisplayName} - the document "
+                            + "has not changed since it was written.");
+                        return reused;
+                    }
+                }
+
                 var document = ResolveDocumentForExport(outputDir, scoped, cancellationToken);
                 var exporter = HeadlessSkylineExporter.Create(skylineCmdPath, scoped);
-                return exporter.Export(
+                var exported = exporter.Export(
                     document, reportsDir, label, batchAnnotation, cancellationToken);
+                // After the export, never before: an entry written first would survive a failure and
+                // vouch for a report that was never finished. StageCache.Record claims only what exists.
+                cache?.Record(stage, fingerprint!, exported.InputPath, exported.ReplicatesCsv);
+                return exported;
             }
 
             default:
@@ -211,6 +238,69 @@ public sealed class PrismInput : INotifyPropertyChanged
     /// The run's output directory - where an extraction goes when the archive's own folder cannot be
     /// written to. Null is allowed; the extraction then falls back to the temp directory.
     /// </param>
+    /// <summary>
+    /// The stage id an input's export is recorded under. One per batch label, because that is what
+    /// names the exported file and therefore what a second document would collide with.
+    /// </summary>
+    internal static string ExportStageId(string label) => "export." + label;
+
+    /// <summary>
+    /// What makes an already-exported report still current: the document, plus everything about the
+    /// export that decides the file's content. Null when the document cannot be stamped, which means
+    /// "export it" - the safe direction.
+    /// </summary>
+    /// <remarks>
+    /// The document's NAME, size and last-write time, not its full path. The same document on a share
+    /// is <c>Z:\...</c> from one machine and <c>Y:\...</c> from another, and a full path would re-export
+    /// a report that is already correct - which is the whole case this exists for. Size and write time
+    /// are properties of the file itself and read the same from either machine. The PRISM version is in
+    /// it because a change to what PRISM asks Skyline for changes the report without touching anything
+    /// here.
+    /// </remarks>
+    internal static string? ExportFingerprint(
+        string? documentPath, string label, string? metadataReportName, string? batchAnnotation)
+    {
+        if (string.IsNullOrWhiteSpace(documentPath))
+            return null;
+        try
+        {
+            var info = new FileInfo(documentPath);
+            if (!info.Exists)
+                return null;
+            return string.Join('|',
+                System.IO.Path.GetFileName(documentPath), info.Length, info.LastWriteTimeUtc.Ticks,
+                label, metadataReportName ?? "", batchAnnotation ?? "", PrismVersion.Current);
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException
+                                       or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The reports a recorded export claimed, or null when the entry does not describe a usable pair.
+    /// <see cref="StageCache.CanReuse"/> has already checked that they exist and are not empty.
+    /// </summary>
+    private static ExportedReports? ReuseExport(
+        StageCache cache, string stage, string outputDir, string documentPath, string label)
+    {
+        var recorded = cache.OutputsOf(stage);
+        if (recorded.Count == 0)
+            return null;
+
+        // Recorded relative to the output directory (StageCache.Relative), which is what lets one
+        // machine read what another wrote; Path.Combine returns an absolute entry unchanged.
+        var report = System.IO.Path.Combine(outputDir, recorded[0]);
+        var metadata = recorded.Count > 1 ? System.IO.Path.Combine(outputDir, recorded[1]) : null;
+        return new ExportedReports(
+            report,
+            System.IO.Path.GetExtension(report).Equals(".parquet", StringComparison.OrdinalIgnoreCase),
+            metadata,
+            documentPath,
+            label);
+    }
+
     internal string ResolveDocumentForExport(
         string? outputDir, Action<string> log, CancellationToken cancellationToken) =>
         IsSharedArchive

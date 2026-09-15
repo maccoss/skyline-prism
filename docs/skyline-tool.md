@@ -525,6 +525,15 @@ rollup and the stages below it, and leaves the peptide results out of it. The ch
 `parameters.json`, so a folder with results but no provenance beside them — or an unreadable one — is
 reported rather than assumed to match.
 
+Saying yes costs as little as it can. A closed document whose file and export settings have not
+changed is not exported again — that export is recorded in the run's own `stage_cache.json`, beside
+the merge and the rollups — and every stage whose inputs and settings still match is reused. Because
+an input under the output directory is stamped by its path relative to it, that holds **across
+machines on a shared drive**: a cohort another computer already processed is left alone rather than
+recomputed because the share is mounted under a different drive letter. A document open in Skyline is
+always exported, since unsaved edits do not move the file on disk and the tool interface reports no
+document hash or revision to ask with.
+
 The `prism` CLI logs a `WARNING:` line when the results would differ, then carries on: a command-line
 run is usually scripted, and stopping to ask a question is worse than the surprise it prevents. Because the
 CLI knows its input files, it answers the two most expensive stages exactly rather than predicting
