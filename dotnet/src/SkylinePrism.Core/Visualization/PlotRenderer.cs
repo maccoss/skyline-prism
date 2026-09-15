@@ -327,6 +327,10 @@ public static partial class PlotRenderer
         // Explicit limits rather than ScottPlot's margins: the default padding puts ticks either side of
         // the data, and a bar chart of counts has no negative loads and no spectra below zero to show.
         plt.Axes.SetLimits(-0.5, histogram.Length - 0.5, 0, Math.Max(1, tallest * 1.05));
+        // A load is a count of precursors, and the automatic ticks do not know that: on a short axis
+        // they label the steps between the bars too, and "0.5 precursors" is not a load any spectrum
+        // carried. Whole numbers only, thinned automatically when there are too many to label.
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic { IntegerTicksOnly = true };
     }
 
     /// <summary>
