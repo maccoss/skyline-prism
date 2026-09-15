@@ -292,6 +292,22 @@ as the GitHub Release description and fails if it is missing.
   boxplot**, in the QC report and in the tool. A gradient short enough for sub-minute bins keeps the
   decimals it needs rather than printing `12-12` three times over.
 
+- **A Spectrum density cell is what one spectrum saw, not what a stretch of time contained.** Each
+  precursor used to add a count to every RT bin its peak spanned, so a cell held the union of
+  everything that eluted during that bin: two peptides that were never in the same spectrum, one
+  finishing before the other began, counted as two co-detected, and the number grew with the bin. A
+  cell is now the greatest number of precursors co-eluting at any one instant inside its column, found
+  by sweeping the peak boundaries, so the busiest cell no longer moves with a display setting. On a
+  90-minute Lumos DIA run with 8 m/z windows the old 0.1-minute bin overstated the five busiest windows
+  by 10-18%.
+
+  The RT bin box in the tool now opens at the documented 0.01 min - about one acquisition cycle -
+  rather than the 0.1 it had kept from before the default changed. A wider column reports the worst of
+  the spectra inside it; the status line and the histogram's axis say so when the grid had to widen
+  the bin. The map, histogram, load curve and hover readout now share one rule for which cells were
+  acquired, so a count can no longer appear in a cell drawn as a gap, and the hover readout no longer
+  names column 0 for a cursor just left of the axis.
+
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
   different empty states: QC Plots rendered nothing at all before the first run, leaving ScottPlot's
   raw default with an unstyled numbered grid to no scale; after a run it reset the chrome but never

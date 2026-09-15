@@ -305,6 +305,10 @@ public static partial class PlotRenderer
         var bars = plt.Add.Bars(loads, spectra);
         bars.Color = DensityLoadColor;
 
+        // A cell is one spectrum at about one acquisition cycle; a widened column holds several and
+        // reports the worst of them (PrecursorDensityMap.RtBinWidened), so the axis names what it is
+        // counting rather than calling a column a spectrum.
+        var noun = map.RtBinWidened ? "RT columns" : "spectra";
         if (acquired > 0)
         {
             var mean = (double)observations / acquired;
@@ -312,12 +316,12 @@ public static partial class PlotRenderer
             line.Color = Colors.Black;
             line.LineWidth = 4;
             line.LinePattern = LinePattern.Dashed;
-            line.LegendText = $"mean {mean:0.0} of {acquired:N0} spectra";
+            line.LegendText = $"mean {mean:0.0} of {acquired:N0} {noun}";
             plt.ShowLegend(Alignment.UpperRight);
         }
 
-        plt.XLabel("Precursors in a spectrum");
-        plt.YLabel("Spectra");
+        plt.XLabel("Precursors co-eluting in a spectrum");
+        plt.YLabel(map.RtBinWidened ? "RT columns (worst spectrum in each)" : "Spectra");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
         // Explicit limits rather than ScottPlot's margins: the default padding puts ticks either side of

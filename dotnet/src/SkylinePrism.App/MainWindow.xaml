@@ -376,7 +376,7 @@
                                          LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
                                          ToolTip="Width of one uniform m/z bin, in Th. Only used by the approximate fallback - its edges are arbitrary and will not line up with the real windows." />
                                 <TextBlock Text="RT bin (min):" VerticalAlignment="Center" Margin="16,0,4,0" />
-                                <TextBox x:Name="DensityRtBinBox" Width="46" Text="0.1" VerticalAlignment="Center"
+                                <TextBox x:Name="DensityRtBinBox" Width="46" Text="0.01" VerticalAlignment="Center"
                                          LostFocus="OnDensityBinChanged" KeyDown="OnDensityBinKeyDown"
                                          ToolTip="Width of one RT column, in minutes - roughly the cycle time of the method." />
                                 <TextBlock Text="Max q-value:" VerticalAlignment="Center" Margin="16,0,4,0" />

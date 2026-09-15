@@ -156,13 +156,15 @@ the right edge, because a label centred on its point buries the very point it na
 
 ### Spectrum density tab
 
-How many peptide precursors were detected in each DIA spectrum of a run: retention time across,
-precursor m/z up, color = precursors per cell. Each map row is one **real isolation window**, so a cell
-is a spectrum and its value is how many precursors that spectrum had to resolve. A precursor contributes
-a count to every window containing its m/z (more than one only for a staggered/overlapping scheme, where
-it genuinely was fragmented twice), for every RT bin its integrated peak `[Start Time, End Time]` spans.
-The **max q-value** control (`Detection Q Value`) decides what counts as detected; hovering reads out
-whatever is under the cursor, in the terms of the view being shown.
+How many peptide precursors a single DIA spectrum had to resolve at once: retention time across,
+precursor m/z up, color = co-eluting precursors per cell. Each map row is one **real isolation window**,
+so a cell is a spectrum, and its value is the greatest number of precursors eluting at any one instant
+inside that window and RT column - not a tally of everything that passed through the column, so two
+peptides that never overlapped are one and one, and the busiest cell does not grow when the RT bin is
+widened. A precursor is credited to every window containing its m/z (more than one only for a
+staggered/overlapping scheme, where it genuinely was fragmented twice). The **max q-value** control
+(`Detection Q Value`) decides what counts as detected; hovering reads out whatever is under the cursor,
+in the terms of the view being shown.
 
 **Three views of the same map**, chosen from the **View** drop-down (all read the same binning, so
 switching between them is instant - no re-query, no re-bin):

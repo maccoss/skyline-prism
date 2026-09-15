@@ -15,9 +15,10 @@ using SkylinePrism.Core.Visualization;
 namespace SkylinePrism.App;
 
 /// <summary>
-/// The "Spectrum density" tab: how many peptide precursors were detected in each DIA spectrum of a run,
-/// as an (isolation window x retention time) map. Ported from the same plot in Skyline-Cadenza, but fed
-/// by the merged PRISM report (Precursor Mz + peak Start/End Time) instead of a DIA-NN report.
+/// The "Spectrum density" tab: how many peptide precursors a single DIA spectrum had to resolve at once,
+/// as an (isolation window x retention time) map - the cell is defined on
+/// <see cref="PrecursorDensityMap"/>. Ported from the same plot in Skyline-Cadenza, but fed by the
+/// merged PRISM report (Precursor Mz + peak Start/End Time) instead of a DIA-NN report.
 ///
 /// Reads the merged dataset from the output directory, so it works for a run that just finished AND for
 /// any previous run the output box is pointed at - no Skyline connection needed. Accepts both the
@@ -665,13 +666,11 @@ public partial class MainWindow
         DensityStatusText.Text =
             $"{total:N0} precursors; busiest {cellNoun} {map.MaxCount:N0}; "
             + $"{map.RowSource}; {map.MzBins:N0} rows x {map.RtBins:N0} RT bins of {map.RtBinMin:0.###} min"
-            // A cell holds the greatest concurrency inside its column. At about one cycle that is
-            // what one spectrum saw; wider, it is the WORST spectrum in the column rather than a
-            // typical one, so the map and the histogram both read high. Not pooling - that was the
-            // old counting, and this message described it until the counting changed underneath.
+            // What widening changes is defined on PrecursorDensityMap.RtBinWidened. Said with the
+            // cell noun chosen above, so a bin or a row is not called a spectrum here either.
             + (map.RtBinWidened
-                ? $" (widened from {map.RtBinRequested:0.###} to fit the grid - each cell now shows "
-                  + "the worst spectrum in its column rather than a typical one)"
+                ? $" (widened from {map.RtBinRequested:0.###} to fit the grid - each {cellNoun} now spans "
+                  + "several acquisition cycles and shows the worst of them rather than a typical one)"
                 : "")
             + (nonDia is not null
                 ? $"; WARNING: this is a {nonDia} acquisition, and this map assumes DIA - the rows are not "
@@ -709,12 +708,11 @@ public partial class MainWindow
     private static string HeatmapReadout(PrecursorDensityMap map, Coordinates c)
     {
         var row = map.RowAt(c.Y);
-        var col = (int)((c.X - map.RtLow) / map.RtBinMin);
-        return row < 0 || col < 0 || col >= map.RtBins
+        var col = map.ColumnAt(c.X);
+        return row < 0 || col < 0
             ? ""
             : $"m/z {map.Rows[row].Start:0.#}-{map.Rows[row].End:0.#} "
-              // "co-eluting", not "precursors": the cell is the most that overlapped at any one
-              // instant, not a tally of everything that passed through the column.
+              // "co-eluting": the cell is what PrecursorDensityMap defines, not a tally.
               + $"at {map.RtLow + col * map.RtBinMin:0.##} min: "
               + $"{map.Counts[row, col]:N0} co-eluting precursors";
     }
@@ -727,9 +725,12 @@ public partial class MainWindow
         if (histogram is null || load < 0 || load >= histogram.Length)
             return "";
         var acquired = histogram.Sum();
+        // A cell is a spectrum at about one cycle; a widened column holds several, so it is named as
+        // what it is (the plot's own axis makes the same choice).
+        var noun = _densityMap?.RtBinWidened == true ? "RT columns" : "spectra";
         // The share is the reading the bar heights cannot give: "1,270 spectra" means nothing without
         // knowing how many were acquired, and that total is nowhere on the plot.
-        return $"{load:N0} precursors: {histogram[load]:N0} spectra"
+        return $"{load:N0} precursors: {histogram[load]:N0} {noun}"
              + (acquired > 0 ? $" ({100.0 * histogram[load] / acquired:0.##}%)" : "");
     }
 
@@ -739,7 +740,7 @@ public partial class MainWindow
         var map = _densityMap;
         if (load is null || map is null)
             return "";
-        var bin = (int)((x - map.RtLow) / map.RtBinMin);
+        var bin = map.ColumnAt(x);
         if (bin < 0 || bin >= load.Count)
             return "";
         var (time, mean, min, max) = load[bin];

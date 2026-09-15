@@ -107,6 +107,30 @@ public class DensitySummaryPlotTests
     }
 
     /// <summary>
+    /// A cell is a spectrum only while a column is about one cycle wide. When the grid budget widened
+    /// the bin, every cell is the worst of several spectra, and the axis and legend say so instead of
+    /// calling a column a spectrum.
+    /// </summary>
+    [Fact]
+    public void Histogram_NamesColumnsRatherThanSpectraWhenTheBinWasWidened()
+    {
+        var narrow = new Plot();
+        PlotRenderer.DrawPrecursorLoadHistogram(narrow, DiaMap());
+        Assert.Equal("Spectra", narrow.Axes.Left.Label.Text);
+        Assert.Contains("spectra", Assert.Single(narrow.GetPlottables<VerticalLine>()).LegendText);
+
+        // 0.05 Th over 400 Th is 8,000 rows, so 0.01 min over an hour would burst the cell budget.
+        var widened = PrecursorDensity.Bin(
+            new List<DetectedPrecursor> { new(500.4, 1.0, 61.0), new(899.0, 1.0, 61.0) },
+            mzBinTh: 0.05, rtBinMin: 0.01);
+        Assert.True(widened.RtBinWidened);
+        var wide = new Plot();
+        PlotRenderer.DrawPrecursorLoadHistogram(wide, widened);
+        Assert.Contains("RT columns", wide.Axes.Left.Label.Text);
+        Assert.Contains("RT columns", Assert.Single(wide.GetPlottables<VerticalLine>()).LegendText);
+    }
+
+    /// <summary>
     /// The axis has to stop at the data. ScottPlot's default margins pad either side, which on a count
     /// of precursors puts ticks at -2 and -1 - loads that cannot exist.
     /// </summary>
