@@ -456,25 +456,35 @@ public static partial class PlotRenderer
     /// <param name="highlights">
     /// Ordered groups drawn over the background, each with its own color and legend entry.
     /// </param>
+    /// <param name="pointSize">
+    /// Point diameter in rendered pixels. 0, the default, takes Skyline's size for a 1400 x 900 pane,
+    /// which is the PNG's canvas; the tool passes the size for the pane it is actually drawing on - see
+    /// <see cref="SkylinePointPixels"/>.
+    /// </param>
     public static void DrawDynamicRange(
         Plot plt,
         IReadOnlyList<AbundanceEntry> background,
         IReadOnlyList<(string Label, string ColorHex, IReadOnlyList<AbundanceEntry> Entries)> highlights,
         string yLabel = "Log10 abundance",
         string xLabel = "Rank",
-        double fontScale = 1.0)
+        double fontScale = 1.0,
+        double pointSize = 0)
     {
+        if (!(pointSize > 0))
+            pointSize = SkylinePointPixels(1400, 900);
+
         if (background.Count > 0)
         {
             var dots = plt.Add.ScatterPoints(
                 background.Select(e => (double)e.Rank).ToArray(),
                 background.Select(e => e.Log10Abundance).ToArray());
-            // Sized against Skyline's own relative-abundance plot, which sets no symbol size and
-            // so takes ZedGraph's default of 7 POINTS - about 9-10 px at 96 DPI, where this was 6 px
-            // at 55% alpha. Smaller and fainter, which on a plot of several thousand ranked points
-            // read as a thin line rather than as a cloud of proteins.
+            // Skyline's Relative Abundance plot draws these at PointSize.normal, 12 points, and
+            // ZedGraph then scales every symbol by the pane's size (SkylineSymbolScale) - so on a
+            // full-width pane its points are about 19 px across and grow with the window. A fixed
+            // 9 px here, chosen against ZedGraph's UNSCALED default, was half that, and several
+            // thousand ranked points read as a thin gray line rather than as Skyline's cloud.
             dots.Color = Color.FromHex("#9e9e9e").WithAlpha(0.75);
-            dots.MarkerSize = 9;
+            dots.MarkerSize = (float)pointSize;
         }
 
         foreach (var (label, colorHex, entries) in highlights)
@@ -485,7 +495,9 @@ public static partial class PlotRenderer
                 entries.Select(e => (double)e.Rank).ToArray(),
                 entries.Select(e => e.Log10Abundance).ToArray());
             marks.Color = Color.FromHex(colorHex);
-            marks.MarkerSize = 13;
+            // The same size Skyline formats list members at: the color and being drawn on top are
+            // what set them apart, not a bigger dot.
+            marks.MarkerSize = (float)pointSize;
             marks.LegendText = $"{label} ({entries.Count})";
         }
 
@@ -496,7 +508,7 @@ public static partial class PlotRenderer
             plt.ShowLegend(Alignment.UpperRight);
     }
 
-    /// <summary>PNG of <see cref="DrawDynamicRange"/>, for headless use.</summary>
+    /// <summary>PNG of <see cref="DrawDynamicRange"/>, for headless use, with the points sized for its canvas.</summary>
     public static byte[] DynamicRangePng(
         IReadOnlyList<AbundanceEntry> background,
         IReadOnlyList<(string Label, string ColorHex, IReadOnlyList<AbundanceEntry> Entries)> highlights,
@@ -504,9 +516,46 @@ public static partial class PlotRenderer
         int width = 1400, int height = 900)
     {
         var plt = new Plot();
-        DrawDynamicRange(plt, background, highlights, yLabel, xLabel);
+        DrawDynamicRange(
+            plt, background, highlights, yLabel, xLabel, pointSize: SkylinePointPixels(width, height));
         return plt.GetImageBytes(width, height, ImageFormat.Png);
     }
+
+    /// <summary>
+    /// Skyline's <c>PointSize.normal</c>, in points - what its Relative Abundance plot draws every
+    /// unformatted and list-formatted point at.
+    /// </summary>
+    public const double SkylinePointSizeNormal = 12;
+
+    /// <summary>
+    /// ZedGraph's pane scale factor, which every Skyline graph multiplies its symbol and font sizes by:
+    /// the pane's width - or 1.5x its height when the pane is wider than 3:2, and 1.5x its width when
+    /// taller than 2:3 - over an 8-inch base at 72 dpi (576 px), never below 0.1. So a 12-point symbol
+    /// is 12 px on a 576 px pane and about 19 px on a 1240 x 600 one. Reproduced exactly rather than
+    /// approximated, so the Dynamic Range points match Skyline's Relative Abundance points at any pane
+    /// size, and grow with the window the way Skyline's do.
+    /// </summary>
+    public static double SkylineSymbolScale(double widthPx, double heightPx)
+    {
+        if (!(widthPx > 0) || !(heightPx > 0))
+            return 1.0;
+        const double aspectLimit = 1.5;
+        var length = widthPx;
+        var aspect = widthPx / heightPx;
+        if (aspect > aspectLimit)
+            length = heightPx * aspectLimit;
+        if (aspect < 1.0 / aspectLimit)
+            length = widthPx * aspectLimit;
+        return Math.Max(0.1, length / (8.0 * 72.0));
+    }
+
+    /// <summary>
+    /// The diameter, in pixels, Skyline draws a point of <paramref name="points"/> at on a pane of this
+    /// size. Pass rendered pixels: on a display scaled to 150% a WPF control's actual size times 1.5.
+    /// </summary>
+    public static double SkylinePointPixels(
+        double widthPx, double heightPx, double points = SkylinePointSizeNormal) =>
+        points * SkylineSymbolScale(widthPx, heightPx);
 
     /// <summary>Histogram of per-feature CVs with a median line, for one sample-type group.</summary>
     public static byte[] CvHistogram(double[] cvs, string title, string colorHex, double medianCv)
