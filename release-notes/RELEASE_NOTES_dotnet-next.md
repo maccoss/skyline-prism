@@ -326,6 +326,17 @@ as the GitHub Release description and fails if it is missing.
   acquired, so a count can no longer appear in a cell drawn as a gap, and the hover readout no longer
   names column 0 for a cursor just left of the axis.
 
+- **Dynamic Range points are the size Skyline draws them.** Skyline's Relative Abundance plot draws
+  its points at 12 points, and ZedGraph then scales every symbol by the pane's size - the shorter of
+  the width and 1.5x the height, over a 576 px base - so on a full-width pane its points are about
+  19 px across and grow with the window. PRISM drew a fixed 9 px, chosen against ZedGraph's unscaled
+  default, so the same cohort read as a thin gray line beside Skyline's cloud of proteins. The tool
+  now applies Skyline's own rule to the pane it is drawing on, in rendered pixels, and the QC report's
+  PNG applies it to its 1400 x 900 canvas. List members are drawn at the same size as the rest, as
+  Skyline draws them - the color and being on top are what set them apart - and the selection ring
+  sizes itself around the point. The y-axis label is also shorter: "Log10 mean abundance (median
+  polish)" rather than "(median_polish rollup)", which a normal-height pane clipped mid-word.
+
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
   different empty states: QC Plots rendered nothing at all before the first run, leaving ScottPlot's
   raw default with an unstyled numbered grid to no scale; after a run it reset the chrome but never

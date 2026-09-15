@@ -275,14 +275,22 @@ public partial class MainWindow
     /// the status bar, which does not travel with a copied image.</para>
     ///
     /// <para>Singular when one replicate is selected, where a mean of one thing is just the thing.</para>
+    ///
+    /// <para>The parenthesis names the method alone - "(median polish)", not "(median_polish
+    /// rollup)". The longer form was clipped mid-word on the vertical axis of a normal-height pane,
+    /// and the word added nothing a reader of this plot did not know; the status line, which has
+    /// room, keeps it. The config spelling's underscore becomes a space, since this is prose.</para>
     /// </remarks>
     internal static string RangeYLabel(string rollup, int replicates)
     {
         var mean = replicates > 1 ? "mean " : "";
         return rollup.Length > 0
-            ? $"Log10 {mean}abundance ({rollup} rollup)"
+            ? $"Log10 {mean}abundance ({RollupDisplayName(rollup)})"
             : $"Log10 {mean}abundance";
     }
+
+    /// <summary>The config spelling of a rollup method as prose: "median_polish" reads "median polish".</summary>
+    internal static string RollupDisplayName(string rollup) => rollup.Replace('_', ' ');
 
     /// <summary>
     /// What that method's numbers ARE, in one clause - the thing worth knowing before comparing this
@@ -750,12 +758,19 @@ public partial class MainWindow
         // On the y axis, not just the status line: the axis travels with the image when the plot is
         // copied into a slide or a paper, and "log10 abundance" alone does not say abundance OF WHAT.
         var rollup = _rangeRollupShown;
+        // Sized as Skyline sizes its Relative Abundance points: by the pane being drawn on, in the
+        // pixels it renders at. It is the pane's size at render time; a window resize keeps it until
+        // the next render, which any control change triggers.
+        var scale = RangePlot.DisplayScale;
+        var pointSize = PlotRenderer.SkylinePointPixels(
+            RangePlot.ActualWidth * scale, RangePlot.ActualHeight * scale);
         PlotRenderer.DrawDynamicRange(
             plt, background, highlights,
             yLabel: RangeYLabel(rollup, SelectedReplicateCount()),
-            xLabel: RangeLevel == AbundanceLevel.Protein ? "Protein rank" : "Peptide rank");
+            xLabel: RangeLevel == AbundanceLevel.Protein ? "Protein rank" : "Peptide rank",
+            pointSize: pointSize);
 
-        AddRangeLabels(plt, matcher, byList);
+        AddRangeLabels(plt, matcher, byList, pointSize);
         BuildRangeMenu();
         RangePlot.Refresh();
         _rangePlotted = _rangeEntries;
@@ -767,7 +782,7 @@ public partial class MainWindow
             + $"({_rangeEntries[0].Log10Abundance - _rangeEntries[^1].Log10Abundance:0.#} orders of magnitude); "
             + $"averaged over {SelectedReplicateCount():N0} replicate(s)"
             + (rollup.Length > 0
-                ? $"; {rollup} rollup"
+                ? $"; {RollupDisplayName(rollup)} rollup"
                   + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
                 : "")
             + TransitionsUsed(_rangeOutputDir)
@@ -817,12 +832,13 @@ public partial class MainWindow
     /// </para>
     /// </summary>
     private void AddRangeLabels(
-        Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList)
+        Plot plt, ProteinListMatcher matcher, Dictionary<ProteinList, List<AbundanceEntry>> byList,
+        double pointSize)
     {
         // The current selection always gets a marker, whether or not labels are on. Without it,
         // following Skyline's selection would move a highlight nobody can see.
         if (_rangeSelected is not null)
-            AddSelectionMarker(plt, _rangeSelected);
+            AddSelectionMarker(plt, _rangeSelected, pointSize);
 
         var wanted = new List<(AbundanceEntry Entry, Color Color)>();
         if (_rangeLabelSelection && _rangeSelected is not null)
@@ -858,11 +874,12 @@ public partial class MainWindow
     /// it, and drawn whatever the label mode is: this is the only thing that shows on screen when
     /// the selection arrives FROM Skyline rather than from a click here.
     /// </summary>
-    private static void AddSelectionMarker(Plot plt, AbundanceEntry entry)
+    private static void AddSelectionMarker(Plot plt, AbundanceEntry entry, double pointSize)
     {
         var marker = plt.Add.Marker(entry.Rank, entry.Log10Abundance);
         marker.MarkerShape = MarkerShape.OpenCircle;
-        marker.MarkerSize = 18;
+        // Around the point, whatever size the point is drawn at on this pane.
+        marker.MarkerSize = (float)(pointSize + 8);
         marker.MarkerLineWidth = 3;
         marker.MarkerLineColor = Colors.Black;
     }
