@@ -31,29 +31,42 @@ public class DynamicRangeRollupLabelTests
     }
 
     /// <summary>
-    /// The axis says MEAN, because a mean across replicates is what it plots.
+    /// The axis says MEAN, because a mean across replicates is what it plots, and names the method in
+    /// prose.
     /// </summary>
     /// <remarks>
     /// It read "Log10 abundance (sum)", where the parenthesis named the rollup - how peptides were
     /// combined into a protein - and a reader took it for the quantity on the axis. That is the
     /// difference that sends someone to Skyline's relative-abundance view wondering why the numbers
-    /// sit a replicate count apart: Skyline sums across replicates, this averages.
+    /// sit a replicate count apart: Skyline sums across replicates, this averages. It then read
+    /// "(median_polish rollup)", which a normal-height pane clipped mid-word; the word "rollup" went,
+    /// and the config spelling's underscore became a space.
     /// </remarks>
     [Fact]
-    public void TheAxisNamesTheMeanAndTheRollupSeparately()
+    public void TheAxisNamesTheMeanAndTheMethodSeparately()
     {
-        Assert.Equal("Log10 mean abundance (sum rollup)", MainWindow.RangeYLabel("sum", 82));
+        Assert.Equal("Log10 mean abundance (sum)", MainWindow.RangeYLabel("sum", 82));
         Assert.Equal(
-            "Log10 mean abundance (median_polish rollup)",
+            "Log10 mean abundance (median polish)",
             MainWindow.RangeYLabel("median_polish", 2));
+        Assert.DoesNotContain("rollup", MainWindow.RangeYLabel("median_polish", 2), StringComparison.Ordinal);
     }
 
     /// <summary>A mean of one thing is just the thing, so it is not called a mean.</summary>
     [Fact]
     public void OneReplicateIsNotAveraged()
     {
-        Assert.Equal("Log10 abundance (sum rollup)", MainWindow.RangeYLabel("sum", 1));
+        Assert.Equal("Log10 abundance (sum)", MainWindow.RangeYLabel("sum", 1));
         Assert.DoesNotContain("mean", MainWindow.RangeYLabel("sum", 1), StringComparison.Ordinal);
+    }
+
+    /// <summary>The config spellings are keys; the plot and status line show them as words.</summary>
+    [Fact]
+    public void TheMethodIsShownAsProse()
+    {
+        Assert.Equal("median polish", MainWindow.RollupDisplayName("median_polish"));
+        Assert.Equal("sum", MainWindow.RollupDisplayName("sum"));
+        Assert.Equal("", MainWindow.RollupDisplayName(""));
     }
 
     /// <summary>With no rollup known, the axis still says what the quantity is.</summary>

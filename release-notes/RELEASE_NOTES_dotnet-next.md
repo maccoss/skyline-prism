@@ -316,7 +316,8 @@ as the GitHub Release description and fails if it is missing.
   now applies Skyline's own rule to the pane it is drawing on, in rendered pixels, and the QC report's
   PNG applies it to its 1400 x 900 canvas. List members are drawn at the same size as the rest, as
   Skyline draws them - the color and being on top are what set them apart - and the selection ring
-  sizes itself around the point.
+  sizes itself around the point. The y-axis label is also shorter: "Log10 mean abundance (median
+  polish)" rather than "(median_polish rollup)", which a normal-height pane clipped mid-word.
 
 - **A plot panel with no data no longer draws axes.** The three panels had drifted into three
   different empty states: QC Plots rendered nothing at all before the first run, leaving ScottPlot's

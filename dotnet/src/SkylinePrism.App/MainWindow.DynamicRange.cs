@@ -275,14 +275,22 @@ public partial class MainWindow
     /// the status bar, which does not travel with a copied image.</para>
     ///
     /// <para>Singular when one replicate is selected, where a mean of one thing is just the thing.</para>
+    ///
+    /// <para>The parenthesis names the method alone - "(median polish)", not "(median_polish
+    /// rollup)". The longer form was clipped mid-word on the vertical axis of a normal-height pane,
+    /// and the word added nothing a reader of this plot did not know; the status line, which has
+    /// room, keeps it. The config spelling's underscore becomes a space, since this is prose.</para>
     /// </remarks>
     internal static string RangeYLabel(string rollup, int replicates)
     {
         var mean = replicates > 1 ? "mean " : "";
         return rollup.Length > 0
-            ? $"Log10 {mean}abundance ({rollup} rollup)"
+            ? $"Log10 {mean}abundance ({RollupDisplayName(rollup)})"
             : $"Log10 {mean}abundance";
     }
+
+    /// <summary>The config spelling of a rollup method as prose: "median_polish" reads "median polish".</summary>
+    internal static string RollupDisplayName(string rollup) => rollup.Replace('_', ' ');
 
     /// <summary>
     /// What that method's numbers ARE, in one clause - the thing worth knowing before comparing this
@@ -774,7 +782,7 @@ public partial class MainWindow
             + $"({_rangeEntries[0].Log10Abundance - _rangeEntries[^1].Log10Abundance:0.#} orders of magnitude); "
             + $"averaged over {SelectedReplicateCount():N0} replicate(s)"
             + (rollup.Length > 0
-                ? $"; {rollup} rollup"
+                ? $"; {RollupDisplayName(rollup)} rollup"
                   + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
                 : "")
             + TransitionsUsed(_rangeOutputDir)
