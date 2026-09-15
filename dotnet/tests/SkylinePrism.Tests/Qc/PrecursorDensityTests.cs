@@ -74,6 +74,89 @@ public class PrecursorDensityTests
             $"{map.MzBins} x {map.RtBins} is over the cell budget");
     }
 
+    /// <summary>
+    /// Two peptides that were never in the same spectrum are not counted as though they were.
+    /// </summary>
+    /// <remarks>
+    /// This is the defect the whole cell definition turned on. Each precursor used to add a count to
+    /// every bin its peak spanned, so a cell held the UNION of everything that eluted during that
+    /// stretch - and one peptide finishing before the next began still came out as two co-detected.
+    /// A cell answers "how many peptides did one spectrum have to deal with", and no spectrum ever
+    /// saw a union over time.
+    /// </remarks>
+    [Fact]
+    public void PeaksThatDoNotOverlapInTimeAreNotCoDetected()
+    {
+        var map = PrecursorDensity.Bin(
+            new[]
+            {
+                new DetectedPrecursor(500.4, 10.0, 10.2),   // done before the next starts
+                new DetectedPrecursor(500.6, 10.6, 10.8),
+            },
+            mzBinTh: 2.0, rtBinMin: 1.0);                   // one bin holding both
+
+        Assert.Equal(1, Max(map));
+    }
+
+    /// <summary>And two that DO overlap still are.</summary>
+    [Fact]
+    public void PeaksThatOverlapInTimeAreCoDetected()
+    {
+        var map = PrecursorDensity.Bin(
+            new[]
+            {
+                new DetectedPrecursor(500.4, 10.0, 10.5),
+                new DetectedPrecursor(500.6, 10.4, 10.9),   // overlaps 10.4 - 10.5
+            },
+            mzBinTh: 2.0, rtBinMin: 1.0);
+
+        Assert.Equal(2, Max(map));
+    }
+
+    /// <summary>
+    /// The count no longer moves when the bin moves, which is what makes it a measurement.
+    /// </summary>
+    /// <remarks>
+    /// A bin ten times a cycle used to report ten times the co-detection, so the number a reader
+    /// quoted depended on a display setting. Sweeping the peak boundaries makes a column report the
+    /// worst spectrum inside it: narrowing refines the answer, widening never invents one.
+    /// </remarks>
+    [Fact]
+    public void TheCountDoesNotDependOnTheBinWidth()
+    {
+        var peaks = new[]
+        {
+            new DetectedPrecursor(500.4, 10.0, 10.2),
+            new DetectedPrecursor(500.5, 10.05, 10.25),
+            new DetectedPrecursor(500.6, 11.0, 11.2),
+            new DetectedPrecursor(500.7, 12.0, 12.2),
+        };
+
+        Assert.Equal(
+            Max(PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 0.01)),
+            Max(PrecursorDensity.Bin(peaks, mzBinTh: 2.0, rtBinMin: 1.0)));
+    }
+
+    /// <summary>A peak with no width still happened, and still appears.</summary>
+    [Fact]
+    public void AZeroWidthPeakIsNotLost()
+    {
+        var map = PrecursorDensity.Bin(
+            new[] { new DetectedPrecursor(500.4, 10.0, 10.0) }, mzBinTh: 2.0, rtBinMin: 0.01);
+
+        Assert.Equal(1, Max(map));
+    }
+
+    private static int Max(PrecursorDensityMap map)
+    {
+        var best = 0;
+        for (var i = 0; i < map.MzBins; i++)
+            for (var j = 0; j < map.RtBins; j++)
+                if (map.Counts[i, j] > best)
+                    best = map.Counts[i, j];
+        return best;
+    }
+
     [Fact]
     public void Bin_CountsEveryRtBinThePeakSpans()
     {

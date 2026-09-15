@@ -362,11 +362,10 @@ public static class PrecursorDensity
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme, scheme.Windows.Count);
         var counts = new int[scheme.Windows.Count, nRt];
+        var peaks = new List<(double Start, double Stop)>[scheme.Windows.Count];
         var outside = 0;
         foreach (var p in precursors)
         {
-            var from = Math.Max(0, (int)((p.RtStart - rtLo) / rtBin));
-            var to = Math.Min(nRt, (int)((p.RtStop - rtLo) / rtBin) + 1);
             var matched = false;
             // Covers(), not Contains(): for a scheduled (dynamic DIA) window the peak must also fall
             // inside the interval the window was firing, or a precursor would be credited to a same-m/z
@@ -375,13 +374,23 @@ public static class PrecursorDensity
             {
                 matched = true;
                 var window = scheme.Windows[row];
-                for (var j = from; j < to; j++)
-                    if (window.IsOnAt(rtLo + (j + 0.5) * rtBin))
-                        counts[row, j]++;
+
+                // Clipped to the stretch this window was actually firing, so a scheduled window is
+                // credited only where it could have acquired the precursor.
+                var start = Math.Max(p.RtStart, window.RtStart);
+                var stop = Math.Min(p.RtStop, window.RtStop);
+                if (!window.IsScheduled)
+                    (start, stop) = (p.RtStart, p.RtStop);
+                if (stop < start)
+                    continue;
+
+                (peaks[row] ??= new List<(double, double)>()).Add((start, stop));
             }
             if (!matched)
                 outside++;
         }
+        for (var row = 0; row < scheme.Windows.Count; row++)
+            FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
         return new PrecursorDensityMap(
             scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
@@ -424,17 +433,78 @@ public static class PrecursorDensity
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, nMz: nMz);
         var counts = new int[nMz, nRt];
+        var peaks = new List<(double Start, double Stop)>[nMz];
         foreach (var p in precursors)
         {
             var row = Math.Clamp((int)((p.Mz - mzLo) / mzBinTh), 0, nMz - 1);
-            var from = Math.Max(0, (int)((p.RtStart - rtLo) / rtBin));
-            var to = Math.Min(nRt, (int)((p.RtStop - rtLo) / rtBin) + 1);
-            for (var j = from; j < to; j++)
-                counts[row, j]++;
+            (peaks[row] ??= new List<(double, double)>()).Add((p.RtStart, p.RtStop));
         }
+        for (var row = 0; row < nMz; row++)
+            FillRowByConcurrency(counts, row, peaks[row], rtLo, rtBin, nRt);
         return new PrecursorDensityMap(
             rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
             RtBinRequested: rtBinMin);
+    }
+
+    /// <summary>
+    /// Fill one row with the greatest number of precursors CO-ELUTING AT ANY ONE INSTANT inside each
+    /// column, found by sweeping the peak boundaries.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the whole point of the plot and it used to be computed wrongly. Each precursor
+    /// used to add one count to every column its peak spanned, so a cell held the UNION of everything
+    /// that eluted during that stretch of time - and two peptides that were never in the same spectrum,
+    /// one finishing before the other began, were counted as though they had been. The wider the
+    /// column, the more of that a cell accumulated, which is why the number moved when the bin moved.
+    /// A cell is meant to answer "how many peptides did one spectrum have to deal with", and no
+    /// spectrum ever saw a union over time.</para>
+    ///
+    /// <para>Sweeping the starts and stops gives the exact concurrency at every instant, at which
+    /// point the column width stops being part of the measurement: a column reports the WORST
+    /// spectrum inside it. Narrow it and the answer refines; widen it and the answer is still a
+    /// number some real spectrum saw, never a sum of separate ones.</para>
+    ///
+    /// <para>Peaks that merely touch - one ending exactly where the next begins - are taken as
+    /// concurrent, because a spectrum acquired at that instant is inside both integration windows.
+    /// It is a boundary effect of at most one, not the pooling this replaces.</para>
+    /// </remarks>
+    private static void FillRowByConcurrency(
+        int[,] counts, int row, List<(double Start, double Stop)>? peaks,
+        double rtLo, double rtBin, int nRt)
+    {
+        if (peaks is null || peaks.Count == 0)
+            return;
+
+        var events = new List<(double Time, int Delta)>(peaks.Count * 2);
+        foreach (var (start, stop) in peaks)
+        {
+            events.Add((start, 1));
+            events.Add((stop, -1));
+
+            // A peak with no width still happened. Without this it would open and close at the same
+            // instant, leave a zero-length segment, and vanish from a plot whose job is to say what
+            // was there.
+            var at = (int)((start - rtLo) / rtBin);
+            if (at >= 0 && at < nRt && counts[row, at] < 1)
+                counts[row, at] = 1;
+        }
+
+        // Opens before closes at equal times, which is what makes touching peaks concurrent.
+        events.Sort((a, b) => a.Time != b.Time ? a.Time.CompareTo(b.Time) : b.Delta.CompareTo(a.Delta));
+
+        var live = 0;
+        for (var i = 0; i < events.Count - 1; i++)
+        {
+            live += events[i].Delta;
+            if (live <= 0)
+                continue;
+
+            var from = Math.Max(0, (int)Math.Floor((events[i].Time - rtLo) / rtBin));
+            var to = Math.Min(nRt, (int)Math.Ceiling((events[i + 1].Time - rtLo) / rtBin));
+            for (var j = from; j < to; j++)
+                if (counts[row, j] < live)
+                    counts[row, j] = live;
+        }
     }
 
     /// <summary>Label that marks a map as approximate, so it can never be mistaken for real windows.</summary>
