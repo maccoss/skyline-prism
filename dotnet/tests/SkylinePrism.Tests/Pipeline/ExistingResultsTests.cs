@@ -53,8 +53,14 @@ public class ExistingResultsTests : IDisposable
     }
 
     /// <summary>
-    /// The case that has to stay silent, or the warning becomes noise: same version, same settings.
+    /// The case that has to stay silent IN THE LOG, or the warning becomes noise: same version, same
+    /// settings, so nothing different would be written.
     /// </summary>
+    /// <remarks>
+    /// The person is asked anyway - see <see cref="AFinishedAnalysisIsWorthAskingAboutEveryTime"/>.
+    /// The two questions are different: whether the numbers would differ, and whether files someone
+    /// wants are about to be deleted.
+    /// </remarks>
     [Fact]
     public void TheSameVersionAndSettingsIsSilent()
     {
@@ -67,6 +73,69 @@ public class ExistingResultsTests : IDisposable
         Assert.True(existing.SameSettings);
         Assert.False(existing.WouldReplace);
         Assert.Null(existing.Warning());
+    }
+
+    /// <summary>
+    /// A finished analysis in the folder is asked about every time, however ordinary the run.
+    /// </summary>
+    /// <remarks>
+    /// The check used to fire only when this run would produce something DIFFERENT from what was
+    /// there, which is the wrong question for a person: a re-run with identical settings still
+    /// deletes and rewrites every file, and if those files are a colleague's finished analysis they
+    /// are just as gone. The default output directory is the document folder's PRISM-Output, so
+    /// landing on a previous analysis takes no mistake at all.
+    /// </remarks>
+    [Fact]
+    public void AFinishedAnalysisIsWorthAskingAboutEveryTime()
+    {
+        var config = new PrismConfig();
+        Results(config);
+
+        var existing = ExistingResults.Inspect(_dir, config);
+
+        // Nothing DIFFERENT would be written - and the person is still asked.
+        Assert.Null(existing.Warning());
+        var prompt = existing.OverwritePrompt()!;
+        Assert.Contains("already holds a finished analysis", prompt, StringComparison.Ordinal);
+        Assert.Contains("overwrites it", prompt, StringComparison.Ordinal);
+        Assert.Contains("corrected_peptides.parquet", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>An empty directory is not a question.</summary>
+    [Fact]
+    public void NothingToOverwriteAsksNothing()
+    {
+        Assert.Null(ExistingResults.Inspect(_dir, new PrismConfig()).OverwritePrompt());
+        Assert.Null(ExistingResults.Inspect(
+            Path.Combine(_dir, "nope"), new PrismConfig()).OverwritePrompt());
+    }
+
+    /// <summary>
+    /// Results from another computer say so, because that is the difference between overwriting your
+    /// own re-run and overwriting a colleague's cohort. Your own machine is not named - that is noise.
+    /// </summary>
+    [Fact]
+    public void ResultsFromAnotherComputerNameTheMachine()
+    {
+        var config = new PrismConfig();
+        Results(config);
+        Assert.DoesNotContain(
+            Environment.MachineName, ExistingResults.Inspect(_dir, config).OverwritePrompt()!,
+            StringComparison.OrdinalIgnoreCase);
+
+        SetRecordedHost("SCARFELL");
+
+        var prompt = ExistingResults.Inspect(_dir, config).OverwritePrompt()!;
+        Assert.Contains("SCARFELL", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>Rewrite the recorded host, as a run on another computer would have left it.</summary>
+    private void SetRecordedHost(string host)
+    {
+        var path = Path.Combine(_dir, Provenance.FileName);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        json["host"] = host;
+        File.WriteAllText(path, json.ToJsonString());
     }
 
     [Fact]

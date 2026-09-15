@@ -35,6 +35,11 @@ namespace SkylinePrism.Core.Pipeline;
 /// alone. The warning can therefore under-report, and says so; a stage whose settings changed is
 /// always listed.</para>
 /// </remarks>
+/// <param name="Host">The machine that produced the results, as that run recorded it.</param>
+/// <param name="Present">
+/// The result files that are in the directory NOW - what a run here destroys. Independent of every
+/// judgement about what would be recomputed: see <see cref="OverwritePrompt"/>.
+/// </param>
 public sealed record ExistingResults(
     bool Any,
     string? Version,
@@ -43,7 +48,9 @@ public sealed record ExistingResults(
     IReadOnlyList<string> Recomputed,
     IReadOnlyList<string> Files,
     bool Measured,
-    bool InputsChanged = false)
+    bool InputsChanged = false,
+    string? Host = null,
+    IReadOnlyList<string>? Present = null)
 {
     /// <summary>Nothing was there to begin with.</summary>
     public static readonly ExistingResults None =
@@ -71,15 +78,54 @@ public sealed record ExistingResults(
     /// <summary>Whether this run would replace results that differ from what it produces.</summary>
     public bool WouldReplace => Any && Files.Count > 0;
 
+    /// <summary>
+    /// What to ask before running here, or null when the directory holds no results to lose.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Presence, not difference.</b> <see cref="Warning"/> answers "would this run produce
+    /// something different from what is here", which is the right question for a log and the wrong one
+    /// for a person: a re-run that recomputes the identical numbers still deletes and rewrites every
+    /// file in the folder, and if those files are somebody's finished analysis they are just as gone.
+    /// So this fires whenever a completed analysis is there, whatever the settings say.</para>
+    ///
+    /// <para>The default output directory is <c>&lt;document folder&gt;/PRISM-Output</c>, so landing on
+    /// a previous analysis takes no mistake at all - it is what happens unless the path is changed.
+    /// That is the case this exists for, and it is why the question is asked every time rather than
+    /// only when something looks unusual.</para>
+    /// </remarks>
+    public string? OverwritePrompt()
+    {
+        var files = Present ?? Files;
+        if (!Any || files.Count == 0)
+            return null;
+
+        var names = string.Join(", ", files.Take(4))
+            + (files.Count > 4 ? $" and {files.Count - 4:N0} more" : "");
+        return $"This output directory already holds a finished analysis from {Describe()}. "
+            + $"Running here overwrites it, including {names}.";
+    }
+
+    /// <summary>The run that produced what is here, as a reader would recognize it.</summary>
+    private string Describe()
+    {
+        var what = Version is null
+            ? "a previous run"
+            : $"a run of PRISM {Version}" + (Date is null ? "" : $" from {Date}");
+        // Naming your own machine is noise; naming someone else's is the point - it is the difference
+        // between overwriting your own re-run and overwriting a colleague's cohort.
+        return Host is { Length: > 0 }
+               && !string.Equals(Host, Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+            ? what + $" on {Host}"
+            : what;
+    }
+
     /// <summary>The warning, or null when there is nothing worth saying.</summary>
     public string? Warning()
     {
         if (!WouldReplace)
             return null;
 
-        var what = Version is null
-            ? "a previous run"
-            : $"a run of PRISM {Version}" + (Date is null ? "" : $" from {Date}");
+        var what = Describe();
         // What actually changed, not what usually changes. An input file rewritten under settings
         // that did not move invalidates the merge and everything below it, and reporting that as
         // "different settings" sends the reader to a config diff that shows nothing.
@@ -165,12 +211,13 @@ public sealed record ExistingResults(
 
         var provenance = Path.Combine(outputDir, Provenance.FileName);
         if (!File.Exists(provenance))
-            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false);
+            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false, Present: present);
 
         // ONE read of the file, on a directory that is routinely a network share.
         string json;
         string? version = null;
         string? date = null;
+        string? host = null;
         try
         {
             json = File.ReadAllText(provenance);
@@ -179,10 +226,12 @@ public sealed record ExistingResults(
                 version = v.GetString();
             if (doc.RootElement.TryGetProperty("processing_date", out var d))
                 date = d.GetString();
+            if (doc.RootElement.TryGetProperty("host", out var h))
+                host = h.GetString();
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false);
+            return new ExistingResults(true, null, null, false, Chain.ToArray(), present, false, Present: present);
         }
 
         PrismConfig recorded;
@@ -197,7 +246,8 @@ public sealed record ExistingResults(
         catch (Exception ex) when (ex is JsonException or InvalidOperationException
                                        or NotSupportedException or ArgumentException)
         {
-            return new ExistingResults(true, version, date, false, Chain.ToArray(), present, false);
+            return new ExistingResults(
+                true, version, date, false, Chain.ToArray(), present, false, Host: host, Present: present);
         }
 
         var sameVersion = string.Equals(version, PrismVersion.Current, StringComparison.Ordinal);
@@ -215,8 +265,11 @@ public sealed record ExistingResults(
             : (0, false);
         if (from < 0)
         {
+            // Nothing DIFFERENT would be written, so there is nothing to warn a log about - but the
+            // files are still there and a run still rewrites them, which is what Present carries.
             return new ExistingResults(
-                true, version, date, true, Array.Empty<string>(), Array.Empty<string>(), exact);
+                true, version, date, true, Array.Empty<string>(), Array.Empty<string>(), exact,
+                Host: host, Present: present);
         }
 
         var recomputed = Chain.Skip(from).ToArray();
@@ -232,7 +285,7 @@ public sealed record ExistingResults(
         // nothing to name - fall back to the outputs a reader would recognize.
         return new ExistingResults(
             true, version, date, sameVersion, recomputed,
-            files.Length > 0 ? files : present, exact, inputsChanged);
+            files.Length > 0 ? files : present, exact, inputsChanged, host, present);
     }
 
     /// <summary>

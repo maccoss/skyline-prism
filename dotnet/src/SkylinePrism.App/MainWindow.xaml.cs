@@ -1212,9 +1212,13 @@ public partial class MainWindow : Window
             // Asked BEFORE anything is touched - this is the last moment a person can change their
             // mind, and the answer decides whether a cohort's results survive.
             //
-            // Silent when the previous run used the same version and the same settings: re-running
-            // to regenerate a report or to top up a partial ion accounting is ordinary, and a dialog
-            // on the ordinary case is one people learn to dismiss without reading.
+            // Asked whenever a finished analysis is there, NOT only when this run would produce
+            // something different from it. A re-run with identical settings still deletes and
+            // rewrites every file in the folder, and if those files are somebody's finished analysis
+            // they are just as gone; whether the new numbers would match is no comfort to whoever
+            // owned the old ones. The default output directory is <document folder>/PRISM-Output, so
+            // landing on a previous analysis takes no mistake at all - it is what happens unless the
+            // path is changed, which is precisely why this cannot be silent on the ordinary case.
             //
             // The controls are read here, on the UI thread; the directory is then looked at off it,
             // because an output directory is routinely a network share and a stat of six file names
@@ -1223,13 +1227,23 @@ public partial class MainWindow : Window
             var configToCheck = BuildConfigFromUi();
             var existing = await Task.Run(
                 () => ExistingResults.Inspect(outputDirToCheck, configToCheck));
-            if (existing.Warning() is { } warning)
+            if (existing.OverwritePrompt() is { } prompt)
             {
+                // The stage-level detail when there is any, under the sentence that matters. It says
+                // which stages differ and is a lower bound; it is not the reason to stop.
+                var detail = existing.Warning() is { } warning
+                    ? Environment.NewLine + Environment.NewLine + warning
+                    : "";
                 var answer = MessageBox.Show(
-                    warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
+                    prompt + detail + Environment.NewLine + Environment.NewLine
+                    + "Overwrite it and run anyway?",
                     "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (answer != MessageBoxResult.Yes)
+                {
+                    Log($"Run cancelled: {outputDirToCheck} already holds a finished analysis.");
+                    ShowAnalysis(AnalysisPane.Log);
                     return;
+                }
             }
 
             // Labels double as exported file stems and as batch labels, so they must be unique

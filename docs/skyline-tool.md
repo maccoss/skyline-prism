@@ -506,21 +506,27 @@ previously absent because nothing in the tool could give it a database.
 
 ## Running onto a folder that already holds results
 
-**Run** checks the output folder before anything is touched. If a previous run's results are there and
-this run would produce different ones, the tool says whose they are — the PRISM version and the date —
-lists the files that would be replaced, and asks whether to go ahead. Answering no costs nothing; the
-run has not started.
+**Run** checks the output folder before anything is touched. If a finished analysis is already there,
+the tool says whose it is — the PRISM version, the date, and the machine that produced it when that
+was not this one — lists the files, and asks whether to overwrite them. Answering no costs nothing;
+the run has not started.
 
-It asks only when something would actually change, and it asks **per stage**. A setting no stage reads
-— thread count, whether plots are saved — changes nothing and says nothing; a setting that moves only
-the protein rollup names the protein rollup and the stages below it, and leaves the peptide results
-out of it. Re-running the same version with the same settings is how a QC report gets regenerated and
-a partial ion accounting gets topped up, so that case is silent. The check reads `parameters.json`, so
-a folder with results but no provenance beside them — or an unreadable one — is reported rather than
-assumed to match.
+**It asks every time there is something to lose**, not only when this run would produce different
+numbers. A re-run with identical settings still deletes and rewrites every file in the folder, and if
+those files are somebody's finished analysis they are just as gone. The default output folder is the
+document's own `PRISM-Output`, so landing on a previous analysis takes no mistake at all — it is what
+happens unless the path is changed, which is exactly why the question cannot be skipped on the
+ordinary case.
 
-The `prism` CLI does the same check and logs a `WARNING:` line, then carries on: a command-line run is
-usually scripted, and stopping to ask a question is worse than the surprise it prevents. Because the
+Underneath that question, when this run *would* produce something different, the dialog also says what
+and why — and it works **per stage**. A setting no stage reads — thread count, whether plots are saved
+— changes nothing and adds nothing; a setting that moves only the protein rollup names the protein
+rollup and the stages below it, and leaves the peptide results out of it. The check reads
+`parameters.json`, so a folder with results but no provenance beside them — or an unreadable one — is
+reported rather than assumed to match.
+
+The `prism` CLI logs a `WARNING:` line when the results would differ, then carries on: a command-line
+run is usually scripted, and stopping to ask a question is worse than the surprise it prevents. Because the
 CLI knows its input files, it answers the two most expensive stages exactly rather than predicting
 them — a report re-exported from Skyline with no setting changed at all is still caught, since the
 merge is checked against the same stamp of path, size and write time the pipeline itself uses. The

@@ -265,9 +265,18 @@ as the GitHub Release description and fails if it is missing.
   from the file timestamps. The CLI now logs a warning naming the version, the date and the files it
   would replace, and carries on; the tool asks first and does not start unless you say so.
 
-  Both stay silent when the previous run used the same version and the same settings, which is how a
-  QC report gets regenerated and a partial ion accounting gets topped up. A warning that fires on the
-  ordinary case stops being read.
+  **The tool asks whenever a finished analysis is there**, not only when the numbers would come out
+  different. A re-run with identical settings still deletes and rewrites every file in the folder, and
+  if those files are somebody's finished analysis they are just as gone; that the new numbers would
+  have matched is no comfort to whoever owned the old ones. The default output folder is the
+  document's own `PRISM-Output`, so landing on a previous analysis takes no mistake at all - it is
+  what happens unless the path is changed. The question names the machine that produced what is there
+  when it was not this one, which is the difference between overwriting your own re-run and
+  overwriting a colleague's cohort across a share.
+
+  The CLI stays silent when the previous run used the same version and the same settings, which is how
+  a QC report gets regenerated and a partial ion accounting gets topped up: it is a log line on a
+  scripted run, not a destructive action someone is about to take by hand.
 
   The question is asked **per stage**, against the same declarations the stage cache keys on, so a
   setting no stage reads - thread count, whether plots are saved - says nothing, and a setting that
