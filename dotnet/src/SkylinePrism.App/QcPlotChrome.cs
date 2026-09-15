@@ -29,6 +29,20 @@ internal static class QcPlotChrome
     public static bool ShowMarkerScoreLegend(int groups) => groups <= MaxMarkerScoreLegendGroups;
 
     /// <summary>
+    /// The plots that describe the marker normalization rather than the matrix. They read
+    /// marker_normalization.csv, which exists only when marker normalization ran.
+    /// </summary>
+    public static bool IsMarkerPlot(string kind) => kind is "Marker score" or "Marker loadings";
+
+    /// <summary>
+    /// Whether the Plot picker offers <paramref name="kind"/> with marker normalization switched on or
+    /// off in Settings. The marker plots are hidden, not greyed out, while it is off: a disabled entry
+    /// invites the question of how to enable it, and the answer is a checkbox on another tab.
+    /// </summary>
+    public static bool OffersPlotKind(string kind, bool markerNormalizationEnabled) =>
+        markerNormalizationEnabled || !IsMarkerPlot(kind);
+
+    /// <summary>
     /// How near the cursor has to be, in pixels, to read as hovering a point. Comfortably larger than
     /// the 12 px markers, because the target is a mouse pointer rather than a click.
     /// </summary>

@@ -113,6 +113,9 @@ public partial class MainWindow : Window
         QcViewCombo.SelectedIndex = 0;
         QcLevelCombo.SelectedIndex = 0;
         QcPlotCombo.SelectedIndex = 0;
+        // Marker normalization starts unticked, and the checkbox raises no event for its initial
+        // state, so the marker plots have to be hidden here to start hidden.
+        RefreshQcPlotKinds();
         // QcGroupByCombo / QcGroupCombo are populated from the Replicates report after a run.
 
         // The visualization nav rail starts on QC plots. Set here rather than in XAML for the reason
@@ -609,6 +612,26 @@ public partial class MainWindow : Window
     {
         if (MarkerNormListCombo is not null)
             MarkerNormListCombo.IsEnabled = MarkerNormCheck?.IsChecked == true;
+        RefreshQcPlotKinds();
+    }
+
+    /// <summary>
+    /// Offer the marker plots only while marker normalization is switched on. They read
+    /// marker_normalization.csv, which only a run with it on writes, so with it off the two entries led
+    /// to "This run did not record marker loadings" - a dead end reached from a drop-down. Hidden rather
+    /// than greyed out (see <see cref="QcPlotChrome.OffersPlotKind"/>), and a marker plot that was
+    /// showing falls back to PCA, so the picker never names a plot it no longer lists.
+    /// </summary>
+    private void RefreshQcPlotKinds()
+    {
+        if (QcPlotCombo is null || QcPlotMarkerScoreItem is null || QcPlotMarkerLoadingsItem is null)
+            return;
+        var markers = MarkerNormCheck?.IsChecked == true;
+        var visibility = markers ? Visibility.Visible : Visibility.Collapsed;
+        QcPlotMarkerScoreItem.Visibility = visibility;
+        QcPlotMarkerLoadingsItem.Visibility = visibility;
+        if (!QcPlotChrome.OffersPlotKind(ComboText(QcPlotCombo, "PCA"), markers))
+            QcPlotCombo.SelectedIndex = 0; // PCA; its SelectionChanged re-renders the pane
     }
 
     // One handler for the checkbox, the export option and the measure picker: they constrain each
@@ -2383,7 +2406,7 @@ public partial class MainWindow : Window
     /// The plots that describe the marker normalization rather than the matrix. They read
     /// marker_normalization.csv, so View and Level do not apply to them.
     /// </summary>
-    private static bool IsMarkerPlot(string kind) => kind is "Marker score" or "Marker loadings";
+    private static bool IsMarkerPlot(string kind) => QcPlotChrome.IsMarkerPlot(kind);
 
     /// <summary>
     /// Plots of the marker PANEL rather than the samples. These read marker_normalization.csv alone, so

@@ -154,4 +154,21 @@ public class QcPlotChromeTests
     {
         Assert.Equal(-1, QcPlotChrome.NearestPoint(System.Array.Empty<Pixel>(), new Pixel(0, 0)));
     }
+
+    /// <summary>
+    /// The marker plots read marker_normalization.csv, which exists only when marker normalization
+    /// ran, so the picker offers them only while it is switched on. Every other plot is always offered.
+    /// </summary>
+    [Fact]
+    public void MarkerPlotsAreOfferedOnlyWithMarkerNormalizationOn()
+    {
+        Assert.True(QcPlotChrome.OffersPlotKind("Marker score", markerNormalizationEnabled: true));
+        Assert.True(QcPlotChrome.OffersPlotKind("Marker loadings", markerNormalizationEnabled: true));
+        Assert.False(QcPlotChrome.OffersPlotKind("Marker score", markerNormalizationEnabled: false));
+        Assert.False(QcPlotChrome.OffersPlotKind("Marker loadings", markerNormalizationEnabled: false));
+
+        Assert.True(QcPlotChrome.OffersPlotKind("PCA", markerNormalizationEnabled: false));
+        Assert.True(QcPlotChrome.OffersPlotKind("CV distribution", markerNormalizationEnabled: false));
+        Assert.True(QcPlotChrome.OffersPlotKind("RT-lowess", markerNormalizationEnabled: false));
+    }
 }
