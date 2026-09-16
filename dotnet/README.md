@@ -220,7 +220,7 @@ counted (never clamped into the nearest one) and the status line warns with the 
 that is when the raw data is most likely still where the document says it is. The windows are resolved once
 and written to the output directory; nothing later depends on the data files still being reachable.
 
-Since dotnet-vNEXT the tool no longer needs Skyline for this. `IsolationWindowProbe` reads the windows
+Since dotnet-v26.25.0 the tool no longer needs Skyline for this. `IsolationWindowProbe` reads the windows
 through PRISM's own ProteoWizard reader in about the time it takes to open the file (~4 s on a 3.3 GB
 Thermo file over SMB, against a ~10 s Skyline launch per input), and the Spectrum density tab does it
 itself when it opens on a directory whose windows are not known - after the map is already drawn, so a
