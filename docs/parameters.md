@@ -272,7 +272,7 @@ nothing else in the config is affected.
 
 | Key | Removed in | What to do instead |
 |-----|-----------|--------------------|
-| `qc_report.ms2_signal.*` | dotnet-v26.25.0 | MS2 signal accounting is gone. Its numerator was a sum of peak areas and its denominator a summed ion current - different quantities, so their ratio was not a fraction of anything. Run `prism ion-accounting -d <output-dir> -r <raw-dir>` instead, which measures both sides from the instrument files |
+| `qc_report.ms2_signal.*` | dotnet-v26.25.1 | MS2 signal accounting is gone. Its numerator was a sum of peak areas and its denominator a summed ion current - different quantities, so their ratio was not a fraction of anything. Run `prism ion-accounting -d <output-dir> -r <raw-dir>` instead, which measures both sides from the instrument files |
 
 ---
 

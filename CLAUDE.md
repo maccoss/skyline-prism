@@ -525,7 +525,7 @@ Key sections:
   the strictest operation available (see the file-sharing table under "Code Style"), refused while
   ANY handle is open on the target, so it fails in exactly the case it is reached for; that shipped
   once and made a narrow failure wider. `RecoverStagedCycles` / `CyclesPathFor` still read an
-  `ion_cycles.parquet.new` left by a build before dotnet-v26.25.0, taking the newer of the two. That is
+  `ion_cycles.parquet.new` left by a build before dotnet-v26.25.1, taking the newer of the two. That is
   a migration path for one release, not a design to extend.
 
   > [!CAUTION]
@@ -557,7 +557,7 @@ Key sections:
   valid file, so reuse is decided by which replicates it covers, never by the key alone.
 
   > [!NOTE]
-  > This replaced `Ms2SignalAccounting`, removed in dotnet-v26.25.0 along with `qc_report.ms2_signal`,
+  > This replaced `Ms2SignalAccounting`, removed in dotnet-v26.25.1 along with `qc_report.ms2_signal`,
   > `prism ms2-signal` and the `PRISM-Ions` report. It divided a sum of Skyline peak areas by a
   > summed total ion current - an intensity-time integral over an intensity - so its "fraction" was
   > never one. Do not reintroduce any part of it; an output directory from dotnet-v26.24.x may still

@@ -442,7 +442,7 @@ public static class IonAccountingStore
     /// holder letting go inside the append's own retry window - and the new rows would land on top
     /// of the old measurement, mixing two settings keys in one file with nothing said.</para>
     ///
-    /// <para>What IS removed here is the staging file a build before dotnet-v26.25.0 would have left,
+    /// <para>What IS removed here is the staging file a build before dotnet-v26.25.1 would have left,
     /// so a stale one cannot shadow the file this run is about to write. Failing to remove it is
     /// harmless and therefore silent: the real file is rewritten continuously from here, so it is
     /// the newer of the two within moments.</para>

@@ -1,4 +1,11 @@
-# Skyline-PRISM (C#) dotnet-v26.25.0 Release Notes
+# Skyline-PRISM (C#) dotnet-v26.25.1 Release Notes
+
+> **On the missing 26.25.0.** A `dotnet-v26.25.0` tag exists in the repository but no release was
+> ever published from it: this is the first release to build the instrument-file reader into every
+> CLI, and the macOS builds could not be made at all - pwiz ships the archive extractor its vendor
+> step needs as a Linux binary only, so the two macOS jobs failed and the publish never ran. Those
+> targets now cross-publish from Linux, which is what CI had been verifying all along. 26.25.1 is
+> that release, whole; nothing was downloadable under the earlier number.
 
 The headline is **ion accounting**: PRISM now reads the instrument files directly and answers, per
 replicate and at each MS level, how many ions reached the detector and what fraction of them a
