@@ -86,7 +86,8 @@ public static partial class QcReport
 
         // A pure file read, so `prism qc -d` shows these on any directory that has been measured
         // and simply omits the section on one that has not.
-        var signalPlots = RenderIonAccountingSection(outputDir, savePlots, plotsDir, log);
+        var signalPlots = RenderIonAccountingSection(
+            outputDir, sampleCols.Count, savePlots, plotsDir, log);
 
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,

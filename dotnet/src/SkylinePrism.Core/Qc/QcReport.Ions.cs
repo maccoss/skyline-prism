@@ -27,8 +27,15 @@ public static partial class QcReport
     /// other way to know which produced these numbers - so each caption names them rather than
     /// leaving the figures to be read as settings-independent.</para>
     /// </remarks>
+    /// <param name="cohortReplicates">
+    /// How many replicates the ANALYSIS has - the denominator for "how much of it has been measured".
+    /// Taken from the run's own sample list rather than from the cache, because the cache is not one
+    /// while a measurement is running: progress is saved after every replicate and the rows for
+    /// replicates with no file of their own are added only once the scan loop ends, so a cache read
+    /// mid-run holds exactly the replicates measured so far and could only ever say "N of N".
+    /// </param>
     private static List<PlotSection> RenderIonAccountingSection(
-        string outputDir, bool savePlots, string plotsDir, Action<string>? log)
+        string outputDir, int cohortReplicates, bool savePlots, string plotsDir, Action<string>? log)
     {
         var sections = new List<PlotSection>();
 
@@ -50,11 +57,12 @@ public static partial class QcReport
             + $"{IonAccountingStore.FileName}.");
 
         // How many of the cohort these numbers cover. A partly measured cache is ordinary - a --max
-        // spot check, or a measurement still running - and the plots cannot say it themselves once
-        // they are drawn over the replicates that HAVE numbers.
-        var coverage = usable.Count == result.Rows.Count
+        // spot check, a measurement still running, or instrument files that could not be found - and
+        // the plots cannot say it themselves once they are drawn over the replicates that HAVE
+        // numbers. Against the analysis's replicate count, not the cache's: see cohortReplicates.
+        var coverage = usable.Count >= cohortReplicates
             ? ""
-            : $"{usable.Count:N0} of {result.Rows.Count:N0} replicates measured so far. ";
+            : $"{usable.Count:N0} of {cohortReplicates:N0} replicates measured so far. ";
         var settings = coverage
             + $"Product {result.ProductTolerance}, precursor "
             + $"{result.PrecursorTolerance}; isolation scheme {result.IsolationScheme}; "
@@ -89,7 +97,9 @@ public static partial class QcReport
             {
                 "- " + FractionCaption(usable, level),
                 ExplainedCaption(usable, level),
-                settings,
+                // Once per section, under the first panel - it is the same settings for both MS
+                // levels, and printing them twice is half of what made this a wall of text.
+                bars.Count == 0 ? settings : "",
             }.Where(line => line.Length > 2));
 
             Render(
@@ -318,8 +328,13 @@ public static partial class QcReport
         }
         catch (Exception ex)
         {
+            // The caption is kept, not replaced: this is the panel that carries the settings and any
+            // impossible-measurement warning for its whole section, and losing a render is no reason
+            // to lose them as well.
+            var failure = (alt.Length > 0 ? alt + " " : "")
+                + "(render failed: " + ex.GetType().Name + ")";
             images.Add(new PlotImage(
-                alt + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>(), alt));
+                caption.Length > 0 ? failure + "\n" + caption : failure, Array.Empty<byte>(), alt));
         }
     }
 
