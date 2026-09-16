@@ -100,8 +100,19 @@ jobs:
           - { os: windows-latest, rid: win-arm64,   archive: zip }
           - { os: ubuntu-latest,  rid: linux-x64,   archive: tar }
           - { os: ubuntu-latest,  rid: linux-arm64, archive: tar }
-          - { os: macos-latest,   rid: osx-x64,     archive: tar }
-          - { os: macos-latest,   rid: osx-arm64,   archive: tar }
+          # The osx targets CROSS-PUBLISH from Linux, and must. Building the reader extracts the
+          # licence-gated vendor archives with pwiz's own `libraries/7zz`, which the pwiz repository
+          # ships as a Linux x86-64 ELF binary and nothing else - on a macOS runner it cannot execute
+          # at all, and MSBuild reports it as exit code 126 from Waters.csproj. dotnet-v26.25.0's
+          # first tag failed here, after the tool zip and all four other CLIs had already built.
+          #
+          # There is nothing macOS-specific to lose: the publish is framework-dependent, so the
+          # apphost for a target RID is emitted by the SDK whatever the build OS, and dotnet-ci.yml's
+          # "CLI carries the instrument-file reader" job has been publishing both of these from
+          # ubuntu-latest - and asserting the reader DLLs land - on every push. That job is why CI
+          # was green while the release was not.
+          - { os: ubuntu-latest,  rid: osx-x64,     archive: tar }
+          - { os: ubuntu-latest,  rid: osx-arm64,   archive: tar }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
