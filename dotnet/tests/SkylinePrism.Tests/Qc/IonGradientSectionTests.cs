@@ -62,14 +62,16 @@ public class IonGradientSectionTests : IDisposable
         // Signal, named in the heading - not "Assigned Share", and not ions.
         Assert.Contains("Fraction of Acquired MS2 Signal", gradient[0], StringComparison.Ordinal);
 
-        // Best, median and worst. A fourth panel is how the two-quantity bug looked.
-        var captions = Captions(html)
-            .Where(c => c.Contains("replicate by assigned fraction", StringComparison.Ordinal))
+        // Best, median and worst. A fourth panel is how the two-quantity bug looked. Counted on the
+        // images' alt text: which replicate a panel shows is its own title, so the caption no longer
+        // repeats it - these figures used to carry a paragraph each.
+        var panels = Alts(html)
+            .Where(a => a.Contains("replicate by assigned fraction", StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(3, captions.Length);
-        Assert.Contains(captions, c => c.Contains("Best replicate", StringComparison.Ordinal));
-        Assert.Contains(captions, c => c.Contains("Median replicate", StringComparison.Ordinal));
-        Assert.Contains(captions, c => c.Contains("Worst replicate", StringComparison.Ordinal));
+        Assert.Equal(3, panels.Length);
+        Assert.Contains(panels, a => a.Contains("Best replicate", StringComparison.Ordinal));
+        Assert.Contains(panels, a => a.Contains("Median replicate", StringComparison.Ordinal));
+        Assert.Contains(panels, a => a.Contains("Worst replicate", StringComparison.Ordinal));
 
         // Nothing absolute under that heading: "ions per cycle" was the fourth panel's caption.
         Assert.DoesNotContain("absolute ions per cycle", html, StringComparison.Ordinal);
@@ -98,6 +100,11 @@ public class IonGradientSectionTests : IDisposable
 
     private static string[] Headings(string html) =>
         Regex.Matches(html, @"<h[23][^>]*>(.*?)</h[23]>", RegexOptions.Singleline)
+            .Select(m => m.Groups[1].Value).ToArray();
+
+    /// <summary>Every image's alt text - what each panel says it shows.</summary>
+    private static string[] Alts(string html) =>
+        Regex.Matches(html, @"<img[^>]*alt=""(.*?)""", RegexOptions.Singleline)
             .Select(m => m.Groups[1].Value).ToArray();
 
     private static string[] Captions(string html) =>

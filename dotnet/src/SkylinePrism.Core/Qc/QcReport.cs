@@ -86,7 +86,8 @@ public static partial class QcReport
 
         // A pure file read, so `prism qc -d` shows these on any directory that has been measured
         // and simply omits the section on one that has not.
-        var signalPlots = RenderIonAccountingSection(outputDir, savePlots, plotsDir, log);
+        var signalPlots = RenderIonAccountingSection(
+            outputDir, sampleCols.Count, savePlots, plotsDir, log);
 
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
@@ -99,7 +100,11 @@ public static partial class QcReport
         return htmlPath;
     }
 
-    private sealed record PlotImage(string Caption, byte[] Png);
+    /// <param name="Alt">
+    /// The image's alt text when it is not the caption - a panel whose own title already names it
+    /// prints no caption, but still has to be described to a reader who cannot see it.
+    /// </param>
+    private sealed record PlotImage(string Caption, byte[] Png, string? Alt = null);
     private sealed record PlotSection(string Title, List<PlotImage> Images);
 
     /// <summary>
@@ -114,19 +119,26 @@ public static partial class QcReport
         var cap = char.ToUpperInvariant(level[0]) + level[1..];
         var sections = new List<PlotSection>();
 
-        PlotImage Img(string caption, string fileStem, Func<byte[]> render)
+        // The label is which half of a before/after pair this is - "Raw" or "Corrected". The plot
+        // carries it as its own title and the section heading above the pair says "Raw vs Corrected",
+        // so printing it under the image as well was a third copy of one word. It stays as the alt
+        // text, where it is the only description a reader who cannot see the image gets.
+        PlotImage Img(string label, string fileStem, Func<byte[]> render)
         {
             try
             {
                 var png = render();
                 if (savePlots && png.Length > 0)
                     File.WriteAllBytes(Path.Combine(plotsDir, fileStem + ".png"), png);
-                return new PlotImage(caption, png);
+                return new PlotImage("", png, label);
             }
             catch (Exception ex)
             {
-                // Rendering can fail on a headless host missing fontconfig; keep the report.
-                return new PlotImage(caption + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>());
+                // Rendering can fail on a headless host missing fontconfig; keep the report. Here the
+                // caption is all there is, so it says which panel failed and why.
+                return new PlotImage(
+                    (label.Length > 0 ? label + " " : "")
+                    + "(render failed: " + ex.GetType().Name + ")", Array.Empty<byte>(), label);
             }
         }
 
@@ -573,7 +585,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             {
                 sb.Append("<div class=\"plot-item\">");
                 if (img.Png.Length > 0)
-                    sb.Append($"<img src=\"data:image/png;base64,{Convert.ToBase64String(img.Png)}\" alt=\"{HtmlEncode(img.Caption)}\" />");
+                    sb.Append($"<img src=\"data:image/png;base64,{Convert.ToBase64String(img.Png)}\" alt=\"{HtmlEncode(img.Alt ?? img.Caption)}\" />");
                 if (!string.IsNullOrEmpty(img.Caption))
                 {
                     // Encoded FIRST, then the line breaks put back - so a caption can be a short

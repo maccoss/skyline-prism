@@ -296,6 +296,24 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **The QC report stopped repeating itself under every figure.** A before/after pair printed "Raw"
+  and "Corrected" under the two images, which the plots already carry as their own titles and the
+  section heading already says as "Raw vs Corrected" - the same word three times. The label is now
+  the image's alt text and nothing more.
+
+  The ion accounting figures were worse: each carried a paragraph describing what its own bars,
+  title and legend were already saying, so they were the one section of the report with prose under
+  every figure. What is left is what the image cannot say - the spread behind the median, the cases
+  where a figure is withheld as impossible, and the extraction tolerances, isolation scheme and
+  peptide count the cache is keyed on. Every ion panel also gained alt text, which the shorter
+  captions had left it without.
+
+- **A partly measured ion accounting cohort is drawn over the replicates it measured.** The bars
+  were drawn over every replicate in the cache, so a `--max` spot check or a measurement still
+  running was one bar and thirty-eight empty slots - which reads as a cohort that acquired almost
+  nothing rather than as a measurement with more to do. The plots now cover the replicates that have
+  numbers, and the caption says how many of the cohort that is.
+
 - **The Load histogram labels only whole-number loads.** A spectrum carries 0, 1, 2 ... precursors,
   but on a short axis ScottPlot labeled the half-steps too, so the Spectrum density tab's histogram
   read "0.5 precursors" under a bar that cannot exist. The axis now carries integer ticks only.

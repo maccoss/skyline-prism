@@ -27,8 +27,15 @@ public static partial class QcReport
     /// other way to know which produced these numbers - so each caption names them rather than
     /// leaving the figures to be read as settings-independent.</para>
     /// </remarks>
+    /// <param name="cohortReplicates">
+    /// How many replicates the ANALYSIS has - the denominator for "how much of it has been measured".
+    /// Taken from the run's own sample list rather than from the cache, because the cache is not one
+    /// while a measurement is running: progress is saved after every replicate and the rows for
+    /// replicates with no file of their own are added only once the scan loop ends, so a cache read
+    /// mid-run holds exactly the replicates measured so far and could only ever say "N of N".
+    /// </param>
     private static List<PlotSection> RenderIonAccountingSection(
-        string outputDir, bool savePlots, string plotsDir, Action<string>? log)
+        string outputDir, int cohortReplicates, bool savePlots, string plotsDir, Action<string>? log)
     {
         var sections = new List<PlotSection>();
 
@@ -49,7 +56,15 @@ public static partial class QcReport
             $"  Ion accounting: plotting {usable.Count:N0} measured replicate(s) from "
             + $"{IonAccountingStore.FileName}.");
 
-        var settings = $"- Product {result.ProductTolerance}, precursor "
+        // How many of the cohort these numbers cover. A partly measured cache is ordinary - a --max
+        // spot check, a measurement still running, or instrument files that could not be found - and
+        // the plots cannot say it themselves once they are drawn over the replicates that HAVE
+        // numbers. Against the analysis's replicate count, not the cache's: see cohortReplicates.
+        var coverage = usable.Count >= cohortReplicates
+            ? ""
+            : $"{usable.Count:N0} of {cohortReplicates:N0} replicates measured so far. ";
+        var settings = coverage
+            + $"Product {result.ProductTolerance}, precursor "
             + $"{result.PrecursorTolerance}; isolation scheme {result.IsolationScheme}; "
             + $"{result.AssignedPeptides:N0} peptides claimed signal.";
 
@@ -60,7 +75,7 @@ public static partial class QcReport
         if (offScale > 0)
         {
             var worst = usable.First(r => r.IonScaleImplausible);
-            settings = $"- WARNING: {offScale:N0} replicate(s) report an impossible number of "
+            settings = $"WARNING: {offScale:N0} replicate(s) report an impossible number of "
                 + $"ions per scan ({worst.MeanMs1IonsPerScan:E2} at MS1, "
                 + $"{worst.MeanMs2IonsPerScan:E2} at MS2, against an AGC target of perhaps 1e6). "
                 + "The totals are in the wrong unit; the fractions are unaffected.\n" + settings;
@@ -73,19 +88,28 @@ public static partial class QcReport
         foreach (var level in new[] { PlotRenderer.IonLevel.Ms2, PlotRenderer.IonLevel.Ms1 })
         {
             var name = level.ToString().ToUpperInvariant();
+            // Only what is NOT on the image. The title carries the medians and the legend names every
+            // series, so what is left is the spread, the cases where a figure is withheld as
+            // impossible, and the settings - each a fact with no other home. Describing the bars in
+            // prose as well made this the one section of the report with a paragraph under every
+            // figure.
             var caption = string.Join("\n", new[]
             {
-                $"- {name} ions acquired, and the part of them inside a region some peptide of this "
-                + "analysis claims. Signal two peptides share is counted once.",
                 "- " + FractionCaption(usable, level),
                 ExplainedCaption(usable, level),
-                settings,
+                // Once per section, under the first panel - it is the same settings for both MS
+                // levels, and printing them twice is half of what made this a wall of text.
+                bars.Count == 0 ? settings : "",
             }.Where(line => line.Length > 2));
 
             Render(
-                bars, caption, $"ion_accounting_{name.ToLowerInvariant()}.png", savePlots, plotsDir,
+                bars, caption, AccountingTitle(name, usable),
+                $"ion_accounting_{name.ToLowerInvariant()}.png", savePlots, plotsDir,
+                // The replicates that HAVE numbers. Drawn over every row, a cache measured for one
+                // replicate of thirty-nine was one bar and thirty-eight empty slots, which reads as a
+                // cohort that acquired nothing rather than as a measurement still to finish.
                 () => PlotRenderer.IonAccountingPng(
-                    result, level, AccountingTitle(name, usable)));
+                    result with { Rows = usable }, level, AccountingTitle(name, usable)));
         }
         sections.Add(new PlotSection(
             usable.Any(r => r.HasExplained)
@@ -154,30 +178,21 @@ public static partial class QcReport
             if (cycles.Count == 0)
                 continue;
 
-            var quantified = row.Ms2FractionIn(signal);
-            var explained = row.Ms2ExplainedFractionIn(signal);
-            var lines = new List<string>
+            // The panel is titled with the replicate and its legend names both traces and the
+            // whole-run figure, so the caption carries only what is not already on the image: the
+            // settings, once per section, and the one case where a fraction is withheld.
+            var lines = new List<string>();
+            if (row.ExceededIn(signal))
             {
-                $"- {labels[i]} replicate by assigned fraction: {row.Sample}.",
-                $"- Fraction of each cycle's acquired MS2 {noun} the run quantifies on"
-                + (row.HasExplained
-                    ? ", with the lighter line what any b/y or precursor ion could account for."
-                    : "."),
-            };
-            lines.Add(row.ExceededIn(signal)
-                ? "- This replicate assigned more than it acquired, which is impossible, so no "
-                  + "whole-run fraction is stated."
-                : $"- Whole run: {IonAccountingStore.Percent(quantified)} quantified"
-                  + (double.IsFinite(explained)
-                      ? $", {IonAccountingStore.Percent(explained)} explained."
-                      : "."));
-            // Once per section rather than under every panel - it is the same three settings each
-            // time, and repeating them is most of what made this section a wall of text.
+                lines.Add("- This replicate assigned more than it acquired, which is impossible, so "
+                    + "no whole-run fraction is stated.");
+            }
             if (images.Count == 0)
                 lines.Add(settings);
 
             Render(
                 images, string.Join("\n", lines),
+                $"{labels[i]} replicate by assigned fraction: {row.Sample}",
                 $"ion_fraction_{labels[i].ToLowerInvariant()}.png", savePlots, plotsDir,
                 () => PlotRenderer.IonFractionProfilePng(
                     cycles, PlotRenderer.IonLevel.Ms2, GradientBinMinutes,
@@ -237,10 +252,11 @@ public static partial class QcReport
               + $"{IonAccountingStore.Percent(fractions[^1])}"
             : "";
 
-        return $"- Median {IonAccountingStore.Percent(median)} explained{span} (lighter bar): "
-            + "every theoretical b and y ion at 1+ and 2+ plus the surviving precursor and its "
-            + "first two isotopes. The gap to the quantified bar is signal the peptide produced "
-            + "that no transition integrates.";
+        // The number and which bar it is, and no more. What "explained" counts - every theoretical b
+        // and y ion at 1+ and 2+ plus the surviving precursor and its first two isotopes - is in the
+        // plot's own title in short form and in docs/skyline-tool.md in full; spelled out here it was
+        // most of what made this the one section of the report with a paragraph under every figure.
+        return $"- Median {IonAccountingStore.Percent(median)} explained{span} (the lighter bar).";
     }
 
     internal static string FractionCaption(
@@ -291,9 +307,14 @@ public static partial class QcReport
     /// caption rather than into a missing report. Every other failure in this file logs and carries
     /// on; a plot is not worth losing a run's whole QC report over.
     /// </summary>
+    /// <param name="alt">
+    /// What the panel shows, for a reader who cannot see it. Its own sentence because the caption is
+    /// now the settings and the exceptions only - most panels here carry none at all, and an image
+    /// with no alt text describes nothing.
+    /// </param>
     private static void Render(
-        List<PlotImage> images, string caption, string fileName, bool savePlots, string plotsDir,
-        Func<byte[]> render)
+        List<PlotImage> images, string caption, string alt, string fileName, bool savePlots,
+        string plotsDir, Func<byte[]> render)
     {
         try
         {
@@ -303,12 +324,17 @@ public static partial class QcReport
                 Directory.CreateDirectory(plotsDir);
                 File.WriteAllBytes(Path.Combine(plotsDir, fileName), png);
             }
-            images.Add(new PlotImage(caption, png));
+            images.Add(new PlotImage(caption, png, alt));
         }
         catch (Exception ex)
         {
+            // The caption is kept, not replaced: this is the panel that carries the settings and any
+            // impossible-measurement warning for its whole section, and losing a render is no reason
+            // to lose them as well.
+            var failure = (alt.Length > 0 ? alt + " " : "")
+                + "(render failed: " + ex.GetType().Name + ")";
             images.Add(new PlotImage(
-                caption + " (render failed: " + ex.GetType().Name + ")", Array.Empty<byte>()));
+                caption.Length > 0 ? failure + "\n" + caption : failure, Array.Empty<byte>(), alt));
         }
     }
 

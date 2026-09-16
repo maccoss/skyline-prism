@@ -189,7 +189,9 @@ public class ExplainedIonsTests
 
         var withIt = QcReport.ExplainedCaption(measured, PlotRenderer.IonLevel.Ms2);
         Assert.Contains("explained", withIt, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("b and y", withIt, StringComparison.OrdinalIgnoreCase);
+        // The number and which bar it is. What "explained" counts is the plot's title and the docs;
+        // spelled out here it was most of the wall of text under these figures.
+        Assert.Contains("lighter bar", withIt, StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal("", QcReport.ExplainedCaption(unmeasured, PlotRenderer.IonLevel.Ms2));
         Assert.Equal("", QcReport.ExplainedCaption(measured, PlotRenderer.IonLevel.Ms1));
