@@ -40,18 +40,25 @@
         <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="200" />
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
+            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True"
+                      ToolTip="Report carrying replicate annotations (default reads the Replicates document grid)." />
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
             <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
-                     TextChanged="OnBatchColumnChanged" />
-            <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
-                       Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
+                     TextChanged="OnBatchColumnChanged"
+                     ToolTip="The batch/plate column name within the metadata report." />
+            <TextBlock Grid.Column="4" Text="Clinical CSV:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBox Grid.Column="5" x:Name="ClinicalCsvBox" VerticalAlignment="Center" IsReadOnly="True"
+                     ToolTip="Optional external clinical metadata CSV, joined to the samples by an auto-detected key column. Its columns become available in the Differential pane's Group by and Adjust for." />
+            <Button Grid.Column="6" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowseClinical"
+                    ToolTip="Choose a clinical metadata CSV to join to the samples." />
         </Grid>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
@@ -308,6 +315,8 @@
                              nothing to offer rather than an empty pane to click. -->
                         <ListBoxItem x:Name="IonNavItem" Content="Ion Accounting" Padding="10,7"
                                      Visibility="Collapsed" />
+                        <ListBoxItem x:Name="DiffNavItem" Content="Differential" Padding="10,7" />
+                        <ListBoxItem x:Name="MarkersNavItem" Content="Markers" Padding="10,7" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -525,6 +534,122 @@
                                            Foreground="#333" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="IonPlot" MouseMove="OnIonPlotMouseMove" />
+                        </DockPanel>
+
+                        <DockPanel x:Name="DiffPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
+                                          ToolTip="Volcano (moderated-t), PCA of the samples, peptide detection frequency, or g:Profiler enrichment of the significant hits.">
+                                    <ComboBoxItem>Volcano</ComboBoxItem>
+                                    <ComboBoxItem>PCA</ComboBoxItem>
+                                    <ComboBoxItem>Detection</ComboBoxItem>
+                                    <ComboBoxItem>Enrichment</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffLevelCombo" Width="90" SelectionChanged="OnDiffLevelChanged"
+                                          ToolTip="Protein- or peptide-level corrected matrix.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"
+                                          ToolTip="Metadata column to split samples by (from sample_metadata.csv)." />
+                                <TextBlock Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffACombo" Width="150" ToolTip="Group A value (reference)." />
+                                <TextBlock Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
+                                <ComboBox x:Name="DiffBCombo" Width="150"
+                                          ToolTip="Group B value (treatment; a positive log2 fold change means higher in B)." />
+                                <TextBlock Text="Adjust for:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffCovariatesCombo" Width="170" IsEditable="True" IsReadOnly="True"
+                                          Text="(none)"
+                                          ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column; numeric columns are centered, categorical ones dummy-coded. A ticked covariate switches Detection to the Firth GLM.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <CheckBox x:Name="DiffTrendCheck" Content="Trend prior" VerticalAlignment="Center"
+                                          Margin="16,0,0,0"
+                                          ToolTip="Use the intensity-trend variance prior (limma-trend) instead of the global prior for the Volcano and Enrichment tests." />
+                                <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
+                                        Click="OnRunDifferential"
+                                        ToolTip="Run the limma moderated-t contrast on the two groups." />
+                                <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <Border DockPanel.Dock="Bottom" Background="#FFF8E1" BorderBrush="#E0C97A"
+                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
+                                <TextBlock x:Name="DiffCaveatText" Foreground="#5C4A00" TextWrapping="Wrap"
+                                           FontSize="11.5"
+                                           Text="Load a run and pick a view for its interpretation notes." />
+                            </Border>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="360" />
+                                </Grid.ColumnDefinitions>
+                                <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot"
+                                            MouseLeftButtonDown="OnDiffPlotMouseDown" />
+                                <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="True"
+                                          AutoGeneratingColumn="OnDiffGridAutoGeneratingColumn"
+                                          SelectionChanged="OnDiffGridSelectionChanged"
+                                          SelectionMode="Single"
+                                          IsReadOnly="True" CanUserAddRows="False" Margin="6,0,0,0"
+                                          GridLinesVisibility="Horizontal" HeadersVisibility="Column" />
+                            </Grid>
+                        </DockPanel>
+
+                        <DockPanel x:Name="MarkersPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="Panels:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="MarkersPanelCombo" Width="240" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick panels)"
+                                          ToolTip="One or more protein lists to evaluate together (your lists + PRISM's shipped panels). Tick several to union them into one heatmap. Manage lists from the Dynamic Range 'Protein lists...' editor.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersLevelCombo" Width="90" SelectionChanged="OnMarkersLevelChanged"
+                                          ToolTip="Protein- or peptide-level corrected matrix. Panels match by gene symbol, so protein level is usual.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersGroupByCombo" Width="150" SelectionChanged="OnMarkersGroupByChanged"
+                                          ToolTip="Metadata column that defines the groups (columns of the heatmap when showing group means)." />
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersViewCombo" Width="130" SelectionChanged="OnMarkersViewChanged"
+                                          ToolTip="Heatmap columns: one per group (means) or one per sample.">
+                                    <ComboBoxItem>Group means</ComboBoxItem>
+                                    <ComboBoxItem>Per sample</ComboBoxItem>
+                                </ComboBox>
+                                <Button x:Name="MarkersReloadButton" Content="Reload" Padding="12,2" Margin="16,0,0,0"
+                                        Click="OnMarkersReload"
+                                        ToolTip="Re-read the corrected matrix and refresh the panel list." />
+                                <TextBlock x:Name="MarkersStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <Border DockPanel.Dock="Bottom" Background="#F3F4F6" BorderBrush="#D0D4DA"
+                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
+                                <TextBlock x:Name="MarkersNoteText" Foreground="#444" TextWrapping="Wrap"
+                                           FontSize="11.5"
+                                           Text="Pick a panel to evaluate its members across your groups." />
+                            </Border>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="3*" />
+                                    <RowDefinition Height="2*" />
+                                </Grid.RowDefinitions>
+                                <sp:WpfPlot Grid.Row="0" x:Name="MarkersHeatPlot" />
+                                <sp:WpfPlot Grid.Row="1" x:Name="MarkersBoxPlot" />
+                            </Grid>
                         </DockPanel>
                     </Grid>
                 </Grid>

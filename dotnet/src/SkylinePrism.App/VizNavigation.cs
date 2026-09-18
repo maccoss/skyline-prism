@@ -1,6 +1,5 @@
 namespace SkylinePrism.App;
 
-/// <summary>One of the panes on the Visualization tab. The values are the nav rail's row order.</summary>
 /// <summary>
 /// The Analysis rail's panes, in the order the ListBox lists them - the index IS the enum value, the
 /// way <see cref="VizPane"/> works, so the two rails behave identically.
@@ -12,12 +11,15 @@ internal enum AnalysisPane
     Log = 2,
 }
 
+/// <summary>One of the panes on the Visualization tab. The values are the nav rail's row order.</summary>
 internal enum VizPane
 {
     Qc = 0,
     Density = 1,
     DynamicRange = 2,
     IonAccounting = 3,
+    Differential = 4,
+    Markers = 5,
 }
 
 /// <summary>
@@ -52,6 +54,8 @@ internal static class VizNavigation
             (int)VizPane.Density => VizPane.Density,
             (int)VizPane.DynamicRange => VizPane.DynamicRange,
             (int)VizPane.IonAccounting => VizPane.IonAccounting,
+            (int)VizPane.Differential => VizPane.Differential,
+            (int)VizPane.Markers => VizPane.Markers,
             _ => null,   // nothing selected yet (-1), or a row added to the XAML and not to this enum
         };
     }

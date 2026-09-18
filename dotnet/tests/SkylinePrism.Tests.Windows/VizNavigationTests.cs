@@ -23,6 +23,8 @@ public class VizNavigationTests
         Assert.Equal(VizPane.Density, VizNavigation.Current(visualizationTabSelected: true, navIndex: 1));
         Assert.Equal(VizPane.DynamicRange, VizNavigation.Current(visualizationTabSelected: true, navIndex: 2));
         Assert.Equal(VizPane.IonAccounting, VizNavigation.Current(visualizationTabSelected: true, navIndex: 3));
+        Assert.Equal(VizPane.Differential, VizNavigation.Current(visualizationTabSelected: true, navIndex: 4));
+        Assert.Equal(VizPane.Markers, VizNavigation.Current(visualizationTabSelected: true, navIndex: 5));
     }
 
     /// <summary>
@@ -46,7 +48,7 @@ public class VizNavigationTests
     /// </summary>
     [Theory]
     [InlineData(-1)]
-    [InlineData(5)]
+    [InlineData(6)]
     [InlineData(99)]
     public void AnIndexThatNamesNoRowIsNoPane(int navIndex)
     {
@@ -85,6 +87,7 @@ public class VizNavigationTests
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Qc));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Density));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.IonAccounting));
+        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Differential));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(null));
     }
 
@@ -100,6 +103,8 @@ public class VizNavigationTests
         Assert.Equal(1, (int)VizPane.Density);
         Assert.Equal(2, (int)VizPane.DynamicRange);
         Assert.Equal(3, (int)VizPane.IonAccounting);
+        Assert.Equal(4, (int)VizPane.Differential);
+        Assert.Equal(5, (int)VizPane.Markers);
     }
 
     /// <summary>

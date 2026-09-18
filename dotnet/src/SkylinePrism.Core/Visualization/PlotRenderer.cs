@@ -866,6 +866,74 @@ public static partial class PlotRenderer
     }
 
     /// <summary>
+    /// Draw a diverging value heatmap into a LIVE plot (not a PNG): rows down, columns across, a blue-
+    /// white-red scale centered at zero over the symmetric range +/-<paramref name="symmetricMax"/>.
+    /// Used for the row z-scored marker-panel heatmap. Row 0 is drawn at the TOP (matplotlib
+    /// orientation). NaN cells are light grey. Cell values are annotated when the grid is small.
+    /// </summary>
+    public static void DrawValueHeatmap(Plot plt, double[,] values, string[] columnLabels,
+        string[] rowLabels, double symmetricMax, string colorBarLabel, bool annotate)
+    {
+        var nRows = values.GetLength(0);
+        var nCols = values.GetLength(1);
+        if (nRows == 0 || nCols == 0)
+            return;
+
+        var range = symmetricMax > 0 && double.IsFinite(symmetricMax) ? symmetricMax : 1.0;
+        var hm = plt.Add.Heatmap(values);
+        hm.Colormap = new ScottPlot.Colormaps.CustomInterpolated(RdBuReversed);
+        hm.ManualRange = new ScottPlot.Range(-range, range);
+        hm.Position = new ScottPlot.CoordinateRect(0, nCols, 0, nRows);
+        hm.NaNCellColor = Color.FromHex("#e8e8e8");
+        StyleColorBar(plt.Add.ColorBar(hm), colorBarLabel, HeatmapColorBarScale);
+
+        if (annotate)
+            for (var i = 0; i < nRows; i++)
+                for (var j = 0; j < nCols; j++)
+                {
+                    if (double.IsNaN(values[i, j]))
+                        continue;
+                    var t = plt.Add.Text(values[i, j].ToString("0.0"), j + 0.5, nRows - 1 - i + 0.5);
+                    t.LabelAlignment = Alignment.MiddleCenter;
+                    StyleTextLabel(t, 12);
+                    t.LabelFontColor = Math.Abs(values[i, j]) > range * 0.55 ? Colors.White : Colors.Black;
+                }
+
+        var colPos = new double[nCols];
+        for (var j = 0; j < nCols; j++)
+            colPos[j] = j + 0.5;
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(colPos, columnLabels);
+
+        var rowPos = new double[nRows];
+        var yLabels = new string[nRows];
+        for (var i = 0; i < nRows; i++)
+        {
+            rowPos[i] = i + 0.5;
+            yLabels[i] = rowLabels[nRows - 1 - i]; // y is flipped (row 0 at top)
+        }
+        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(rowPos, yLabels);
+
+        StyleQcPlot(plt);
+        plt.Axes.Left.FrameLineStyle.Width = 0;
+        plt.Axes.Bottom.FrameLineStyle.Width = 0;
+        plt.Axes.Right.FrameLineStyle.Width = 0;
+        plt.Axes.Top.FrameLineStyle.Width = 0;
+        plt.Axes.Left.MajorTickStyle.Length = 0;
+        plt.Axes.Bottom.MajorTickStyle.Length = 0;
+        // Row labels shrink as the panel grows so a big marker set does not overlap into an unreadable
+        // smear; columns are far fewer, so they keep a readable size.
+        plt.Axes.Left.TickLabelStyle.FontSize = nRows > 60 ? 6 : nRows > 45 ? 7 : nRows > 30 ? 9 : 12;
+        plt.Axes.Bottom.TickLabelStyle.FontSize = 12;
+        plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
+        plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
+        plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
+
+        // Pin the view to the cell extent so the grid fills the plot (auto-scale leaves it floating in a
+        // corner when the plot is much wider than the grid, and the colorbar/annotations skew the fit).
+        plt.Axes.SetLimits(0, nCols, 0, nRows);
+    }
+
+    /// <summary>
     /// The correlation heatmap's color bar, relative to the shared sizes. Smaller than the other
     /// plots because it sits beside a dense grid, but nowhere near as small as that grid's own tick
     /// labels have to be - the bar's label count does not grow with the cohort.

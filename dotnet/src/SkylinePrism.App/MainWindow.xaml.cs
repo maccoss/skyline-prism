@@ -1330,6 +1330,7 @@ public partial class MainWindow : Window
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
             InvalidateIonAccounting(); // and a new ion_accounting.parquet for the Ion accounting pane
+            InvalidateDifferential(); // and new corrected matrices + merged_data for the Differential pane
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             ShowVisualization(VizPane.Qc); // land on the plots when the run finishes
@@ -1428,6 +1429,7 @@ public partial class MainWindow : Window
         InvalidateDensity();
         InvalidateDynamicRange();
         InvalidateIonAccounting();
+        InvalidateDifferential();
 
         // Whether the Ion accounting pane exists AT ALL depends on this directory carrying measured
         // ion accounting, so the rail has to be re-checked here and not only when a pane changes -
