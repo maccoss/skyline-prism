@@ -222,20 +222,50 @@ public partial class MainWindow
     /// losing the user's pick every time they touched an unrelated combo would be worse than the
     /// comparison costs.
     /// </remarks>
-    private void PopulateTrendColumns(List<string> numeric)
+    private void PopulateTrendColumns(IReadOnlyList<TrendAxisOption> axes)
     {
-        if (DiffTrendOverCombo.ItemsSource is IEnumerable<string> current
-            && current.SequenceEqual(numeric, StringComparer.Ordinal))
+        if (DiffTrendOverCombo.ItemsSource is IEnumerable<TrendAxisOption> current
+            && current.Select(a => a.Label).SequenceEqual(axes.Select(a => a.Label), StringComparer.Ordinal))
             return;
 
-        var keep = DiffTrendOverCombo.SelectedItem as string;
+        // Kept by LABEL, not by reference: the options are rebuilt from the metadata each time, so
+        // the equal option is a different object and holding the old one would drop the selection.
+        var keep = (DiffTrendOverCombo.SelectedItem as TrendAxisOption)?.Label;
         using (SuppressDiff())
         {
-            DiffTrendOverCombo.ItemsSource = numeric;
-            DiffTrendOverCombo.SelectedItem = keep is not null && numeric.Contains(keep, StringComparer.Ordinal)
-                ? keep
-                : numeric.FirstOrDefault();
+            DiffTrendOverCombo.ItemsSource = axes;
+            // Defaults only to an axis that needed no interpreting (Position 0 - the column IS a
+            // number). An axis read OUT of text is a judgement with a wrong answer available:
+            // "V2_Week 8" yields the visit as readily as the week, and a pane that opened on one of
+            // them would have the user fitting slopes against patient numbers without ever choosing
+            // to. With none to default to, the picker opens empty and the status line asks.
+            DiffTrendOverCombo.SelectedItem =
+                axes.FirstOrDefault(a => string.Equals(a.Label, keep, StringComparison.Ordinal))
+                ?? axes.FirstOrDefault(a => a.Position == 0);
         }
+    }
+
+    /// <summary>
+    /// Show what the chosen trend axis parsed, or hide the line when there is nothing to check.
+    /// </summary>
+    /// <remarks>
+    /// Shown rather than tucked into a tooltip because it is the only guard against the axis being
+    /// the wrong number. "V2_Week 8" reads as 2 or as 8 and both are legitimate columns; a slope
+    /// fitted against the visit index when the week was meant is wrong in a way no other part of the
+    /// output reveals.
+    /// </remarks>
+    private void UpdateTrendPreview()
+    {
+        var axis = DiffTrendOverCombo.SelectedItem as TrendAxisOption;
+        var line = axis is null ? string.Empty : TrendAxis.DescribePreview(axis);
+        if (!DiffIsTrend() || line.Length == 0)
+        {
+            DiffTrendPreviewText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DiffTrendPreviewText.Text = "Reading " + line;
+        DiffTrendPreviewText.Visibility = Visibility.Visible;
     }
 
     private async void OnDiffTrendOverChanged(object sender, SelectionChangedEventArgs e)
@@ -306,16 +336,67 @@ public partial class MainWindow
     private bool DiffIsTrend() => DiffSelectedDesign()
         is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject;
 
-    /// <summary>The trend column's name, or null when none is picked.</summary>
-    private string? DiffTrendColumn() => DiffTrendOverCombo.SelectedItem as string;
+    /// <summary>
+    /// The trend axis's name, or null when none is picked. The LABEL, not the bare column: on a
+    /// column offering two readings it is the only form that says which one ran, and it is what a
+    /// recorded command carries back to the CLI.
+    /// </summary>
+    private string? DiffTrendColumn() => (DiffTrendOverCombo.SelectedItem as TrendAxisOption)?.Label;
 
     /// <summary>
-    /// The trend column's value per sample, NaN where the sample has none.
+    /// The trend value per sample: NaN where the sample has none, AND where the Restrict-to picker
+    /// excludes it.
     /// </summary>
+    /// <remarks>
+    /// Restriction is expressed as NaN rather than as a separate sample list because
+    /// <see cref="TrendSamples.Resolve"/> already drops a non-finite x and counts what it dropped -
+    /// so a subset needs no new plumbing anywhere below this method. <see cref="DiffRestrictedCount"/>
+    /// keeps the two reasons apart for the status line, which would otherwise report a deliberate
+    /// restriction as missing data.
+    /// </remarks>
     private double[]? DiffTrendValues() =>
-        _diffDataset is null || DiffTrendColumn() is not { } col || !_diffDataset.MetadataColumns.Contains(col)
+        _diffDataset is null || DiffTrendOverCombo.SelectedItem is not TrendAxisOption axis
+            || !_diffDataset.MetadataColumns.Contains(axis.Column)
             ? null
-            : _diffDataset.NumericValues(col);
+            : TrendAxis.Read(_diffDataset.MetadataValues(axis.Column), axis);
+
+    /// <summary>
+    /// The sample columns a trend runs over: every sample, less those the Restrict-to picker excludes.
+    /// </summary>
+    /// <remarks>
+    /// The restriction leaves the COLUMN LIST rather than NaN-ing the x values, though both would fit
+    /// the same samples. NaN reaches <see cref="TrendSamples.Resolve"/> as "no value in the trend
+    /// column", so a deliberate subset was counted and reported as missing data - 46 left out, of
+    /// which 30 were the user's own choice. Removing the column instead means the only samples that
+    /// message ever counts are ones that genuinely have no value on the axis.
+    /// </remarks>
+    private int[] DiffTrendColumns()
+    {
+        var all = Enumerable.Range(0, _diffDataset?.SampleIds.Length ?? 0);
+        if (_diffDataset is null
+            || DiffRestrictColumn() is not { } col
+            || DiffRestrictValues() is not { Count: > 0 } keep)
+            return all.ToArray();
+
+        var values = _diffDataset.MetadataValues(col);
+        return all
+            .Where(i => i < values.Length && values[i] is { } v && keep.Contains(v, StringComparer.Ordinal))
+            .ToArray();
+    }
+
+    /// <summary>The Restrict-to column, or null for "(all samples)".</summary>
+    private string? DiffRestrictColumn() =>
+        DiffRestrictColumnCombo.SelectedItem as string is { } s && s != RestrictNone ? s : null;
+
+    /// <summary>The ticked Restrict-to values, or null when none are ticked.</summary>
+    private List<string>? DiffRestrictValues() =>
+        (DiffRestrictValuesCombo.ItemsSource as IEnumerable<QcGroupValue>)
+            ?.Where(v => v.IsSelected).Select(v => v.Name).ToList() is { Count: > 0 } picked
+            ? picked
+            : null;
+
+    /// <summary>The "no restriction" entry, first in the column picker.</summary>
+    private const string RestrictNone = "(all samples)";
 
     /// <summary>
     /// The metadata columns a trend can be fitted against: those whose every non-empty value parses
@@ -327,34 +408,74 @@ public partial class MainWindow
     /// at run time instead of at the picker. A column needs two DISTINCT values to carry a slope,
     /// so a constant numeric column is left out too.
     /// </remarks>
-    private List<string> DiffNumericColumns()
+    private IReadOnlyList<TrendAxisOption> DiffTrendAxes() =>
+        _diffDataset is null
+            ? Array.Empty<TrendAxisOption>()
+            : TrendAxis.AllFor(_diffDataset.MetadataColumns, c => _diffDataset.MetadataValues(c));
+
+    /// <summary>
+    /// Fill the Restrict-to pickers: every metadata column, and the ticked values of the chosen one.
+    /// </summary>
+    /// <remarks>
+    /// Only under a trend, where the Group by / A / B triple is hidden - so the row does not grow,
+    /// and the control appears exactly where a reader is already looking for "which samples".
+    /// </remarks>
+    private void UpdateRestrictControls(bool trend)
     {
-        var result = new List<string>();
-        if (_diffDataset is null)
-            return result;
+        var visible = trend ? Visibility.Visible : Visibility.Collapsed;
+        DiffRestrictLabel.Visibility = visible;
+        DiffRestrictColumnCombo.Visibility = visible;
 
-        foreach (var col in _diffDataset.MetadataColumns)
+        if (_diffDataset is not null)
         {
-            var seen = new HashSet<double>();
-            var allNumeric = true;
-            foreach (var v in _diffDataset.MetadataValues(col))
+            var columns = new List<string> { RestrictNone };
+            columns.AddRange(_diffDataset.MetadataColumns);
+            if (DiffRestrictColumnCombo.ItemsSource is not IEnumerable<string> have
+                || !have.SequenceEqual(columns, StringComparer.Ordinal))
             {
-                if (string.IsNullOrEmpty(v))
-                    continue;
-                if (!double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                var keep = DiffRestrictColumnCombo.SelectedItem as string;
+                using (SuppressDiff())
                 {
-                    allNumeric = false;
-                    break;
+                    DiffRestrictColumnCombo.ItemsSource = columns;
+                    DiffRestrictColumnCombo.SelectedItem =
+                        keep is not null && columns.Contains(keep, StringComparer.Ordinal) ? keep : RestrictNone;
                 }
-
-                seen.Add(d);
             }
-
-            if (allNumeric && seen.Count >= 2)
-                result.Add(col);
         }
 
-        return result;
+        var col = DiffRestrictColumn();
+        DiffRestrictValuesCombo.Visibility = trend && col is not null ? Visibility.Visible : Visibility.Collapsed;
+        if (col is null || _diffDataset is null)
+            return;
+
+        var distinct = _diffDataset.MetadataValues(col)
+            .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!)
+            .Distinct(StringComparer.Ordinal).OrderBy(v => v, StringComparer.Ordinal).ToList();
+        if (DiffRestrictValuesCombo.ItemsSource is IEnumerable<QcGroupValue> existing
+            && existing.Select(v => v.Name).SequenceEqual(distinct, StringComparer.Ordinal))
+            return;
+
+        using (SuppressDiff())
+        {
+            DiffRestrictValuesCombo.ItemsSource =
+                distinct.Select(v => new QcGroupValue { Name = v }).ToList();
+            DiffRestrictValuesCombo.Text = string.Empty;
+        }
+    }
+
+    private async void OnDiffRestrictColumnChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            UpdateDiffControls();
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffRestrictColumnChanged), ex);
+        }
     }
 
     /// <summary>The multiple-testing correction the Correct combo is pointing at.</summary>
@@ -538,7 +659,7 @@ public partial class MainWindow
         // A trend design needs a numeric column to fit against. With none in the run, both trend
         // entries are collapsed AND disabled - and if one was already selected (a clinical CSV was
         // detached, say) the design falls back rather than leaving an invisible selection.
-        var numeric = DiffNumericColumns();
+        var numeric = DiffTrendAxes();
         PopulateTrendColumns(numeric);
         ShowTest(DiffDesignTrendItem, numeric.Count > 0);
         ShowTest(DiffDesignTrendSubjectItem, numeric.Count > 0);
@@ -570,6 +691,8 @@ public partial class MainWindow
         DiffACombo.Visibility = armVisibility;
         DiffBLabel.Visibility = armVisibility;
         DiffBCombo.Visibility = armVisibility;
+        UpdateRestrictControls(trend);
+        UpdateTrendPreview();
 
         // The effect on a trend is a change across a range, not a fold change between arms.
         DiffEffectLabel.Text = trend ? "|log2 change| >=" : "|log2FC| >=";
@@ -1090,17 +1213,6 @@ public partial class MainWindow
         }
     }
 
-    private async void OnRunDifferential(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            await RunCurrentViewAsync();
-        }
-        catch (Exception ex)
-        {
-            ReportHandlerFailure(nameof(OnRunDifferential), ex);
-        }
-    }
 
     private async Task RunCurrentViewAsync()
     {
@@ -1188,7 +1300,13 @@ public partial class MainWindow
             return;
         if (DiffTrendColumn() is not { } trendColumn || DiffTrendValues() is not { } xValues)
         {
-            DiffStatusText.Text = "Pick a numeric column to fit the trend against.";
+            // Named rather than "pick a numeric column": with an interpreted axis available the
+            // picker deliberately opens empty, and a reader needs to know that is a choice waiting
+            // on them rather than a run with nothing to offer.
+            DiffStatusText.Text = DiffTrendOverCombo.HasItems
+                ? "Pick what to fit the trend against. A column whose values embed a number is "
+                  + "offered once per number it holds - check the line underneath says the one you mean."
+                : "This run has no column a trend can be fitted against.";
             return;
         }
 
@@ -1196,7 +1314,13 @@ public partial class MainWindow
         var covariates = WithoutTestedTerm(SelectedCovariatesFor(dataset.SampleIds));
         var options = DiffOptions(covariates);
         var rule = DiffRule();
-        var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
+        var columns = DiffTrendColumns();
+        var restricted = dataset.SampleIds.Length - columns.Length;
+        if (columns.Length == 0)
+        {
+            DiffStatusText.Text = "Restrict to: no sample matches the ticked values.";
+            return;
+        }
 
         DifferentialResult res;
         try
@@ -1238,6 +1362,12 @@ public partial class MainWindow
             ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}"
             : string.Empty;
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
+        // Restriction is expressed as NaN, which TrendSamples reports as "no value in the trend
+        // column" - true of the mechanism and misleading about the cause. Said separately, and
+        // FIRST, so a deliberate subset never reads as missing data.
+        if (restricted > 0 && DiffRestrictColumn() is { } restrictCol)
+            note = $" Restricted to {restrictCol}: {restricted} sample(s) outside the"
+                + " ticked values were left out." + note;
         // Samples AND subjects, because under a within-subject design the second is what the test
         // has to work with and the first alone would overstate it.
         var n = res.NSubjects > 0

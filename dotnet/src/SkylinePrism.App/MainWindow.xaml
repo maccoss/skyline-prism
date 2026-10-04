@@ -331,7 +331,11 @@
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                     <ComboBoxItem>Protein</ComboBoxItem>
                                 </ComboBox>
-                                <TextBlock x:Name="DiffGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <!-- QcGroupByLabel, not Diff*: this one is the QC Plots pane's. Named
+                                     with the wrong prefix it was the label the Differential pane
+                                     hid when a trend design was picked - so the QC pane quietly lost
+                                     its label while the Differential kept one it should not have. -->
+                                <TextBlock x:Name="QcGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
                                           ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any clinical CSV attached in the Differential pane. Defaults to Sample Type." />
                                 <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
@@ -596,8 +600,32 @@
                                           ToolTip="The metadata column identifying the subject - usually a patient or donor id. Under a paired design it matches each subject's two samples; under a within-subject trend it gives each subject its own level, so the slope is estimated within subject rather than across people." />
                                 <TextBlock x:Name="DiffTrendOverLabel" Text="Trend over:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
-                                <ComboBox x:Name="DiffTrendOverCombo" Width="140" SelectionChanged="OnDiffTrendOverChanged"
-                                          ToolTip="The NUMERIC metadata column to fit the slope against - a timepoint, a dose, a numeric stage. Only columns whose every value parses as a number are offered, because a slope needs one. The reported effect is the modeled change across this column's observed range, so the effect-size cut means the same thing as a fold change does on a two-arm contrast." />
+                                <!-- Wider than the other pickers because an axis read out of a text
+                                     column carries which number it took - "Longitudinal Draw
+                                     Description (Week)" - and truncating that away would leave the
+                                     two readings of one column looking identical in the list. -->
+                                <ComboBox x:Name="DiffTrendOverCombo" Width="240" DisplayMemberPath="Label"
+                                          SelectionChanged="OnDiffTrendOverChanged"
+                                          ToolTip="The metadata column to fit the slope against - a timepoint, a dose, a numeric stage. A column of plain numbers is offered under its own name; one whose values embed a number (V2_Week 8) is offered once per number it holds, named after the word in front of it, because those are different quantities and only one of them is your axis. The line underneath shows what the chosen reading parsed. The reported effect is the modeled change across the observed range, so the effect-size cut means what a fold change does on a two-arm contrast." />
+                                <!-- Restrict to: a trend pools every sample that has an x, which
+                                     silently merges two studies that share a timepoint scale. Sits
+                                     where the Group by / A / B triple does on a two-arm contrast -
+                                     those are hidden under a trend - so the row does not grow. -->
+                                <TextBlock x:Name="DiffRestrictLabel" Text="Restrict to:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffRestrictColumnCombo" Width="150"
+                                          SelectionChanged="OnDiffRestrictColumnChanged"
+                                          ToolTip="Optional: fit the trend on only some of the samples. Pick the column that separates them - a study, a cohort, a treatment arm - then tick the values to keep. Samples outside the ticked values are left out of the fit, and the status line says how many, separately from those that simply have no value on the axis." />
+                                <ComboBox x:Name="DiffRestrictValuesCombo" DropDownClosed="OnDiffTickListClosed"
+                                          Width="170" IsEditable="True" IsReadOnly="True" Visibility="Collapsed"
+                                          ToolTip="Which values of that column to keep. Untick everything to use every sample again.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                                 <TextBlock Text="Test:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffTestCombo" Width="130" SelectionChanged="OnDiffTestChanged"
                                           ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
@@ -613,7 +641,7 @@
                                     <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT">Paired t</ComboBoxItem>
                                     <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon">Wilcoxon</ComboBoxItem>
                                 </ComboBox>
-                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBlock x:Name="DiffGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"
                                           ToolTip="Metadata column to split samples by (from sample_metadata.csv)." />
                                 <TextBlock x:Name="DiffALabel" Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
@@ -730,15 +758,25 @@
                                     <ComboBoxItem Tag="Bonferroni">Bonferroni</ComboBoxItem>
                                     <ComboBoxItem Tag="None">None</ComboBoxItem>
                                 </ComboBox>
-                                <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
-                                        Click="OnRunDifferential"
-                                        ToolTip="Re-run the current contrast. Every selector here runs on its own when you change it - the arms and covariates when you close their list - so this is a manual refresh rather than a required step." />
-                                <Button x:Name="QuantReportButton" Content="Quant report..." Padding="12,2" Margin="8,0,0,0"
+                                <!-- No Run button: every selector in this row re-runs the contrast on
+                                     its own (the tick lists when their drop-down closes), so a manual
+                                     refresh was a control that never needed pressing, in a row that
+                                     has too many already. -->
+                                <Button x:Name="QuantReportButton" Content="Quant report..." Padding="12,2" Margin="16,0,0,0"
                                         Click="OnGenerateQuantReport"
                                         ToolTip="Run the current contrast across every view and write a self-contained quant_report.html plus result tables (CSV) to a quant/ folder in the output directory. Includes differential, detection, GO/pathway enrichment (needs internet), and the ticked Markers-pane panels." />
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
+                            <!-- What the trend axis parsed, on its own line under the toolbar. An
+                                 axis read out of text is a guess the USER has to confirm - two
+                                 numbers in "V2_Week 8" are both readable and only one is time - and
+                                 a tooltip is the wrong place for something that must be seen without
+                                 being sought. Collapsed for a plainly numeric column: there is
+                                 nothing to check when the value IS the number. -->
+                            <TextBlock x:Name="DiffTrendPreviewText" DockPanel.Dock="Top"
+                                       Margin="12,0,12,4" Foreground="#666" TextWrapping="Wrap"
+                                       Visibility="Collapsed" />
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

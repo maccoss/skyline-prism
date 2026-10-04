@@ -163,7 +163,7 @@ prism differential -d output/ --group-by condition -a Control -b Disease
 ```
 
 `prism differential` takes the whole menu above as flags - `--level`, `--design`, `--subject`,
-`--trend-over`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction`,
+`--trend-over`, `--restrict-to`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction`,
 `--alpha`, `--raw-p`, `--min-log2fc` - and writes a results
 CSV (`differential.csv` in the output directory unless `-o` says otherwise) whose header records the
 contrast, its direction and the method that produced it. `prism differential --help` lists every
@@ -199,6 +199,36 @@ A trend takes `--trend-over` in place of the arms, and the within-subject form a
 prism differential -d output/ --design trend --trend-over dose_mg
 prism differential -d output/ --design trend-within-subject --trend-over week --subject patient_id
 ```
+
+**A timepoint written as text.** Study metadata usually names a timepoint for people, not for an
+axis - `V2_Week 8`, `Day 14`, `T0`. Such a column is still a trend axis: it is offered once for each
+number its values hold, and each axis is named after the word just before that number. `V2_Week 8`
+holds two numbers, and they are different quantities - the visit index and the elapsed weeks - so it
+gives two axes, `Longitudinal Draw Description (V)` and `Longitudinal Draw Description (Week)`.
+Nothing picks one for you. Naming the wrong one gives a plausible slope against the wrong quantity,
+and nothing else in the output would show it. The pane shows what the chosen axis parsed under the
+toolbar (`Reading V0_Week 0 -> 0, V1_Week 2 -> 2, ...`) and only selects one automatically when the
+column is already plain numbers. A value with no number in it (`na`, an empty cell) leaves that
+sample off the axis, and the status line counts it.
+
+**Fitting on some of the samples.** A trend pools every sample that has a value on the axis. When a
+cohort holds two studies on one timescale, that merges them into one slope - two arms both drawn
+"at week 4" become a single point on the line. `--restrict-to COLUMN=VALUE[,VALUE...]` keeps only the
+samples whose column holds one of the values. It can be given more than once, and the restrictions
+narrow together (study *and* on-drug window). A column or value the run doesn't have is refused,
+with the values it does have, rather than silently keeping nothing. The pane's **Restrict to** picker
+does the same. Restricted samples are counted apart from samples with no value on the axis, so a
+deliberate subset never reads as missing data.
+
+```bash
+prism differential -d output/ --design trend-within-subject \
+    --trend-over "Longitudinal Draw Description (Week)" --subject "BRI Subject ID" \
+    --restrict-to "Study=Waking Beta Cells - Verapamil"
+```
+
+The span the results header reports - "log2fc is the modeled change across *x* to *y*" - comes
+from the samples the fit used, never from the whole column. Otherwise an excluded arm's earlier
+timepoint would describe every row by a range the model never saw.
 
 The pane and the command resolve their arms through the same `ContrastArms` in Core, and run the
 same `Differential.Run`, so a contrast set up by clicking and one typed out mean the same samples

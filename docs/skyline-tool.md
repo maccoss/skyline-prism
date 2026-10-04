@@ -504,9 +504,15 @@ like it was applied.
 | **Trend, within subject** | The same slope where the same subjects are followed across that column, fitted as `[1, x, subject dummies]` - the paired design generalized from a two-level column to a numeric one. Use this whenever a subject contributes more than one sample, or the standard error is understated. |
 | **Paired** | Matches each subject's two samples by a **Subject** column and tests the within-subject change. The moderated t fits it as `[1, group, subject dummies]` — a *fixed*-effect subject block, as the lab's toolkit does, which takes each subject's overall level out of the residual. That is the whole point: a within-subject shift gets tested against within-subject noise rather than against the spread between people. Subjects present in only one arm, or with more than one sample in an arm, are left out and counted in the status line. |
 
-A trend design replaces **Group by / A / B** with a single **Trend over** picker, which lists only
-the metadata columns whose every value parses as a number - a slope needs one. With no such column in
-the run, both trend entries are hidden and disabled. **Detection** is hidden too: it compares
+A trend design replaces **Group by / A / B** with a **Trend over** picker and a **Restrict to** picker.
+**Trend over** lists every axis the metadata can give. A column of plain numbers is listed under its own
+name. A column whose values hold a number inside text (`V2_Week 8`) is listed once per number, named
+after the word in front of it — `(Week)`, `(V)`. Those are different quantities, so the picker only
+selects an axis automatically when the column is plain numbers. A line under the toolbar shows what
+the chosen axis parsed, so you can check it is the one you meant. **Restrict to** fits the trend on
+only some samples (one study of two, say). Without it, studies that share a timescale are merged into
+one slope. With no axis anywhere in the run, both trend entries are hidden and disabled. See
+[`differential-analysis.md`](differential-analysis.md) for the details. **Detection** is hidden too: it compares
 observed-versus-not between two groups, and a trend has none. Clicking a point opens the feature's
 **trajectory** - abundance against the trend column with the fitted line, plus one faint line per
 subject under a within-subject design, which is that design's whole point made visible.

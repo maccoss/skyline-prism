@@ -91,6 +91,18 @@ public static class QuantCommand
         if (isTrend)
         {
             Single(args, "--trend-over", o.TrendColumn ?? string.Empty, "the trend column");
+            // Recorded, or the command reproduces the analysis over a DIFFERENT set of samples -
+            // every sample with a value on the axis rather than the subset that was fitted - and
+            // nothing in its output would say so.
+            foreach (var r in request.Restrictions.Where(r => r.Values.Count > 0))
+            {
+                Check(r.Column, "the restrict column", splitsOnComma: false);
+                foreach (var v in r.Values)
+                    Check(v, "a restricted value", splitsOnComma: true);
+                // One flag per restriction, the form the CLI intersects - a single flag carrying two
+                // columns would have to invent a separator the parser does not take.
+                args.AddRange(new[] { "--restrict-to", r.Column + "=" + string.Join(",", r.Values) });
+            }
         }
         else
         {

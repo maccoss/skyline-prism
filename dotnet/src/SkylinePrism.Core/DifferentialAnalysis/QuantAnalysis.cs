@@ -16,6 +16,12 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// <c>prism differential --report</c> from its flags - and run by <see cref="QuantAnalysis.Run"/>,
 /// so the two cannot compute a report differently.
 /// </remarks>
+/// <summary>
+/// One restriction on the samples a trend is fitted over: keep those whose <paramref name="Column"/>
+/// holds one of <paramref name="Values"/>.
+/// </summary>
+public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values);
+
 public sealed class QuantRequest
 {
     /// <summary>The finished PRISM run; the report is written under its <c>quant/</c> folder.</summary>
@@ -38,6 +44,20 @@ public sealed class QuantRequest
     /// within-subject design. The labels alone cannot name it, and the reproducing command needs it.
     /// </summary>
     public string? SubjectColumn { get; init; }
+
+    /// <summary>
+    /// Trend designs: which samples to fit over, as the metadata values to keep. Empty for all.
+    /// </summary>
+    /// <remarks>
+    /// Carried as COLUMNS AND VALUES rather than as a list of sample indices, because the report has
+    /// to write the command that reproduces it and <c>--restrict-to Study=...</c> is the only form a
+    /// command line can carry. The indices are derived from these in one place, so the samples a
+    /// report describes and the samples its command would select cannot differ.
+    ///
+    /// <para>A LIST, because restrictions narrow together - a study AND an on-drug window - and one
+    /// pair would have quietly kept whichever the caller happened to pass last.</para>
+    /// </remarks>
+    public IReadOnlyList<QuantRestriction> Restrictions { get; init; } = Array.Empty<QuantRestriction>();
 
     /// <summary>Two-arm contrasts: arm A's dataset columns, as resolved by <see cref="ContrastArms.Resolve"/>.</summary>
     public IReadOnlyList<int> GroupA { get; init; } = Array.Empty<int>();
@@ -113,6 +133,38 @@ public static class QuantAnalysis
     /// <c>--adjust-for</c> without <c>--test moderated</c>. Dropping them here means the contrast, the
     /// detection test and the recorded command all describe the same unadjusted analysis.
     /// </remarks>
+    /// <summary>
+    /// The sample columns a trend runs over: every sample, less those
+    /// <see cref="QuantRequest.RestrictColumn"/> excludes.
+    /// </summary>
+    /// <remarks>
+    /// The restriction drops the COLUMN rather than NaN-ing its x, because NaN reaches
+    /// <see cref="TrendSamples.Resolve"/> as "no value in the trend column" - which would report a
+    /// deliberate subset as missing data. Both front ends do the same, so a report and the command
+    /// that reproduces it select the same samples.
+    /// </remarks>
+    public static int[] TrendColumnsFor(QuantRequest request, DifferentialDataset ds)
+    {
+        var kept = Enumerable.Range(0, ds.SampleIds.Length).ToHashSet();
+        foreach (var r in request.Restrictions)
+        {
+            if (r.Values.Count == 0 || !ds.MetadataColumns.Contains(r.Column))
+                continue;
+            var values = ds.MetadataValues(r.Column);
+            // Intersected, so several restrictions narrow together rather than the last one winning.
+            kept.IntersectWith(Enumerable.Range(0, ds.SampleIds.Length)
+                .Where(i => i < values.Length && values[i] is { } v
+                    && r.Values.Contains(v, StringComparer.Ordinal)));
+        }
+
+        if (kept.Count == 0)
+            throw new ArgumentException(
+                "Restricting the trend kept no samples: "
+                + string.Join("; ", request.Restrictions.Select(r => $"{r.Column}={string.Join(",", r.Values)}")),
+                nameof(request));
+        return kept.OrderBy(i => i).ToArray();
+    }
+
     public static DifferentialOptions EffectiveOptions(DifferentialOptions options, out string? note)
     {
         note = null;
@@ -159,11 +211,22 @@ public static class QuantAnalysis
         {
             var trendOver = options.TrendColumn
                 ?? throw new ArgumentException("A trend design needs Options.TrendColumn.", nameof(request));
-            var x = ds.NumericValues(trendOver);
-            res = request.Differential ?? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds,
-                Enumerable.Range(0, ds.SampleIds.Length).ToArray(), x, options);
+            // Through TrendAxis, not NumericValues: TrendColumn carries the axis LABEL, which on a
+            // column whose values embed a number ("Longitudinal Draw Description (Week)") is not a
+            // column name at all - NumericValues would return every sample NaN and the trend would
+            // report that it had nothing to fit.
+            var axis = TrendAxis.Find(trendOver, ds.MetadataColumns, ds.MetadataValues)
+                ?? throw new ArgumentException(
+                    $"No trend axis '{trendOver}' in this run.", nameof(request));
+            var x = TrendAxis.Read(ds.MetadataValues(axis.Column), axis);
+            var trendColumns = TrendColumnsFor(request, ds);
+            res = request.Differential
+                ?? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds, trendColumns, x, options);
             groupBy = trendOver;
-            (aLabel, bLabel) = DifferentialCsv.TrendEndpoints(x);
+            // Over the samples the fit used: the endpoints become the span the results header says
+            // log2fc is the change across, so an excluded sample's x would misdescribe every row.
+            (aLabel, bLabel) = DifferentialCsv.TrendEndpoints(
+                trendColumns.Select(c => x[c]).ToList());
             contrastLabel = $"trend over {trendOver}";
             effectName = $"log2 change across {trendOver}";
             contrast = new QuantContrast(null, null, null, trendOver);
