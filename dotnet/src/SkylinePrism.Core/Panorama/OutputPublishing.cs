@@ -112,7 +112,7 @@ public static class OutputPublishing
         if (request.RawFolder is not null)
         {
             var files = Directory.Exists(request.OutputDir)
-                ? Directory.EnumerateFiles(request.OutputDir, "*", SearchOption.AllDirectories).Select(f => new FileInfo(f)).ToList()
+                ? PanoramaPublisher.FilesToUpload(request.OutputDir)
                 : new List<FileInfo>();
             // panorama.json is written just before the upload and goes up with it - when it CAN be
             // written: a directory PRISM cannot write to is published without one, so it is named
@@ -183,7 +183,7 @@ public static class OutputPublishing
 
         // Strictly: a file that is there but unreadable for a moment is not "nothing remembered", or the
         // directory's id would be replaced (see LoadForPublish).
-        var remembered = PanoramaTargets.LoadForPublish(request.OutputDir, say);
+        var remembered = await PanoramaTargets.LoadForPublishAsync(request.OutputDir, say, cancellationToken).ConfigureAwait(false);
         var targets = request.ToTargets(remembered);
         // The web part PRISM added before, and the folder whose page it is on - which older files do not
         // record, and then it is the links page's folder. Moving the links elsewhere adds a part there;
@@ -196,6 +196,12 @@ public static class OutputPublishing
             ? (Folder: PanoramaPaths.Container(partFolder), Page: remembered.LinksWebPartPage ?? remembered.LinksWiki?.Page ?? "",
                 WebPartId: oldPart)
             : ((string Folder, string Page, int WebPartId)?)null;
+        // A part PRISM left on the destination's page by an earlier move: reused rather than doubled.
+        var earlier = remembered.EarlierLinksParts ?? Array.Empty<LinksPart>();
+        var returning = movedFrom is null || request.LinksFolder is null
+            ? null
+            : earlier.FirstOrDefault(p => string.Equals(PanoramaPaths.Container(p.Folder), PanoramaPaths.Container(request.LinksFolder),
+                StringComparison.OrdinalIgnoreCase));
 
         // Derived, not random: the same directory always gives the same id, so one PRISM cannot write to
         // (a read-only share, an archived analysis) is recognized from one publish to the next without
@@ -268,7 +274,7 @@ public static class OutputPublishing
                 try
                 {
                     var (webPartId, _) = await publisher.ShowOnFolderPageAsync(request.LinksFolder, request.ResolvedLinksPage,
-                        movedFrom is null ? targets.LinksWebPartId : null,
+                        movedFrom is null ? targets.LinksWebPartId : returning?.WebPartId,
                         added: id =>
                         {
                             // Recorded the moment the part exists, so a failure setting it up does not
@@ -287,6 +293,7 @@ public static class OutputPublishing
                     {
                         LinksWebPartId = webPartId, LinksWebPartFolder = links.Folder, LinksWebPartPage = links.PageName,
                     };
+                    superseded = true;
                     onFolderPage = true;
                 }
                 catch (PanoramaException ex)
@@ -302,6 +309,16 @@ public static class OutputPublishing
                 // then on the old one is no longer what this directory records.
                 if (movedFrom is { } old && superseded)
                 {
+                    // The part left behind is remembered for its folder, so moving back reuses it.
+                    targets = targets with
+                    {
+                        EarlierLinksParts = earlier
+                            .Where(p => !string.Equals(PanoramaPaths.Container(p.Folder), PanoramaPaths.Container(links.Folder),
+                                            StringComparison.OrdinalIgnoreCase)
+                                        && !string.Equals(PanoramaPaths.Container(p.Folder), old.Folder, StringComparison.OrdinalIgnoreCase))
+                            .Append(new LinksPart(old.Folder, old.Page, old.WebPartId))
+                            .ToList(),
+                    };
                     var moved = $"The links are now shown on {links.Folder}'s page. {old.Folder}'s page still shows the earlier "
                                 + $"links page, {old.Page}, in the Wiki web part PRISM added there (id {old.WebPartId}); it is no "
                                 + "longer updated. Remove that part on Panorama if it is not wanted there.";
@@ -353,10 +370,11 @@ public static class OutputPublishing
     }
 
     /// <summary>
-    /// The publish id of an output directory that has none recorded: a hash of its run record
-    /// (<c>parameters.json</c>), else of its full path. The same however often it is derived - so a
-    /// directory that cannot keep it is still recognized - and a copy of one analysis is that analysis,
-    /// while another run, which writes its own <c>parameters.json</c>, is not.
+    /// The publish id of an output directory that has none recorded: a hash of its full path and its run
+    /// record (<c>parameters.json</c>, when there is one). The same however often it is derived, so a
+    /// directory that cannot keep it is still recognized. A copy elsewhere is a different directory, as
+    /// it was under random ids: two copies of one run with the same name must not replace each other's
+    /// pages unnoticed, and neither may a later run written into the same path.
     /// </summary>
     /// <remarks>
     /// A <c>parameters.json</c> that is there but cannot be read is refused rather than replaced by
@@ -366,17 +384,16 @@ public static class OutputPublishing
     internal static string DerivedPublishId(string outputDir)
     {
         var parameters = Path.Combine(outputDir, "parameters.json");
-        byte[] basis;
-        if (!File.Exists(parameters))
-            basis = Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        else
+        using var basisStream = new MemoryStream();
+        var location = Encoding.UTF8.GetBytes(
+            Path.GetFullPath(outputDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "\n");
+        basisStream.Write(location);
+        if (File.Exists(parameters))
         {
             try
             {
                 using var stream = new FileStream(parameters, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var copy = new MemoryStream();
-                stream.CopyTo(copy);
-                basis = copy.ToArray();
+                stream.CopyTo(basisStream);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -386,7 +403,7 @@ public static class OutputPublishing
             }
         }
 
-        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(basis))[..32];
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(basisStream.ToArray()))[..32];
     }
 
     /// <summary>

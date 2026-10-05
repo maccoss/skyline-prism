@@ -392,6 +392,19 @@ public sealed class PanoramaPublisher
             : name[..(MaxPageName - 9)].TrimEnd('-') + "-"
               + Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name)))[..8];
 
+    /// <summary>
+    /// The files an upload of <paramref name="root"/> sends, in order: everything in it except a
+    /// <see cref="PanoramaTargets.DamagedFileName"/>, which is a local leftover, not an output.
+    /// </summary>
+    public static List<FileInfo> FilesToUpload(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(f => new FileInfo(f))
+            .Where(f => !(f.Name == PanoramaTargets.DamagedFileName
+                          && string.Equals(f.DirectoryName, Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar),
+                              StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(f => f.FullName, StringComparer.Ordinal)
+            .ToList();
+
     /// <summary>Why a wiki page name cannot be used, or null when it can.</summary>
     public static string? PageNameProblem(string name) =>
         !string.IsNullOrWhiteSpace(name) && Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}$")
@@ -464,10 +477,7 @@ public sealed class PanoramaPublisher
         if (!PanoramaPaths.IsFileArea(destination) || PanoramaPaths.Name(destination).StartsWith('@'))
             throw new PanoramaException($"{destination} is not a folder inside a file area (@files).");
 
-        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Select(f => new FileInfo(f))
-            .OrderBy(f => f.FullName, StringComparer.Ordinal)
-            .ToList();
+        var files = FilesToUpload(root);
         foreach (var f in files.Where(f => f.Name.Contains(';')))
             throw new PanoramaException($"{f.Name} contains a ';', at which Panorama silently truncates a name. Rename it first.");
 

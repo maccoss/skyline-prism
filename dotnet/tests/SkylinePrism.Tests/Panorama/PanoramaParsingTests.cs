@@ -95,6 +95,9 @@ public class PanoramaParsingTests
         const string Props = "<script>LABKEY._wiki.setProps({\n    entityId: 'e-1'\n});\n";
         Assert.Null(PanoramaClient.ParseWikiEditor(Props + "LABKEY._wiki.setAttachments([\n    {\"name\": \"a-1.png\"}\n]);</script>").Attachments);
         Assert.Empty(PanoramaClient.ParseWikiEditor(Props + "LABKEY._wiki.setAttachments([\n]);</script>").Attachments!);
+        // And one where only some entries read: the unread one would be taken as absent.
+        Assert.Null(PanoramaClient.ParseWikiEditor(Props + "LABKEY._wiki.setAttachments([\n    {\n        name: 'a-1.png'\n    },\n"
+            + "    {\n        \"name\": \"a-2.png\"\n    }\n]);</script>").Attachments);
     }
 
     [Fact]

@@ -13,6 +13,9 @@ public sealed record WikiTarget(string Folder, string Page);
 /// <summary>A quant page published from this output directory, and the contrast it shows.</summary>
 public sealed record QuantPage(string Folder, string Page, string? Contrast);
 
+/// <summary>A Wiki web part PRISM added to a folder's page to show a links page.</summary>
+public sealed record LinksPart(string Folder, string Page, int WebPartId);
+
 /// <summary>
 /// Where an output directory was last published, kept beside the outputs as <see cref="FileName"/>
 /// so the CLI and the GUI remember it for each output directory and agree on it.
@@ -35,6 +38,8 @@ public sealed record QuantPage(string Folder, string Page, string? Contrast);
 /// <param name="LinksWebPartFolder">The folder whose page <paramref name="LinksWebPartId"/> is on; older files
 /// leave it out, and then it is the links page's folder.</param>
 /// <param name="LinksWebPartPage">The links page that part shows.</param>
+/// <param name="EarlierLinksParts">Parts PRISM added on other folders' pages before the links moved, one per
+/// folder, so moving the links back reuses the part already there rather than adding a second.</param>
 public sealed record PanoramaTargets(
     string Server,
     WikiTarget? QcWiki,
@@ -46,9 +51,13 @@ public sealed record PanoramaTargets(
     IReadOnlyList<QuantPage>? QuantPages = null,
     string? PublishId = null,
     string? LinksWebPartFolder = null,
-    string? LinksWebPartPage = null)
+    string? LinksWebPartPage = null,
+    IReadOnlyList<LinksPart>? EarlierLinksParts = null)
 {
     public const string FileName = "panorama.json";
+
+    /// <summary>Where a <see cref="FileName"/> that is not JSON is kept aside; never uploaded.</summary>
+    public const string DamagedFileName = FileName + ".damaged";
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -92,10 +101,11 @@ public sealed record PanoramaTargets(
     /// nothing through a moment's lock - a scanner, the window reading it, an SMB hiccup - would make
     /// an id and save it over the real one, and from then on every page this directory had published
     /// would be refused as another directory's. A file that is not JSON cannot be read later either,
-    /// so it is copied aside (<c>panorama.json.damaged</c>) before anything overwrites it, the publish
-    /// goes on as a first one, and says so.
+    /// so it is copied aside (<see cref="DamagedFileName"/>) before anything overwrites it, the publish
+    /// goes on as a first one, and says so. The retries wait asynchronously, so no thread is held.
     /// </remarks>
-    public static PanoramaTargets LoadForPublish(string outputDir, Action<string>? say = null)
+    public static async System.Threading.Tasks.Task<PanoramaTargets> LoadForPublishAsync(
+        string outputDir, Action<string>? say = null, System.Threading.CancellationToken cancellationToken = default)
     {
         var path = Path.Combine(outputDir, FileName);
         if (!File.Exists(path))
@@ -113,7 +123,7 @@ public sealed record PanoramaTargets(
             {
                 if (attempt < 3)
                 {
-                    System.Threading.Thread.Sleep(ReadRetryDelay * attempt);
+                    await System.Threading.Tasks.Task.Delay(ReadRetryDelay * attempt, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -130,19 +140,22 @@ public sealed record PanoramaTargets(
         }
         catch (JsonException ex)
         {
-            var aside = path + ".damaged";
+            var aside = Path.Combine(outputDir, DamagedFileName);
+            string kept;
             try
             {
                 File.Copy(path, aside, overwrite: true);
+                kept = $"it was copied to {DamagedFileName}";
             }
             catch (Exception copy) when (copy is IOException or UnauthorizedAccessException)
             {
-                // Nowhere to put it; the message below still says the file was not used.
+                // Said as it is: on a directory PRISM cannot write to, the damaged original is the only copy.
+                kept = $"it could not be copied aside ({copy.Message}), so the damaged original is the only copy";
             }
 
-            say?.Invoke($"{FileName} in {outputDir} is damaged ({ex.Message}); it was copied to {Path.GetFileName(aside)} "
-                        + "and this publish goes on as this directory's first. Pages it published before carry its "
-                        + "old id: if they are refused as another directory's, take them over on purpose (--take-over).");
+            say?.Invoke($"{FileName} in {outputDir} is damaged ({ex.Message}); {kept}, and this publish goes on as "
+                        + "this directory's first. Pages it published before carry its old id: if they are refused as "
+                        + "another directory's, take them over on purpose (--take-over).");
             return Empty;
         }
     }
@@ -168,7 +181,8 @@ public sealed record PanoramaTargets(
         && RawFolder == other.RawFolder && Destination == other.Destination && LinksWiki == other.LinksWiki
         && LinksWebPartId == other.LinksWebPartId && PublishId == other.PublishId
         && LinksWebPartFolder == other.LinksWebPartFolder && LinksWebPartPage == other.LinksWebPartPage
-        && (QuantPages ?? Array.Empty<QuantPage>()).SequenceEqual(other.QuantPages ?? Array.Empty<QuantPage>());
+        && (QuantPages ?? Array.Empty<QuantPage>()).SequenceEqual(other.QuantPages ?? Array.Empty<QuantPage>())
+        && (EarlierLinksParts ?? Array.Empty<LinksPart>()).SequenceEqual(other.EarlierLinksParts ?? Array.Empty<LinksPart>());
 
     public override int GetHashCode()
     {
@@ -183,6 +197,7 @@ public sealed record PanoramaTargets(
         hash.Add(PublishId);
         hash.Add(LinksWebPartFolder);
         hash.Add(LinksWebPartPage);
+        hash.Add((EarlierLinksParts ?? Array.Empty<LinksPart>()).Count);
         return hash.ToHashCode();
     }
 

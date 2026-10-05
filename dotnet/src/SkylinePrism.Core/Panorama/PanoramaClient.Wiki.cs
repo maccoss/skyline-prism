@@ -180,7 +180,9 @@ public sealed partial class PanoramaClient
         {
             var names = Regex.Matches(list.Groups[1].Value, @"(?m)^\s*name:\s*'((?:[^'\\]|\\.)*)'")
                 .Select(m => DecodeJsString(m.Groups[1].Value)).ToList();
-            attachments = names.Count > 0 || string.IsNullOrWhiteSpace(list.Groups[1].Value) ? names : null;
+            // Every entry has to be read, not some: a list missing one names that plot as absent.
+            var entries = Regex.Matches(list.Groups[1].Value, @"(?m)^\s*[""']?name[""']?\s*:").Count;
+            attachments = names.Count == entries && (entries > 0 || string.IsNullOrWhiteSpace(list.Groups[1].Value)) ? names : null;
         }
 
         return new WikiPageInfo(entityId, JsInt(props, "rowId"), JsInt(props, "pageVersionId"), JsString(props, "name") ?? "",

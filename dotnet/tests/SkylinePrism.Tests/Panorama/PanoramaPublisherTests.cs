@@ -772,6 +772,74 @@ public sealed class PanoramaPublisherTests : IDisposable
     }
 
     [Fact]
+    public void ACopyOfARunElsewhere_GetsItsOwnId_AndTheSamePlaceKeepsOne()
+    {
+        // Hashed on parameters.json alone, two copies of one run had one id, and the second could
+        // replace the first's same-named pages unnoticed - the thing the id exists to stop.
+        File.WriteAllText(Path.Combine(_outputDir, "parameters.json"), "{\"run\":1}");
+        var copy = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(_outputDir)!)!,
+            "prism_pub_copy_" + Guid.NewGuid().ToString("N"), Path.GetFileName(_outputDir));
+        Directory.CreateDirectory(copy);
+        try
+        {
+            File.Copy(Path.Combine(_outputDir, "parameters.json"), Path.Combine(copy, "parameters.json"));
+            Assert.NotEqual(OutputPublishing.DerivedPublishId(_outputDir), OutputPublishing.DerivedPublishId(copy));
+            Assert.Equal(OutputPublishing.DerivedPublishId(_outputDir), OutputPublishing.DerivedPublishId(_outputDir + Path.DirectorySeparatorChar));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(copy)!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ADamagedTargetsFile_ThatCannotBeKeptAside_IsSaidToBeTheOnlyCopy_AndIsNeverUploaded()
+    {
+        var targetsFile = Path.Combine(_outputDir, PanoramaTargets.FileName);
+        File.WriteAllText(targetsFile, "{ not json");
+        // A directory where the copy would go: the copy fails, as it does on a read-only share.
+        Directory.CreateDirectory(Path.Combine(_outputDir, PanoramaTargets.DamagedFileName));
+        var said = new System.Collections.Generic.List<string>();
+
+        await OutputPublishing.RunAsync(_client, Request(raw: null), say: said.Add);
+
+        Assert.Contains(said, s => s.Contains("could not be copied aside", StringComparison.Ordinal));
+        Assert.DoesNotContain(said, s => s.Contains("it was copied to", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AKeptAsideTargetsFile_StaysOutOfTheUpload()
+    {
+        File.WriteAllText(Path.Combine(_outputDir, PanoramaTargets.DamagedFileName), "{ not json");
+
+        var outcome = await OutputPublishing.RunAsync(_client, Request(qc: null, quant: null));
+
+        Assert.DoesNotContain(_server.Files.Keys, k => k.EndsWith("/" + PanoramaTargets.DamagedFileName, StringComparison.Ordinal));
+        Assert.DoesNotContain(PanoramaTargets.DamagedFileName, OutputPublishing.Describe(Request()), StringComparison.Ordinal);
+        Assert.NotNull(outcome.Upload);
+    }
+
+    [Fact]
+    public async Task MovingTheLinksBack_ReusesThePartAlreadyThere_RatherThanAddingASecond()
+    {
+        const string other = "/MacCoss/maccoss/Elsewhere";
+        MakePanoramaFolder();
+        _server.AddContainer(other);
+        _server.FolderTypes[other] = "Targeted MS";
+        await OutputPublishing.RunAsync(_client, WithLinks());
+        var first = PanoramaTargets.Load(_outputDir).LinksWebPartId;
+        await OutputPublishing.RunAsync(_client, WithLinks() with { LinksFolder = other });
+        var second = PanoramaTargets.Load(_outputDir).LinksWebPartId;
+
+        var back = await OutputPublishing.RunAsync(_client, WithLinks());
+
+        Assert.Single(_server.WebParts, p => p.Container == Container && p.Name == "Wiki");
+        Assert.Equal(first, PanoramaTargets.Load(_outputDir).LinksWebPartId);
+        Assert.Contains($"(id {second})", back.LinksNote, StringComparison.Ordinal); // the one left on the other page
+        Assert.Equal(other, Assert.Single(PanoramaTargets.Load(_outputDir).EarlierLinksParts!).Folder);
+    }
+
+    [Fact]
     public async Task ADamagedTargetsFile_IsKeptAside_AndThePublishSaysSo()
     {
         var targetsFile = Path.Combine(_outputDir, PanoramaTargets.FileName);

@@ -92,8 +92,8 @@ links page itself cannot be written, the reports and the upload stand, and the p
   output directory's name, and names like `PRISM-sum-rtlowess-medianpolish` recur from one experiment
   to the next. So each output directory gets an id on its first publish (`publish_id` in
   `panorama.json`), and every page it publishes carries that id in its footer. The id is a hash of
-  the directory's `parameters.json` (of its path, when there is none), so the same run gives the same
-  id however often it is worked out, and another run, which writes its own `parameters.json`, gets
+  the directory's full path and its `parameters.json`, so the same directory gives the same id however
+  often it is worked out, while a copy elsewhere, or another run written into the same path, gets
   another. Another output directory with the same name, publishing to the same folder, is refused
   rather than allowed to replace the first one's page: choose another page name for it. The same
   refusal appears if this directory's `panorama.json` was replaced with another's, or if the analysis
