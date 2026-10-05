@@ -26,10 +26,12 @@ public static class DifferentialCsv
     /// <param name="groupBy">The contrast column, or the trend column under a trend design.</param>
     /// <param name="aLabel">Arm A's label, or the trend column's low end (<see cref="TrendEndpoints"/>).</param>
     /// <param name="bLabel">Arm B's label, or the trend column's high end.</param>
+    /// <param name="restrictions">The samples a trend was fitted on, when not all of them; recorded in
+    /// the header, since the rows below mean something different over a subset.</param>
     public static void Write(
         string path, DifferentialResult result, DifferentialDataset dataset,
         DifferentialOptions options, SignificanceRule rule, string groupBy, string aLabel, string bLabel,
-        string effectName = "log2FC")
+        string effectName = "log2FC", IReadOnlyList<QuantRestriction>? restrictions = null)
     {
         var dirName = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dirName))
@@ -40,6 +42,8 @@ public static class DifferentialCsv
             ? $"# trend: {groupBy} from {aLabel} to {bLabel} (span {result.TrendRange.ToString("0.####", CultureInfo.InvariantCulture)}); "
               + "log2fc is the modeled change ACROSS that span, slope = log2fc / span"
             : $"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
+        if (result.IsTrend && restrictions is { Count: > 0 } && QuantRestriction.Describe(restrictions) is { Length: > 0 } kept)
+            w.WriteLine($"# restricted to: {kept} (only those samples were fitted)");
         w.WriteLine($"# method: {options.Describe(result.VariancePrior)}, {CorrectionName(options.Correction)}");
         w.WriteLine(result.IsTrend
             ? $"# n: {result.NA} samples"

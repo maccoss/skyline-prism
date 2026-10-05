@@ -43,6 +43,9 @@ public sealed class QuantReportInputs
     /// <inheritdoc cref="Options"/>
     public required string BLabel { get; init; }
 
+    /// <summary>A trend's restriction to some of the samples, for differential.csv's header; empty for all.</summary>
+    public IReadOnlyList<QuantRestriction> Restrictions { get; init; } = Array.Empty<QuantRestriction>();
+
     /// <summary>
     /// The loaded dataset: the feature annotations <c>differential.csv</c> carries, and the RAW
     /// per-sample abundances behind the summaries (linear, matching PRISM's corrected parquet).
@@ -264,7 +267,7 @@ public static class QuantReport
         // gene/protein/accession columns and the number format included.
         DifferentialCsv.Write(Path.Combine(quantDir, "differential.csv"), inputs.Differential,
             inputs.Dataset, inputs.Options, inputs.Rule, inputs.GroupBy, inputs.ALabel, inputs.BLabel,
-            inputs.EffectName);
+            inputs.EffectName, inputs.Restrictions);
 
         if (inputs.Detection is { Rows.Count: > 0 } det)
             WriteDetectionCsv(Path.Combine(quantDir, "detection.csv"), det);

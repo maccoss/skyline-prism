@@ -805,7 +805,7 @@
                                         level rather than offering a prior that cannot be fitted. -->
                                         <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount">Peptide count</ComboBoxItem>
                                         </ComboBox>
-                                        <!-- ToolTipService.ShowOnDisabled, because this control is GREYED
+                                        <!-- ToolTipService.ShowOnDisabled, because this control is GRAYED
                                         rather than hidden when the run has no controls, and WPF
                                         suppresses tooltips on disabled elements by default - which
                                         would hide the explanation at exactly the moment it is the only

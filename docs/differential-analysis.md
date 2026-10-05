@@ -211,7 +211,10 @@ below the **Trend over** picker in its settings panel (`Reading V0_Week 0 -> 0, 
 and only selects one automatically when the column is already plain numbers. On the command line, a
 bare column name (`--trend-over "Longitudinal Draw Description"`) is refused when the column offers
 more than one reading, and the message lists them: name the one you mean. A value with no number in it (`na`, an empty cell) leaves that
-sample off the axis, and the status line counts it.
+sample off the axis, and the status line counts it. A hyphen is a minus sign only at the start of a value
+or after a space or other punctuation (`Week -2` is -2). Straight after a letter or a digit it is a
+separator: `Week-4` is 4, `Day-14` is 14, and `Week 2-4` reads 2 and 4. Read the other way, timepoints
+written with hyphens would give a negative axis and flip the sign of every slope.
 
 **Fitting on some of the samples.** A trend pools every sample that has a value on the axis. When a
 cohort holds two studies on one timescale, that merges them into one slope - two arms both drawn
@@ -220,7 +223,10 @@ samples whose column holds one of the values. It can be given more than once, an
 narrow together (study *and* on-drug window). A column or value the run doesn't have is refused,
 with the values it does have, rather than silently keeping nothing. The pane's **Restrict to** picker
 does the same. Restricted samples are counted apart from samples with no value on the axis, so a
-deliberate subset never reads as missing data.
+deliberate subset never reads as missing data. A report records its restriction wherever it records
+the contrast - its title (`trend over ... (restricted to Study = Verapamil)`), `quant_parameters`
+(`restrict_to:`) and the `# restricted to:` line in `differential.csv` - and its marker panels use
+the same samples.
 
 ```bash
 prism differential -d output/ --design trend-within-subject \

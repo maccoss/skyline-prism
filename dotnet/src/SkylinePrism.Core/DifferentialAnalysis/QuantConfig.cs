@@ -12,13 +12,17 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// <param name="GroupBy">The grouping column (two-arm contrasts).</param>
 /// <param name="GroupA">Arm A's levels - a list, as <c>-a</c> takes one, so a union arm records as one.</param>
 /// <param name="GroupB">Arm B's levels.</param>
-/// <param name="TrendOver">The numeric column a trend is fitted against (trend designs).</param>
+/// <param name="TrendOver">The axis a trend is fitted against (trend designs): a column, or one
+/// reading of a text column (<see cref="TrendAxis"/>).</param>
+/// <param name="RestrictTo">The samples a trend was fitted on, when not all of them.</param>
 public sealed record QuantContrast(
-    string? GroupBy, IReadOnlyList<string>? GroupA, IReadOnlyList<string>? GroupB, string? TrendOver)
+    string? GroupBy, IReadOnlyList<string>? GroupA, IReadOnlyList<string>? GroupB, string? TrendOver,
+    IReadOnlyList<QuantRestriction>? RestrictTo = null)
 {
     /// <summary>A one-line description for the report and the status line.</summary>
     public string Describe() => TrendOver is not null
         ? $"trend over {TrendOver}"
+          + (RestrictTo is { Count: > 0 } r ? $" (restricted to {QuantRestriction.Describe(r)})" : string.Empty)
         : $"{ContrastArms.Describe(GroupB ?? Array.Empty<string>())} vs "
           + $"{ContrastArms.Describe(GroupA ?? Array.Empty<string>())} by {GroupBy}";
 }
@@ -82,7 +86,16 @@ public sealed record QuantConfig(
         if (Contrast.TrendOver is not null)
             // Through Yaml() like group_by below: a trend column named "1.0", or one holding a colon,
             // would otherwise be emitted bare and read back as something other than its name.
+        {
             sb.Append("  trend_over: ").Append(Yaml(Contrast.TrendOver)).Append('\n');
+            if (Contrast.RestrictTo is { Count: > 0 } restrictions)
+            {
+                sb.Append("  restrict_to:\n");
+                foreach (var r in restrictions)
+                    sb.Append("    - column: ").Append(Yaml(r.Column)).Append('\n')
+                      .Append("      values: ").Append(YamlList(r.Values)).Append('\n');
+            }
+        }
         else
         {
             sb.Append("  group_by: ").Append(Yaml(Contrast.GroupBy)).Append('\n');

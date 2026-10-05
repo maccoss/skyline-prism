@@ -94,6 +94,79 @@ public class TrendRestrictionTests
     }
 
     [Fact]
+    public void ARestrictColumnHoldingAnEquals_GivesNoCommand()
+    {
+        // The CLI splits COLUMN=VALUE at the first '=', so "Dose=mg=10" would come back as column
+        // "Dose" and value "mg=10" - a different restriction.
+        var ds = Mini();
+        var request = TrendRequest(ds, new QuantRestriction("Dose=mg", new[] { "10" }));
+
+        Assert.False(QuantCommand.TryArguments(request, out _, out var reason));
+        Assert.Contains("contains '='", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheRestriction_IsPartOfTheRecordedContrast()
+    {
+        // Recorded only in the command, two reports restricted to different studies described
+        // themselves identically - in their titles, quant_parameters and differential.csv.
+        var restricted = new QuantContrast(null, null, null, "Visit (Week)",
+            new[] { new QuantRestriction("Study", new[] { "Verapamil" }) });
+        Assert.Equal("trend over Visit (Week) (restricted to Study = Verapamil)", restricted.Describe());
+        Assert.Equal("trend over Visit (Week)", (restricted with { RestrictTo = null }).Describe());
+
+        var config = new QuantConfig("protein", restricted, "trend", "moderated", "global", "global", "bh",
+            Array.Empty<string>(), "p < 0.05", false, 0.01, false, Array.Empty<string>(), "both", Array.Empty<string>());
+        Assert.Contains("  restrict_to:\n    - column: Study\n      values: [Verapamil]\n", config.ToYaml(), StringComparison.Ordinal);
+        Assert.Contains("\"restrict_to\"", config.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARestrictedReport_RecordsItsSubset_AndItsMarkersUseIt()
+    {
+        var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"prism-restricted-{Guid.NewGuid():N}");
+        System.IO.Directory.CreateDirectory(dir);
+        try
+        {
+            var (ds, _, _, _) = DetectionAnalysisTests.Setup();
+            var names = ds.MetadataValues("sample");
+            var clinical = System.IO.Path.Combine(dir, "clinical.csv");
+            System.IO.File.WriteAllLines(clinical,
+                new[] { "PatientName,week" }.Concat(names.Select((n, i) => $"{n},{i % 5}")));
+            ds.AttachClinical(clinical);
+            var panel = new SkylinePrism.Core.Qc.ProteinList { Name = "Panel one" };
+            panel.Members.Add(ds.FeatureGenes.First(g => !string.IsNullOrEmpty(g)));
+
+            QuantAnalysis.Run(new QuantRequest
+            {
+                OutputDir = dir,
+                Dataset = ds,
+                Options = new DifferentialOptions
+                {
+                    Design = DifferentialDesign.LinearTrend, TrendColumn = "week", Prior = VariancePrior.Global,
+                },
+                Rule = SignificanceRule.Default,
+                Restrictions = new[] { new QuantRestriction("sample_type", new[] { "experimental" }) },
+                MarkerPanels = new[] { panel },
+                MarkerGroupBy = "sample_type",
+            });
+
+            var quant = System.IO.Path.Combine(dir, "quant");
+            Assert.Equal("# restricted to: sample_type = experimental (only those samples were fitted)",
+                System.IO.File.ReadLines(System.IO.Path.Combine(quant, "differential.csv")).ElementAt(1));
+            Assert.Contains("restrict_to:", System.IO.File.ReadAllText(System.IO.Path.Combine(quant, "quant_parameters.yaml")),
+                StringComparison.Ordinal);
+            // The panels are grouped over the fitted samples only: no qc or reference group, which were excluded.
+            Assert.Equal("marker,experimental",
+                System.IO.File.ReadLines(System.IO.Path.Combine(quant, "markers_Panel_one_zscores.csv")).First());
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ARestrictedValueStartingWithADash_StillGetsACommand()
     {
         // It travels as COLUMN=VALUE, so the argument never starts with '-' and cannot be read as a

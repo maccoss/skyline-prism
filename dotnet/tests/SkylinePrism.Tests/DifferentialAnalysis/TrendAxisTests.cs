@@ -228,6 +228,52 @@ public class TrendAxisTests
     }
 
     [Fact]
+    public void AHyphenAfterALetterOrDigit_SeparatesRatherThanNegates()
+    {
+        // Read as a minus, timepoints written with hyphens gave an axis running 0, -2, -4, -12: every
+        // slope's sign flipped, with only the preview line to show it.
+        var hyphenated = new string?[] { "Week-0", "Week-2", "Week-4", "Week-12" };
+        var week = Assert.Single(TrendAxis.OptionsFor("t", hyphenated));
+        Assert.Equal(new[] { 0.0, 2.0, 4.0, 12.0 }, TrendAxis.Read(hyphenated, week));
+        Assert.Equal("Week", week.Short); // the word still names it
+
+        // A range is two numbers, not a number and a negative one.
+        var ranges = new string?[] { "Week 2-4", "Week 6-8", "Week 10-12" };
+        var options = TrendAxis.OptionsFor("t", ranges);
+        Assert.Equal(new[] { 2.0, 6.0, 10.0 }, TrendAxis.Read(ranges, options.Single(o => o.Position == 1)));
+        Assert.Equal(new[] { 4.0, 8.0, 12.0 }, TrendAxis.Read(ranges, options.Single(o => o.Position == 2)));
+    }
+
+    [Fact]
+    public void AHyphenAtTheStartOrAfterASpace_IsStillAMinus()
+    {
+        var before = new string?[] { "Week -2", "Week 0", "Week 4" };
+        Assert.Equal(new[] { -2.0, 0.0, 4.0 },
+            TrendAxis.Read(before, Assert.Single(TrendAxis.OptionsFor("t", before))));
+
+        var underscore = new string?[] { "T_-1", "T_0", "T_1" };
+        Assert.Equal(new[] { -1.0, 0.0, 1.0 },
+            TrendAxis.Read(underscore, Assert.Single(TrendAxis.OptionsFor("t", underscore))));
+    }
+
+    [Fact]
+    public void AReadingNamedLikeAnotherColumn_SaysItWasReadFromText()
+    {
+        // A numeric column literally called "Visit (Week)" beside a text column "Visit" whose week
+        // reading would carry the same label: two identical picker entries, and Find taking whichever
+        // sorted first. The column keeps its own name.
+        string?[] ValuesOf(string c) => c == "Visit"
+            ? new string?[] { "V0_Week 0", "V1_Week 2", "V2_Week 4" }
+            : new string?[] { "0", "1", "2" };
+        var columns = new[] { "Visit", "Visit (Week)" };
+
+        var labels = TrendAxis.AllFor(columns, ValuesOf).Select(a => a.Label).ToList();
+        Assert.Equal(labels.Count, labels.Distinct().Count());
+        Assert.Equal(0, TrendAxis.Find("Visit (Week)", columns, ValuesOf)!.Position);
+        Assert.Equal("Visit", TrendAxis.Find("Visit (Week) (read from text)", columns, ValuesOf)!.Column);
+    }
+
+    [Fact]
     public void AnIdentifierLikeNumberIsNotMistakenForAnAxis()
     {
         // Exponent notation is deliberately not read: "1e5" in a label is an identifier far more

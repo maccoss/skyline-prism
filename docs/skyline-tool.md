@@ -488,9 +488,9 @@ it, grouped in the order you decide them: **Compare** (the design: Unpaired, Pai
 subject), **Level**, **Comparison** (the samples: Group by and the arms, or the trend axis and
 restriction), **Hits** (the significance rule), and **Method** (test, prior, covariates, correction).
 **Method** is folded away by default because its defaults are the right ones for most analyses, but its
-current state is always shown underneath in one line - `Moderated t · intensity trend from controls ·
-Benjamini-Hochberg` - so you can see what ran without opening it. The **«** button hides the whole
-column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
+current state is always shown underneath in one line - `Moderated t; intensity trend from controls;
+Benjamini-Hochberg` - so you can see what ran without opening it. The button at the top right of the
+settings column hides the whole column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
 Detection, Enrichment) is a set of tabs above the plot, beside **Quant report...**. Every setting reruns
 the contrast as you change it; there is no Run button.
 
@@ -518,7 +518,7 @@ like it was applied.
 A trend design replaces **Group by / A / B** with a **Trend over** picker and a **Restrict to** picker.
 **Trend over** lists every axis the metadata can give. A column of plain numbers is listed under its own
 name. A column whose values hold a number inside text (`V2_Week 8`) is listed once per number, named
-after the word in front of it — `(Week)`, `(V)`. Those are different quantities, so the picker only
+after the word in front of it - `(Week)`, `(V)`. Those are different quantities, so the picker only
 selects an axis automatically when the column is plain numbers. A line below the **Trend over** picker
 shows what the chosen axis parsed, so you can check it is the one you meant. **Restrict to** fits the trend on
 only some samples (one study of two, say). Without it, studies that share a timescale are merged into
@@ -672,7 +672,7 @@ samples, nothing is added and the status line says so. The same join runs headle
 
 Evaluates a **protein panel** — a marker set — against the corrected matrix. Pick one or more panels from
 **Panels** (the same lists the Dynamic Range plot uses: your own plus PRISM's shipped panels; tick
-several to union them), a **Level**, a **Group by** column, and **Heatmap columns** — group means or per
+several to union them), a **Level**, a **Group by** column, and **Heatmap columns** - group means or per
 sample. The settings sit in a collapsible column on the left, as on the Differential pane.
 
 - The **heatmap** shows each matched member's abundance, **row z-scored on log2**, as marker × group

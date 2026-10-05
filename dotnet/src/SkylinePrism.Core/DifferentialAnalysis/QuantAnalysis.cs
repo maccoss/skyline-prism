@@ -11,7 +11,15 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// One restriction on the samples a trend is fitted over: keep those whose <paramref name="Column"/>
 /// holds one of <paramref name="Values"/>.
 /// </summary>
-public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values);
+public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values)
+{
+    /// <summary><c>Study = Verapamil</c>; several values listed, since any of them is kept.</summary>
+    public string Describe() => $"{Column} = {string.Join(", ", Values)}";
+
+    /// <summary>Several restrictions, which narrow together: <c>Study = Verapamil; Arm = Drug</c>.</summary>
+    public static string Describe(IEnumerable<QuantRestriction> restrictions) =>
+        string.Join("; ", restrictions.Where(r => r.Values.Count > 0).Select(r => r.Describe()));
+}
 
 /// <summary>
 /// One quantification analysis to run and report: a resolved contrast (two arms, or a trend under
@@ -248,6 +256,8 @@ public static class QuantAnalysis
         DifferentialResult res;
         string groupBy, aLabel, bLabel, contrastLabel, effectName;
         QuantContrast contrast;
+        int[]? trendColumns = null;
+        var restricted = request.Restrictions.Where(r => r.Values.Count > 0).ToList();
         if (isTrend)
         {
             var trendOver = options.TrendColumn
@@ -260,7 +270,7 @@ public static class QuantAnalysis
                 ?? throw new ArgumentException(
                     $"No trend axis '{trendOver}' in this run.", nameof(request));
             var x = TrendAxis.Read(ds.MetadataValues(axis.Column), axis);
-            var trendColumns = TrendColumnsFor(request, ds);
+            trendColumns = TrendColumnsFor(request, ds);
             res = request.Differential
                 ?? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds, trendColumns, x, options);
             groupBy = trendOver;
@@ -268,9 +278,13 @@ public static class QuantAnalysis
             // log2fc is the change across, so an excluded sample's x would misdescribe every row.
             (aLabel, bLabel) = DifferentialCsv.TrendEndpoints(
                 trendColumns.Select(c => x[c]).ToList());
-            contrastLabel = $"trend over {trendOver}";
             effectName = $"log2 change across {trendOver}";
-            contrast = new QuantContrast(null, null, null, trendOver);
+            // The restriction is part of WHAT was compared, so it goes wherever the contrast is
+            // recorded - the report's title, quant_parameters, differential.csv's header - and not
+            // only into the reproducing command. Without it two reports restricted to different
+            // studies described themselves identically.
+            contrast = new QuantContrast(null, null, null, trendOver, restricted.Count > 0 ? restricted : null);
+            contrastLabel = contrast.Describe();
         }
         else
         {
@@ -378,6 +392,15 @@ public static class QuantAnalysis
         else
         {
             var groups = ds.MetadataValues(markerColumn);
+            // Over the samples the trend was fitted on: a sample with no group is one the panels leave
+            // out, so a restriction is applied the same way. Every sample here would put a study the
+            // report excluded into its marker plots, with nothing saying so.
+            if (trendColumns is not null && restricted.Count > 0)
+            {
+                var kept = trendColumns.ToHashSet();
+                groups = groups.Select((g, i) => kept.Contains(i) ? g : null).ToArray();
+            }
+
             var identities = Enumerable.Range(0, ds.FeatureIds.Length).Select(ds.IdentityOf).ToArray();
             foreach (var panel in request.MarkerPanels)
                 markers.Add(new MarkerReportSection(panel.Name, markerColumn,
@@ -436,6 +459,7 @@ public static class QuantAnalysis
             GroupBy = groupBy,
             ALabel = aLabel,
             BLabel = bLabel,
+            Restrictions = restricted,
             Dataset = ds,
             ContrastColumns = valueColumns,
             Detection = detection,

@@ -896,7 +896,7 @@ public static partial class PlotRenderer
     /// told the reader anything. So the axes show what can actually be read:</para>
     /// <list type="bullet">
     /// <item>Columns: when there are more than fit, and the columns are samples ordered by group, the
-    /// axis names each group once, centred under its run, with a line between groups. A sample id is
+    /// axis names each group once, centered under its run, with a line between groups. A sample id is
     /// not what a per-sample heatmap is read for - which group the column is in is.</item>
     /// <item>Rows: at most <see cref="MaxRowLabels"/> are named, every k-th, at a legible size - the
     /// convention seaborn's heatmap follows - rather than every row at a size nobody can read. The
@@ -971,7 +971,7 @@ public static partial class PlotRenderer
                 start = j;
             }
 
-            // A group only a few samples wide is narrower than its own name, and neighbouring names then
+            // A group only a few samples wide is narrower than its own name, and neighboring names then
             // run together ("Quality ControlStandard" on a cohort with six of each). When any run is
             // narrower than its label - one character per column is the conservative reading, columns
             // being at least a character wide at any sensible window size - alternate labels drop a

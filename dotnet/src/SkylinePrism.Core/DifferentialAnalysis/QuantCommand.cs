@@ -99,6 +99,10 @@ public static class QuantCommand
             foreach (var r in request.Restrictions.Where(r => r.Values.Count > 0))
             {
                 Check(r.Column, "the restrict column", splitsOnComma: false);
+                // The CLI splits COLUMN=VALUE at the FIRST '=', so a column holding one would come back
+                // as a different column and value.
+                if (r.Column.Contains('=', StringComparison.Ordinal))
+                    problems.Add($"the restrict column '{r.Column}' contains '=', which --restrict-to splits on");
                 foreach (var v in r.Values)
                     Check(v, "a restricted value", splitsOnComma: true, leadingDashOk: true);
                 // One flag per restriction, the form the CLI intersects - a single flag carrying two

@@ -72,7 +72,13 @@ public static class TrendAxis
     // Signed integers and decimals. Deliberately NOT exponent notation: "1e5" inside a label is far
     // more often an identifier fragment than a number, and a trend axis read from a sample name is
     // the wrong kind of surprise.
-    private static readonly Regex Number = new(@"-?\d+(?:\.\d+)?", RegexOptions.Compiled);
+    //
+    // A hyphen is a MINUS only at the start of the value or after something that is not a letter or
+    // a digit ("Week -2", "V_-1"). Straight after a letter or a digit it is a separator: "Week-4",
+    // "Day-14" and "Week 2-4" read 4, 14, and 2 then 4. Read as a minus, a study that writes its
+    // timepoints with hyphens got an axis running 0, -2, -4, -12 - the sign of every slope flipped,
+    // and nothing but the preview line to show it.
+    private static readonly Regex Number = new(@"(?:(?<![A-Za-z0-9])-)?\d+(?:\.\d+)?", RegexOptions.Compiled);
 
     /// <summary>
     /// Every way <paramref name="values"/> can be read as a trend axis, best first.
@@ -195,6 +201,13 @@ public static class TrendAxis
         // So callers default to a wholly-numeric axis and require an interpreted one to be picked
         // (see the pane's PopulateTrendColumns), and the preview says what the pick parsed.
         //
+        // A reading whose label is another column's own name - "Visit (Week)" read out of Visit, beside
+        // a numeric column literally named "Visit (Week)" - would be two axes under one label: two
+        // identical entries in the picker, and Find taking whichever sorted first. The column keeps
+        // its name, since that is what it is called; the reading says where it came from.
+        var names = all.Where(o => o.Position == 0).Select(o => o.Label).ToHashSet(StringComparer.Ordinal);
+        all = all.Select(o => o.Position > 0 && names.Contains(o.Label) ? o with { Label = o.Label + " (read from text)" } : o).ToList();
+
         // One key, and a stable sort: `all` is already in metadata column order, and each column's
         // readings already ranked by OptionsFor. A further sort by column name and position undid
         // both - columns came out alphabetical, and a coarser reading ahead of the finer one.
@@ -207,7 +220,7 @@ public static class TrendAxis
     /// </summary>
     /// <remarks>
     /// A bare column name matches that column's axis when it has only one, so <c>--trend-over Week</c>
-    /// keeps working on a numeric column and a user need not learn the parenthesised form to use an
+    /// keeps working on a numeric column and a user need not learn the parenthesized form to use an
     /// obvious one. On a column offering two - <c>(V)</c> and <c>(Week)</c> - the bare name names
     /// neither: taking whichever happened to come first is the guess this class exists to refuse, and
     /// it would be a plausible slope against the wrong quantity. The full label is what the pane shows

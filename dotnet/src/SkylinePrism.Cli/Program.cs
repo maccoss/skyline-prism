@@ -422,14 +422,6 @@ public static class Program
             is "trend" or "trend-within-subject" or "trend-repeated";
 
     /// <summary>
-    /// <c>prism differential --design trend</c>: fit a slope against a numeric column.
-    /// </summary>
-    /// <remarks>
-    /// Separate from the two-arm path for the same reason the pane's is - there are no arms to
-    /// resolve or name - while sharing the options builder, the hit rule and the CSV writer, so a
-    /// trend result is the same file shape as any other.
-    /// </remarks>
-    /// <summary>
     /// The sample columns a trend runs over: every sample, less those excluded by each
     /// <c>--restrict-to COLUMN=VALUE[,VALUE...]</c>.
     /// </summary>
@@ -477,6 +469,16 @@ public static class Program
         return new QuantRestriction(column, keep);
     }
 
+    /// <summary>
+    /// <c>prism differential --design trend</c>: fit a slope against a trend axis - a numeric column,
+    /// or one reading of a text column (<see cref="TrendAxis"/>) - over the samples
+    /// <c>--restrict-to</c> keeps.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the two-arm path for the same reason the pane's is - there are no arms to
+    /// resolve or name - while sharing the options builder, the hit rule and the CSV writer, so a
+    /// trend result is the same file shape as any other.
+    /// </remarks>
     private static int RunDifferentialTrend(
         ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir,
         IReadOnlyList<ProteinList> markerPanels)
@@ -490,8 +492,6 @@ public static class Program
         if (restricted > 0)
             Console.WriteLine(
                 $"--restrict-to: {restricted} sample(s) outside the kept values were left out.");
-        if (columns.Length == 0)
-            throw new ArgumentException("--restrict-to: no sample matches the kept values.");
         var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
         var rule = SignificanceRuleFrom(opts);
 
@@ -519,7 +519,7 @@ public static class Program
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
         DifferentialCsv.Write(outPath, result, dataset, options, rule, trendOver,
-            aLabel: xLow, bLabel: xHigh, effectName: effectName);
+            aLabel: xLow, bLabel: xHigh, effectName: effectName, restrictions: ParseRestrictions(opts));
         Console.WriteLine($"Results written to: {outPath}");
 
         // A trend has no arms; the report takes its column and range from the options and the data.

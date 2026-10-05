@@ -224,8 +224,14 @@ public partial class MainWindow
     /// </remarks>
     private void PopulateTrendColumns(IReadOnlyList<TrendAxisOption> axes)
     {
+        // Compared on everything the option READS with and shows, not the label alone: another output
+        // directory can offer the same label at a different position ("Visit (Week)" out of
+        // "V1_Week 4" and out of "Week 4"), and keeping the old option read every sample as NaN while
+        // the preview went on showing the previous run's values.
+        static string Key(TrendAxisOption a) =>
+            string.Join("|", a.Label, a.Column, a.Position, a.Distinct, a.Covered, TrendAxis.DescribePreview(a));
         if (DiffTrendOverCombo.ItemsSource is IEnumerable<TrendAxisOption> current
-            && current.Select(a => a.Label).SequenceEqual(axes.Select(a => a.Label), StringComparer.Ordinal))
+            && current.Select(Key).SequenceEqual(axes.Select(Key), StringComparer.Ordinal))
             return;
 
         // Kept by LABEL, not by reference: the options are rebuilt from the metadata each time, so
@@ -395,14 +401,13 @@ public partial class MainWindow
     private const string RestrictNone = "(all samples)";
 
     /// <summary>
-    /// The metadata columns a trend can be fitted against: those whose every non-empty value parses
-    /// as a number.
+    /// Every axis a trend can be fitted against: each column whose values are numbers, and each
+    /// readable position of a number inside a text column ("V2_Week 8" offers the visit and the week).
     /// </summary>
     /// <remarks>
-    /// The same dtype inference <see cref="Covariate.FromMetadata"/> uses, and for the same reason -
-    /// offering a categorical column here would put a rank-deficient design one click away and fail
-    /// at run time instead of at the picker. A column needs two DISTINCT values to carry a slope,
-    /// so a constant numeric column is left out too.
+    /// Built by <see cref="TrendAxis.AllFor"/>, the list the CLI's <c>--trend-over</c> is checked
+    /// against, so a label offered here is one the command line accepts. An axis needs two DISTINCT
+    /// values to carry a slope, so a constant column offers none.
     /// </remarks>
     private IReadOnlyList<TrendAxisOption> DiffTrendAxes() =>
         _diffDataset is null
@@ -658,13 +663,13 @@ public partial class MainWindow
             or DifferentialDesign.LinearTrendWithinSubject;
         var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
 
-        // A trend design needs a numeric column to fit against. With none in the run, both trend
-        // entries are collapsed AND disabled - and if one was already selected (a clinical CSV was
-        // detached, say) the design falls back rather than leaving an invisible selection.
-        var numeric = DiffTrendAxes();
-        PopulateTrendColumns(numeric);
-        ShowTest(DiffDesignTrendItem, numeric.Count > 0);
-        ShowTest(DiffDesignTrendSubjectItem, numeric.Count > 0);
+        // A trend design needs an axis to fit against. With none in the run, both trend entries are
+        // collapsed AND disabled - and if one was already selected (a clinical CSV was detached, say)
+        // the design falls back rather than leaving an invisible selection.
+        var axes = DiffTrendAxes();
+        PopulateTrendColumns(axes);
+        ShowTest(DiffDesignTrendItem, axes.Count > 0);
+        ShowTest(DiffDesignTrendSubjectItem, axes.Count > 0);
         if (DiffDesignCombo.SelectedItem is ListBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
@@ -819,7 +824,7 @@ public partial class MainWindow
     private void OnDiffMethodExpanderToggled(object sender, RoutedEventArgs e) => UpdateDiffMethodSummary();
 
     /// <summary>
-    /// The Method section in one line - "Moderated t · intensity trend from controls · BH" - shown
+    /// The Method section in one line - "Moderated t; intensity trend from controls; BH" - shown
     /// while the section is folded away.
     /// </summary>
     /// <remarks>
@@ -857,7 +862,7 @@ public partial class MainWindow
         if (Shown(DiffCorrectionCombo) is { } correction)
             parts.Add(correction);
 
-        DiffMethodSummary.Text = string.Join(" · ", parts);
+        DiffMethodSummary.Text = string.Join("; ", parts);
         DiffMethodSummary.Visibility = parts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -1430,7 +1435,7 @@ public partial class MainWindow
 
         // The span the effect is measured across, for the axis label - over the samples the fit
         // USED. This read every finite x in the column while its comment said otherwise, so with a
-        // restriction a Verapamil-only fit was labelled "-2 to 12", -2 being a Liraglutide timepoint:
+        // restriction a Verapamil-only fit was labeled "-2 to 12", -2 being a Liraglutide timepoint:
         // a range the model never saw, on the axis whose numbers are a change across it.
         var used = columns.Select(c => xValues[c]).Where(double.IsFinite).ToList();
         _diffTrendRange = used.Count > 0 ? (used.Min(), used.Max()) : null;

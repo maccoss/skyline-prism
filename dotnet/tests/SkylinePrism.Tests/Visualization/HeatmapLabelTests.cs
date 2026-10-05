@@ -60,7 +60,7 @@ public class HeatmapLabelTests
         var positions = Draw(9, groups.Length, groups, names).Axes.Bottom.TickGenerator.Ticks
             .Where(t => t.IsMajor).Select(t => t.Position).ToArray();
 
-        // Runs are [0,6), [6,12), [12,96): centres 3, 9, 54.
+        // Runs are [0,6), [6,12), [12,96): centers 3, 9, 54.
         Assert.Equal(new[] { 3.0, 9.0, 54.0 }, positions);
     }
 
@@ -98,7 +98,7 @@ public class HeatmapLabelTests
     [Fact]
     public void ManyRows_NameEveryKthRow_AndNoMoreThanThirty()
     {
-        // The largest shipped panel: 158 members. Every row labelled meant 6pt text in a smear.
+        // The largest shipped panel: 158 members. Every row labeled meant 6pt text in a smear.
         var labels = Labels(Draw(158, 3).Axes.Left);
 
         Assert.InRange(labels.Length, 20, 30);

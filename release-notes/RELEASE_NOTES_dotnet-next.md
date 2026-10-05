@@ -16,14 +16,17 @@ as the GitHub Release description and fails if it is missing.
   different quantities, and a slope fitted against the wrong one looks entirely reasonable. The pane
   shows what the chosen axis parsed (`Reading V0_Week 0 -> 0, V1_Week 2 -> 2, ...`), and it only
   selects an axis automatically when the column is plain numbers. `prism differential --trend-over`
-  takes the same names, and an unknown name lists the available axes.
+  takes the same names; a bare column name that offers two readings is refused with both named, and
+  an unknown name lists every available axis. A hyphen counts as a minus sign only at the start of a
+  value or after a space or punctuation, so timepoints written `Week-4` or `Day-14` read 4 and 14.
 - **A trend can be restricted to some of the samples.** A trend pools every sample with a value on its
   axis, so two studies that share a timescale were merged into one slope. On that cohort, a Verapamil
   arm and a Liraglutide arm both drawn "at week 4" became a single point. The Differential pane's new
   **Restrict to** picker and `prism differential --restrict-to COLUMN=VALUE[,VALUE...]` (repeatable;
   restrictions narrow together) keep only the samples you name. A column or value the run doesn't have
   is refused, with the values it does have. Restricted samples are counted separately from samples with
-  no value on the axis, and a quant report records the restriction in the command that reproduces it.
+  no value on the axis. A quant report records the restriction in its title, `quant_parameters`,
+  `differential.csv` and the command that reproduces it, and its marker panels use the same samples.
   Fitting the within-subject Verapamil trend now gives weeks 0 to 12 over 50 samples in 10 subjects.
 - **The Differential and Markers settings are in a collapsible column beside the plot.** The
   Differential toolbar had grown to 15 drop-downs and 16 labels in one wrapping row, about twice the
@@ -33,11 +36,11 @@ as the GitHub Release description and fails if it is missing.
   of two to four options (design, level, adjusted or raw p, heatmap columns) are now buttons that show
   every option instead of drop-downs. **Method** is folded away by default with its current state shown
   in one line, so you can see what ran without opening it. The view (Volcano, Detection, Enrichment)
-  is tabs above the plot. **«** hides the column to give the plot the full width. The Markers pane
+  is tabs above the plot. A button at the top of the column hides it to give the plot the full width. The Markers pane
   has the same layout.
-- **The window opens at a size that suits the screen.** It used to open at a fixed 1040 × 740: a small
+- **The window opens at a size that suits the screen.** It used to open at a fixed 1040 x 740: a small
   box on a large monitor, and at that width the plot was about 600 pixels beside the new settings
-  column. It now opens at 85% of the screen (up to 1600 × 1000), with a minimum of 960 × 640.
+  column. It now opens at 85% of the screen (up to 1600 x 1000), with a minimum of 960 x 640.
 
 ## Bug Fixes
 
@@ -61,7 +64,7 @@ as the GitHub Release description and fails if it is missing.
 - **The Differential pane's trend span now covers the samples the fit used.** The axis title and status
   line read the span from every value in the trend column, while the code's comment said it came from
   the fitted samples. Whenever samples were left out, the label described a range the model never saw.
-  A Verapamil-only fit was labelled "-2 to 12", where -2 is a Liraglutide timepoint, on the axis whose
+  A Verapamil-only fit was labeled "-2 to 12", where -2 is a Liraglutide timepoint, on the axis whose
   numbers are a change across that span. It now reads "0 to 12", matching the command line and the CSV
   header. The axis title also uses the short name of the axis ("log2 change across Week") instead of
   the full label, which no longer fit on the plot.

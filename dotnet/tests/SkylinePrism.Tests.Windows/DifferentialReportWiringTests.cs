@@ -44,6 +44,17 @@ public class DifferentialReportWiringTests
     }
 
     [Fact]
+    public void TheTrendPicker_IsRebuiltWhenAnAxisReadsDifferently_NotOnlyWhenItsLabelChanges()
+    {
+        // Another output directory can offer the same label at a different position; compared on
+        // labels alone, the old option kept reading every sample as NaN.
+        var populate = Between(Source("MainWindow.Differential.cs"),
+            "private void PopulateTrendColumns(", "\n    }\n");
+        Assert.Contains("a.Position", populate, StringComparison.Ordinal);
+        Assert.Contains("TrendAxis.DescribePreview(a)", populate, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheTestedTerm_IsDroppedByItsColumn_NotItsLabel()
     {
         var drop = Between(Source("MainWindow.Differential.cs"),
