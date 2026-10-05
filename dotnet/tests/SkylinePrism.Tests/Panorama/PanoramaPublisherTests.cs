@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.Panorama;
 using Xunit;
 
@@ -314,6 +315,25 @@ public sealed class PanoramaPublisherTests : IDisposable
         Assert.Equal("Post vs Pre by Arm", PanoramaPublisher.QuantContrast(_outputDir));
         Assert.Equal("PRISM-Quant-run-2026-10-Post-vs-Pre-by-Arm",
             PanoramaPublisher.DefaultQuantPage(_outputDir, PanoramaPublisher.QuantContrast(_outputDir)));
+    }
+
+    [Fact]
+    public void ARestrictedTrend_NamesItsRestriction_SoTwoSubsetsGetTwoPages()
+    {
+        // Written by the quant report's own writer, so the reader is held to what is actually written.
+        string PageFor(string study)
+        {
+            var contrast = new QuantContrast(null, null, null, "Visit (Week)", new[] { new QuantRestriction("Study", new[] { study }) });
+            var config = new QuantConfig("protein", contrast, "trend", "moderated", "global", "global", "bh",
+                Array.Empty<string>(), "p < 0.05", false, 0.01, false, Array.Empty<string>(), "both", Array.Empty<string>());
+            File.WriteAllText(Path.Combine(_outputDir, "quant", "quant_parameters.json"), config.ToJson());
+            return PanoramaPublisher.DefaultQuantPage(_outputDir, PanoramaPublisher.QuantContrast(_outputDir));
+        }
+
+        var verapamil = PageFor("Verapamil");
+        Assert.Equal("trend over Visit (Week) (restricted to Study = Verapamil)", PanoramaPublisher.QuantContrast(_outputDir));
+        Assert.NotEqual(verapamil, PageFor("Liraglutide"));
+        Assert.Null(PanoramaPublisher.PageNameProblem(verapamil));
     }
 
     [Fact]

@@ -100,10 +100,20 @@ public sealed class PanoramaPublisher
             if (!document.RootElement.TryGetProperty("contrast", out var c))
                 return null;
             string? Text(string name) => c.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-            IReadOnlyList<string>? List(string name) => c.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+            IReadOnlyList<string>? List(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
                 ? v.EnumerateArray().Select(x => x.GetString() ?? "").ToList()
                 : null;
-            return new QuantContrast(Text("group_by"), List("group_a"), List("group_b"), Text("trend_over")).Describe();
+            // The restriction is part of the contrast: two trends over one axis restricted to different
+            // studies are different analyses, and without it their default page names were the same.
+            var restrictTo = c.TryGetProperty("restrict_to", out var r) && r.ValueKind == JsonValueKind.Array
+                ? r.EnumerateArray()
+                    .Where(x => x.ValueKind == JsonValueKind.Object)
+                    .Select(x => new QuantRestriction(
+                        x.TryGetProperty("column", out var col) && col.ValueKind == JsonValueKind.String ? col.GetString() ?? "" : "",
+                        List(x, "values") ?? (IReadOnlyList<string>)Array.Empty<string>()))
+                    .ToList()
+                : null;
+            return new QuantContrast(Text("group_by"), List(c, "group_a"), List(c, "group_b"), Text("trend_over"), restrictTo).Describe();
         }
         catch (JsonException)
         {
