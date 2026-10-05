@@ -967,6 +967,9 @@
             <Button x:Name="ShowCommandButton" Content="Show Command Line" Padding="12,4" Margin="0,0,8,0"
                     Click="OnShowCommandLine"
                     ToolTip="Show the prism CLI command + config YAML that reproduces the current GUI settings." />
+            <Button x:Name="PublishButton" Content="Publish to Panorama..." Padding="12,4" Margin="0,0,8,0" IsEnabled="False"
+                    Click="OnPublishToPanorama"
+                    ToolTip="Publish the QC and quant reports as Panorama wiki pages and upload this output directory next to the raw files." />
             <Button x:Name="OpenReportButton" Content="Open QC Report" Padding="12,4" IsEnabled="False"
                     Click="OnOpenReport" />
         </StackPanel>

@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AngleSharp" Version="1.8.3" />
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
     <PackageReference Include="Parquet.Net" Version="6.1.0" />
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5" />

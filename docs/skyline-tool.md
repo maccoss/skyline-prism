@@ -785,6 +785,21 @@ rebuilds them.
 
 ---
 
+## Publishing to Panorama
+
+**Publish to Panorama...** (bottom right, beside Open QC Report) publishes the current output directory:
+the QC report and the quant report as wiki pages, each in a Panorama folder you choose with **Browse...**,
+the whole output directory uploaded next to the folder holding the raw files, and a links page shown at
+the top of a folder's own page (**Links on the folder's page**; it follows the QC folder until you choose
+another, and adding it to the page needs folder administrator permission). The window opens on
+the folders this output directory was last published to (its `panorama.json`), signs in with the sign-in
+PanoramaBridge saved on this computer when there is one, and shows the plan before anything is sent.
+Publishing again updates the same pages - Panorama keeps the earlier versions of their text - uploads only files that
+changed, and refuses to overwrite a page someone edited on Panorama unless **Replace a page edited on
+Panorama** is ticked. The button is available whenever the Output directory holds a QC or quant report,
+not only after a run. **Show Command Line** gives the equivalent `prism publish` command. See
+[panorama-publishing.md](panorama-publishing.md) for where things go and what Panorama requires of a page.
+
 ## Environment variables
 
 Escape hatches for when an automatic choice picks badly. None are needed normally.
@@ -794,6 +809,7 @@ Escape hatches for when an automatic choice picks badly. None are needed normall
 | `PRISM_TEMP_DIR` | Where DuckDB spills the Stage 1 sort. By default this sits beside the output, unless the output is on a network drive, in which case it falls back to the machine's temp directory. Set this when the automatic choice lands on a small or quota'd disk. Stage 1 logs the directory it chose. |
 | `PRISM_ISOLATION_TIMEOUT_SEC` | How long to let Skyline read isolation windows out of a data file before giving up (default 300). Reading them normally takes ~10 s; raise this only if your data really is that slow to reach. |
 | `PRISM_EXTRACT_DIR` | Where `.sky.zip` archives are extracted, instead of beside the archive. One folder per archive underneath. For a Panorama download folder on a slow share, or one you would rather keep clean. |
+| `PRISM_PANORAMA_API_KEY` | A Panorama API key for publishing, tried before any saved sign-in. The only sign-in source for `prism publish` on Linux and macOS, which have no Credential Manager. |
 | `PRISM_SKYLINECMD` | Full path to `SkylineCmd.exe`, when the automatic discovery finds the wrong installation. |
 | `PRISM_PROTEIN_LISTS` | The saved protein-lists file to use instead of `%LOCALAPPDATA%\SkylinePrism\protein-lists.json`. Read by the tool and by the CLI (`prism differential --markers`), so a cluster account can use the same lists as the Windows machine a quant report was made on. The shipped panels are always available either way. |
 

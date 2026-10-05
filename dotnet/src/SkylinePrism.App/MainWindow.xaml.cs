@@ -252,6 +252,7 @@ public partial class MainWindow : Window
         if (RunButton is not null)
             RunButton.IsEnabled = !_isRunning && _inputs.Count > 0
                 && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
+        UpdatePublishEnabled();
 
         // Adding and removing an input both reach here, which makes it the one place the ComBat
         // default has to follow.
@@ -1291,6 +1292,7 @@ public partial class MainWindow : Window
             return;
 
         OpenReportButton.IsEnabled = false;
+        PublishButton.IsEnabled = false;
         LogBox.Clear();
         ShowAnalysis(AnalysisPane.Log); // show progress as it runs
 
@@ -1344,6 +1346,7 @@ public partial class MainWindow : Window
             });
             _lastReportPath = reportPath;
             OpenReportButton.IsEnabled = reportExists;
+            UpdatePublishEnabled();
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
@@ -3077,6 +3080,34 @@ public partial class MainWindow : Window
     }
 
     private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+
+    /// <summary>
+    /// Publishing reads a finished output directory, not a run, so it follows the Output directory box:
+    /// available whenever that directory holds a QC or quant report and nothing is running. Tying it
+    /// to a completed run, as Open QC Report is, left it disabled for the usual case - opening an
+    /// output directory produced earlier to publish it.
+    /// </summary>
+    private void UpdatePublishEnabled()
+    {
+        if (PublishButton is null)
+            return;
+        var dir = OutputDirBox?.Text?.Trim();
+        PublishButton.IsEnabled = !_isRunning && !string.IsNullOrEmpty(dir)
+            && (File.Exists(Path.Combine(dir, "qc_report.html")) || File.Exists(Path.Combine(dir, "quant", "quant_report.html")));
+    }
+
+    /// <summary>
+    /// Opens the Publish to Panorama window on the current output directory - the same publish as
+    /// <c>prism publish</c>, which its Show Command Line gives.
+    /// </summary>
+    private void OnPublishToPanorama(object sender, RoutedEventArgs e)
+    {
+        var dir = OutputDirBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+            return;
+        PanoramaPublishWindow.Open(this, dir);
+        UpdatePublishEnabled();
+    }
 
     private void OnOpenReport(object sender, RoutedEventArgs e)
     {

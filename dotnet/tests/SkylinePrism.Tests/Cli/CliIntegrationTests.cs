@@ -139,6 +139,61 @@ public class CliIntegrationTests
         finally { Cleanup(outDir); }
     }
 
+    /// <summary>
+    /// <c>prism publish --dry-run</c> says what it would do - and needs no network or sign-in to do it -
+    /// and the real QC report a run writes is one Panorama would accept, both as a wiki body and,
+    /// rewritten, as an uploaded file. That last part is checked against the report the pipeline
+    /// actually generates rather than a hand-made one, because a new element or style in the report
+    /// is exactly what would start failing a publish.
+    /// </summary>
+    [Fact]
+    public void Publish_DryRun_SaysThePlan_AndTheRealReportPassesPanoramasRules()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            Assert.Equal(0, Invoke("qc", "-d", outDir).Code);
+
+            var (code, output) = Invoke("publish", "-d", outDir, "--qc-wiki",
+                "https://panoramaweb.org/MacCoss/maccoss/Some-Project/project-begin.view",
+                "--beside-raw", "/MacCoss/maccoss/Some-Project/@files/RawFiles", "--dry-run");
+            Assert.Equal(0, code);
+            Assert.Contains("Publish the QC report as the wiki page PRISM-QC-", output, StringComparison.Ordinal);
+            Assert.Contains("in /MacCoss/maccoss/Some-Project", output, StringComparison.Ordinal);
+            Assert.Contains($"to /MacCoss/maccoss/Some-Project/@files/{new DirectoryInfo(outDir).Name}", output, StringComparison.Ordinal);
+            Assert.Contains("(dry run: nothing was sent)", output, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(outDir, "panorama.json"))); // a dry run remembers nothing
+
+            var report = File.ReadAllText(Path.Combine(outDir, "qc_report.html"));
+            var wiki = SkylinePrism.Core.Panorama.WikiReport.FromReport(report, "qc");
+            Assert.Empty(SkylinePrism.Core.Panorama.WikiReport.Refusals(wiki.BodyTemplate));
+            Assert.NotEmpty(wiki.Images);
+            Assert.True(SkylinePrism.Core.Panorama.WikiReport.RefusedAsFile(report)); // why the rewrite exists
+            Assert.False(SkylinePrism.Core.Panorama.WikiReport.RefusedAsFile(
+                SkylinePrism.Core.Panorama.WikiReport.ToPanoramaFile(report)));
+        }
+        finally { Cleanup(outDir); }
+    }
+
+    [Fact]
+    public void Publish_WithNothingToPublish_IsRefused_WithWhatToPass()
+    {
+        var outDir = TempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(outDir, "qc_report.html"), "<html></html>");
+            var (code, output) = Invoke("publish", "-d", outDir);
+            Assert.Equal(2, code);
+            Assert.Contains("Nothing to publish", output, StringComparison.Ordinal);
+
+            (code, output) = Invoke("publish", "-d", outDir, "--quant-wiki", "/P");
+            Assert.Equal(2, code);
+            Assert.Contains("no quant report", output, StringComparison.Ordinal);
+        }
+        finally { Cleanup(outDir); }
+    }
+
     [Fact]
     public void ConfigTemplate_FullAndMinimal_WriteFiles()
     {

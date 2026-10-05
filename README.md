@@ -192,6 +192,7 @@ warning.
 | `prism differential` | Differential abundance on a finished output directory - two arms, or a slope against a numeric column. `--report` also writes the quant report (`quant/quant_report.html` plus its CSVs) |
 | `prism ion-accounting` | Count acquired ions from the instrument files and the fraction assigned to a peptide |
 | `prism isolation-scheme` | Read the acquisition's DIA isolation windows from a data file and record them |
+| `prism publish` | Publish the QC and quant reports as Panorama wiki pages, upload the output directory beside the raw files, and link them all from the folder's page ([docs/panorama-publishing.md](docs/panorama-publishing.md)) |
 | `prism compare` | Compare control-sample CVs between two runs |
 | `prism config-template` | Emit an annotated configuration template (`--minimal` for common options) |
 
@@ -263,7 +264,7 @@ dotnet msbuild dotnet/build/package.proj /p:Configuration=Release
 
 - **[dotnet/README.md](dotnet/README.md)** — building, testing, project layout, and CI for the C# code.
 - **[SPECIFICATION.md](SPECIFICATION.md)** — the authoritative algorithm/format specification.
-- **[docs/](docs/)** — [the Skyline tool](docs/skyline-tool.md), [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
+- **[docs/](docs/)** — [the Skyline tool](docs/skyline-tool.md), [parameters](docs/parameters.md), [methods](docs/methods.md), [output files](docs/output_files.md), [protein parsimony](docs/parsimony.md), [publishing to Panorama](docs/panorama-publishing.md), and [building a Skyline external tool](https://github.com/uw-maccosslab/skyline-external-tools-ai) (its own repo now).
 
 ## License
 

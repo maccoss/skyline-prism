@@ -44,6 +44,7 @@ output_dir/
 ├── ion_accounting_lists.parquet    # ...split by selected protein list, if any were selected
 ├── qc_report.html                  # HTML QC report with embedded diagnostic plots
 ├── qc_plots/                       # Directory containing PNG plot files (if enabled)
+├── panorama.json                   # Where `prism publish` last published this directory (folders, page names, and the id its pages carry; never a credential)
 └── prism_run_YYYYMMDD_HHMMSS.log   # Detailed processing log
 ```
 

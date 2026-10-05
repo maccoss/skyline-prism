@@ -38,6 +38,27 @@ as the GitHub Release description and fails if it is missing.
   in one line, so you can see what ran without opening it. The view (Volcano, Detection, Enrichment)
   is tabs above the plot. A button at the top of the column hides it to give the plot the full width. The Markers pane
   has the same layout.
+- **Publish an output directory to Panorama.** **Publish to Panorama...** in the Skyline tool, and
+  `prism publish` on the command line, put the QC report and the quant report on Panorama as wiki
+  pages, each in a folder you choose. They also upload the whole output directory next to the folder
+  that holds the raw files (`.../@files/RawFiles` gives `.../@files/<output directory>`). A links
+  page shows up on the folder's own page, in a Wiki web part right after Targeted MS Runs (above
+  Files), so the results are found
+  from the folder rather than from the wiki's page list. It links the QC page, every quant page
+  published from the directory (one per contrast), and the uploaded files. Without folder
+  administrator permission the links page is still published, and the publish says what a folder
+  administrator would need to add by hand. Publishing
+  again updates the same pages, and Panorama keeps the earlier versions of their text; only plots
+  that changed are sent again. A page published from one output directory is never replaced by
+  another output directory that happens to have the same name. It uploads only the files
+  that changed, checked against Panorama's own MD5 of its copy, and verifies every upload the same
+  way. It refuses to overwrite a page someone edited on Panorama unless told to. Sign-in uses the
+  key PanoramaBridge already saved on the computer, so a lab machine needs no setup; otherwise the
+  window asks once, and `PRISM_PANORAMA_API_KEY` serves a headless run. Each output directory
+  remembers its targets in `panorama.json`, so `prism publish -d <dir>` alone republishes. Panorama
+  refuses HTML with a `<style>` block from ordinary users, and an uploaded HTML file with a doctype,
+  both with nothing but "403". So the reports' CSS is inlined for the wiki, their plots become page
+  attachments, and the report files go up in an inlined form. See `docs/panorama-publishing.md`.
 - **The window opens at a size that suits the screen.** It used to open at a fixed 1040 x 740: a small
   box on a large monitor, and at that width the plot was about 600 pixels beside the new settings
   column. It now opens at 85% of the screen (up to 1600 x 1000), with a minimum of 960 x 640.

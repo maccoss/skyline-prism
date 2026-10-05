@@ -17,7 +17,7 @@ namespace SkylinePrism.Cli;
 /// Entry point for the cross-platform `prism` CLI. Mirrors the Python subcommands
 /// (run / merge / config-template / version). QC report generation (qc) arrives with Layer 8.
 /// </summary>
-public static class Program
+public static partial class Program
 {
     public static int Main(string[] args)
     {
@@ -43,6 +43,7 @@ public static class Program
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
                 "differential" => CmdDifferential(rest),
+                "publish" => CmdPublish(rest),
                 "ion-accounting" => CmdIonAccounting(rest),
                 "isolation-scheme" => CmdIsolationScheme(rest),
                 "compare" => CmdCompare(rest),
@@ -1092,6 +1093,7 @@ public static class Program
         "merge" => MergeHelp,
         "qc" => QcHelp,
         "differential" => DifferentialHelp,
+        "publish" => PublishHelp,
         "ion-accounting" => IonAccountingHelp,
         "isolation-scheme" => IsolationSchemeHelp,
         "compare" => CompareHelp,
@@ -1126,6 +1128,7 @@ public static class Program
             merge              Merge Skyline transition reports into one parquet
             qc                 (Re)generate the QC report from an existing output directory
             differential       Two-group differential abundance on a finished output directory
+            publish            Publish the QC and quant reports to Panorama wikis and upload the outputs
             ion-accounting     Count acquired ions and the fraction assigned to a peptide
             isolation-scheme   Read the acquisition's DIA isolation windows and record them
             compare            Compare control-sample CVs between two runs

@@ -510,6 +510,47 @@ Key sections:
 - `StreamingComBat`: the same result with bounded memory, a row group at a time
 - `Qc/BatchCorrectionEvaluator`: the `auto_revert` decision (control CV worsened by >10%)
 
+### Core/Panorama/
+- `OutputPublishing`: one publish, shared by `prism publish` and the tool's Publish to Panorama window -
+  upload first (so the pages can link to it), then the QC page, then the quant page, then the links
+  page and the Wiki web part that shows it on the folder's page. Targets are remembered in the output
+  directory's `panorama.json` (folders, page names and that web part's id, never a credential: that
+  file is uploaded with the outputs).
+- `PanoramaClient` (+ `.WebDav`, `.Wiki`, `.Portal`): ported from LabOps, which built on PanoramaBridge's
+  measurements. `PanoramaSignIn` tries `PRISM_PANORAMA_API_KEY`, then PanoramaBridge's Credential
+  Manager entry, then LabOps's, then PRISM's own, and writes only PRISM's.
+- `WikiReport`: a report as a page Panorama accepts. `PanoramaPublisher`: pages owned through a
+  fingerprinted footer, uploads verified against the server's own MD5s.
+
+> [!CAUTION]
+> **Panorama refuses HTML that a browser would happily render, and says only "403".** Measured on
+> panoramaweb.org (October 2026); see `docs/panorama-publishing.md`:
+> - a wiki body with a `<style>`, `<link>`, `<script>` or form element, an `on*` attribute, or `url()`
+>   in a style attribute is refused outright for anyone not a trusted developer - so the reports' CSS
+>   is inlined (`WikiReport.FromReport`);
+> - an uploaded `.html` file gets the same rules **plus a `<!doctype>` is refused** - the same bytes
+>   named `.txt` go through. So the reports are uploaded as `WikiReport.ToPanoramaFile`. Any new
+>   element or style added to a report must keep `WikiReport.Refusals` empty;
+>   `CliIntegrationTests.Publish_DryRun_SaysThePlan_AndTheRealReportPassesPanoramasRules` checks the
+>   real generated report, not a hand-made one.
+> - MKCOL on an existing folder answers **200**, not the 405 PanoramaBridge measured; an attachment
+>   whose name is taken is refused with a *warning* in a 200 response, not replaced; a wiki POST needs
+>   the CSRF token from `login-whoami.api` with that session's cookie, even with an API key.
+> - **`project-addWebPart.view` takes the column by LabKey's internal name, and a wrong one fails
+>   silently.** The body is `!content` (`WebPartFactory.LOCATION_BODY`); `project-getWebParts.api`
+>   reports it as `body`. Sent `body`, the action still saves the part - in a column no page renders
+>   and the listing omits - and answers with the same redirect a success gives. Ten invisible Wiki
+>   parts were left on the test folder this way before the cause was found. Go through
+>   `PanoramaClient.InternalLocation`, which refuses a column it does not know.
+> - **Wiki attachments are not versioned** - they belong to the page, not a version of it. A plot is
+>   attached under a name carrying a hash of its bytes (`WikiReport.FromReport`), and the previous
+>   publish's plots are removed only after the new body is saved. Reusing a fixed name per position,
+>   as the first version did, made every older version in the page history show the newest run's
+>   plots.
+> - A Panorama (Targeted MS) folder's page is `DefaultDashboard`, not `portal.default`
+>   (`MainPageIdAsync` matches the parts the start page renders), and adding a web part needs folder
+>   administrator permission - without it the links page is published and the outcome says why.
+
 ### Core/Qc/
 - `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory
 - `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
@@ -645,6 +686,10 @@ prism ion-accounting -d output_dir/ -r raw_dir/ --probe-lanes
 
 # Read the acquisition's DIA isolation windows from a data file and record them beside the outputs
 prism isolation-scheme -d output_dir/ -r raw_dir/ [--force]
+
+# Publish the QC and quant reports as Panorama wiki pages, and upload the outputs beside the raw files
+prism publish -d output_dir/ --qc-wiki /MacCoss/maccoss/Project --quant-wiki /MacCoss/maccoss/Project \
+    --beside-raw /MacCoss/maccoss/Project/@files/RawFiles [--links-wiki FOLDER] [--dry-run]
 
 # Merge multiple Skyline reports into unified parquet
 prism merge report1.csv report2.csv -o data.parquet -m metadata.tsv
