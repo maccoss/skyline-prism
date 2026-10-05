@@ -519,8 +519,8 @@ A trend design replaces **Group by / A / B** with a **Trend over** picker and a 
 **Trend over** lists every axis the metadata can give. A column of plain numbers is listed under its own
 name. A column whose values hold a number inside text (`V2_Week 8`) is listed once per number, named
 after the word in front of it — `(Week)`, `(V)`. Those are different quantities, so the picker only
-selects an axis automatically when the column is plain numbers. A line under the toolbar shows what
-the chosen axis parsed, so you can check it is the one you meant. **Restrict to** fits the trend on
+selects an axis automatically when the column is plain numbers. A line below the **Trend over** picker
+shows what the chosen axis parsed, so you can check it is the one you meant. **Restrict to** fits the trend on
 only some samples (one study of two, say). Without it, studies that share a timescale are merged into
 one slope. With no axis anywhere in the run, both trend entries are hidden and disabled. See
 [`differential-analysis.md`](differential-analysis.md) for the details. **Detection** is hidden too: it compares
@@ -677,9 +677,10 @@ sample. The settings sit in a collapsible column on the left, as on the Differen
 
 - The **heatmap** shows each matched member's abundance, **row z-scored on log2**, as marker × group
   (group means) or marker × sample (per-sample). Blue-white-red is centered at zero; the colorbar is the
-  scale. The heatmap labels only what can be read. In the per-sample view each group is named once,
-  centered under its block of columns, with a line between groups. Sample IDs aren't shown: there are too
-  many to read at cohort size, and the group is what you need from that view. A group narrower than its
+  scale. The heatmap labels only what can be read. In the per-sample view with more than 15 columns, each
+  group is named once, centered under its block of columns, with a line between groups, and sample IDs
+  aren't shown: there are too many to read at cohort size, and the group is what you need from that view.
+  With 15 or fewer columns every sample is named, since they fit. A group narrower than its
   name drops its label a line so neighbors don't run together. A panel with more than 30 members names
   every k-th row rather than every row in unreadable type. The full lists are in the quant report's
   CSVs.

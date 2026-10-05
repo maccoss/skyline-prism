@@ -865,7 +865,10 @@ public static partial class PlotRenderer
         plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
     }
 
-    /// <summary>Past this many columns a heatmap stops naming each one.</summary>
+    /// <summary>
+    /// Past this many columns, a heatmap whose columns carry group metadata names each GROUP once
+    /// under its block instead of every column; one without groups still names every column, rotated.
+    /// </summary>
     private const int ManyColumns = 15;
 
     /// <summary>The most row labels a heatmap names; beyond it, every k-th.</summary>

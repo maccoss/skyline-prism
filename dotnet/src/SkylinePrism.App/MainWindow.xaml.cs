@@ -51,7 +51,7 @@ public partial class MainWindow : Window
     {
         var area = SystemParameters.WorkArea;
         Width = Math.Max(MinWidth, Math.Min(1600, area.Width * 0.85));
-        Height = Math.Max(MinHeight, Math.Min(1000, area.Height * 0.88));
+        Height = Math.Max(MinHeight, Math.Min(1000, area.Height * 0.85));
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
     }
 

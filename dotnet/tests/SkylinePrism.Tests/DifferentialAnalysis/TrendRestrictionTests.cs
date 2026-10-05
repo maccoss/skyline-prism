@@ -61,14 +61,48 @@ public class TrendRestrictionTests
     }
 
     [Fact]
-    public void ARestrictionThatKeepsNothing_IsRefused()
+    public void ARestrictionToAValueTheColumnNeverHolds_IsRefused_NamingWhatIsThere()
     {
         // Silently fitting zero samples would report "nothing to fit" and send the reader to their
         // data, when the fault is in the restriction.
         var ds = Mini();
         var request = TrendRequest(ds, new QuantRestriction("sample_type", new[] { "no-such-type" }));
         var ex = Assert.Throws<ArgumentException>(() => QuantAnalysis.TrendColumnsFor(request, ds));
-        Assert.Contains("kept no samples", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("'sample_type' has no value 'no-such-type'. Present:", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARestrictionOnAnUnknownColumn_IsRefused_NotIgnored()
+    {
+        // Ignored, the trend would be fitted over every sample while the report's recorded command
+        // claimed the restriction. The CLI checked this; the shared path every request runs through
+        // did not.
+        var ds = Mini();
+        var request = TrendRequest(ds, new QuantRestriction("no_such_column", new[] { "x" }));
+        var ex = Assert.Throws<ArgumentException>(() => QuantAnalysis.TrendColumnsFor(request, ds));
+        Assert.Contains("no metadata column 'no_such_column'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void KeptColumns_IsThePanesRestriction_AndKeepsEverySampleWithoutOne()
+    {
+        var ds = Mini();
+        Assert.Equal(Enumerable.Range(0, ds.SampleIds.Length), QuantAnalysis.KeptColumns(Array.Empty<QuantRestriction>(), ds));
+        Assert.Equal(
+            QuantAnalysis.TrendColumnsFor(TrendRequest(ds, new QuantRestriction("sample_type", new[] { "experimental" })), ds),
+            QuantAnalysis.KeptColumns(new[] { new QuantRestriction("sample_type", new[] { "experimental" }) }, ds));
+    }
+
+    [Fact]
+    public void ARestrictedValueStartingWithADash_StillGetsACommand()
+    {
+        // It travels as COLUMN=VALUE, so the argument never starts with '-' and cannot be read as a
+        // flag; refusing it withheld a perfectly reproducible command (a visit "-1", say).
+        var ds = Mini();
+        var request = TrendRequest(ds, new QuantRestriction("sample_type", new[] { "-1" }));
+
+        Assert.True(QuantCommand.TryArguments(request, out var args, out var reason), reason);
+        Assert.Equal("sample_type=-1", args[args.ToList().IndexOf("--restrict-to") + 1]);
     }
 
     [Fact]

@@ -8,6 +8,12 @@ using SkylinePrism.Core.Qc;
 namespace SkylinePrism.Core.DifferentialAnalysis;
 
 /// <summary>
+/// One restriction on the samples a trend is fitted over: keep those whose <paramref name="Column"/>
+/// holds one of <paramref name="Values"/>.
+/// </summary>
+public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values);
+
+/// <summary>
 /// One quantification analysis to run and report: a resolved contrast (two arms, or a trend under
 /// <see cref="DifferentialOptions.TrendColumn"/>) plus which of the other views to include.
 /// </summary>
@@ -16,12 +22,6 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// <c>prism differential --report</c> from its flags - and run by <see cref="QuantAnalysis.Run"/>,
 /// so the two cannot compute a report differently.
 /// </remarks>
-/// <summary>
-/// One restriction on the samples a trend is fitted over: keep those whose <paramref name="Column"/>
-/// holds one of <paramref name="Values"/>.
-/// </summary>
-public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values);
-
 public sealed class QuantRequest
 {
     /// <summary>The finished PRISM run; the report is written under its <c>quant/</c> folder.</summary>
@@ -133,38 +133,6 @@ public static class QuantAnalysis
     /// <c>--adjust-for</c> without <c>--test moderated</c>. Dropping them here means the contrast, the
     /// detection test and the recorded command all describe the same unadjusted analysis.
     /// </remarks>
-    /// <summary>
-    /// The sample columns a trend runs over: every sample, less those
-    /// <see cref="QuantRequest.RestrictColumn"/> excludes.
-    /// </summary>
-    /// <remarks>
-    /// The restriction drops the COLUMN rather than NaN-ing its x, because NaN reaches
-    /// <see cref="TrendSamples.Resolve"/> as "no value in the trend column" - which would report a
-    /// deliberate subset as missing data. Both front ends do the same, so a report and the command
-    /// that reproduces it select the same samples.
-    /// </remarks>
-    public static int[] TrendColumnsFor(QuantRequest request, DifferentialDataset ds)
-    {
-        var kept = Enumerable.Range(0, ds.SampleIds.Length).ToHashSet();
-        foreach (var r in request.Restrictions)
-        {
-            if (r.Values.Count == 0 || !ds.MetadataColumns.Contains(r.Column))
-                continue;
-            var values = ds.MetadataValues(r.Column);
-            // Intersected, so several restrictions narrow together rather than the last one winning.
-            kept.IntersectWith(Enumerable.Range(0, ds.SampleIds.Length)
-                .Where(i => i < values.Length && values[i] is { } v
-                    && r.Values.Contains(v, StringComparer.Ordinal)));
-        }
-
-        if (kept.Count == 0)
-            throw new ArgumentException(
-                "Restricting the trend kept no samples: "
-                + string.Join("; ", request.Restrictions.Select(r => $"{r.Column}={string.Join(",", r.Values)}")),
-                nameof(request));
-        return kept.OrderBy(i => i).ToArray();
-    }
-
     public static DifferentialOptions EffectiveOptions(DifferentialOptions options, out string? note)
     {
         note = null;
@@ -175,6 +143,79 @@ public static class QuantAnalysis
             + "takes covariates, so this report (and its detection test) is unadjusted. Switch to the "
             + "moderated t to adjust, or untick them.";
         return options with { Covariates = null };
+    }
+
+    /// <summary>
+    /// Refuse a restriction that names a column the run does not have, or a value that column never
+    /// holds.
+    /// </summary>
+    /// <remarks>
+    /// Here, on the shared path, and not only in the CLI: a request built any other way - the pane, any
+    /// caller of this API - would otherwise have an unknown column skipped, fitting over every sample
+    /// while its recorded command claimed the restriction, or an absent value keep nothing and report
+    /// "nothing to fit", which sends the reader to their data instead of to the restriction.
+    /// </remarks>
+    /// <param name="what">How the message names the restriction: the CLI's flag, or the pane's control.</param>
+    public static void ValidateRestrictions(
+        IReadOnlyList<QuantRestriction> restrictions, DifferentialDataset ds, string what = "Restrict to")
+    {
+        foreach (var r in restrictions)
+        {
+            if (!ds.MetadataColumns.Contains(r.Column))
+                throw new ArgumentException($"{what}: no metadata column '{r.Column}'.");
+
+            var present = ds.MetadataValues(r.Column)
+                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!)
+                .Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
+            foreach (var want in r.Values.Where(w => !present.Contains(w, StringComparer.Ordinal)))
+                throw new ArgumentException(
+                    $"{what}: '{r.Column}' has no value '{want}'. Present: "
+                    + string.Join(", ", present.Select(p => $"'{p}'")) + ".");
+        }
+    }
+
+    /// <summary>
+    /// The sample columns <paramref name="restrictions"/> keep - every sample when there are none -
+    /// intersected, so several narrow together rather than the last one winning. Possibly none.
+    /// </summary>
+    /// <remarks>
+    /// The one place a restriction becomes samples: the pane's own trend, the report and the CLI all
+    /// come through here, so the samples a view shows and the samples its report and command fit
+    /// cannot differ. The restriction drops the COLUMN rather than NaN-ing its x, because NaN reaches
+    /// <see cref="TrendSamples.Resolve"/> as "no value in the trend column" - which would report a
+    /// deliberate subset as missing data.
+    /// </remarks>
+    public static int[] KeptColumns(IReadOnlyList<QuantRestriction> restrictions, DifferentialDataset ds)
+    {
+        var kept = Enumerable.Range(0, ds.SampleIds.Length).ToHashSet();
+        foreach (var r in restrictions)
+        {
+            if (r.Values.Count == 0 || !ds.MetadataColumns.Contains(r.Column))
+                continue;
+            var values = ds.MetadataValues(r.Column);
+            kept.IntersectWith(Enumerable.Range(0, ds.SampleIds.Length)
+                .Where(i => i < values.Length && values[i] is { } v
+                    && r.Values.Contains(v, StringComparer.Ordinal)));
+        }
+
+        return kept.OrderBy(i => i).ToArray();
+    }
+
+    /// <summary>
+    /// The sample columns a trend runs over: those <see cref="QuantRequest.Restrictions"/> keep, after
+    /// refusing a restriction the run cannot honor (<see cref="ValidateRestrictions"/>) and one that
+    /// keeps no sample at all.
+    /// </summary>
+    public static int[] TrendColumnsFor(QuantRequest request, DifferentialDataset ds)
+    {
+        ValidateRestrictions(request.Restrictions, ds);
+        var kept = KeptColumns(request.Restrictions, ds);
+        if (kept.Length == 0)
+            throw new ArgumentException(
+                "Restricting the trend kept no samples: "
+                + string.Join("; ", request.Restrictions.Select(r => $"{r.Column}={string.Join(",", r.Values)}")),
+                nameof(request));
+        return kept;
     }
 
     /// <summary>Run every view and write the report.</summary>

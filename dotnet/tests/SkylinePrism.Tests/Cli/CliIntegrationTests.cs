@@ -811,6 +811,39 @@ public class CliIntegrationTests
     }
 
     /// <summary>
+    /// A text timepoint offering two readings: the bare column name is refused with both named, and
+    /// adjusting for the column a reading comes from is refused as the tested term.
+    /// </summary>
+    [Fact]
+    public void Differential_ATextTimepoint_IsNotGuessed_AndItsColumnIsTheTestedTerm()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            var metaPath = Path.Combine(outDir, "sample_metadata.csv");
+            var meta = File.ReadAllLines(metaPath);
+            File.WriteAllLines(metaPath, meta.Select((line, i) =>
+                i == 0 ? line + ",visit" : line.Length == 0 ? line : $"{line},V{(i - 1) % 4}_Week {2 * ((i - 1) % 4)}"));
+
+            var (bare, bareOut) = Invoke("differential", "-d", outDir, "--design", "trend", "--trend-over", "visit");
+            Assert.NotEqual(0, bare);
+            Assert.Contains("'visit' can be read as more than one axis: 'visit (", bareOut, StringComparison.Ordinal);
+
+            // "visit (Week)" names a READING; the column is still visit, whose categories encode the
+            // very timepoints tested. Compared with the label, this used to get through.
+            var (adjusted, adjustedOut) = Invoke("differential", "-d", outDir, "--design", "trend",
+                "--trend-over", "visit (Week)", "--test", "moderated", "--adjust-for", "visit");
+            Assert.NotEqual(0, adjusted);
+            Assert.Contains("'visit' is the term being tested", adjustedOut, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
     /// A trend report: no arms, so no detection and no raw-value table - both said on the console -
     /// and the panels grouped by the column named for them.
     /// </summary>

@@ -636,6 +636,7 @@
                                 <DockPanel>
                                     <DockPanel DockPanel.Dock="Top" Margin="12,8,6,2">
                                         <Button DockPanel.Dock="Right" Content="&#x00AB;" Padding="6,0"
+                                                AutomationProperties.Name="Collapse Differential settings"
                                                 Click="OnDiffSettingsCollapse" ToolTip="Hide the settings and give the plot the width" />
                                         <TextBlock Text="Settings" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </DockPanel>
@@ -845,6 +846,7 @@
                             </Border>
                             <Button x:Name="DiffSettingsExpandButton" DockPanel.Dock="Left" Visibility="Collapsed"
                                     Content="&#x00BB;" Padding="3,0" VerticalAlignment="Stretch"
+                                    AutomationProperties.Name="Expand Differential settings"
                                     Click="OnDiffSettingsExpand" ToolTip="Show the settings" />
                             <DockPanel DockPanel.Dock="Top" Margin="8,6,8,2" LastChildFill="False">
                                 <ListBox x:Name="DiffViewCombo" SelectionChanged="OnDiffViewChanged"
@@ -893,6 +895,7 @@
                                 <DockPanel>
                                     <DockPanel DockPanel.Dock="Top" Margin="12,8,6,2">
                                         <Button DockPanel.Dock="Right" Content="&#x00AB;" Padding="6,0"
+                                                AutomationProperties.Name="Collapse Markers settings"
                                                 Click="OnMarkersSettingsCollapse" ToolTip="Hide the settings and give the plots the width" />
                                         <TextBlock Text="Settings" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </DockPanel>
@@ -933,6 +936,7 @@
                             </Border>
                             <Button x:Name="MarkersSettingsExpandButton" DockPanel.Dock="Left" Visibility="Collapsed"
                                     Content="&#x00BB;" Padding="3,0" VerticalAlignment="Stretch"
+                                    AutomationProperties.Name="Expand Markers settings"
                                     Click="OnMarkersSettingsExpand" ToolTip="Show the settings" />
                             <TextBlock x:Name="MarkersStatusText"
                             Foreground="#888" TextWrapping="Wrap" Margin="8,6,8,2" DockPanel.Dock="Top" />

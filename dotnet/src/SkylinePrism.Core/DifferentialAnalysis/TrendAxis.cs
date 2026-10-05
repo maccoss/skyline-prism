@@ -145,6 +145,17 @@ public static class TrendAxis
             });
         }
 
+        // Two positions can be read after the same word - "Week 0 to Week 4" gives both the hint
+        // "Week" - and two options under one label cannot be told apart in a picker, nor the second
+        // one ever named on a command line. Such a pair says which number each takes as well.
+        var shared = options.GroupBy(o => o.Label, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1).SelectMany(g => g).ToHashSet();
+        options = options
+            .Select(o => shared.Contains(o)
+                ? o with { Label = $"{column} ({o.Short}, {Ordinal(o.Position)} number)", Short = $"{o.Short} ({Ordinal(o.Position)})" }
+                : o)
+            .ToList();
+
         return options.OrderByDescending(o => o.Distinct).ThenBy(o => o.Position).ToList();
     }
 
@@ -183,28 +194,33 @@ public static class TrendAxis
         //
         // So callers default to a wholly-numeric axis and require an interpreted one to be picked
         // (see the pane's PopulateTrendColumns), and the preview says what the pick parsed.
-        return all
-            .OrderByDescending(o => o.Position == 0)
-            .ThenBy(o => o.Column, StringComparer.Ordinal)
-            .ThenBy(o => o.Position)
-            .ToList();
+        //
+        // One key, and a stable sort: `all` is already in metadata column order, and each column's
+        // readings already ranked by OptionsFor. A further sort by column name and position undid
+        // both - columns came out alphabetical, and a coarser reading ahead of the finer one.
+        return all.OrderByDescending(o => o.Position == 0).ToList();
     }
 
     /// <summary>
-    /// The axis <paramref name="label"/> names, or null when no column offers one.
+    /// The axis <paramref name="label"/> names, or null when no column offers one - or when it names a
+    /// column offering more than one.
     /// </summary>
     /// <remarks>
-    /// A bare column name matches that column's best axis, so <c>--trend-over Week</c> keeps working
-    /// on a numeric column and a user need not learn the parenthesised form to use an obvious one.
-    /// The full label is what the pane shows and what a recorded command carries, because on a column
-    /// offering two it is the only form that says which.
+    /// A bare column name matches that column's axis when it has only one, so <c>--trend-over Week</c>
+    /// keeps working on a numeric column and a user need not learn the parenthesised form to use an
+    /// obvious one. On a column offering two - <c>(V)</c> and <c>(Week)</c> - the bare name names
+    /// neither: taking whichever happened to come first is the guess this class exists to refuse, and
+    /// it would be a plausible slope against the wrong quantity. The full label is what the pane shows
+    /// and what a recorded command carries, because it is the only form that says which.
     /// </remarks>
     public static TrendAxisOption? Find(
         string label, IEnumerable<string> columns, Func<string, string?[]> valuesOf)
     {
         var all = AllFor(columns, valuesOf);
-        return all.FirstOrDefault(o => string.Equals(o.Label, label, StringComparison.Ordinal))
-            ?? all.FirstOrDefault(o => string.Equals(o.Column, label, StringComparison.Ordinal));
+        if (all.FirstOrDefault(o => string.Equals(o.Label, label, StringComparison.Ordinal)) is { } exact)
+            return exact;
+        var ofColumn = all.Where(o => string.Equals(o.Column, label, StringComparison.Ordinal)).ToList();
+        return ofColumn.Count == 1 ? ofColumn[0] : null;
     }
 
     /// <summary>

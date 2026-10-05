@@ -88,6 +88,9 @@ public partial class MainWindow
             GroupB = groupB,
             ALevels = aLevels,
             BLevels = bLevels,
+            // The pane's restriction, or the report would fit the trend over every sample while the
+            // pane shows a subset - and its recorded command would leave out --restrict-to.
+            Restrictions = DiffIsTrend() ? DiffRestrictions() : Array.Empty<QuantRestriction>(),
             MarkerPanels = _markersPanelItems.Where(i => i.IsSelected).Select(i => i.List).ToList(),
             MarkerGroupBy = MarkersGroupByCombo.SelectedItem as string,
             // Enrichment always runs from the button; with no network it becomes a note, not a failure.

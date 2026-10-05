@@ -43,8 +43,9 @@ as the GitHub Release description and fails if it is missing.
 
 - **The per-sample marker heatmap no longer draws sample names across the data.** On a 96-sample
   cohort, 96 rotated sample IDs were drawn over the heatmap, its title, and its row labels, and nothing
-  underneath could be read. Each group is now named once, centered under its block of columns with a
-  line between groups, which is what that view is read for. Group names wider than their block are
+  underneath could be read. Past 15 columns each group is now named once, centered under its block of
+  columns with a line between groups, which is what that view is read for; a heatmap of 15 or fewer
+  still names every sample, since they fit. Group names wider than their block are
   staggered onto two lines so neighbors don't run together (two six-sample control groups had read as
   "Quality ControlStandard").
 - **A large marker panel no longer labels every row in unreadable type.** Labels shrank to 6pt as a

@@ -189,6 +189,45 @@ public class TrendAxisTests
     }
 
     [Fact]
+    public void ABareColumnName_NamesItsOnlyAxis_ButNeitherOfTwo()
+    {
+        // Taking whichever reading came first is the guess this class refuses: on this column the
+        // visit and the week are different quantities, and either gives a plausible slope.
+        string?[] ValuesOf(string c) => c == "Week" ? new string?[] { "0", "2", "4", "6", "12" } : Verapamil;
+        var columns = new[] { "Longitudinal Draw Description", "Week" };
+
+        Assert.Null(TrendAxis.Find("Longitudinal Draw Description", columns, ValuesOf));
+        Assert.Equal(2, TrendAxis.Find("Longitudinal Draw Description (Week)", columns, ValuesOf)!.Position);
+        Assert.Equal(0, TrendAxis.Find("Week", columns, ValuesOf)!.Position); // one reading: the bare name is enough
+    }
+
+    [Fact]
+    public void TwoNumbersReadAfterTheSameWord_GetLabelsThatTellThemApart()
+    {
+        // Both positions follow "Week", so both would have been "t (Week)" - indistinguishable in a
+        // picker, and the second never reachable by name on a command line.
+        var values = new string?[] { "Week 0 to Week 4", "Week 2 to Week 8", "Week 6 to Week 10" };
+        var options = TrendAxis.OptionsFor("t", values);
+
+        Assert.Equal(2, options.Count);
+        Assert.Equal(2, options.Select(o => o.Label).Distinct().Count());
+        foreach (var option in options)
+            Assert.Equal(option.Position, TrendAxis.Find(option.Label, new[] { "t" }, _ => values)!.Position);
+    }
+
+    [Fact]
+    public void InterpretedAxes_KeepTheMetadataOrder_AndEachColumnsBestReadingFirst()
+    {
+        // Not alphabetical by column, and not position order within one: the metadata's own order, and
+        // the reading with more distinct values (the measurement rather than a group index) first.
+        string?[] Visits(int n) => Enumerable.Range(0, n).Select(i => (string?)$"V{i % 3}_Week {i}").ToArray();
+        var axes = TrendAxis.AllFor(new[] { "Zeta", "Alpha" }, c => Visits(c == "Zeta" ? 6 : 9));
+
+        Assert.Equal(new[] { "Zeta", "Zeta", "Alpha", "Alpha" }, axes.Select(a => a.Column));
+        Assert.Equal(new[] { 2, 1, 2, 1 }, axes.Select(a => a.Position)); // Week (distinct) before V (3 values)
+    }
+
+    [Fact]
     public void AnIdentifierLikeNumberIsNotMistakenForAnAxis()
     {
         // Exponent notation is deliberately not read: "1e5" in a label is an identifier far more

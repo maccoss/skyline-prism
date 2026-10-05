@@ -341,19 +341,16 @@ public partial class MainWindow
     /// column offering two readings it is the only form that says which one ran, and it is what a
     /// recorded command carries back to the CLI.
     /// </summary>
-    private string? DiffTrendColumn() => (DiffTrendOverCombo.SelectedItem as TrendAxisOption)?.Label;
+    private string? DiffTrendColumn() => DiffTrendAxis()?.Label;
+
+    /// <summary>The picked trend axis, or null; its <see cref="TrendAxisOption.Column"/> is the metadata column tested.</summary>
+    private TrendAxisOption? DiffTrendAxis() => DiffTrendOverCombo.SelectedItem as TrendAxisOption;
 
     /// <summary>
-    /// The trend value per sample: NaN where the sample has none, AND where the Restrict-to picker
-    /// excludes it.
+    /// The trend value per sample, read through the picked axis: NaN where the sample has no value on
+    /// it. The Restrict-to picker does not appear here - it removes samples from
+    /// <see cref="DiffTrendColumns"/> instead, so a deliberate subset is never counted as missing data.
     /// </summary>
-    /// <remarks>
-    /// Restriction is expressed as NaN rather than as a separate sample list because
-    /// <see cref="TrendSamples.Resolve"/> already drops a non-finite x and counts what it dropped -
-    /// so a subset needs no new plumbing anywhere below this method. <see cref="DiffRestrictedCount"/>
-    /// keeps the two reasons apart for the status line, which would otherwise report a deliberate
-    /// restriction as missing data.
-    /// </remarks>
     private double[]? DiffTrendValues() =>
         _diffDataset is null || DiffTrendOverCombo.SelectedItem is not TrendAxisOption axis
             || !_diffDataset.MetadataColumns.Contains(axis.Column)
@@ -370,19 +367,18 @@ public partial class MainWindow
     /// which 30 were the user's own choice. Removing the column instead means the only samples that
     /// message ever counts are ones that genuinely have no value on the axis.
     /// </remarks>
-    private int[] DiffTrendColumns()
-    {
-        var all = Enumerable.Range(0, _diffDataset?.SampleIds.Length ?? 0);
-        if (_diffDataset is null
-            || DiffRestrictColumn() is not { } col
-            || DiffRestrictValues() is not { Count: > 0 } keep)
-            return all.ToArray();
+    private int[] DiffTrendColumns() =>
+        _diffDataset is null ? Array.Empty<int>() : QuantAnalysis.KeptColumns(DiffRestrictions(), _diffDataset);
 
-        var values = _diffDataset.MetadataValues(col);
-        return all
-            .Where(i => i < values.Length && values[i] is { } v && keep.Contains(v, StringComparer.Ordinal))
-            .ToArray();
-    }
+    /// <summary>
+    /// The Restrict-to choice as restrictions - empty for all samples - the one form both this pane's
+    /// trend and its Quant report take, so the report fits the samples the pane shows and its recorded
+    /// command carries the same <c>--restrict-to</c>.
+    /// </summary>
+    private IReadOnlyList<QuantRestriction> DiffRestrictions() =>
+        DiffRestrictColumn() is { } col && DiffRestrictValues() is { Count: > 0 } keep
+            ? new[] { new QuantRestriction(col, keep) }
+            : Array.Empty<QuantRestriction>();
 
     /// <summary>The Restrict-to column, or null for "(all samples)".</summary>
     private string? DiffRestrictColumn() =>
@@ -1102,11 +1098,14 @@ public partial class MainWindow
     /// </remarks>
     private IReadOnlyList<Covariate>? WithoutTestedTerm(IReadOnlyList<Covariate>? covariates)
     {
-        if (covariates is null || !DiffIsTrend() || DiffTrendColumn() is not { } trendColumn)
+        // The axis's COLUMN, not its label: a covariate is a metadata column, and the label of a
+        // reading ("Longitudinal Draw Description (Week)") names none, so comparing with it kept the
+        // column's own categories in the design - collinear with the very timepoints tested.
+        if (covariates is null || !DiffIsTrend() || DiffTrendAxis() is not { } axis)
             return covariates;
 
         var kept = covariates
-            .Where(c => !string.Equals(c.Name, trendColumn, StringComparison.Ordinal))
+            .Where(c => !string.Equals(c.Name, axis.Column, StringComparison.Ordinal))
             .ToList();
         return kept.Count == covariates.Count ? covariates : kept;
     }
@@ -1455,9 +1454,9 @@ public partial class MainWindow
             ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}"
             : string.Empty;
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
-        // Restriction is expressed as NaN, which TrendSamples reports as "no value in the trend
-        // column" - true of the mechanism and misleading about the cause. Said separately, and
-        // FIRST, so a deliberate subset never reads as missing data.
+        // A restriction removes samples from the column list (DiffTrendColumns), so TrendSamples never
+        // counts them as having no value on the axis; how many it removed is said here, separately
+        // and FIRST, so a deliberate subset never reads as missing data.
         if (restricted > 0 && DiffRestrictColumn() is { } restrictCol)
             note = $" Restricted to {restrictCol}: {restricted} sample(s) outside the"
                 + " ticked values were left out." + note;

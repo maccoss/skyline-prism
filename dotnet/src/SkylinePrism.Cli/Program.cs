@@ -477,32 +477,6 @@ public static class Program
         return new QuantRestriction(column, keep);
     }
 
-    /// <summary>
-    /// Refuse a restriction that names a column or a value the run does not have.
-    /// </summary>
-    /// <remarks>
-    /// Checked rather than left to empty the fit: a typo would otherwise keep no samples and surface
-    /// as "this cohort has nothing to fit", which sends the reader to their data instead of to their
-    /// command line.
-    /// </remarks>
-    private static void ValidateRestrictions(
-        IReadOnlyList<QuantRestriction> restrictions, DifferentialDataset dataset)
-    {
-        foreach (var r in restrictions)
-        {
-            if (!dataset.MetadataColumns.Contains(r.Column))
-                throw new ArgumentException($"--restrict-to: no metadata column '{r.Column}'.");
-
-            var present = dataset.MetadataValues(r.Column)
-                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!)
-                .Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
-            foreach (var want in r.Values.Where(w => !present.Contains(w, StringComparer.Ordinal)))
-                throw new ArgumentException(
-                    $"--restrict-to: '{r.Column}' has no value '{want}'. Present: "
-                    + string.Join(", ", present.Select(p => $"'{p}'")) + ".");
-        }
-    }
-
     private static int RunDifferentialTrend(
         ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir,
         IReadOnlyList<ProteinList> markerPanels)
@@ -660,6 +634,9 @@ public static class Program
         var isTrend = design is DifferentialDesign.LinearTrend
             or DifferentialDesign.LinearTrendWithinSubject;
         var trendOver = opts.GetSingleOrNull("--trend-over");
+        // Kept, not just checked: the tested COLUMN is what --adjust-for is compared with below, and
+        // trendOver may be a label naming one reading of a column rather than the column itself.
+        TrendAxisOption? axis = null;
         if (isTrend)
         {
             if (trendOver is null)
@@ -667,23 +644,23 @@ public static class Program
                     "A trend design needs --trend-over <axis>, the column to fit the slope against.");
             // Resolved through TrendAxis, not by a bare column check, so the CLI accepts exactly the
             // axes the pane offers - including one read out of a text column, named for the number it
-            // takes ("Longitudinal Draw Description (Week)"). The refusal lists them, because a
-            // column that offers two readings cannot be guessed at from its name alone.
-            if (TrendAxis.Find(trendOver, dataset.MetadataColumns, dataset.MetadataValues) is null)
+            // takes ("Longitudinal Draw Description (Week)").
+            axis = TrendAxis.Find(trendOver, dataset.MetadataColumns, dataset.MetadataValues);
+            if (axis is null)
             {
-                var offered = TrendAxis.AllFor(dataset.MetadataColumns, dataset.MetadataValues)
-                    .Select(a => a.Label).ToList();
-                // The most likely few, not all of them: a number is readable out of almost any
-                // identifier, so a real study offers twenty-odd axes and a wall of them is not a
-                // message. They are ordered most timepoint-like first.
-                const int show = 8;
-                var shown = string.Join(", ", offered.Take(show).Select(o => $"'{o}'"));
-                throw new ArgumentException(
-                    $"No trend axis '{trendOver}'. "
-                    + (offered.Count == 0
-                        ? "This run has no column a slope can be fitted against."
-                        : $"Available: {shown}"
-                          + (offered.Count > show ? $", and {offered.Count - show} more." : ".")));
+                var offered = TrendAxis.AllFor(dataset.MetadataColumns, dataset.MetadataValues);
+                var readings = offered.Where(a => string.Equals(a.Column, trendOver, StringComparison.Ordinal)).ToList();
+                // Every axis, not the first few: a cut list can leave out exactly the one meant, and
+                // nothing else on the command line shows the rest. A column offering two readings is
+                // named for what it is - a choice the command has to make - rather than "not found".
+                throw new ArgumentException(readings.Count > 1
+                    ? $"'{trendOver}' can be read as more than one axis: "
+                      + string.Join(", ", readings.Select(a => $"'{a.Label}'"))
+                      + ". They are different quantities; name the one you mean with --trend-over."
+                    : $"No trend axis '{trendOver}'. "
+                      + (offered.Count == 0
+                          ? "This run has no column a slope can be fitted against."
+                          : "Available: " + string.Join(", ", offered.Select(o => $"'{o.Label}'")) + "."));
             }
         }
         else if (trendOver is not null)
@@ -703,7 +680,7 @@ public static class Program
 
         if (isTrend)
         {
-            ValidateRestrictions(ParseRestrictions(opts), dataset);
+            QuantAnalysis.ValidateRestrictions(ParseRestrictions(opts), dataset, "--restrict-to");
         }
 
         var covariates = new List<Covariate>();
@@ -713,8 +690,10 @@ public static class Program
                 throw new ArgumentException($"No metadata column '{name}' to adjust for.");
             // The tested term, whichever it is. On a trend the guard used to compare against an
             // EMPTY groupBy, so --trend-over week --adjust-for week built [1, week, week] - exactly
-            // singular - and died on a rank check naming neither flag.
-            var tested = trendOver ?? groupBy;
+            // singular - and died on a rank check naming neither flag. And it is the axis's COLUMN:
+            // the label of a reading ("Visit (Week)") names no column, so comparing with it let
+            // --adjust-for Visit through, whose categories encode the very timepoints being tested.
+            var tested = axis?.Column ?? groupBy;
             if (!string.IsNullOrEmpty(tested) && string.Equals(name, tested, StringComparison.Ordinal))
                 throw new ArgumentException(
                     $"'{name}' is the term being tested; adjusting for it would leave nothing to test.");

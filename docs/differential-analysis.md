@@ -206,9 +206,11 @@ number its values hold, and each axis is named after the word just before that n
 holds two numbers, and they are different quantities - the visit index and the elapsed weeks - so it
 gives two axes, `Longitudinal Draw Description (V)` and `Longitudinal Draw Description (Week)`.
 Nothing picks one for you. Naming the wrong one gives a plausible slope against the wrong quantity,
-and nothing else in the output would show it. The pane shows what the chosen axis parsed under the
-toolbar (`Reading V0_Week 0 -> 0, V1_Week 2 -> 2, ...`) and only selects one automatically when the
-column is already plain numbers. A value with no number in it (`na`, an empty cell) leaves that
+and nothing else in the output would show it. The pane shows what the chosen axis parsed on the line
+below the **Trend over** picker in its settings panel (`Reading V0_Week 0 -> 0, V1_Week 2 -> 2, ...`)
+and only selects one automatically when the column is already plain numbers. On the command line, a
+bare column name (`--trend-over "Longitudinal Draw Description"`) is refused when the column offers
+more than one reading, and the message lists them: name the one you mean. A value with no number in it (`na`, an empty cell) leaves that
 sample off the axis, and the status line counts it.
 
 **Fitting on some of the samples.** A trend pools every sample that has a value on the axis. When a
