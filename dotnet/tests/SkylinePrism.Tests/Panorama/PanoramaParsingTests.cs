@@ -79,6 +79,20 @@ public class PanoramaParsingTests
     }
 
     [Fact]
+    public void WikiEditor_ListsTheFilesAttachedToThePage()
+    {
+        var page = PanoramaClient.ParseWikiEditor(
+            "<script>LABKEY._wiki.setProps({\n    entityId: 'e-1',\n    name: 'p'\n});\n"
+            + "LABKEY._wiki.setAttachments([\n    {\n        name: 'a-1.png',\n        iconUrl: '/_icons/image.png',\n"
+            + "        downloadUrl: '/P/wiki-download.view?entityId=e-1&name=a-1.png'\n    },\n    {\n        name: 'it\\'s.png',\n"
+            + "        downloadUrl: '/P/x'\n    }\n]);</script>");
+        Assert.Equal(new[] { "a-1.png", "it's.png" }, page.Attachments);
+
+        // An editor that does not say leaves the list unknown, not empty.
+        Assert.Null(PanoramaClient.ParseWikiEditor("<script>LABKEY._wiki.setProps({\n    entityId: 'e-1'\n});</script>").Attachments);
+    }
+
+    [Fact]
     public void AnEditorWithoutAPageId_IsRefused_RatherThanSavedOverBlind() =>
         Assert.Throws<PanoramaException>(() => PanoramaClient.ParseWikiEditor("<script>LABKEY._wiki.setProps({\n    name: 'x'\n});</script>"));
 }

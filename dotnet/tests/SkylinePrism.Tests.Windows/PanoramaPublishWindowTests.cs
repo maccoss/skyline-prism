@@ -128,6 +128,24 @@ public sealed class PanoramaPublishWindowTests : IDisposable
     }
 
     [Fact]
+    public void ADirectoryWithNoReport_OpensWithLinksOff_SoAnUploadIsNotHeldUp()
+    {
+        var bare = Path.Combine(Path.GetDirectoryName(_dir)!, "run-bare");
+        Directory.CreateDirectory(bare);
+
+        var (links, plan) = OnSta(() =>
+        {
+            var window = new PanoramaPublishWindow(bare);
+            var s = (window.LinksCheck.IsChecked == true, window.LogBox.Text);
+            window.Close();
+            return s;
+        });
+
+        Assert.False(links);
+        Assert.DoesNotContain("Choose a folder for the links page", plan, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ARememberedLinksFolder_IsKept_AndDoesNotFollowTheQcFolder()
     {
         new PanoramaTargets("https://panoramaweb.org", new WikiTarget("/MacCoss/maccoss/X", "My-QC-page"), null, null, null,

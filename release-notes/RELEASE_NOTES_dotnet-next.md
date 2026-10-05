@@ -49,8 +49,9 @@ as the GitHub Release description and fails if it is missing.
   administrator permission the links page is still published, and the publish says what a folder
   administrator would need to add by hand. Publishing
   again updates the same pages, and Panorama keeps the earlier versions of their text; only plots
-  that changed are sent again. A page published from one output directory is never replaced by
-  another output directory that happens to have the same name. It uploads only the files
+  that changed are sent again. A page published from one output directory is not replaced by
+  another output directory that happens to have the same name, unless taken over on purpose
+  (`--take-over`). It uploads only the files
   that changed, checked against Panorama's own MD5 of its copy, and verifies every upload the same
   way. It refuses to overwrite a page someone edited on Panorama unless told to. Sign-in uses the
   key PanoramaBridge already saved on the computer, so a lab machine needs no setup; otherwise the

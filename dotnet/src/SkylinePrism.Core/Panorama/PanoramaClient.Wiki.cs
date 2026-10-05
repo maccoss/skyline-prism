@@ -15,9 +15,13 @@ namespace SkylinePrism.Core.Panorama;
 /// <summary>A wiki page as Panorama's editor holds it: what a save needs, and its current text.</summary>
 /// <param name="EntityId">LabKey's ID for the page; attachments are filed under it.</param>
 /// <param name="PageVersionId">The version being replaced; LabKey refuses a save when someone has edited it since.</param>
+/// <param name="Attachments">
+/// The files attached to the page now, as the editor lists them (<c>LABKEY._wiki.setAttachments</c>);
+/// null when the editor did not say.
+/// </param>
 public sealed record WikiPageInfo(
     string EntityId, int? RowId, int? PageVersionId, string Name, string Title, string Body, int? Parent,
-    bool ShowAttachments, bool ShouldIndex);
+    bool ShowAttachments, bool ShouldIndex, IReadOnlyList<string>? Attachments = null);
 
 /// <summary>A file attached to a wiki page, and where Panorama serves it.</summary>
 public sealed record WikiAttachment(string Name, string? DownloadUrl);
@@ -167,9 +171,15 @@ public sealed partial class PanoramaClient
         if (string.IsNullOrEmpty(entityId))
             throw new PanoramaException("Panorama's wiki editor did not say which page it is, so the page was left alone.");
 
+        // The attachments come in a block of their own, one object per file, each with its name.
+        var attachments = Regex.Match(html, @"LABKEY\._wiki\.setAttachments\(\[((?:'(?:[^'\\]|\\.)*'|""(?:[^""\\]|\\.)*""|[^'""])*?)\]\);",
+            RegexOptions.Singleline) is { Success: true } list
+            ? Regex.Matches(list.Groups[1].Value, @"(?m)^\s*name:\s*'((?:[^'\\]|\\.)*)'").Select(m => DecodeJsString(m.Groups[1].Value)).ToList()
+            : null;
+
         return new WikiPageInfo(entityId, JsInt(props, "rowId"), JsInt(props, "pageVersionId"), JsString(props, "name") ?? "",
             JsString(props, "title") ?? "", JsString(props, "body") ?? "", JsInt(props, "parent"),
-            JsBool(props, "showAttachments") ?? true, JsBool(props, "shouldIndex") ?? true);
+            JsBool(props, "showAttachments") ?? true, JsBool(props, "shouldIndex") ?? true, attachments);
     }
 
     /// <summary>A JavaScript string literal's text: <c>\x3C</c>, <c>é</c>, <c>\n</c>, <c>\'</c>, <c>\"</c> and <c>\\</c> undone.</summary>

@@ -78,6 +78,17 @@ public sealed class PanoramaClientTests : IDisposable
     }
 
     [Fact]
+    public async Task AGatewayThatKeepsFailing_SaysItWasTriedThreeTimes()
+    {
+        var server = new ScriptedServer { GatewayErrors = 99 };
+        using var client = Client(server);
+        var ex = await Assert.ThrowsAsync<PanoramaException>(() => client.UploadFileAsync(_file, "/P/@files/out", "a.bin"));
+        Assert.Contains("failed after 3 attempts", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("503", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(3, server.Puts);
+    }
+
+    [Fact]
     public async Task AnUploadThatKeepsFailing_SaysHowManyTimesItWasTried()
     {
         var server = new ScriptedServer { FailPuts = 99 };

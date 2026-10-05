@@ -797,7 +797,8 @@ the folders this output directory was last published to (its `panorama.json`), s
 PanoramaBridge saved on this computer when there is one, and shows the plan before anything is sent.
 Publishing again updates the same pages - Panorama keeps the earlier versions of their text - uploads only files that
 changed, and refuses to overwrite a page someone edited on Panorama unless **Replace a page edited on
-Panorama** is ticked. The button is available whenever the Output directory holds a QC or quant report,
+Panorama** is ticked, or a page published from another output directory unless **Take over a page
+published from a different output directory** is. The button is available whenever the Output directory holds a QC or quant report,
 not only after a run. **Show Command Line** gives the equivalent `prism publish` command. See
 [panorama-publishing.md](panorama-publishing.md) for where things go and what Panorama requires of a page.
 

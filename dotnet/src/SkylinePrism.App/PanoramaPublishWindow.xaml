@@ -131,9 +131,14 @@
             </Grid>
         </GroupBox>
 
-        <CheckBox x:Name="ReplaceEditedCheck" Grid.Row="6" Margin="2,0,0,8" Checked="OnTargetsChanged" Unchecked="OnTargetsChanged"
-                  Content="Replace a page edited on Panorama since PRISM published it"
-                  ToolTip="Without this, a page someone changed by hand on Panorama - or a page of that name PRISM did not write - is refused rather than overwritten. Panorama keeps the edited version in the page's history either way." />
+        <StackPanel Grid.Row="6" Margin="2,0,0,8">
+            <CheckBox x:Name="ReplaceEditedCheck" Checked="OnTargetsChanged" Unchecked="OnTargetsChanged" Margin="0,0,0,4"
+                      Content="Replace a page edited on Panorama since PRISM published it"
+                      ToolTip="Without this, a page someone changed by hand on Panorama - or a page of that name PRISM did not write - is refused rather than overwritten. Panorama keeps the edited version in the page's history either way." />
+            <CheckBox x:Name="TakeOverCheck" Checked="OnTargetsChanged" Unchecked="OnTargetsChanged"
+                      Content="Take over a page published from a different output directory"
+                      ToolTip="Without this, a page PRISM published from another output directory - another analysis whose directory name gives the same page name, or this directory if its panorama.json was lost - is refused rather than replaced." />
+        </StackPanel>
 
         <TextBox x:Name="LogBox" Grid.Row="7" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                  FontFamily="Consolas" FontSize="12" Background="#fafbfc" MinHeight="80" />

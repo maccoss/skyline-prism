@@ -60,9 +60,11 @@ public static class WikiReport
     private static readonly string[] RefusedInStyle = { "url", "expression", "behavior" };
 
     /// <summary>
-    /// Rewrites a report. Each image's attachment name is <paramref name="imagePrefix"/>, its position,
-    /// and a hash of its bytes - so an unchanged plot keeps its name from one publish to the next, and a
-    /// changed one never takes over the name an earlier version of the page shows.
+    /// Rewrites a report. Each image's attachment name is <paramref name="imagePrefix"/> and a hash of
+    /// its bytes - not its position, so a plot added or removed elsewhere in the report does not rename
+    /// (and re-send) every plot after it. An unchanged plot keeps its name from one publish to the next,
+    /// a changed one never takes over the name an earlier version of the page shows, and two identical
+    /// images in one report share one attachment.
     /// </summary>
     public static WikiDocument FromReport(string html, string imagePrefix)
     {
@@ -91,8 +93,9 @@ public static class WikiReport
                 continue;
             var extension = data.Groups[1].Value switch { "svg+xml" => ".svg", "jpeg" or "jpg" => ".jpg", var e => "." + e };
             var bytes = Convert.FromBase64String(data.Groups[2].Value.Trim());
-            var name = $"{imagePrefix}-{images.Count + 1:00}-{Convert.ToHexStringLower(SHA256.HashData(bytes))[..8]}{extension}";
-            images.Add(new WikiImage(name, bytes));
+            var name = $"{imagePrefix}-{Convert.ToHexStringLower(SHA256.HashData(bytes))[..12]}{extension}";
+            if (images.All(i => i.Name != name))
+                images.Add(new WikiImage(name, bytes));
             img.SetAttribute("src", ImagePlaceholder + name);
         }
 

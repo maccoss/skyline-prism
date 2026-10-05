@@ -114,10 +114,15 @@ public sealed partial class PanoramaClient
             {
                 using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, abort.Token)
                     .ConfigureAwait(false);
-                if (attempt < MaxUploadAttempts && (int)response.StatusCode is 502 or 503 or 504)
+                if ((int)response.StatusCode is 502 or 503 or 504)
                 {
                     // The gateway in front of Panorama answering for a server that is briefly away: the
                     // same passing failure as a dropped connection, and retried the same way.
+                    if (attempt >= MaxUploadAttempts)
+                        throw new PanoramaException(
+                            $"Uploading {name} to {PanoramaPaths.ToFolder(folder)} failed after {MaxUploadAttempts} attempts: the gateway "
+                            + $"in front of Panorama answered {(int)response.StatusCode} {response.ReasonPhrase} each time. Panorama may be "
+                            + "briefly down; publish again in a few minutes, and files already uploaded will be skipped.");
                     progress?.Report(0);
                     await Task.Delay(RetryDelayUnit * attempt, cancellationToken).ConfigureAwait(false);
                     continue;

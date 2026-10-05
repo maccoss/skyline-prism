@@ -60,6 +60,9 @@ internal sealed class FakePanorama : HttpMessageHandler
     /// <summary>Runs after files are attached to a page: someone editing it on Panorama meanwhile.</summary>
     public Action<Page>? AfterAttach { get; set; }
 
+    /// <summary>Runs after a web part is added, before the client hears of it.</summary>
+    public Action? AfterAddWebPart { get; set; }
+
     private int _nextWebPartId = 1000;
 
     /// <summary>The page a browser opens for the folder: the dashboard of a Panorama folder, the portal page otherwise.</summary>
@@ -186,6 +189,7 @@ internal sealed class FakePanorama : HttpMessageHandler
         var form = await FormAsync(request, ct);
         // Saved whatever the column is called, as LabKey's Portal.addPart does.
         AddWebPart(container, form["pageId"], form["location"], form["name"]);
+        AfterAddWebPart?.Invoke();
         var response = new HttpResponseMessage(HttpStatusCode.Found);
         response.Headers.Location = new Uri(form.GetValueOrDefault("returnUrl", container + "/project-begin.view"), UriKind.Relative);
         return response;
@@ -297,7 +301,13 @@ internal sealed class FakePanorama : HttpMessageHandler
                    + $"    entityId: '{page.EntityId}',\n    rowId: 7,\n    pageVersionId: {page.Version},\n"
                    + $"    name: '{Js(page.Name)}',\n    title: '{Js(page.Title)}',\n    body: '{Js(page.Body)}',\n"
                    + $"    parent: -1,\n    showAttachments: {(page.ShowAttachments ? "true" : "false")},\n    shouldIndex: true\n"
-                   + "});\n</script></body></html>";
+                   + "});\n"
+                   // The page's files, as LabKey's editor lists them: one object per file.
+                   + "LABKEY._wiki.setAttachments([\n"
+                   + string.Join(",\n", page.Attachments.Keys.Select(n =>
+                       $"    {{\n        name: '{Js(n)}',\n        iconUrl: '/_icons/image.png',\n"
+                       + $"        downloadUrl: '{container}/wiki-download.view?entityId={page.EntityId}&name={Uri.EscapeDataString(n)}'\n    }}"))
+                   + "\n]);\n</script></body></html>";
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html) };
     }
 

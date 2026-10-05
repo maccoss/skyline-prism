@@ -18,6 +18,8 @@ namespace SkylinePrism.Core.Panorama;
 /// Panorama folder for the links page - links to this output directory's QC page, quant pages and
 /// uploaded files - which that folder's own page then shows in a Wiki web part. Null to skip it.
 /// </param>
+/// <param name="ReplaceEdited">Replace a page edited on Panorama since PRISM published it, or one PRISM did not write.</param>
+/// <param name="TakeOver">Replace a page published from a different output directory (see <see cref="PanoramaTargets.PublishId"/>).</param>
 public sealed record PublishRequest(
     string OutputDir,
     Uri Server,
@@ -28,7 +30,8 @@ public sealed record PublishRequest(
     string? QuantPage = null,
     bool ReplaceEdited = false,
     string? LinksFolder = null,
-    string? LinksPage = null)
+    string? LinksPage = null,
+    bool TakeOver = false)
 {
     public string QcReport => Path.Combine(OutputDir, "qc_report.html");
 
@@ -175,13 +178,36 @@ public static class OutputPublishing
                 $"Signed in to {client.Server.GetLeftPart(UriPartial.Authority)}, but asked to publish to "
                 + $"{request.Server.GetLeftPart(UriPartial.Authority)}. Sign in to that server first.");
 
-        var targets = request.ToTargets(PanoramaTargets.Load(request.OutputDir));
-        targets = targets with { PublishId = targets.PublishId ?? Guid.NewGuid().ToString("N") };
+        var remembered = PanoramaTargets.Load(request.OutputDir);
+        var targets = request.ToTargets(remembered);
+        // A web part recorded for another folder's page is not this folder's: forgotten, so a new one is
+        // added here, and the old one is named below so it is not left behind unmentioned.
+        var movedFrom = remembered.LinksWiki is { } was && remembered.LinksWebPartId is not null && request.LinksFolder is not null
+                        && !string.Equals(PanoramaPaths.Container(was.Folder), PanoramaPaths.Container(request.LinksFolder),
+                            StringComparison.OrdinalIgnoreCase)
+            ? (Folder: PanoramaPaths.Container(was.Folder), was.Page, WebPartId: remembered.LinksWebPartId.Value)
+            : ((string Folder, string Page, int WebPartId)?)null;
+        if (movedFrom is not null)
+            targets = targets with { LinksWebPartId = null };
+
         // Saved before anything is sent: the id goes into every page's footer, and a page published under
         // an id that was then lost would be refused as another output directory's. It also means the
         // uploaded copy records where it was published.
-        targets.Save(request.OutputDir);
-        var publisher = new PanoramaPublisher(client, say, targets.PublishId);
+        var remembering = Remember(targets with { PublishId = targets.PublishId ?? Guid.NewGuid().ToString("N") }, request.OutputDir);
+        if (remembering.Saved)
+            targets = remembering.Targets;
+        else
+        {
+            // An output directory PRISM cannot write to - a read-only share, an archived analysis - is
+            // published all the same. Its id cannot be saved, so it is derived from what the directory
+            // holds, and so is the same on every publish from it: a fresh random one each time would
+            // make every republish look like another directory's.
+            targets = targets with { PublishId = targets.PublishId ?? DerivedPublishId(request.OutputDir) };
+            say?.Invoke($"{PanoramaTargets.FileName} cannot be written in {request.OutputDir} ({remembering.Why}). Publishing anyway; "
+                        + "where this directory was published to will not be remembered for next time.");
+        }
+
+        var publisher = new PanoramaPublisher(client, say, targets.PublishId, request.TakeOver);
 
         UploadedDirectory? upload = null;
         if (request.Destination is { } destination)
@@ -215,7 +241,8 @@ public static class OutputPublishing
         // What was published is recorded before the links step, which can fail on its own - a links
         // page edited on Panorama, a folder page this account may not change - and must not take the
         // record of a quant page that now exists down with it.
-        targets.Save(request.OutputDir);
+        if (remembering.Saved)
+            Remember(targets, request.OutputDir);
 
         PublishedPage? links = null;
         var onFolderPage = false;
@@ -243,13 +270,23 @@ public static class OutputPublishing
                         added: id =>
                         {
                             // Recorded the moment the part exists, so a failure setting it up does not
-                            // leave a part the next publish would not recognize and add again.
+                            // leave a part the next publish would not recognize and add again. A file
+                            // that cannot be written here must not fail a publish that worked.
                             targets = targets with { LinksWebPartId = id };
-                            targets.Save(request.OutputDir);
+                            if (remembering.Saved)
+                                Remember(targets, request.OutputDir);
                         },
                         cancellationToken).ConfigureAwait(false);
                     targets = targets with { LinksWebPartId = webPartId };
                     onFolderPage = true;
+                    if (movedFrom is { } old)
+                    {
+                        var moved = $"The links are now shown on {links.Folder}'s page. {old.Folder}'s page still shows the earlier "
+                                    + $"links page, {old.Page}, in the Wiki web part PRISM added there (id {old.WebPartId}); it is no "
+                                    + "longer updated. Remove that part on Panorama if it is not wanted there.";
+                        say?.Invoke(moved);
+                        note = note is null ? moved : note + " " + moved;
+                    }
                 }
                 catch (PanoramaException ex)
                 {
@@ -262,8 +299,11 @@ public static class OutputPublishing
             }
         }
 
-        targets.Save(request.OutputDir);
-        if (upload is not null)
+        var final = remembering.Saved ? Remember(targets, request.OutputDir) : remembering;
+        if (remembering.Saved && !final.Saved)
+            say?.Invoke($"Everything is published, but {PanoramaTargets.FileName} could not be updated ({final.Why}); "
+                        + "the next publish may not know about this one's quant page or web part.");
+        if (upload is not null && final.Saved)
         {
             // The publish changes panorama.json after uploading it - the quant pages, the web part's id - and
             // the uploaded copy is what a directory restored from Panorama remembers: left stale, a republish
@@ -280,6 +320,47 @@ public static class OutputPublishing
         }
 
         return new PublishOutcome(upload, qc, quant, links, onFolderPage, note);
+    }
+
+    /// <summary>
+    /// Saves the targets, or says why they could not be saved. A publish never fails for want of
+    /// writing <see cref="PanoramaTargets.FileName"/>: the file is a convenience, and the pages and the
+    /// upload are what was asked for.
+    /// </summary>
+    private static (bool Saved, PanoramaTargets Targets, string? Why) Remember(PanoramaTargets targets, string outputDir)
+    {
+        try
+        {
+            targets.Save(outputDir);
+            return (true, targets, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (false, targets, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// A publish id for an output directory that cannot keep one: a hash of its run record
+    /// (<c>parameters.json</c>, which a read-only directory cannot change), else of its full path.
+    /// Prefixed so it is never mistaken for a saved random one.
+    /// </summary>
+    internal static string DerivedPublishId(string outputDir)
+    {
+        var parameters = Path.Combine(outputDir, "parameters.json");
+        byte[] basis;
+        try
+        {
+            basis = File.Exists(parameters)
+                ? File.ReadAllBytes(parameters)
+                : Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            basis = Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir));
+        }
+
+        return "d" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(basis))[..31];
     }
 
     /// <summary>
@@ -342,6 +423,8 @@ public static class OutputPublishing
         Step(request.LinksFolder, "--links-wiki", "--no-links", request.LinksPage, "--links-page");
         if (request.ReplaceEdited)
             parts.Add("--replace-edited");
+        if (request.TakeOver)
+            parts.Add("--take-over");
         return string.Join(' ', parts);
     }
 }

@@ -76,15 +76,16 @@ public class WikiReportTests
     {
         var document = WikiReport.FromReport(Report, "prism-qc-run1");
 
-        // Numbered in order, and named by a hash of the bytes, so an unchanged plot keeps its name.
-        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(Png)))[..8];
-        Assert.Equal(new[] { $"prism-qc-run1-01-{hash}.png", $"prism-qc-run1-02-{hash}.png" }, document.Images.Select(i => i.Name));
+        // Named by a hash of the bytes alone - not the position - so an unchanged plot keeps its name
+        // wherever it moves, and the report's two identical images share one attachment.
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(Png)))[..12];
+        Assert.Equal(new[] { $"prism-qc-run1-{hash}.png" }, document.Images.Select(i => i.Name));
         Assert.Equal(Convert.FromBase64String(Png), document.Images[0].Data);
         // The favicon is a <link>, not an image of the report, and is not attached.
         Assert.DoesNotContain("data:image", document.BodyTemplate, StringComparison.Ordinal);
 
         var rendered = document.Render(name => "/P/wiki-download.view?name=" + name);
-        Assert.Contains($"src=\"/P/wiki-download.view?name=prism-qc-run1-01-{hash}.png\"", rendered, StringComparison.Ordinal);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(rendered, $"src=\"/P/wiki-download.view\\?name=prism-qc-run1-{hash}.png\"").Count);
         Assert.DoesNotContain(WikiReport.ImagePlaceholder, rendered, StringComparison.Ordinal);
     }
 
@@ -95,8 +96,20 @@ public class WikiReportTests
         var before = WikiReport.FromReport(Report, "p").Images.Select(i => i.Name).ToList();
         var after = WikiReport.FromReport(ReplaceLastImage(Report, other), "p").Images.Select(i => i.Name).ToList();
 
+        Assert.Equal(2, after.Count);
         Assert.Equal(before[0], after[0]);
-        Assert.NotEqual(before[1], after[1]);
+        Assert.NotEqual(before[0], after[1]);
+    }
+
+    [Fact]
+    public void APlotAddedAhead_DoesNotRenameThePlotsAfterIt()
+    {
+        var added = Convert.ToBase64String(Convert.FromBase64String(Png).Append((byte)9).ToArray());
+        var before = WikiReport.FromReport(Report, "p").Images.Select(i => i.Name).ToList();
+        var after = WikiReport.FromReport(Report.Replace("<body>", "<body><img src=\"data:image/png;base64," + added + "\">"), "p")
+            .Images.Select(i => i.Name).ToList();
+
+        Assert.Contains(before[0], after); // still there under its name, so not sent again
     }
 
     private static string ReplaceLastImage(string html, string base64)

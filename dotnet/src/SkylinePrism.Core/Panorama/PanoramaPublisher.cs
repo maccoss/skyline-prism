@@ -55,16 +55,23 @@ public sealed class PanoramaPublisher
     private readonly PanoramaClient _client;
     private readonly Action<string> _say;
     private readonly string? _sourceId;
+    private readonly bool _takeOver;
 
     /// <param name="sourceId">
     /// The output directory's publish id, written into every page's footer. A page whose footer names
-    /// another is refused unless replaced on purpose; null publishes without one and checks none.
+    /// another is refused unless <paramref name="takeOver"/>; null publishes without one and checks none.
     /// </param>
-    public PanoramaPublisher(PanoramaClient client, Action<string>? say = null, string? sourceId = null)
+    /// <param name="takeOver">
+    /// Replace a page published from another output directory. Deliberately not the same switch as
+    /// replacing an edited page: that one is reached for to overwrite one's own edit, and must not also
+    /// hand over another experiment's same-named pages in the same run.
+    /// </param>
+    public PanoramaPublisher(PanoramaClient client, Action<string>? say = null, string? sourceId = null, bool takeOver = false)
     {
         _client = client;
         _say = say ?? (_ => { });
         _sourceId = sourceId;
+        _takeOver = takeOver;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -145,11 +152,16 @@ public sealed class PanoramaPublisher
         // publish's other plots are removed only AFTER the new body is saved: the live page never points
         // at a plot that is gone, and an earlier version in the page's history never shows another run's
         // plot under its own name.
+        //
+        // What is attached NOW is read from the editor, not trusted from the last footer: a plot removed
+        // on Panorama by hand would otherwise never be sent again, and every later publish would point
+        // at it anyway. A name already there holds the same bytes (it is their hash), so it is kept.
         var newNames = document.Images.Select(i => i.Name).ToList();
-        var toSend = document.Images.Where(i => !previousAttachments.Contains(i.Name, StringComparer.Ordinal)).ToList();
-        // A name on the page that the last publish did not record (one that failed before its save)
-        // would be refused as taken, so any such leftover is cleared first.
-        if (toSend.Count > 0)
+        var onPage = existing.Attachments;
+        var toSend = document.Images.Where(i => !(onPage ?? previousAttachments).Contains(i.Name, StringComparer.Ordinal)).ToList();
+        // Without the editor's list, a name on the page that the last publish did not record (one that
+        // failed before its save) would be refused as taken, so any such leftover is cleared first.
+        if (onPage is null && toSend.Count > 0)
             await _client.AttachFilesAsync(container, existing.EntityId, Array.Empty<(string, byte[])>(),
                 toSend.Select(i => i.Name).ToList(), cancellationToken).ConfigureAwait(false);
 
@@ -186,13 +198,20 @@ public sealed class PanoramaPublisher
         // Attaching takes a while, and re-reading the page adopts its newest version: an edit made on
         // Panorama meanwhile would be saved over under that version's own token. So it is checked again,
         // and refused like an edit found at the start; the token still guards the last moment.
-        if (!replaceEdited)
-            CheckOwnership(current, container, pageName, replaceEdited: false);
+        CheckOwnership(current, container, pageName, replaceEdited);
         _say($"Saving the wiki page {pageName}");
         await _client.SaveWikiPageAsync(container, pageName, title, body, current, showAttachments: false, cancellationToken)
             .ConfigureAwait(false);
 
-        var unused = previousAttachments.Except(newNames, StringComparer.Ordinal).ToList();
+        // Removed: the plots the last publish recorded, and any named exactly as PRISM names a plot (this
+        // page's prefix, then the content hash - or the position, as the first versions did) left by a
+        // publish that failed before its save. Never an attachment someone else put on the page.
+        var plotName = new Regex("^" + Regex.Escape(pageName.ToLowerInvariant()) + @"-(?:[0-9a-f]{12}|\d{2}-[0-9a-f]{8}|\d{2})\.(?:png|jpg|gif|svg)$");
+        var unused = previousAttachments
+            .Concat((onPage ?? Array.Empty<string>()).Where(n => plotName.IsMatch(n)))
+            .Distinct(StringComparer.Ordinal)
+            .Where(n => !newNames.Contains(n, StringComparer.Ordinal) && (onPage is null || onPage.Contains(n, StringComparer.Ordinal)))
+            .ToList();
         if (unused.Count > 0)
         {
             try
@@ -212,9 +231,9 @@ public sealed class PanoramaPublisher
     }
 
     /// <summary>
-    /// Refuses a page PRISM must not overwrite - one it did not write, one published from another output
-    /// directory, or one edited on Panorama since - unless <paramref name="replaceEdited"/>; otherwise
-    /// returns the attachments its last publish left.
+    /// Refuses a page PRISM must not overwrite - one it did not write or one edited on Panorama since
+    /// (unless <paramref name="replaceEdited"/>), or one published from another output directory (unless
+    /// taking over) - and otherwise returns the attachments its last publish recorded.
     /// </summary>
     private string[] CheckOwnership(WikiPageInfo existing, string container, string pageName, bool replaceEdited)
     {
@@ -223,11 +242,12 @@ public sealed class PanoramaPublisher
             throw new PanoramaException(
                 $"{container} already has a wiki page named {pageName} that PRISM did not write. Choose another "
                 + "page name, or replace it on purpose (--replace-edited in the CLI).");
-        if (footer?.Source is { } source && _sourceId is not null && source != _sourceId && !replaceEdited)
+        if (footer?.Source is { } source && _sourceId is not null && source != _sourceId && !_takeOver)
             throw new PanoramaException(
-                $"The wiki page {pageName} in {container} was published by PRISM from a different output directory - "
-                + "one with the same name, from another experiment or analysis. Choose another page name, or replace it "
-                + "on purpose (--replace-edited in the CLI).");
+                $"The wiki page {pageName} in {container} was published by PRISM from a different output directory: "
+                + "another analysis whose directory name gives the same page name, or this directory itself if its "
+                + "panorama.json was deleted or replaced since. If it is another analysis's page, choose another page name "
+                + "for this one. If it is this directory's own, take it over on purpose (--take-over in the CLI).");
         if (footer is not null && footer.EditedSincePublished(existing.Body) && !replaceEdited)
             throw new PanoramaException(
                 $"The wiki page {pageName} in {container} was edited on Panorama after PRISM published it. "
@@ -291,12 +311,13 @@ public sealed class PanoramaPublisher
         CancellationToken cancellationToken = default)
     {
         var container = PanoramaPaths.Container(folder);
-        var pageId = await _client.MainPageIdAsync(container, cancellationToken).ConfigureAwait(false);
+        var (containerId, folderType) = await _client.FolderAsync(container, cancellationToken).ConfigureAwait(false);
+        var pageId = await _client.MainPageIdAsync(container, folderType, cancellationToken).ConfigureAwait(false);
         var parts = await _client.WebPartsAsync(container, pageId, cancellationToken).ConfigureAwait(false);
         var properties = new Dictionary<string, string>
         {
             ["name"] = pageName,
-            ["webPartContainer"] = await _client.ContainerIdAsync(container, cancellationToken).ConfigureAwait(false),
+            ["webPartContainer"] = containerId,
         };
 
         if (knownWebPartId is { } known && parts.Any(p => p.WebPartId == known && p.Name == WikiWebPart))

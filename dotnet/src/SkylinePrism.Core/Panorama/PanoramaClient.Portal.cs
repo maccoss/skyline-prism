@@ -27,13 +27,18 @@ public sealed partial class PanoramaClient
     public const string PanoramaDashboardPage = "DefaultDashboard";
 
     /// <summary>The container's id, which a Wiki web part names its page's folder by.</summary>
-    public async Task<string> ContainerIdAsync(string container, CancellationToken cancellationToken = default)
+    public async Task<string> ContainerIdAsync(string container, CancellationToken cancellationToken = default) =>
+        (await FolderAsync(container, cancellationToken).ConfigureAwait(false)).Id;
+
+    /// <summary>The container's id and folder type (<c>Targeted MS</c> for a Panorama folder), in one request.</summary>
+    public async Task<(string Id, string? FolderType)> FolderAsync(string container, CancellationToken cancellationToken = default)
     {
         var body = await GetAsync(PortalUrl(container, "project-getContainers.api?includeSubfolders=false"),
             PanoramaPaths.Container(container), cancellationToken).ConfigureAwait(false);
         using var document = ParseJson(body!, "the folder's details");
-        return Text(document.RootElement, "id")
-               ?? throw new PanoramaException($"Panorama did not give the id of {PanoramaPaths.Container(container)}.");
+        return (Text(document.RootElement, "id")
+                ?? throw new PanoramaException($"Panorama did not give the id of {PanoramaPaths.Container(container)}."),
+            Text(document.RootElement, "folderType"));
     }
 
     /// <summary>The web parts on one page of a folder.</summary>
@@ -45,12 +50,24 @@ public sealed partial class PanoramaClient
     }
 
     /// <summary>
-    /// The id of the page a browser opens for the folder: the candidate whose web parts are the ones the
-    /// folder's start page actually renders. A folder with nothing on its page falls back to its folder
-    /// type - the Panorama dashboard for a Targeted MS folder, the portal page for anything else.
+    /// The id of the page a browser opens for the folder. A Panorama (Targeted MS) folder's is its
+    /// dashboard and an ordinary folder's the portal page - both known from the folder type, which
+    /// <see cref="FolderAsync"/> reads cheaply. For any other type the folder's start page is rendered
+    /// and the candidate whose web parts it shows is taken; that render runs every query on the page
+    /// (a Targeted MS Runs grid over thousands of runs, say), so it is the fallback, not the rule.
     /// </summary>
-    public async Task<string> MainPageIdAsync(string container, CancellationToken cancellationToken = default)
+    /// <param name="folderType">The folder type, when the caller already has it; read when null.</param>
+    public async Task<string> MainPageIdAsync(string container, string? folderType = null, CancellationToken cancellationToken = default)
     {
+        folderType ??= (await FolderAsync(container, cancellationToken).ConfigureAwait(false)).FolderType;
+        switch (folderType)
+        {
+            case "Targeted MS":
+                return PanoramaDashboardPage;
+            case "Collaboration" or "None" or "Custom":
+                return DefaultPortalPage;
+        }
+
         var start = await GetAsync(PortalUrl(container, "project-begin.view"), PanoramaPaths.Container(container), cancellationToken)
             .ConfigureAwait(false);
         var rendered = Regex.Matches(start!, @"id=""webpart_(\d+)""").Select(m => int.Parse(m.Groups[1].Value)).ToHashSet();
@@ -61,9 +78,7 @@ public sealed partial class PanoramaClient
                 return candidate;
         }
 
-        return start!.Contains("\"folderType\":\"Targeted MS\"", StringComparison.Ordinal) || start.Contains("PanoramaDashboardTab", StringComparison.Ordinal)
-            ? PanoramaDashboardPage
-            : DefaultPortalPage;
+        return DefaultPortalPage;
     }
 
     /// <summary>

@@ -39,6 +39,7 @@ public static partial class Program
             QcPage: opts.GetSingleOrNull("--qc-page") ?? remembered.QcPageFor(dir),
             QuantPage: opts.GetSingleOrNull("--quant-page") ?? remembered.QuantPageFor(dir),
             ReplaceEdited: opts.GetSingleOrNull("--replace-edited") is not null,
+            TakeOver: opts.GetSingleOrNull("--take-over") is not null,
             LinksFolder: linksFolder,
             LinksPage: opts.GetSingleOrNull("--links-page") ?? remembered.LinksPageFor(dir));
 
@@ -135,9 +136,12 @@ public static partial class Program
             --links-page NAME      Links page name (default PRISM-<output-dir name>)
             --server URL           Panorama server (default https://panoramaweb.org)
             --replace-edited       Replace a page edited on Panorama since PRISM published
-                                   it, a page of that name PRISM did not write, or one
-                                   published from a different output directory of the same
-                                   name. Without it, each is refused rather than overwritten
+                                   it, or a page of that name PRISM did not write. Without
+                                   it, either is refused rather than overwritten
+            --take-over            Replace a page PRISM published from a different output
+                                   directory - another analysis whose directory name gives
+                                   the same page name, or this one if its panorama.json was
+                                   lost. Separate from --replace-edited on purpose
             --no-upload, --no-qc, --no-quant, --no-links
                                    Skip a step remembered from an earlier publish, this time
             --dry-run              Print what would be published, and send nothing

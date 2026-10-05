@@ -65,7 +65,9 @@ public partial class PanoramaPublishWindow : Window
             ? $"Contrast: {PanoramaPublisher.QuantContrast(outputDir) ?? "(not recorded)"}"
             : "This output directory has no quant report yet - make one with the Differential pane's Quant report button.";
         UploadCheck.IsChecked = true;
-        LinksCheck.IsChecked = true;
+        // On when there is something to link - a report, or links this directory published before - as
+        // the CLI decides it; an upload-only directory is not held up asking for a links folder.
+        LinksCheck.IsChecked = targets.LinksWiki is not null || File.Exists(request.QcReport) || hasQuant;
 
         _loading = false;
         Refresh();
@@ -109,6 +111,7 @@ public partial class PanoramaPublishWindow : Window
             QcPage: Page(QcPageBox.Text),
             QuantPage: Page(QuantPageBox.Text),
             ReplaceEdited: ReplaceEditedCheck.IsChecked == true,
+            TakeOver: TakeOverCheck.IsChecked == true,
             LinksFolder: Folder(LinksCheck.IsChecked == true, LinksFolderBox.Text),
             LinksPage: Page(LinksPageBox.Text));
     }
@@ -157,7 +160,10 @@ public partial class PanoramaPublishWindow : Window
         var missing = (QcCheck.IsChecked == true && request.QcFolder is null ? "Choose a folder for the QC report's wiki page. " : "")
                       + (QuantCheck.IsChecked == true && request.QuantFolder is null ? "Choose a folder for the quant report's wiki page. " : "")
                       + (UploadCheck.IsChecked == true && request.RawFolder is null ? "Choose the folder that holds the raw files. " : "")
-                      + (LinksCheck.IsChecked == true && request.LinksFolder is null ? "Choose a folder for the links page. " : "");
+                      // Links with no folder and no report to publish is simply no links, as in the CLI.
+                      + (LinksCheck.IsChecked == true && request.LinksFolder is null && (request.QcFolder is not null || request.QuantFolder is not null)
+                          ? "Choose a folder for the links page. "
+                          : "");
 
         DestinationText.Text = request.RawFolder is not null && PanoramaPaths.IsFileArea(request.RawFolder)
             ? $"Uploads to {request.Destination}"
@@ -295,6 +301,10 @@ public partial class PanoramaPublishWindow : Window
             var outcome = await Task.Run(() => OutputPublishing.RunAsync(client, request,
                 say: m => Dispatcher.BeginInvoke(new Action(() => Log(m))), progress, _running.Token));
             Log("Done.");
+            // Once a links folder is remembered it is this directory's, as the CLI treats it: editing the
+            // QC folder afterwards must not quietly move the links (and leave the old ones behind).
+            if (PanoramaTargets.Load(_outputDir).LinksWiki is not null)
+                _linksFollowReports = false;
             if (outcome.Upload is { } up)
                 AddLink($"Output directory ({up.Uploaded} uploaded, {up.Skipped} already there)", up.Url);
             if (outcome.Qc is { } qc)
@@ -335,10 +345,12 @@ public partial class PanoramaPublishWindow : Window
     {
         foreach (var control in new System.Windows.Controls.Control[]
                  {
-                     ServerBox, SignInButton, QcCheck, QcFolderBox, QcPageBox, QuantFolderBox, QuantPageBox, UploadCheck, RawFolderBox,
-                     LinksCheck, LinksFolderBox, LinksPageBox, ReplaceEditedCheck, CommandButton,
+                     ServerBox, SignInButton, QcFolderBox, QcPageBox, QuantFolderBox, QuantPageBox, UploadCheck, RawFolderBox,
+                     LinksCheck, LinksFolderBox, LinksPageBox, ReplaceEditedCheck, TakeOverCheck, CommandButton,
                  })
             control.IsEnabled = editable;
+        // Each report's step can be ticked only when the report is there, as when the window opened.
+        QcCheck.IsEnabled = editable && File.Exists(Path.Combine(_outputDir, "qc_report.html"));
         QuantCheck.IsEnabled = editable && File.Exists(Path.Combine(_outputDir, "quant", "quant_report.html"));
     }
 

@@ -29,7 +29,8 @@ prism publish -d output_dir/ \
 | `--links-wiki FOLDER` | Publishes the links page in that folder and shows it on the folder's page (default: the QC page's folder) |
 | `--qc-page NAME`, `--quant-page NAME`, `--links-page NAME` | Page names (defaults below) |
 | `--server URL` | Another Panorama server (default `https://panoramaweb.org`) |
-| `--replace-edited` | Replace a page that was edited on Panorama, a same-named page PRISM did not write, or one published from a different output directory |
+| `--replace-edited` | Replace a page that was edited on Panorama, or a same-named page PRISM did not write |
+| `--take-over` | Replace a page PRISM published from a different output directory (see below) |
 | `--no-upload`, `--no-qc`, `--no-quant`, `--no-links` | Skip a step remembered from an earlier publish (or, for the links page, the default), this once |
 | `--dry-run` | Print what would happen and send nothing |
 
@@ -63,7 +64,9 @@ uploaded output directory. PRISM then shows that page in a **Wiki web part on th
 that puts it between Targeted MS Runs and **Files**. A folder without a Targeted MS Runs part gets it
 right above Files, and one with neither gets it at the top. The web part's id is recorded in
 `panorama.json`. A republish updates the same part, and leaves it wherever someone has moved it since.
-A part someone removed is added again, in the same place as a new one.
+A part someone removed is added again, in the same place as a new one. Choosing another folder for the
+links adds a part there; the old folder's part and links page are left as they were, since PRISM
+deletes nothing on Panorama, and the publish names them so they can be removed by hand.
 
 Adding a web part needs **folder administrator** permission. Without it, the links page is still
 published along with everything else, and the publish says what is missing: a folder administrator
@@ -74,11 +77,14 @@ links page itself cannot be written, the reports and the upload stand, and the p
 
 - **Pages are updated in place.** Panorama keeps every version of a page's text. Its plots are page
   attachments, and Panorama does not version those: they belong to the page, not to a version of it.
-  So each plot is attached under a name that includes a hash of its image. A plot that did not change
-  keeps its name and is not sent again. A changed one goes up under a new name, and the one it
-  replaced is removed only after the new page is saved. An earlier version opened from the page's
-  history therefore shows the plots it shares with the current one, and a missing image for any that
-  changed. It never shows another run's plot in their place.
+  So each plot is attached under a name made from a hash of its image, not its place in the report.
+  A plot that did not change keeps its name, wherever it moved, and is not sent again; two identical
+  plots share one attachment. A changed one goes up under a new name, and the one it replaced is
+  removed only after the new page is saved. An earlier version opened from the page's history
+  therefore shows the plots it shares with the current one, and a missing image for any that changed.
+  It never shows another run's plot in their place. What is attached is read from Panorama on each
+  publish, so a plot removed there by hand is sent again; an attachment PRISM did not name is never
+  removed.
 - **A page edited on Panorama is not overwritten.** PRISM marks each page it writes with a footer that
   carries a fingerprint of what it wrote. If someone has since edited the page on Panorama, or a page
   of that name exists that PRISM never wrote, the publish stops and says so.
@@ -87,9 +93,18 @@ links page itself cannot be written, the reports and the upload stand, and the p
   to the next. So each output directory gets a random id on its first publish (`publish_id` in
   `panorama.json`), and every page it publishes carries that id in its footer. Another output
   directory with the same name, publishing to the same folder, is refused rather than allowed to
-  replace the first one's page: choose another page name for it.
-- **Replacing one on purpose.** In any of these cases, pass `--replace-edited` (or tick **Replace a
-  page edited on Panorama**). The text it replaces stays in the page's history.
+  replace the first one's page: choose another page name for it. The same refusal appears if this
+  directory's own `panorama.json` was deleted or replaced, since its id went with it; then take the
+  page back with `--take-over`.
+- **Replacing one on purpose.** Pass `--replace-edited` (or tick **Replace a page edited on Panorama**)
+  for a page edited on Panorama or one PRISM did not write, and `--take-over` (**Take over a page
+  published from a different output directory**) for another directory's page. They are separate on
+  purpose: replacing your own edit must not also hand over another experiment's same-named pages in
+  the same run. The text replaced stays in the page's history.
+- **An output directory PRISM cannot write to is still published.** A read-only share or an archived
+  analysis cannot hold `panorama.json`, so the publish says that where it went will not be
+  remembered. Its id is then derived from its `parameters.json` (which a read-only directory cannot
+  change), so a later publish from it is still recognized as the same directory.
 - **Only changed files are uploaded.** Before uploading, each file is compared with Panorama's own MD5
   of its copy (LabKey's `?method=md5sum`, computed over the bytes the server stored). A file already
   there unchanged is skipped. After a folder's files go up, they are checked the same way. A file that

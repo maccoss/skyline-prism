@@ -64,9 +64,9 @@ public sealed class PanoramaPublisherTests : IDisposable
             "PRISM-QC-run", "PRISM QC: run", outputLink: null, replaceEdited: false);
 
         Assert.True(page.Created);
-        Assert.Equal(2, page.Images);
+        Assert.Equal(1, page.Images); // the report's two plots are the same image, so one attachment serves both
         var stored = PageNamed("PRISM-QC-run");
-        Assert.Equal(new[] { "prism-qc-run-01-", "prism-qc-run-02-" }, stored.Attachments.Keys.OrderBy(k => k).Select(k => k[..16]));
+        Assert.Matches("^prism-qc-run-[0-9a-f]{12}\\.png$", Assert.Single(stored.Attachments.Keys));
         Assert.False(stored.ShowAttachments); // the plots are inline; the attachment list would repeat them
         Assert.Contains("<h1 style=\"color: #1a3c6e\">", stored.Body, StringComparison.Ordinal);
         Assert.Contains("src=\"/MacCoss/maccoss/Test/wiki-download.view?entityId=", stored.Body, StringComparison.Ordinal);
@@ -87,7 +87,7 @@ public sealed class PanoramaPublisherTests : IDisposable
 
         Assert.False(again.Created);
         Assert.True(PageNamed("PRISM-QC-run").Version > version);
-        Assert.Equal(2, PageNamed("PRISM-QC-run").Attachments.Count);
+        Assert.Single(PageNamed("PRISM-QC-run").Attachments);
         Assert.Equal(attached, _server.FilesAttached); // the plots are unchanged, so none was sent again
     }
 
@@ -105,13 +105,46 @@ public sealed class PanoramaPublisherTests : IDisposable
         File.WriteAllText(report, html[..last] + changed + html[(last + Png.Length)..]);
         await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
 
+        // The first plot is unchanged and kept under its name; only the changed second one was sent.
         var after = PageNamed("PRISM-QC-run").Attachments.Keys.OrderBy(k => k).ToList();
         Assert.Equal(attached + 1, _server.FilesAttached);
-        Assert.Equal(before[0], after[0]);
-        Assert.NotEqual(before[1], after[1]);
-        Assert.Equal(2, after.Count); // the replaced plot is gone, not kept forever
+        Assert.Contains(Assert.Single(before), after);
+        Assert.Equal(2, after.Count);
         // At no save did the page point at an attachment it did not have.
         Assert.Empty(_server.MissingAtSave);
+
+        // Changed back, the plot that is no longer shown is removed, not kept forever.
+        File.WriteAllText(report, html);
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+        Assert.Equal(before, PageNamed("PRISM-QC-run").Attachments.Keys.ToList());
+    }
+
+    [Fact]
+    public async Task APlotRemovedOnPanoramaByHand_IsSentAgain()
+    {
+        var report = Path.Combine(_outputDir, "qc_report.html");
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+        PageNamed("PRISM-QC-run").Attachments.Clear(); // the footer still lists it
+
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+
+        // What is attached is read from the editor, so the missing plot is noticed and sent.
+        Assert.Single(PageNamed("PRISM-QC-run").Attachments);
+        Assert.Empty(_server.MissingAtSave);
+    }
+
+    [Fact]
+    public async Task AnAttachmentSomeoneElsePutOnThePage_IsLeftAlone()
+    {
+        var report = Path.Combine(_outputDir, "qc_report.html");
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+        PageNamed("PRISM-QC-run").Attachments["prism-qc-run-notes.pdf"] = new byte[] { 1 };
+        File.AppendAllText(report, "<img src=\"data:image/png;base64,"
+            + Convert.ToBase64String(Convert.FromBase64String(Png).Append((byte)7).ToArray()) + "\">");
+
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+
+        Assert.Contains("prism-qc-run-notes.pdf", PageNamed("PRISM-QC-run").Attachments.Keys);
     }
 
     [Fact]
@@ -187,9 +220,14 @@ public sealed class PanoramaPublisherTests : IDisposable
                 new PublishRequest(other, new Uri("https://panorama.test"), Container, null, null)));
             Assert.Contains("from a different output directory", ex.Message, StringComparison.Ordinal);
 
-            // Replaced on purpose, it goes; and the first directory republishes its own page as before.
+            // Replacing an EDITED page on purpose does not also take over another directory's page.
+            await Assert.ThrowsAsync<PanoramaException>(() => OutputPublishing.RunAsync(_client,
+                new PublishRequest(other, new Uri("https://panorama.test"), Container, null, null, ReplaceEdited: true)));
+            Assert.Contains("--take-over", ex.Message, StringComparison.Ordinal);
+
+            // Taken over on purpose, it goes; and the first directory is then refused in turn.
             await OutputPublishing.RunAsync(_client,
-                new PublishRequest(other, new Uri("https://panorama.test"), Container, null, null, ReplaceEdited: true));
+                new PublishRequest(other, new Uri("https://panorama.test"), Container, null, null, TakeOver: true));
             await Assert.ThrowsAsync<PanoramaException>(() => OutputPublishing.RunAsync(_client, Request(quant: null, raw: null)));
         }
         finally
@@ -406,13 +444,13 @@ public sealed class PanoramaPublisherTests : IDisposable
     [Fact]
     public void TheCommandLine_ReproducesTheRequest()
     {
-        var command = OutputPublishing.CommandLine(Request() with { QcPage = "my page", ReplaceEdited = true, LinksFolder = Container });
+        var command = OutputPublishing.CommandLine(Request() with { QcPage = "my page", ReplaceEdited = true, TakeOver = true, LinksFolder = Container });
         Assert.Contains("--beside-raw /MacCoss/maccoss/Test/@files/RawFiles", command, StringComparison.Ordinal);
         Assert.Contains("--qc-wiki /MacCoss/maccoss/Test", command, StringComparison.Ordinal);
         Assert.Contains("--qc-page \"my page\"", command, StringComparison.Ordinal);
         Assert.Contains("--links-wiki /MacCoss/maccoss/Test", command, StringComparison.Ordinal);
         Assert.Contains("--server https://panorama.test", command, StringComparison.Ordinal);
-        Assert.EndsWith("--replace-edited", command, StringComparison.Ordinal);
+        Assert.EndsWith("--replace-edited --take-over", command, StringComparison.Ordinal);
         Assert.DoesNotContain("--no-", command, StringComparison.Ordinal);
     }
 
@@ -569,18 +607,88 @@ public sealed class PanoramaPublisherTests : IDisposable
     [Fact]
     public async Task TheFolderPage_IsTheDashboardInAPanoramaFolder_AndThePortalPageOtherwise()
     {
-        // An empty Panorama folder: nothing rendered to match, so the folder type decides.
         _server.FolderTypes[Container] = "Targeted MS";
         Assert.Equal(PanoramaClient.PanoramaDashboardPage, await _client.MainPageIdAsync(Container));
 
+        // An ordinary folder, even with parts left on the dashboard by an earlier folder type.
         _server.FolderTypes.Remove(Container);
-        Assert.Equal(PanoramaClient.DefaultPortalPage, await _client.MainPageIdAsync(Container));
-
-        // Parts left on the dashboard by an earlier folder type are not what the page shows: the page id
-        // is the one whose parts the folder's page actually renders, though the dashboard is tried first.
         _server.AddWebPart(Container, "DefaultDashboard", "!content", "Targeted MS Runs");
         _server.AddWebPart(Container, "portal.default", "!content", "Wiki");
         Assert.Equal(PanoramaClient.DefaultPortalPage, await _client.MainPageIdAsync(Container));
+
+        // Both are known from the folder type alone: the folder's page, with every query on it, is not
+        // rendered for them.
+        Assert.DoesNotContain(_server.Requests, r => r.Contains("project-begin.view", StringComparison.Ordinal));
+
+        // A type PRISM does not know is decided by which parts the folder's page renders.
+        _server.FolderTypes[Container] = "Study";
+        Assert.Equal(PanoramaClient.DefaultPortalPage, await _client.MainPageIdAsync(Container));
+        Assert.Contains(_server.Requests, r => r.Contains("project-begin.view", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MovingTheLinksToAnotherFolder_SaysTheOldPartIsStillThere()
+    {
+        const string other = "/MacCoss/maccoss/Elsewhere";
+        MakePanoramaFolder();
+        _server.AddContainer(other);
+        _server.FolderTypes[other] = "Targeted MS";
+        await OutputPublishing.RunAsync(_client, WithLinks());
+        var first = PanoramaTargets.Load(_outputDir).LinksWebPartId;
+
+        var outcome = await OutputPublishing.RunAsync(_client, WithLinks() with { LinksFolder = other });
+
+        var moved = Assert.Single(_server.WebParts, p => p.Container == other && p.Name == "Wiki");
+        Assert.Equal(moved.Id, PanoramaTargets.Load(_outputDir).LinksWebPartId);
+        Assert.Contains(_server.WebParts, p => p.Id == first); // PRISM does not delete it; it says so
+        Assert.Contains($"{Container}'s page still shows the earlier links page", outcome.LinksNote, StringComparison.Ordinal);
+        Assert.Contains($"(id {first})", outcome.LinksNote, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnOutputDirectoryPrismCannotWrite_IsPublished_UnderTheSameIdEachTime()
+    {
+        var targetsFile = Path.Combine(_outputDir, PanoramaTargets.FileName);
+        File.WriteAllText(targetsFile, "{}");
+        File.SetAttributes(targetsFile, FileAttributes.ReadOnly);
+        try
+        {
+            var said = new System.Collections.Generic.List<string>();
+            var outcome = await OutputPublishing.RunAsync(_client, Request(raw: null), say: said.Add);
+
+            Assert.NotNull(outcome.Qc);
+            Assert.Contains(said, s => s.Contains("cannot be written", StringComparison.Ordinal));
+            var source = System.Text.RegularExpressions.Regex.Match(PageNamed("PRISM-QC-run-2026-10").Body, "data-source=\"([^\"]+)\"").Groups[1].Value;
+            Assert.StartsWith("d", source, StringComparison.Ordinal);
+
+            // Nothing could be remembered, yet the next publish is recognized as the same directory.
+            await OutputPublishing.RunAsync(_client, Request(raw: null));
+        }
+        finally
+        {
+            File.SetAttributes(targetsFile, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public async Task ATargetsFileHeldWhileTheWebPartIsAdded_DoesNotFailAPublishThatWorked()
+    {
+        MakePanoramaFolder();
+        FileStream? held = null;
+        _server.AfterAddWebPart = () => held = new FileStream(Path.Combine(_outputDir, PanoramaTargets.FileName),
+            FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            var said = new System.Collections.Generic.List<string>();
+            var outcome = await OutputPublishing.RunAsync(_client, WithLinks(), say: said.Add);
+
+            Assert.True(outcome.LinksOnFolderPage);
+            Assert.Contains(said, s => s.Contains("could not be updated", StringComparison.Ordinal));
+        }
+        finally
+        {
+            held?.Dispose();
+        }
     }
 
     [Fact]
