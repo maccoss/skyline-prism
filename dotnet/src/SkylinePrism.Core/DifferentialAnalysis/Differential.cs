@@ -148,20 +148,32 @@ public sealed class DifferentialResult
     public double PriorLevel { get; }
 
     /// <summary>
-    /// One line on how the intensity-trend prior was fitted, for a status line or a file header;
+    /// One line on how the intensity-trend prior was fitted, for a status line or a file header
+    /// (<c>prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2</c>);
     /// null for every other prior.
     /// </summary>
-    public string? DescribePriorFit()
+    public string? DescribePriorFit() => DescribePriorFitBody() is { } body ? "prior: " + body : null;
+
+    /// <summary>
+    /// <see cref="DescribePriorFit"/> without its <c>prior: </c> label, for a place that names the
+    /// field itself, like the quant report's parameter table.
+    /// </summary>
+    public string? DescribePriorFitBody()
     {
         if (!double.IsFinite(PriorLevel))
             return null;
         var source = VariancePrior.EndsWith("controls", StringComparison.Ordinal) ? "controls" : "design groups";
-        var df = double.IsPositiveInfinity(DfPrior)
-            ? "inf"
-            : DfPrior.ToString("0.##", CultureInfo.InvariantCulture);
-        return string.Create(CultureInfo.InvariantCulture,
-            $"prior: intensity trend from the {source}, scaled x{PriorLevel:0.###} to these residuals; prior df {df}");
+        var df = double.IsPositiveInfinity(DfPrior) ? "inf" : Significant(DfPrior);
+        return $"intensity trend from the {source}, scaled x{Significant(PriorLevel)} to these residuals; prior df {df}";
     }
+
+    // Three significant figures, so a small factor is not rounded away: under a fixed "0.###" a
+    // level below 0.0005 printed as "x0", which reads as a fit that failed. From 100 up, whole
+    // numbers, rather than the exponent "G3" would give.
+    private static string Significant(double v) =>
+        Math.Abs(v) >= 100
+            ? v.ToString("0", CultureInfo.InvariantCulture)
+            : v.ToString("G3", CultureInfo.InvariantCulture);
 
     /// <summary>Design columns actually used, excluding the intercept and group term.</summary>
     public IReadOnlyList<string> CovariatesUsed { get; }
@@ -1074,8 +1086,17 @@ public static class Differential
 
     /// <summary>
     /// A per-feature prior scale paired with the GLOBAL prior degrees of freedom - the DEqMS
-    /// peptide-count prior, whose scale is already fitted on these residuals.
+    /// peptide-count prior, kept exactly as DEqMS defines it.
     /// </summary>
+    /// <remarks>
+    /// DEqMS is limma with one change: the prior scale follows a LOWESS of log residual variance on
+    /// log peptide count, and limma's own global <c>d0</c> is kept. So this is NOT calibrated the way
+    /// the intensity trend is (<see cref="WithCalibratedLevel"/>): the fitted curve keeps the low bias
+    /// of a smoothed log variance, and <c>d0</c> is measured around the global mean rather than around
+    /// the curve. That is deliberate. The estimator is DEqMS's, reproducing it is the requirement
+    /// (<c>peptide_count_prior.json</c>), and a calibrated variant would be a different method under
+    /// DEqMS's name.
+    /// </remarks>
     private static SqueezeVarResult WithGlobalDf(double[] variances, double dfResidual, double[] prior)
     {
         var global = EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual);

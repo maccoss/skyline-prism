@@ -175,13 +175,14 @@ public static class EmpiricalBayes
     /// <c>s0_i^2</c> as <c>d0 -> inf</c>.
     /// </summary>
     /// <remarks>
-    /// Exists so the toolkit-style priors in <see cref="VariancePriors"/> - which fit only a scale and
-    /// deliberately keep the GLOBAL <paramref name="dfPrior"/> - compose the posterior through the
-    /// same arithmetic as every other path rather than restating it. Restating it is how two priors
-    /// end up shrinking by subtly different amounts.
+    /// Exists so the priors whose scale comes from <see cref="VariancePriors"/> compose the posterior
+    /// through the same arithmetic as every other path rather than restating it. Restating it is how
+    /// two priors end up shrinking by subtly different amounts. The <paramref name="dfPrior"/> is the
+    /// caller's: the peptide-count prior passes limma's global one, as DEqMS does, and the intensity
+    /// trend passes the one fitted around its scaled trend (<c>Differential.WithCalibratedLevel</c>).
     /// </remarks>
     /// <param name="varPrior">Per-feature prior scale, one per entry of <paramref name="variances"/>.</param>
-    /// <param name="dfPrior">The global prior degrees of freedom, typically from <see cref="SqueezeVarGlobal"/>.</param>
+    /// <param name="dfPrior">The prior degrees of freedom to pair with it; may be infinite.</param>
     public static SqueezeVarResult SqueezeVarWithScale(
         ReadOnlySpan<double> variances, double dfResidual, double[] varPrior, double dfPrior,
         IReadOnlyList<string>? warnings = null)

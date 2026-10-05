@@ -58,7 +58,7 @@ below. Neither touches any file `prism run` wrote.
 |---|---|---|
 | `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
 
-Four or five `#` comment lines precede the header, because a results file outlives the shell that
+Four to six `#` comment lines precede the header, because a results file outlives the shell that
 produced it and every one of these is a question a reader asks of it:
 
 ```text
@@ -75,11 +75,18 @@ hit rule is recorded as *not* having filtered the rows, because every tested fea
 The `# prior:` line appears under the intensity-trend prior only. Its source sets the trend's shape,
 and the factor says how far the trend was scaled to match this contrast's residuals.
 
-Under a trend design the first line reads differently, and says what `log2fc` now means:
+Under a trend design the first line reads differently, and says what `log2fc` now means. A trend
+restricted to some of the samples (`--restrict-to`, or **Restrict to** in the pane) adds a line saying
+which, since every row below was fitted on those samples only:
 
 ```text
 # trend: week from 0 to 12 (span 12); log2fc is the modeled change ACROSS that span, slope = log2fc / span
+# restricted to: Study = Verapamil (only those samples were fitted)
 ```
+
+So a file has four lines at the least (contrast or trend, method, n, hit rule), a fifth for the
+intensity-trend prior, and a sixth for a restricted trend. Read past the lines that start with `#`
+rather than skipping a fixed number.
 
 ### Quant report
 

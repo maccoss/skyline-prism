@@ -238,8 +238,8 @@ public static class QuantReport
         // The same words the CLI prints and differential.csv's "# method:" line records, naming the
         // prior that actually RAN - which is the thing a reader comparing two results needs.
         Kv(sb, "Method", options.Describe(res.VariancePrior));
-        if (res.DescribePriorFit() is { } priorFit)
-            Kv(sb, "Variance prior", priorFit["prior: ".Length..]);
+        if (res.DescribePriorFitBody() is { } priorFit)
+            Kv(sb, "Variance prior", priorFit);
         Kv(sb, "Multiple testing", DifferentialCsv.CorrectionName(options.Correction));
         Kv(sb, "Hit rule", rule.Describe(effectName));
         Kv(sb, "Groups", res.IsTrend

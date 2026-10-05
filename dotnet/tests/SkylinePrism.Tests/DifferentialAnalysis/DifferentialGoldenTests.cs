@@ -904,6 +904,10 @@ public class DifferentialGoldenTests
     /// design residuals. Every piece could agree and that still disagree, so it is checked here
     /// through <c>run_comprehensive_statistical_analysis</c> itself. The generator also checks the
     /// level and df against <c>inmoose.limma.squeezeVar</c> on residual / trend before writing.</para>
+    /// <para>The two-arm designs are covered in both branches of the d0 estimate: <c>unpaired</c> and
+    /// <c>paired</c> come out with d0 infinite, so the posterior IS the scaled trend, and the
+    /// <c>*_finite_d0</c> cases give each feature its own departure from the trend, so d0 is finite
+    /// and every residual reaches its t, as on a real cohort.</para>
     /// <para>The <c>independent_trend</c> case is the one the uncalibrated prior got most wrong: a
     /// between-subject trend whose residual carries the whole between-person spread, against pools
     /// that carry none of it. Its d0 came out infinite, so the posterior WAS the pools' technical

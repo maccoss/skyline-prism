@@ -42,7 +42,7 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `paired.json` | `SimpleTests` paired t / Wilcoxon, and the paired moderated design | `scipy.stats.ttest_rel`, `scipy.stats.wilcoxon(method="asymptotic")`, lstsq + `squeezeVar` |
 | `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
 | `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
-| `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
+| `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend; the two-arm designs with both an infinite and a finite d0) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
 
 **One reference is a sibling lab tool, deliberately.** `intensity_trend.json` (and with it
 `peptide_count_prior.json` and `toolkit_end_to_end.json`) is pinned to

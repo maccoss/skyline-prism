@@ -906,10 +906,16 @@ public class CliIntegrationTests
             var byDefault = Invoke(Args()).Output;
             var byGroups = Invoke(Args("--prior-from-groups")).Output;
             var byControls = Invoke(Args("--prior-from-controls")).Output;
+            var header = File.ReadLines(Path.Combine(outDir, "d.csv")).TakeWhile(l => l.StartsWith('#')).ToList();
 
             Assert.Contains("intensity-trend prior from controls", byDefault, StringComparison.Ordinal);
             Assert.Contains("intensity-trend prior from controls", byControls, StringComparison.Ordinal);
             Assert.Contains("intensity-trend prior from design groups", byGroups, StringComparison.Ordinal);
+
+            // How far the trend was scaled is part of the answer: printed, and kept in the file.
+            Assert.Contains("prior: intensity trend from the controls, scaled x", byDefault, StringComparison.Ordinal);
+            Assert.Contains("prior: intensity trend from the design groups, scaled x", byGroups, StringComparison.Ordinal);
+            Assert.Contains(header, l => l.StartsWith("# prior: intensity trend from the controls, scaled x", StringComparison.Ordinal));
 
             // Asking for both at once is a contradiction, not a precedence puzzle.
             var both = Invoke(Args("--prior-from-controls", "--prior-from-groups"));

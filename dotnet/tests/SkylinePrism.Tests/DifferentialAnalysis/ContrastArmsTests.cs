@@ -357,6 +357,21 @@ public class VariancePriorSourceTests
         Assert.InRange(ratio, 0.9, 1.1);
     }
 
+    [Theory]
+    [InlineData(2.0123, 3.17, "scaled x2.01 to these residuals; prior df 3.17")]
+    [InlineData(0.00012, 0.5, "scaled x0.00012 to these residuals; prior df 0.5")]
+    [InlineData(172.93, double.PositiveInfinity, "scaled x173 to these residuals; prior df inf")]
+    public void TheFit_IsDescribedToThreeSignificantFigures_SoNoFactorRoundsToZero(double level, double d0, string expected)
+    {
+        // Under a fixed "0.###" the second case printed "scaled x0", which reads as a fit that failed.
+        var res = new DifferentialResult(Array.Empty<DifferentialRow>(), 5, 5, 0, 0, 8, d0,
+            "intensity-trend from controls", Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
+            priorLevel: level);
+
+        Assert.Equal("prior: intensity trend from the controls, " + expected, res.DescribePriorFit());
+        Assert.Equal(res.DescribePriorFit(), "prior: " + res.DescribePriorFitBody());
+    }
+
     [Fact]
     public void TheLevelIsReported_AndOnlyForTheIntensityTrend()
     {

@@ -104,10 +104,11 @@ as the GitHub Release description and fails if it is missing.
 
 ## Breaking Changes
 
-- **Moderated p-values under the default intensity-trend prior change.** A prior shaped on the controls
-  is less optimistic than before. A paired or within-subject contrast with its prior shaped on the
-  design groups is more powerful. An unpaired contrast on design groups barely moves. On the serum
-  cohort this was checked against, the one protein that cleared FDR 0.05 in the within-subject trend
-  over weeks 0-12 still does (p 5.3e-7 to 1.0e-6). `--prior-from-groups` no longer says to use it
-  only to reproduce an older result: it changes the trend's shape, not its level. To reproduce a
-  result from dotnet-v26.27.0 or earlier, run that version.
+- **Moderated p-values under the default intensity-trend prior changed.** A prior shaped on the
+  controls became less optimistic than before. A paired or within-subject contrast with its prior
+  shaped on the design groups became more powerful. An unpaired contrast on design groups barely
+  moved. On the serum cohort this was checked against, the one protein that cleared FDR 0.05 in the
+  within-subject trend over weeks 0-12 still did (p 5.3e-7 to 1.0e-6). The help for
+  `--prior-from-groups` stopped saying to use it only to reproduce an older result, since the source
+  now sets the trend's shape and not its level. To reproduce a result from dotnet-v26.27.0 or
+  earlier, run that version. The peptide-count prior did not change: it stays DEqMS as published.

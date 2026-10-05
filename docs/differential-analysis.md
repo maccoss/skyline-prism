@@ -46,7 +46,10 @@ outcome needs conditional logistic regression, which is not implemented.
 Variance priors: **global** (Smyth 2004), **intensity trend** (the default - see below), **limma-trend**
 (`trend=TRUE`), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
 `_fit_count_dependent_prior`). The intensity trend and limma-trend both estimate the prior *degrees of
-freedom* around their trend; the peptide-count prior keeps the global value, as DEqMS does. The
+freedom* around their trend. The peptide-count prior keeps limma's global value, as DEqMS does, and
+is used exactly as DEqMS defines it: limma with a prior scale that follows peptide count. It is not
+calibrated to the residuals the way the intensity trend is (below), because that would be a different
+method under DEqMS's name. The
 intensity trend's shape can be fitted on the run's QC and reference replicates instead of on the
 contrast groups.
 
@@ -398,7 +401,8 @@ feature, with spline df `1 + (n>=3) + (n>=6) + (n>=30)`. The intensity trend fit
 log(within-group variance) on log(within-group mean) on **raw** intensities, one point per (feature,
 group), converted to log space by the delta method. What they now share is the second step: each
 estimates the prior's level and `d0` from the residuals around its own trend. The intensity trend
-gained that step in dotnet-v26.28.0 / toolkit v26.8.0. Before it, the two disagreed by a median 11.7%
+gained that step in the release after dotnet-v26.27.0, and in toolkit v26.8.0. Before it, the two
+disagreed by a median 11.7%
 and up to 265% on the same case, and 3 of 7 hits differed. Against the **global** prior either trend
 differs more (median 5-13%), which is the point of a trend prior.
 

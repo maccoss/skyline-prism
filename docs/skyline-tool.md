@@ -569,7 +569,7 @@ in the way. How high the trend sits is still fitted to the contrast's own residu
 injections lack the biology a study sample carries. Taken at their own level, they made every test
 optimistic, which is how PRISM behaved up to dotnet-v26.27.0. The status line says how far the
 trend was scaled (`scaled x2.01 to these residuals`). The controls take no part in the contrast itself, and each
-control type is its own group — pooling QC with reference would count the systematic gap between two
+control type is its own group: pooling QC with reference would count the systematic gap between two
 different materials as measurement noise. The box is unavailable on a run with fewer than two control
 replicates. See `docs/differential-analysis.md` for the calibration and the numbers behind it.
 

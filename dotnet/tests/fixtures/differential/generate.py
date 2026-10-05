@@ -1399,6 +1399,11 @@ def gen_toolkit_end_to_end() -> None:
 
     ``logfc`` is in PRISM's convention: B - A for a two-arm design, and the slope times the span of
     x for a trend. ``slope`` keeps the toolkit's own trend coefficient beside it.
+
+    **Both branches of the d0 estimate are covered.** Where every feature's variance follows the
+    trend, d0 is infinite and the posterior is the scaled trend itself (``unpaired``, ``paired``).
+    The ``*_finite_d0`` cases give each feature its own departure from the trend, so d0 is finite
+    and the residual variances enter every t - the regime a real cohort is in.
     """
     import contextlib
     import io
@@ -1439,7 +1444,8 @@ def gen_toolkit_end_to_end() -> None:
 
     cases = []
 
-    def run(name, design, note, design_block, meta_rows, cfg_fn, a_cols, b_cols, x, subject_of):
+    def run(name, design, note, design_block, meta_rows, cfg_fn, a_cols, b_cols, x, subject_of,
+            finite_d0=False):
         """Assemble [design | ref | qc], run the toolkit, record what PRISM must reproduce."""
         ref, qc = controls()
         expr = np.column_stack([design_block, ref, qc])
@@ -1505,10 +1511,19 @@ def gen_toolkit_end_to_end() -> None:
         ref_level = float(np.atleast_1d(sq["var_prior"])[0])
         ref_d0 = float(np.atleast_1d(sq["df_prior"])[0])
         level_ok = abs(prior_level - ref_level) <= 1e-9 * abs(ref_level)
-        d0_ok = (np.isinf(ref_d0) and np.isinf(df_prior[0])) or abs(df_prior[0] - ref_d0) <= 1e-9 * abs(ref_d0)
+        # An infinite d0 agrees only with an infinite one. Folded into the relative check it passed
+        # any finite toolkit d0 against an infinite reference: |finite - inf| <= 1e-9 * inf is
+        # inf <= inf, which is true.
+        if np.isinf(ref_d0) or np.isinf(df_prior[0]):
+            d0_ok = bool(np.isinf(ref_d0) and np.isinf(df_prior[0]))
+        else:
+            d0_ok = abs(df_prior[0] - ref_d0) <= 1e-9 * abs(ref_d0)
         if not (level_ok and d0_ok):
             raise SystemExit(f"{name}: toolkit level {prior_level!r} / d0 {df_prior[0]!r} disagree with "
                              f"inmoose squeezeVar on the ratio ({ref_level!r} / {ref_d0!r})")
+        if finite_d0 and not np.isfinite(df_prior[0]):
+            raise SystemExit(f"{name}: d0 came out infinite, so this case would not reach the finite-d0 "
+                             "posterior it exists to pin")
         cases.append({
             "name": name,
             "design": design,
@@ -1582,6 +1597,38 @@ def gen_toolkit_end_to_end() -> None:
         block, [{"Week": x[k]} for k in range(len(x))],
         lambda c: (setattr(c, "analysis_type", "linear_trend"), setattr(c, "time_column", "Week")),
         list(range(len(x))), [], x, None)
+
+    # --- two-arm designs whose d0 is FINITE ------------------------------------------------------
+    # In the two-arm cases above every feature's true variance sits on the trend, so the residuals
+    # scatter around it by sampling noise alone, fitFDist finds no spread beyond that, and d0 comes
+    # out infinite: the posterior IS the scaled trend and the residual variances never reach t. A
+    # real cohort's d0 is finite (about 2.5 on the serum cohort), so these give each feature its own
+    # departure from the trend, which is what makes d0 finite and puts every residual into its t.
+    # Appended after the cases above, so those keep the draws they were generated with.
+    spread = [float(np.exp(0.7 * rng.normal())) for _ in range(n_feat)]
+    block = np.asarray([
+        [level[f] + (0.8 if (f < moves and j >= 5) else 0.0) + (noise[f] + 0.15) * spread[f] * rng.normal()
+         for j in range(10)] for f in range(n_feat)])
+    run("unpaired_finite_d0", "unpaired",
+        "the unpaired design again, each feature's noise scaled by its own factor, so d0 is finite",
+        block, [{"Group": "Control" if j < 5 else "Treated"} for j in range(10)],
+        lambda c: (setattr(c, "analysis_type", "unpaired"), setattr(c, "group_column", "Group"),
+                   setattr(c, "group_labels", ["Control", "Treated"])),
+        list(range(5)), list(range(5, 10)), None, None, finite_d0=True)
+
+    subj = [1.5 * rng.normal() for _ in range(6)]
+    block = np.asarray([
+        [level[f] + subj[j % 6] + (-0.7 if (f < moves and j >= 6) else 0.0) + noise[f] * spread[f] * rng.normal()
+         for j in range(12)] for f in range(n_feat)])
+    run("paired_finite_d0", "paired",
+        "the paired design again, each feature's noise scaled by its own factor, so d0 is finite",
+        block,
+        [{"Subject": f"P{j % 6}", "Timepoint": "Pre" if j < 6 else "Post"} for j in range(12)],
+        lambda c: (setattr(c, "analysis_type", "paired"), setattr(c, "subject_column", "Subject"),
+                   setattr(c, "paired_column", "Timepoint"), setattr(c, "paired_label1", "Pre"),
+                   setattr(c, "paired_label2", "Post"), setattr(c, "group_column", "Timepoint"),
+                   setattr(c, "group_labels", ["Pre", "Post"])),
+        list(range(6)), list(range(6, 12)), None, [f"P{j % 6}" for j in range(12)], finite_d0=True)
 
     write(
         "toolkit_end_to_end.json",

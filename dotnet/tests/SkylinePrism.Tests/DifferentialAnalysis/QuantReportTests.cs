@@ -56,7 +56,7 @@ public class QuantReportTests
         MarkerPanels: Array.Empty<string>());
 
     private static QuantReportInputs InputsFor(DifferentialDataset ds, DifferentialResult res,
-        List<int>? cols, SignificanceRule rule) => new()
+        List<int>? cols, SignificanceRule rule, DifferentialOptions? options = null) => new()
     {
         Differential = res,
         Rule = rule,
@@ -64,7 +64,7 @@ public class QuantReportTests
         Contrast = "experimental split A vs B",
         EffectName = "log2FC",
         LabelFor = id => id,
-        Options = Options,
+        Options = options ?? Options,
         GroupBy = "sample_type",
         ALabel = "first half",
         BLabel = "second half",
@@ -106,6 +106,42 @@ public class QuantReportTests
             Assert.Contains("Quantification Parameters", html);
             Assert.Contains("experimental split A vs B", html);
             Assert.Contains("data:image/png;base64,", html);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Write_IntensityTrendPrior_SaysHowItWasFitted_InTheCsvAndTheReport()
+    {
+        // One description behind both: the CSV's "# prior:" line straight after "# method:", and the
+        // report's parameter row, which names the field itself and so drops the label.
+        var ds = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
+        var types = ds.MetadataValues("sample_type");
+        var experimental = Enumerable.Range(0, ds.SampleIds.Length).Where(j => types[j] == "experimental").ToList();
+        var groupA = experimental.Take(experimental.Count / 2).ToList();
+        var groupB = experimental.Skip(experimental.Count / 2).ToList();
+        var options = new DifferentialOptions
+        {
+            Prior = VariancePrior.IntensityTrend, PriorGroupColumns = ControlSampleTypes.PriorGroups(types),
+        };
+        var res = Differential.Run(ds.ExprLog2, ds.FeatureIds, groupA, groupB, options);
+        Assert.NotNull(options.PriorGroupColumns);
+        Assert.StartsWith("prior: intensity trend from the controls, scaled x", res.DescribePriorFit(), StringComparison.Ordinal);
+
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-quant-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var html = File.ReadAllText(QuantReport.Write(dir, ConfigFor(res),
+                InputsFor(ds, res, groupA.Concat(groupB).ToList(), SignificanceRule.Default, options)));
+
+            var lines = File.ReadAllLines(Path.Combine(dir, "quant", "differential.csv"));
+            Assert.StartsWith("# method:", lines[1], StringComparison.Ordinal);
+            Assert.Equal("# " + res.DescribePriorFit(), lines[2]);
+            Assert.Contains("<td>Variance prior</td><td>" + res.DescribePriorFitBody() + "</td>", html, StringComparison.Ordinal);
         }
         finally
         {
