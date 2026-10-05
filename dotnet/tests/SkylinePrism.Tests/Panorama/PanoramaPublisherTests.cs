@@ -148,6 +148,28 @@ public sealed class PanoramaPublisherTests : IDisposable
     }
 
     [Fact]
+    public async Task OnlyANameInPrismsPlotFormat_IsTakenForALeftoverPlot()
+    {
+        // A plot attached by a publish that failed before its save is named as PRISM names plots - the
+        // page's prefix, then 12 hex digits of its content - and is cleared. A file someone attached
+        // and merely numbered is theirs, however much it looks like a plot.
+        var report = Path.Combine(_outputDir, "qc_report.html");
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+        PageNamed("PRISM-QC-run").Attachments["prism-qc-run-0123456789ab.png"] = new byte[] { 1 };
+        PageNamed("PRISM-QC-run").Attachments["prism-qc-run-01.png"] = new byte[] { 1 };
+        PageNamed("PRISM-QC-run").Attachments["prism-qc-run-01-0123abcd.png"] = new byte[] { 1 };
+        File.AppendAllText(report, "<img src=\"data:image/png;base64,"
+            + Convert.ToBase64String(Convert.FromBase64String(Png).Append((byte)7).ToArray()) + "\">");
+
+        await Publisher().PublishReportAsync(report, Container, "PRISM-QC-run", "t", null, false);
+
+        var names = PageNamed("PRISM-QC-run").Attachments.Keys;
+        Assert.DoesNotContain("prism-qc-run-0123456789ab.png", names);
+        Assert.Contains("prism-qc-run-01.png", names);
+        Assert.Contains("prism-qc-run-01-0123abcd.png", names);
+    }
+
+    [Fact]
     public async Task AnEditMadeOnPanoramaWhileThePlotsAttach_IsRefused_NotSavedOver()
     {
         // The save re-reads the page for its newest version; without a second ownership check it would
@@ -435,10 +457,16 @@ public sealed class PanoramaPublisherTests : IDisposable
     }
 
     [Fact]
-    public void ThePlan_CountsTheTargetsFileThatGoesUpWithTheOutputs()
+    public void ThePlan_NamesTheTargetsFile_RatherThanCountingIt()
     {
-        // Five files now, plus the panorama.json written just before the upload.
-        Assert.StartsWith("Upload 6 files", OutputPublishing.Describe(Request()), StringComparison.Ordinal);
+        // Five files now. The panorama.json written just before the upload goes up too when it can be
+        // written, which a read-only directory cannot, so it is named, not counted.
+        Assert.StartsWith("Upload 5 files (", OutputPublishing.Describe(Request()), StringComparison.Ordinal);
+        Assert.Contains("and the panorama.json this publish writes", OutputPublishing.Describe(Request()), StringComparison.Ordinal);
+
+        File.WriteAllText(Path.Combine(_outputDir, PanoramaTargets.FileName), "{}");
+        Assert.StartsWith("Upload 6 files (", OutputPublishing.Describe(Request()), StringComparison.Ordinal);
+        Assert.DoesNotContain("this publish writes", OutputPublishing.Describe(Request()), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -643,6 +671,99 @@ public sealed class PanoramaPublisherTests : IDisposable
         Assert.Contains(_server.WebParts, p => p.Id == first); // PRISM does not delete it; it says so
         Assert.Contains($"{Container}'s page still shows the earlier links page", outcome.LinksNote, StringComparison.Ordinal);
         Assert.Contains($"(id {first})", outcome.LinksNote, StringComparison.Ordinal);
+        Assert.Equal(other, PanoramaTargets.Load(_outputDir).LinksWebPartFolder);
+    }
+
+    [Fact]
+    public async Task AMoveThatIsRefused_KeepsTheOldPartRecorded_SoTheNextPublishStillNamesIt()
+    {
+        // Forgotten before a new part existed, a move refused for want of permission left the old part
+        // recorded nowhere: no later publish could reuse it, or say it was still there.
+        const string other = "/MacCoss/maccoss/Elsewhere";
+        MakePanoramaFolder();
+        _server.AddContainer(other);
+        _server.FolderTypes[other] = "Targeted MS";
+        await OutputPublishing.RunAsync(_client, WithLinks());
+        var first = PanoramaTargets.Load(_outputDir).LinksWebPartId;
+
+        _server.IsAdmin = false;
+        var refused = await OutputPublishing.RunAsync(_client, WithLinks() with { LinksFolder = other });
+
+        Assert.False(refused.LinksOnFolderPage);
+        Assert.DoesNotContain("still shows the earlier links page", refused.LinksNote, StringComparison.Ordinal);
+        var kept = PanoramaTargets.Load(_outputDir);
+        Assert.Equal(first, kept.LinksWebPartId);
+        Assert.Equal(Container, kept.LinksWebPartFolder);
+
+        _server.IsAdmin = true;
+        var moved = await OutputPublishing.RunAsync(_client, WithLinks() with { LinksFolder = other });
+
+        Assert.True(moved.LinksOnFolderPage);
+        Assert.Contains($"(id {first})", moved.LinksNote, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AMoveWhoseNewPartCouldNotBeSetUp_StillSaysTheOldOneIsThere()
+    {
+        // The new part exists from the moment it is added, so the old one is no longer what this
+        // directory records - and has to be named then, not only when everything went well.
+        const string other = "/MacCoss/maccoss/Elsewhere";
+        MakePanoramaFolder();
+        _server.AddContainer(other);
+        _server.FolderTypes[other] = "Targeted MS";
+        await OutputPublishing.RunAsync(_client, WithLinks());
+        var first = PanoramaTargets.Load(_outputDir).LinksWebPartId;
+
+        _server.FailCustomize = true;
+        var outcome = await OutputPublishing.RunAsync(_client, WithLinks() with { LinksFolder = other });
+
+        Assert.False(outcome.LinksOnFolderPage);
+        Assert.Contains($"(id {first})", outcome.LinksNote, StringComparison.Ordinal);
+        var recorded = PanoramaTargets.Load(_outputDir);
+        Assert.Equal(Assert.Single(_server.WebParts, p => p.Container == other).Id, recorded.LinksWebPartId);
+        Assert.Equal(other, recorded.LinksWebPartFolder);
+    }
+
+    [Fact]
+    public async Task ATargetsFileThatCannotBeRead_StopsThePublish_RatherThanReplacingItsId()
+    {
+        // Read as "nothing remembered", a moment's lock gave the directory a new id, saved it over the
+        // real one, and left every page it had published refused as another directory's.
+        var targetsFile = Path.Combine(_outputDir, PanoramaTargets.FileName);
+        File.WriteAllText(targetsFile, "{\"publish_id\":\"0123456789abcdef0123456789abcdef\"}");
+        var delay = PanoramaTargets.ReadRetryDelay;
+        PanoramaTargets.ReadRetryDelay = TimeSpan.Zero;
+        var sent = _server.Requests.Count;
+        try
+        {
+            using (new FileStream(targetsFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var refused = await Assert.ThrowsAsync<PanoramaException>(() => OutputPublishing.RunAsync(_client, Request(raw: null)));
+                Assert.Contains("could not be read", refused.Message, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            PanoramaTargets.ReadRetryDelay = delay;
+        }
+
+        Assert.Equal(sent, _server.Requests.Count); // nothing was sent
+        Assert.Equal("0123456789abcdef0123456789abcdef", PanoramaTargets.Load(_outputDir).PublishId);
+    }
+
+    [Fact]
+    public async Task ADamagedTargetsFile_IsKeptAside_AndThePublishSaysSo()
+    {
+        var targetsFile = Path.Combine(_outputDir, PanoramaTargets.FileName);
+        File.WriteAllText(targetsFile, "{ not json");
+        var said = new System.Collections.Generic.List<string>();
+
+        var outcome = await OutputPublishing.RunAsync(_client, Request(raw: null), say: said.Add);
+
+        Assert.NotNull(outcome.Qc);
+        Assert.Equal("{ not json", File.ReadAllText(targetsFile + ".damaged"));
+        Assert.Contains(said, s => s.Contains("is damaged", StringComparison.Ordinal));
+        Assert.Equal(OutputPublishing.DerivedPublishId(_outputDir), PanoramaTargets.Load(_outputDir).PublishId);
     }
 
     [Fact]
@@ -659,7 +780,7 @@ public sealed class PanoramaPublisherTests : IDisposable
             Assert.NotNull(outcome.Qc);
             Assert.Contains(said, s => s.Contains("cannot be written", StringComparison.Ordinal));
             var source = System.Text.RegularExpressions.Regex.Match(PageNamed("PRISM-QC-run-2026-10").Body, "data-source=\"([^\"]+)\"").Groups[1].Value;
-            Assert.StartsWith("d", source, StringComparison.Ordinal);
+            Assert.Equal(OutputPublishing.DerivedPublishId(_outputDir), source);
 
             // Nothing could be remembered, yet the next publish is recognized as the same directory.
             await OutputPublishing.RunAsync(_client, Request(raw: null));

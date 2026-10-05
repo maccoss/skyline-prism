@@ -548,8 +548,14 @@ Key sections:
 >   as the first version did, made every older version in the page history show the newest run's
 >   plots.
 > - A Panorama (Targeted MS) folder's page is `DefaultDashboard`, not `portal.default`
->   (`MainPageIdAsync` matches the parts the start page renders), and adding a web part needs folder
->   administrator permission - without it the links page is published and the outcome says why.
+>   (`MainPageIdAsync` goes by the folder type, and for a type it does not know, by which page holds
+>   the parts the start page renders), and adding a web part needs folder administrator permission -
+>   without it the links page is published and the outcome says why.
+> - **`panorama.json` holds the directory's `publish_id`, so a publish reads it strictly**
+>   (`PanoramaTargets.LoadForPublish`): unreadable after retries, the publish stops. `Load`'s leniency
+>   (anything wrong reads as "nothing remembered") is for showing remembered folders only - used for a
+>   publish, a moment's lock replaced the id and every page the directory had published was then
+>   refused as another's.
 
 ### Core/Qc/
 - `QcReport.Generate()`: builds the self-contained `qc_report.html` from an output directory

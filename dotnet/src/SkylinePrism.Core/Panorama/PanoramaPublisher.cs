@@ -204,9 +204,9 @@ public sealed class PanoramaPublisher
             .ConfigureAwait(false);
 
         // Removed: the plots the last publish recorded, and any named exactly as PRISM names a plot (this
-        // page's prefix, then the content hash - or the position, as the first versions did) left by a
-        // publish that failed before its save. Never an attachment someone else put on the page.
-        var plotName = new Regex("^" + Regex.Escape(pageName.ToLowerInvariant()) + @"-(?:[0-9a-f]{12}|\d{2}-[0-9a-f]{8}|\d{2})\.(?:png|jpg|gif|svg)$");
+        // page's prefix, then 12 hex digits of its content) left by a publish that failed before its save.
+        // Never an attachment someone else put on the page - "<page>-01.png" is a name a person gives a file.
+        var plotName = new Regex("^" + Regex.Escape(pageName.ToLowerInvariant()) + @"-[0-9a-f]{12}\.(?:png|jpg|gif|svg)$");
         var unused = previousAttachments
             .Concat((onPage ?? Array.Empty<string>()).Where(n => plotName.IsMatch(n)))
             .Distinct(StringComparer.Ordinal)

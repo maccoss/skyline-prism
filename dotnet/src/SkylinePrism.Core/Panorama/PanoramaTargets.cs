@@ -27,10 +27,14 @@ public sealed record QuantPage(string Folder, string Page, string? Contrast);
 /// <param name="LinksWebPartId">The web part PRISM added to show it, so a republish updates that part rather than adding another.</param>
 /// <param name="QuantPages">Every quant page published from this output directory - one per contrast - for the links page.</param>
 /// <param name="PublishId">
-/// A random id for this output directory, made on its first publish and written into the footer of
-/// every page it publishes, so a different output directory with the same name - and so the same
-/// default page names - cannot replace its pages unnoticed. Not secret, and not provenance.
+/// This output directory's id, written into the footer of every page it publishes, so a different
+/// output directory with the same name - and so the same default page names - cannot replace its
+/// pages unnoticed. Derived from the run on its first publish (<see cref="OutputPublishing.DerivedPublishId"/>)
+/// and kept here after. Not secret, and not provenance.
 /// </param>
+/// <param name="LinksWebPartFolder">The folder whose page <paramref name="LinksWebPartId"/> is on; older files
+/// leave it out, and then it is the links page's folder.</param>
+/// <param name="LinksWebPartPage">The links page that part shows.</param>
 public sealed record PanoramaTargets(
     string Server,
     WikiTarget? QcWiki,
@@ -40,7 +44,9 @@ public sealed record PanoramaTargets(
     WikiTarget? LinksWiki = null,
     int? LinksWebPartId = null,
     IReadOnlyList<QuantPage>? QuantPages = null,
-    string? PublishId = null)
+    string? PublishId = null,
+    string? LinksWebPartFolder = null,
+    string? LinksWebPartPage = null)
 {
     public const string FileName = "panorama.json";
 
@@ -53,7 +59,10 @@ public sealed record PanoramaTargets(
 
     public static PanoramaTargets Empty { get; } = new(PanoramaPaths.DefaultServer.AbsoluteUri.TrimEnd('/'), null, null, null, null);
 
-    /// <summary>The targets recorded in an output directory, or <see cref="Empty"/> when there are none (or they cannot be read).</summary>
+    /// <summary>
+    /// The targets recorded in an output directory, or <see cref="Empty"/> when there are none (or they
+    /// cannot be read). For showing what was remembered; a publish uses <see cref="LoadForPublish"/>.
+    /// </summary>
     public static PanoramaTargets Load(string outputDir)
     {
         var path = Path.Combine(outputDir, FileName);
@@ -61,13 +70,90 @@ public sealed record PanoramaTargets(
             return Empty;
         try
         {
-            return JsonSerializer.Deserialize<PanoramaTargets>(File.ReadAllText(path), Json) ?? Empty;
+            return JsonSerializer.Deserialize<PanoramaTargets>(ReadShared(path), Json) ?? Empty;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            // A damaged file is a forgotten preference, not a failure to publish.
+            // A damaged file is a forgotten preference, not a failure to open a window.
             return Empty;
         }
+    }
+
+    /// <summary>The pause before re-reading a file another program holds; the nth retry waits n times this.</summary>
+    internal static TimeSpan ReadRetryDelay { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// The targets as a PUBLISH needs them: like <see cref="Load"/>, except that a file that is there
+    /// but cannot be read is retried and then refused, never read as "nothing remembered".
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Load"/>'s leniency is right for a window opening on remembered folders and wrong
+    /// here, because the file holds the directory's <see cref="PublishId"/>. A publish that read
+    /// nothing through a moment's lock - a scanner, the window reading it, an SMB hiccup - would make
+    /// an id and save it over the real one, and from then on every page this directory had published
+    /// would be refused as another directory's. A file that is not JSON cannot be read later either,
+    /// so it is copied aside (<c>panorama.json.damaged</c>) before anything overwrites it, the publish
+    /// goes on as a first one, and says so.
+    /// </remarks>
+    public static PanoramaTargets LoadForPublish(string outputDir, Action<string>? say = null)
+    {
+        var path = Path.Combine(outputDir, FileName);
+        if (!File.Exists(path))
+            return Empty;
+
+        string text;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                text = ReadShared(path);
+                break;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt < 3)
+                {
+                    System.Threading.Thread.Sleep(ReadRetryDelay * attempt);
+                    continue;
+                }
+
+                throw new PanoramaException(
+                    $"{FileName} in {outputDir} is there but could not be read ({ex.Message}). Not publishing: it "
+                    + "holds the id that says which pages on Panorama are this directory's, and publishing without it "
+                    + "would claim them under another. Close whatever has it open and publish again.");
+            }
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<PanoramaTargets>(text, Json) ?? Empty;
+        }
+        catch (JsonException ex)
+        {
+            var aside = path + ".damaged";
+            try
+            {
+                File.Copy(path, aside, overwrite: true);
+            }
+            catch (Exception copy) when (copy is IOException or UnauthorizedAccessException)
+            {
+                // Nowhere to put it; the message below still says the file was not used.
+            }
+
+            say?.Invoke($"{FileName} in {outputDir} is damaged ({ex.Message}); it was copied to {Path.GetFileName(aside)} "
+                        + "and this publish goes on as this directory's first. Pages it published before carry its "
+                        + "old id: if they are refused as another directory's, take them over on purpose (--take-over).");
+            return Empty;
+        }
+    }
+
+    // Shared for writing and deletion, so reading the file never holds up the program that owns it
+    // (see "A reader must never take a file hostage" in CLAUDE.md).
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     public void Save(string outputDir) =>
@@ -81,10 +167,24 @@ public sealed record PanoramaTargets(
         other is not null && Server == other.Server && QcWiki == other.QcWiki && QuantWiki == other.QuantWiki
         && RawFolder == other.RawFolder && Destination == other.Destination && LinksWiki == other.LinksWiki
         && LinksWebPartId == other.LinksWebPartId && PublishId == other.PublishId
+        && LinksWebPartFolder == other.LinksWebPartFolder && LinksWebPartPage == other.LinksWebPartPage
         && (QuantPages ?? Array.Empty<QuantPage>()).SequenceEqual(other.QuantPages ?? Array.Empty<QuantPage>());
 
-    public override int GetHashCode() =>
-        HashCode.Combine(Server, QcWiki, QuantWiki, RawFolder, Destination, LinksWiki, LinksWebPartId, PublishId);
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Server);
+        hash.Add(QcWiki);
+        hash.Add(QuantWiki);
+        hash.Add(RawFolder);
+        hash.Add(Destination);
+        hash.Add(LinksWiki);
+        hash.Add(LinksWebPartId);
+        hash.Add(PublishId);
+        hash.Add(LinksWebPartFolder);
+        hash.Add(LinksWebPartPage);
+        return hash.ToHashCode();
+    }
 
     /// <summary>The QC page to publish to: the remembered one, else the default name.</summary>
     public string QcPageFor(string outputDir) => QcWiki?.Page ?? PanoramaPublisher.DefaultQcPage(outputDir);

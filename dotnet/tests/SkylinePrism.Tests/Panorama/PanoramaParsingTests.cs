@@ -90,6 +90,11 @@ public class PanoramaParsingTests
 
         // An editor that does not say leaves the list unknown, not empty.
         Assert.Null(PanoramaClient.ParseWikiEditor("<script>LABKEY._wiki.setProps({\n    entityId: 'e-1'\n});</script>").Attachments);
+
+        // So does one that lists files in a shape PRISM does not read; an empty block is no files.
+        const string Props = "<script>LABKEY._wiki.setProps({\n    entityId: 'e-1'\n});\n";
+        Assert.Null(PanoramaClient.ParseWikiEditor(Props + "LABKEY._wiki.setAttachments([\n    {\"name\": \"a-1.png\"}\n]);</script>").Attachments);
+        Assert.Empty(PanoramaClient.ParseWikiEditor(Props + "LABKEY._wiki.setAttachments([\n]);</script>").Attachments!);
     }
 
     [Fact]

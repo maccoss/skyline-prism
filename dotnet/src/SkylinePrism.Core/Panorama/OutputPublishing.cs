@@ -114,10 +114,13 @@ public static class OutputPublishing
             var files = Directory.Exists(request.OutputDir)
                 ? Directory.EnumerateFiles(request.OutputDir, "*", SearchOption.AllDirectories).Select(f => new FileInfo(f)).ToList()
                 : new List<FileInfo>();
-            // panorama.json is written just before the upload, so it is one of the files sent.
-            var count = files.Count + (File.Exists(Path.Combine(request.OutputDir, PanoramaTargets.FileName)) ? 0 : 1);
-            sb.AppendLine($"Upload {count} files ({PanoramaPublisher.FormatBytes(files.Sum(f => f.Length))}) to {request.Destination}, "
-                          + "skipping any already there unchanged");
+            // panorama.json is written just before the upload and goes up with it - when it CAN be
+            // written: a directory PRISM cannot write to is published without one, so it is named
+            // rather than counted, and the run says which happened.
+            var targetsPending = !File.Exists(Path.Combine(request.OutputDir, PanoramaTargets.FileName));
+            sb.AppendLine($"Upload {files.Count} files ({PanoramaPublisher.FormatBytes(files.Sum(f => f.Length))})"
+                          + (targetsPending ? $", and the {PanoramaTargets.FileName} this publish writes," : string.Empty)
+                          + $" to {request.Destination}, skipping any already there unchanged");
         }
         if (request.QcFolder is not null)
             sb.AppendLine($"Publish the QC report as the wiki page {request.ResolvedQcPage} in {PanoramaPaths.Container(request.QcFolder)}");
@@ -178,34 +181,32 @@ public static class OutputPublishing
                 $"Signed in to {client.Server.GetLeftPart(UriPartial.Authority)}, but asked to publish to "
                 + $"{request.Server.GetLeftPart(UriPartial.Authority)}. Sign in to that server first.");
 
-        var remembered = PanoramaTargets.Load(request.OutputDir);
+        // Strictly: a file that is there but unreadable for a moment is not "nothing remembered", or the
+        // directory's id would be replaced (see LoadForPublish).
+        var remembered = PanoramaTargets.LoadForPublish(request.OutputDir, say);
         var targets = request.ToTargets(remembered);
-        // A web part recorded for another folder's page is not this folder's: forgotten, so a new one is
-        // added here, and the old one is named below so it is not left behind unmentioned.
-        var movedFrom = remembered.LinksWiki is { } was && remembered.LinksWebPartId is not null && request.LinksFolder is not null
-                        && !string.Equals(PanoramaPaths.Container(was.Folder), PanoramaPaths.Container(request.LinksFolder),
+        // The web part PRISM added before, and the folder whose page it is on - which older files do not
+        // record, and then it is the links page's folder. Moving the links elsewhere adds a part there;
+        // the old one stays recorded until the new one exists, so a move that fails (no administrator
+        // permission in the new folder, say) still names the old part on the next publish.
+        var partFolder = remembered.LinksWebPartFolder ?? remembered.LinksWiki?.Folder;
+        var movedFrom = remembered.LinksWebPartId is { } oldPart && partFolder is not null && request.LinksFolder is not null
+                        && !string.Equals(PanoramaPaths.Container(partFolder), PanoramaPaths.Container(request.LinksFolder),
                             StringComparison.OrdinalIgnoreCase)
-            ? (Folder: PanoramaPaths.Container(was.Folder), was.Page, WebPartId: remembered.LinksWebPartId.Value)
+            ? (Folder: PanoramaPaths.Container(partFolder), Page: remembered.LinksWebPartPage ?? remembered.LinksWiki?.Page ?? "",
+                WebPartId: oldPart)
             : ((string Folder, string Page, int WebPartId)?)null;
-        if (movedFrom is not null)
-            targets = targets with { LinksWebPartId = null };
 
-        // Saved before anything is sent: the id goes into every page's footer, and a page published under
-        // an id that was then lost would be refused as another output directory's. It also means the
-        // uploaded copy records where it was published.
-        var remembering = Remember(targets with { PublishId = targets.PublishId ?? Guid.NewGuid().ToString("N") }, request.OutputDir);
-        if (remembering.Saved)
-            targets = remembering.Targets;
-        else
-        {
-            // An output directory PRISM cannot write to - a read-only share, an archived analysis - is
-            // published all the same. Its id cannot be saved, so it is derived from what the directory
-            // holds, and so is the same on every publish from it: a fresh random one each time would
-            // make every republish look like another directory's.
-            targets = targets with { PublishId = targets.PublishId ?? DerivedPublishId(request.OutputDir) };
+        // Derived, not random: the same directory always gives the same id, so one PRISM cannot write to
+        // (a read-only share, an archived analysis) is recognized from one publish to the next without
+        // keeping it anywhere, and stays recognized if it later becomes writable.
+        targets = targets with { PublishId = targets.PublishId ?? DerivedPublishId(request.OutputDir) };
+        // Saved before anything is sent, so the uploaded copy records where it was published. A
+        // directory PRISM cannot write to is published all the same.
+        var remembering = Remember(targets, request.OutputDir);
+        if (!remembering.Saved)
             say?.Invoke($"{PanoramaTargets.FileName} cannot be written in {request.OutputDir} ({remembering.Why}). Publishing anyway; "
                         + "where this directory was published to will not be remembered for next time.");
-        }
 
         var publisher = new PanoramaPublisher(client, say, targets.PublishId, request.TakeOver);
 
@@ -263,30 +264,30 @@ public static class OutputPublishing
 
             if (links is not null)
             {
+                var superseded = false;
                 try
                 {
                     var (webPartId, _) = await publisher.ShowOnFolderPageAsync(request.LinksFolder, request.ResolvedLinksPage,
-                        targets.LinksWebPartId,
+                        movedFrom is null ? targets.LinksWebPartId : null,
                         added: id =>
                         {
                             // Recorded the moment the part exists, so a failure setting it up does not
                             // leave a part the next publish would not recognize and add again. A file
                             // that cannot be written here must not fail a publish that worked.
-                            targets = targets with { LinksWebPartId = id };
+                            targets = targets with
+                            {
+                                LinksWebPartId = id, LinksWebPartFolder = links.Folder, LinksWebPartPage = links.PageName,
+                            };
+                            superseded = true;
                             if (remembering.Saved)
                                 Remember(targets, request.OutputDir);
                         },
                         cancellationToken).ConfigureAwait(false);
-                    targets = targets with { LinksWebPartId = webPartId };
-                    onFolderPage = true;
-                    if (movedFrom is { } old)
+                    targets = targets with
                     {
-                        var moved = $"The links are now shown on {links.Folder}'s page. {old.Folder}'s page still shows the earlier "
-                                    + $"links page, {old.Page}, in the Wiki web part PRISM added there (id {old.WebPartId}); it is no "
-                                    + "longer updated. Remove that part on Panorama if it is not wanted there.";
-                        say?.Invoke(moved);
-                        note = note is null ? moved : note + " " + moved;
-                    }
+                        LinksWebPartId = webPartId, LinksWebPartFolder = links.Folder, LinksWebPartPage = links.PageName,
+                    };
+                    onFolderPage = true;
                 }
                 catch (PanoramaException ex)
                 {
@@ -295,6 +296,17 @@ public static class OutputPublishing
                     note = $"The links page was published, but could not be shown on {links.Folder}'s page ({ex.Message}). "
                            + $"A folder administrator can add a Wiki web part there showing the page {links.PageName}.";
                     say?.Invoke(note);
+                }
+
+                // Said once the new part exists - whether or not setting it up then failed - because from
+                // then on the old one is no longer what this directory records.
+                if (movedFrom is { } old && superseded)
+                {
+                    var moved = $"The links are now shown on {links.Folder}'s page. {old.Folder}'s page still shows the earlier "
+                                + $"links page, {old.Page}, in the Wiki web part PRISM added there (id {old.WebPartId}); it is no "
+                                + "longer updated. Remove that part on Panorama if it is not wanted there.";
+                    say?.Invoke(moved);
+                    note = note is null ? moved : note + " " + moved;
                 }
             }
         }
@@ -341,26 +353,40 @@ public static class OutputPublishing
     }
 
     /// <summary>
-    /// A publish id for an output directory that cannot keep one: a hash of its run record
-    /// (<c>parameters.json</c>, which a read-only directory cannot change), else of its full path.
-    /// Prefixed so it is never mistaken for a saved random one.
+    /// The publish id of an output directory that has none recorded: a hash of its run record
+    /// (<c>parameters.json</c>), else of its full path. The same however often it is derived - so a
+    /// directory that cannot keep it is still recognized - and a copy of one analysis is that analysis,
+    /// while another run, which writes its own <c>parameters.json</c>, is not.
     /// </summary>
+    /// <remarks>
+    /// A <c>parameters.json</c> that is there but cannot be read is refused rather than replaced by
+    /// the path: the fallback would give this directory a second identity, and its pages would then
+    /// be refused as another's.
+    /// </remarks>
     internal static string DerivedPublishId(string outputDir)
     {
         var parameters = Path.Combine(outputDir, "parameters.json");
         byte[] basis;
-        try
+        if (!File.Exists(parameters))
+            basis = Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        else
         {
-            basis = File.Exists(parameters)
-                ? File.ReadAllBytes(parameters)
-                : Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            basis = Encoding.UTF8.GetBytes(Path.GetFullPath(outputDir));
+            try
+            {
+                using var stream = new FileStream(parameters, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var copy = new MemoryStream();
+                stream.CopyTo(copy);
+                basis = copy.ToArray();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new PanoramaException(
+                    $"parameters.json in {outputDir} could not be read ({ex.Message}); it is what this directory's publish "
+                    + "id comes from. Close whatever has it open and publish again.");
+            }
         }
 
-        return "d" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(basis))[..31];
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(basis))[..32];
     }
 
     /// <summary>

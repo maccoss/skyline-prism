@@ -3092,6 +3092,9 @@ public partial class MainWindow : Window
     // Each look at the Output directory's reports is numbered, and only the latest may set the button.
     private int _publishProbe;
 
+    // The directory the button's state was last decided for.
+    private string? _publishProbedDir;
+
     /// <summary>How long the Output directory box must be still before its reports are looked for.</summary>
     private static readonly TimeSpan PublishProbeDelay = TimeSpan.FromMilliseconds(300);
 
@@ -3110,8 +3113,15 @@ public partial class MainWindow : Window
         if (_isRunning || string.IsNullOrEmpty(dir))
         {
             PublishButton.IsEnabled = false;
+            _publishProbedDir = null;
             return;
         }
+
+        // Another directory is not the one the button was enabled for: off until it has been looked at,
+        // or a click in the wait would publish whatever the box holds now. The same directory looked at
+        // again (a report just written beside it) keeps its state meanwhile, so the button does not flicker.
+        if (!string.Equals(dir, _publishProbedDir, StringComparison.OrdinalIgnoreCase))
+            PublishButton.IsEnabled = false;
 
         try
         {
@@ -3121,7 +3131,10 @@ public partial class MainWindow : Window
             var hasReport = await Task.Run(() =>
                 File.Exists(Path.Combine(dir, "qc_report.html")) || File.Exists(Path.Combine(dir, "quant", "quant_report.html")));
             if (probe == _publishProbe)
+            {
                 PublishButton.IsEnabled = hasReport && !_isRunning;
+                _publishProbedDir = dir;
+            }
         }
         catch (Exception)
         {

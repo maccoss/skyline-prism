@@ -90,12 +90,18 @@ links page itself cannot be written, the reports and the upload stand, and the p
   of that name exists that PRISM never wrote, the publish stops and says so.
 - **A page belongs to the output directory that published it.** Default page names come from the
   output directory's name, and names like `PRISM-sum-rtlowess-medianpolish` recur from one experiment
-  to the next. So each output directory gets a random id on its first publish (`publish_id` in
-  `panorama.json`), and every page it publishes carries that id in its footer. Another output
-  directory with the same name, publishing to the same folder, is refused rather than allowed to
-  replace the first one's page: choose another page name for it. The same refusal appears if this
-  directory's own `panorama.json` was deleted or replaced, since its id went with it; then take the
-  page back with `--take-over`.
+  to the next. So each output directory gets an id on its first publish (`publish_id` in
+  `panorama.json`), and every page it publishes carries that id in its footer. The id is a hash of
+  the directory's `parameters.json` (of its path, when there is none), so the same run gives the same
+  id however often it is worked out, and another run, which writes its own `parameters.json`, gets
+  another. Another output directory with the same name, publishing to the same folder, is refused
+  rather than allowed to replace the first one's page: choose another page name for it. The same
+  refusal appears if this directory's `panorama.json` was replaced with another's, or if the analysis
+  was re-run after its `panorama.json` was deleted; then take the page back with `--take-over`.
+- **A `panorama.json` that cannot be read stops the publish.** Held by another program through three
+  attempts, it is not read as "nothing remembered", which would replace the directory's id: the
+  publish stops and says to close whatever has it open. One that is not valid JSON is copied to
+  `panorama.json.damaged` and the publish goes on as the directory's first, saying so.
 - **Replacing one on purpose.** Pass `--replace-edited` (or tick **Replace a page edited on Panorama**)
   for a page edited on Panorama or one PRISM did not write, and `--take-over` (**Take over a page
   published from a different output directory**) for another directory's page. They are separate on
@@ -103,8 +109,10 @@ links page itself cannot be written, the reports and the upload stand, and the p
   the same run. The text replaced stays in the page's history.
 - **An output directory PRISM cannot write to is still published.** A read-only share or an archived
   analysis cannot hold `panorama.json`, so the publish says that where it went will not be
-  remembered. Its id is then derived from its `parameters.json` (which a read-only directory cannot
-  change), so a later publish from it is still recognized as the same directory.
+  remembered. Its id is worked out from its `parameters.json` each time (which a read-only directory
+  cannot change), so a later publish from it is still recognized as the same directory. The plan
+  names the `panorama.json` a publish writes separately from the files it counts, because a
+  directory like this one never gets one.
 - **Only changed files are uploaded.** Before uploading, each file is compared with Panorama's own MD5
   of its copy (LabKey's `?method=md5sum`, computed over the bytes the server stored). A file already
   there unchanged is skipped. After a folder's files go up, they are checked the same way. A file that
@@ -153,15 +161,20 @@ documentation, which differ from it in ways that matter.
   alone, and no doctype. Every other file is uploaded byte for byte.
 - **A wiki save needs LabKey's CSRF token, even with an API key.** PRISM gets one from
   `login-whoami.api` for each save, together with that session's cookie.
-- **Attaching a file whose name is already taken is refused with a warning, not replaced.** PRISM
-  removes the previous publish's attachments first, in a request of its own.
+- **Attaching a file whose name is already taken is refused with a warning, not replaced.** A plot is
+  named by a hash of its bytes (`<page>-<12 hex digits>.png`), so an unchanged plot is already there
+  and is not sent. Plots the page no longer shows are removed after the new body is saved: the ones
+  the previous publish recorded, and any named in exactly that form that a failed publish left
+  behind. A file someone else attached, such as `<page>-01.png`, is never removed.
 - **Creating a folder that already exists answers 200** on panoramaweb.org, where PanoramaBridge
   measured 405 earlier. Both are treated as success.
 - **A semicolon in a file name** makes the server truncate the name, so such a file is refused before
   anything is sent.
 - **A Panorama folder's page is not `portal.default`.** A Targeted MS folder keeps its page's web parts
-  under the page id `DefaultDashboard`, and `portal.default` lists nothing there. PRISM uses the page
-  whose parts the folder's start page actually renders.
+  under the page id `DefaultDashboard`, and `portal.default` lists nothing there. PRISM takes the page
+  from the folder's type (`project-getContainers.api`): `DefaultDashboard` for Targeted MS,
+  `portal.default` for Collaboration. For any other type it falls back to whichever of the two holds
+  the parts the folder's start page actually renders.
 - **Adding a web part takes the column by LabKey's internal name.** `project-addWebPart.view` is a form
   action, not an API. It answers with a redirect and never names the new part. It wants the body
   column as `!content`, though the web part listing reports that column as `body`. Sent `body`, it

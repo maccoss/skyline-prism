@@ -171,11 +171,17 @@ public sealed partial class PanoramaClient
         if (string.IsNullOrEmpty(entityId))
             throw new PanoramaException("Panorama's wiki editor did not say which page it is, so the page was left alone.");
 
-        // The attachments come in a block of their own, one object per file, each with its name.
-        var attachments = Regex.Match(html, @"LABKEY\._wiki\.setAttachments\(\[((?:'(?:[^'\\]|\\.)*'|""(?:[^""\\]|\\.)*""|[^'""])*?)\]\);",
-            RegexOptions.Singleline) is { Success: true } list
-            ? Regex.Matches(list.Groups[1].Value, @"(?m)^\s*name:\s*'((?:[^'\\]|\\.)*)'").Select(m => DecodeJsString(m.Groups[1].Value)).ToList()
-            : null;
+        // The attachments come in a block of their own, one object per file, each with its name. A block
+        // with something in it but no name PRISM can read is a format it does not know, so the list is
+        // unknown rather than empty: read as "no files", every plot would be sent again.
+        IReadOnlyList<string>? attachments = null;
+        if (Regex.Match(html, @"LABKEY\._wiki\.setAttachments\(\[((?:'(?:[^'\\]|\\.)*'|""(?:[^""\\]|\\.)*""|[^'""])*?)\]\);",
+                RegexOptions.Singleline) is { Success: true } list)
+        {
+            var names = Regex.Matches(list.Groups[1].Value, @"(?m)^\s*name:\s*'((?:[^'\\]|\\.)*)'")
+                .Select(m => DecodeJsString(m.Groups[1].Value)).ToList();
+            attachments = names.Count > 0 || string.IsNullOrWhiteSpace(list.Groups[1].Value) ? names : null;
+        }
 
         return new WikiPageInfo(entityId, JsInt(props, "rowId"), JsInt(props, "pageVersionId"), JsString(props, "name") ?? "",
             JsString(props, "title") ?? "", JsString(props, "body") ?? "", JsInt(props, "parent"),
