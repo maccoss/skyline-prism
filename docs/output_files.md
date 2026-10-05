@@ -58,12 +58,13 @@ below. Neither touches any file `prism run` wrote.
 |---|---|---|
 | `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
 
-Four `#` comment lines precede the header, because a results file outlives the shell that produced
-it and every one of these is a question a reader asks of it:
+Four or five `#` comment lines precede the header, because a results file outlives the shell that
+produced it and every one of these is a question a reader asks of it:
 
 ```text
 # contrast: condition = Disease vs Control (positive log2FC is higher in Disease)
 # method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
+# prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
 # n: Disease 40 vs Control 12; tested 4,812 of 4,900
 # hit rule (rows are NOT filtered by it): adj.P < 0.05, |log2FC| >= 1
 ```
@@ -71,6 +72,8 @@ it and every one of these is a question a reader asks of it:
 The method line names the prior that **actually ran**, which is not always the one requested - a
 trend design has no groups for the intensity trend, a peptide matrix has no peptide counts - and the
 hit rule is recorded as *not* having filtered the rows, because every tested feature is in the file.
+The `# prior:` line appears under the intensity-trend prior only. Its source sets the trend's shape,
+and the factor says how far the trend was scaled to match this contrast's residuals.
 
 Under a trend design the first line reads differently, and says what `log2fc` now means:
 

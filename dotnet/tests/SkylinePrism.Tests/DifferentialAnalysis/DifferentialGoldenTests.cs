@@ -541,9 +541,9 @@ public class DifferentialGoldenTests
     /// with an independent implementation to check against - it IS
     /// <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and reproducing that is the
     /// whole requirement. It stands to PRISM as inmoose does for squeezeVar.
-    /// <para>Note what is asserted: the per-feature prior SCALE only. The prior degrees of freedom
-    /// are not part of this estimator - they stay at the global squeezeVar value - and that is
-    /// precisely what distinguishes it from limma's <c>trend=TRUE</c>, which re-estimates both.</para>
+    /// <para>Note what is asserted: the trend's per-feature SHAPE only, before its level and the prior
+    /// degrees of freedom are fitted to the design residuals. That calibration is pinned end to end
+    /// by <see cref="DefaultAnalysis_PriorFromControls_MatchesTheToolkitEndToEnd"/>.</para>
     /// </remarks>
     [Theory]
     [MemberData(nameof(IntensityTrendCases))]
@@ -891,6 +891,109 @@ public class DifferentialGoldenTests
             Golden.Close(a[id].T, b[id].T, 1e-12, $"{id} t under reordering");
         }
     }
+
+    /// <summary>
+    /// The default analysis end to end - moderated t, intensity-trend prior fitted on dedicated
+    /// reference and QC pools, Benjamini-Hochberg - against the toolkit's own top-level call.
+    /// </summary>
+    /// <remarks>
+    /// <para>The pieces are pinned separately elsewhere in this file: the trend's shape on the
+    /// contrast arms, and each design under a global prior. What none of them pins is the
+    /// composition a lab analysis runs, where the prior's groups are replicates outside the design
+    /// and give only the trend's SHAPE, while its level and degrees of freedom are fitted to the
+    /// design residuals. Every piece could agree and that still disagree, so it is checked here
+    /// through <c>run_comprehensive_statistical_analysis</c> itself. The generator also checks the
+    /// level and df against <c>inmoose.limma.squeezeVar</c> on residual / trend before writing.</para>
+    /// <para>The <c>independent_trend</c> case is the one the uncalibrated prior got most wrong: a
+    /// between-subject trend whose residual carries the whole between-person spread, against pools
+    /// that carry none of it. Its d0 came out infinite, so the posterior WAS the pools' technical
+    /// variance and null features reached p ~ 1e-8. Calibrated, the trend is scaled by ~170 and no
+    /// null feature gets below p = 0.7.</para>
+    /// <para>Checked first on the Verapamil serum cohort (3,595 proteins, paired week 0 vs 12 and the
+    /// within-subject trend over weeks 0-12), where every t, p and adjusted p agreed to ~1e-11 once
+    /// two conventions were aligned: the toolkit's log pseudocount (PRISM adds none) and PRISM's
+    /// LOWESS interpolation distance (the toolkit passes 0). The generator aligns the first and
+    /// builds its inputs so the second interpolates nothing, so 1e-9 here is the squeezeVar
+    /// tolerance used throughout this file, not an allowance for either.</para>
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(ToolkitEndToEndCases))]
+    public void DefaultAnalysis_PriorFromControls_MatchesTheToolkitEndToEnd(string name)
+    {
+        var c = Golden.Case("toolkit_end_to_end.json", name);
+        var expr = Golden.Mat(c, "expr_log2");
+        var nCols = expr.GetLength(1);
+        var ids = Enumerable.Range(0, expr.GetLength(0)).Select(i => $"f{i}").ToArray();
+        int[] Ints(JsonElement e) => e.EnumerateArray().Select(v => v.GetInt32()).ToArray();
+        var a = Ints(c.GetProperty("a_columns"));
+        var b = Ints(c.GetProperty("b_columns"));
+        var priorGroups = c.GetProperty("prior_groups").EnumerateArray()
+            .Select(g => (IReadOnlyList<int>)Ints(g)).ToArray();
+
+        // Subject and x are indexed by MATRIX column, like any metadata column; the control pools
+        // that close every case have neither.
+        string?[]? subjects = null;
+        if (c.GetProperty("subject_of").ValueKind == JsonValueKind.Array)
+        {
+            subjects = new string?[nCols];
+            var given = c.GetProperty("subject_of").EnumerateArray().Select(e => e.GetString()).ToArray();
+            Array.Copy(given, subjects, given.Length);
+        }
+
+        var design = c.GetProperty("design").GetString();
+        var options = new DifferentialOptions
+        {
+            Design = design switch
+            {
+                "unpaired" => DifferentialDesign.Unpaired,
+                "paired" => DifferentialDesign.Paired,
+                "within_subject_trend" => DifferentialDesign.LinearTrendWithinSubject,
+                "trend" => DifferentialDesign.LinearTrend,
+                _ => throw new InvalidOperationException($"unknown design {design}"),
+            },
+            Prior = VariancePrior.IntensityTrend,
+            PriorGroupColumns = priorGroups,
+            Correction = MultipleTesting.BenjaminiHochberg,
+            SubjectLabels = subjects,
+        };
+
+        DifferentialResult res;
+        if (design is "within_subject_trend" or "trend")
+        {
+            var x = Enumerable.Repeat(double.NaN, nCols).ToArray();
+            var given = Golden.Vec(c, "x");
+            Array.Copy(given, x, given.Length);
+            res = Differential.RunTrend(expr, ids, a, x, options);
+        }
+        else
+        {
+            res = Differential.Run(expr, ids, a, b, options);
+        }
+
+        Assert.Equal(ids.Length, res.NFeaturesTested);
+        Golden.Close(Golden.Num(c, "df_residual"), res.DfResidual, 1e-12, $"{name} df residual");
+        Golden.Close(Golden.Num(c, "df_prior"), res.DfPrior, 1e-9, $"{name} df prior");
+        Golden.Close(Golden.Num(c, "prior_level"), res.PriorLevel, 1e-9, $"{name} trend level");
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId);
+        var logfc = Golden.Vec(c, "logfc");
+        var t = Golden.Vec(c, "t");
+        var p = Golden.Vec(c, "p");
+        var adj = Golden.Vec(c, "adj_p");
+        var amean = Golden.Vec(c, "amean");
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var row = byId[ids[i]];
+            Golden.Close(logfc[i], row.LogFc, 1e-9, $"{name} f{i} logFC");
+            Golden.Close(t[i], row.T, 1e-9, $"{name} f{i} t");
+            Golden.Close(p[i], row.PValue, 1e-9, $"{name} f{i} p");
+            Golden.Close(adj[i], row.AdjPValue, 1e-9, $"{name} f{i} adj p");
+            Golden.Close(amean[i], row.AveExpr, 1e-9, $"{name} f{i} AveExpr");
+        }
+    }
+
+    public static IEnumerable<object[]> ToolkitEndToEndCases()
+        => Golden.CaseNames("toolkit_end_to_end.json");
 
     /// <summary>
     /// The DEqMS-style peptide-count prior, against the toolkit that defines it.

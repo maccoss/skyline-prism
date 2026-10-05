@@ -6,9 +6,10 @@ optional covariate adjustment, and a choice of empirical-Bayes variance prior. T
 in `SkylinePrism.Core.DifferentialAnalysis` and are reachable without the GUI.
 
 The **default prior is the lab's own**, `VariancePriors.IntensityTrend` - the same estimator as
-`proteomics-toolkit`'s `moderation="intensity_trend"`, and pinned to it by
-`intensity_trend.json`. limma's `trend=TRUE` is still available as **limma-trend**, and the two are
-not the same thing; the section below is about exactly that.
+`proteomics-toolkit`'s `moderation="intensity_trend"`, and pinned to it by `intensity_trend.json`
+(the trend's shape) and `toolkit_end_to_end.json` (the whole analysis). limma's `trend=TRUE` is still
+available as **limma-trend**, and the two are not the same thing; the section below is about exactly
+that.
 
 ## What each quantity is held to
 
@@ -44,9 +45,10 @@ outcome needs conditional logistic regression, which is not implemented.
 
 Variance priors: **global** (Smyth 2004), **intensity trend** (the default - see below), **limma-trend**
 (`trend=TRUE`), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
-`_fit_count_dependent_prior`). Any prior that fits a per-feature scale leaves the prior *degrees of
-freedom* at the global value; only limma-trend re-estimates both. The prior can optionally be fitted on
-the run's QC and reference replicates instead of on the contrast groups.
+`_fit_count_dependent_prior`). The intensity trend and limma-trend both estimate the prior *degrees of
+freedom* around their trend; the peptide-count prior keeps the global value, as DEqMS does. The
+intensity trend's shape can be fitted on the run's QC and reference replicates instead of on the
+contrast groups.
 
 Multiple-testing corrections: Benjamini-Hochberg, Benjamini-Yekutieli, Holm, Bonferroni, none - all
 pinned to `statsmodels multipletests`, and all keeping PRISM's own NaN policy (a NaN passes through and
@@ -100,39 +102,93 @@ counted in the status line. Covariates constant within every subject (sex, genot
 dropped for the same reason they are under a paired design: a within-subject slope cannot estimate a
 between-subject effect.
 
-### The variance prior is fitted on the CONTROLS by default
+### The intensity prior: shape from the controls, level and weight from the design
 
-This is the single most consequential default in the pane, and it is the lab's long-standing
-practice rather than a new idea.
+A moderated t replaces each protein's own variance estimate, which is noisy with few samples, by a
+weighted average of that estimate and a prior:
 
-The intensity-trend prior needs groups to take a within-group SD from. Take them from the **design
-groups** of a real study and that SD contains the inter-subject biological variation the analysis
-exists to find - so the prior describes measurement noise *plus* that biology, and the moderation
-shrinks genuine effects toward nothing. Take them from the run's **QC and reference injections**,
-which are nominal replicates, and the SD is the measurement variance the prior is actually supposed
-to describe.
+```
+posterior variance = (d0 * prior + residual df * residual variance) / (d0 + residual df)
+```
 
-PRISM therefore fits the prior on the control replicates whenever the run has two or more of any
-control type, and says which source it used in the status line and in the CLI's header. **Fit prior
-on controls** in the pane, `--prior-from-controls` / `--prior-from-groups` on the command line.
+The prior has a **scale**, the variance expected for a protein at that intensity, and a **weight**,
+`d0`, which says how far to trust that scale over the protein's own estimate. The intensity prior
+builds them in two steps:
 
-Two things make this defensible rather than merely looser:
+1. **Shape.** A LOWESS of log(within-group variance) on log(within-group mean intensity) says how
+   noise changes with intensity: low-abundance proteins are noisier. By default it is fitted on the
+   run's **QC and reference injections** whenever there are two or more of a control type, because
+   they trace that dependence without any biology in the way. Otherwise it is fitted on the
+   contrast's two arms. **Fit prior on controls** in the pane, `--prior-from-controls` /
+   `--prior-from-groups` on the command line. The controls need not be in the design: they are
+   selected from the full matrix, so QC injections with no timepoint are dropped from a trend's
+   design and still give its prior a shape.
+2. **Level and weight.** The trend is multiplied by one factor, and `d0` is estimated at the same
+   time, both from the design's own residual variances. This is limma's `fitFDist` with the trend as
+   a known covariate offset: Smyth's method of moments on `residual variance / trend`. The CLI, the
+   CSV header and the quant report print the factor, for example
+   `prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2`.
 
-- **Only the per-feature scale comes from the controls.** The prior degrees of freedom stay global,
-  estimated from the study samples' own residual variances, so the *amount* of shrinkage is still
-  calibrated to the data being analyzed. This matches `proteomics-toolkit`, which passes
-  `fit["d0"]` through unchanged when `variance_prior_group_column` is set.
-- **The controls need not be in the design fit.** They are selected from the full matrix, so QC
-  injections with no timepoint are dropped from a trend's design and still feed its prior - the
-  toolkit's rule, in its words, that "the prior fit sees those samples via its own metadata pool;
-  the design fit must not."
+Step 2 exists because no source of groups measures the noise a design is tested against:
 
-It is worth knowing that this moves results in one direction. On the committed cohort, switching
-from design groups to controls lowered the p-value of **all 51** proteins - median ratio 0.969,
-minimum 0.847, none raised. That is over-shrinkage being removed, and it is modest here only because
-n = 160 vs 16 makes the residual degrees of freedom dominate the prior; at the small n proteomics
-usually has, the prior carries much more weight. Two results are not comparable unless they used the
-same prior source, which is why the source is named everywhere the prior is.
+- **Control pools** carry instrument and processing noise only. A study residual also carries
+  biology: person-to-person spread in an unpaired design, and week-to-week variation within a person
+  in a paired one. Their trend sits too **low**. On the Verapamil serum cohort, the residuals ran
+  about 2x above the controls' trend, even within subject.
+- **Design groups under a paired or within-subject model** contain the between-subject spread that
+  the model's subject block removes. Their trend sits too **high**: about 0.7x on the same cohort.
+- **Small groups** bias any trend low. A LOWESS fits the mean of log variance, and the log of a
+  chi-square draw averages below the log of its mean: a factor of 0.81 at six samples per group,
+  0.28 at two.
+
+**Up to dotnet-v26.27.0 there was no step 2,** and neither was there in `proteomics-toolkit` before
+v26.8.0. The trend was used at its source's level, and `d0` was estimated separately from the
+residuals around their own global mean - a weight measured against one level and applied to another.
+The argument for the controls was that a prior fitted on design groups "describes measurement noise
+plus that biology and shrinks genuine effects toward nothing". That argument had it backwards for
+any comparison between people. The spread within a group is the error a between-group effect is
+tested against, not the effect itself. A prior that leaves it out makes every test optimistic. When
+`d0` came out large, the posterior variance was the controls' technical variance outright.
+
+How far off it was, as the share of null p-values below 0.05 (a calibrated test gives 5%):
+
+| Null test | Prior shape from | Before | After |
+|---|---|---|---|
+| **Simulated**, 2,000 features, 5 seeds | | | |
+| unpaired 6 vs 6 | control pools | 40% | 4.9% |
+| unpaired 6 vs 6 | design groups | 7.4% | 5.0% |
+| paired, 6 subjects | control pools | 18.5% | 4.7% |
+| paired, 6 subjects | design groups | 0.17% | 5.1% |
+| **Verapamil serum cohort**, 3,595 proteins, 40 permutations | | | |
+| unpaired 5 vs 5 (random split of week 0) | controls | 6.1% | 4.6% |
+| unpaired 5 vs 5 | design groups | 4.5% | 4.5% |
+| paired week 0 vs 12 (labels flipped within subject) | controls | 7.0% | 5.8% |
+| paired week 0 vs 12 | design groups | 4.4% | 5.5% |
+| trend over weeks 0-12 (shuffled within subject) | controls | 5.1% | 4.8% |
+| trend over weeks 0-12 | design groups (one per week)\* | 4.5% | 4.8% |
+| trend, random weeks on the week-0 samples (between-subject) | controls | 6.3% | 4.8% |
+| trend, random weeks on the week-0 samples | design groups (one per week)\* | 6.2% | 4.8% |
+
+\* Measured with the toolkit, which groups a trend's samples by timepoint. PRISM has no groups for
+a trend design and uses the global prior there unless the run has controls.
+
+Both paired rows stay slightly above 5% after the change (5.5-5.8%), under either source. That
+residue is not explained by the prior, and it is not investigated here.
+
+The real cohort's prior weight is small (`d0` about 2.5 against 9 to 39 residual df), which is why
+its errors were modest. The simulations have a large `d0`, which is where the old estimator failed
+badly. The simulations are in `proteomics-toolkit`'s `tests/test_statistical_analysis.py`
+(`TestTrendCalibration`).
+
+On the real result this was checked against, the one finding survives: CHGA's within-subject trend
+over weeks 0-12 goes from p = 5.3e-7 (adjusted 0.0019) to p = 1.0e-6 (adjusted 0.0036), and it is
+still the only protein below FDR 0.05.
+
+**What changes for an existing result.** P-values move, in a direction set by the design and the
+source. A control-sourced prior gets less optimistic. A paired or within-subject analysis on design
+groups gets more powerful. An unpaired analysis on design groups barely moves. Two results are not
+comparable unless they used the same prior source and the same version, which is why the source and
+the factor are printed everywhere the prior is.
 
 Controls are found by looking up `sample_type` against a fixed vocabulary - Skyline's **Standard**
 and **Quality Control**, plus PRISM's own `reference` and `qc`. A run whose replicates are all
@@ -313,65 +369,62 @@ show is omitted with a note rather than failing the report - no merged_data (det
 no significant genes (enrichment), no panels (markers), a trend (detection and the raw-value table) -
 and each omission is printed on the console or the pane's status line with its reason.
 
-## PRISM and `proteomics-toolkit` are not interchangeable
+## PRISM, `proteomics-toolkit` and limma
 
 The lab's [`proteomics-toolkit`](https://github.com/uw-maccosslab/proteomics-toolkit) implements the
-same idea in `run_moderated_linear_model`. It is a **third** implementation, not a second copy of
-this one, and the two agree in one mode and not in the other. Both were run on the same inputs (the
-`moderated_t.json` fixture cases) against the same limma reference:
+same moderated linear model in `run_moderated_linear_model`, independently of PRISM. How the three
+compare depends on the prior:
 
-| toolkit `moderation` | agreement with limma / PRISM |
+| prior | agreement |
 |---|---|
-| `"limma"` (global prior) | **~1e-13 on logFC, t and P.Value** - the three implementations are the same estimator |
-| `"intensity_trend"` (the toolkit's **default**) | **median 3-7% on P.Value, up to 178% on individual features**; hit lists at p < 0.05 differed by 1-2 features out of 6-8 |
+| global (toolkit `moderation="limma"`) | **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma (inmoose) - three implementations of Smyth (2004) on the same numbers |
+| intensity trend (both tools' **default**) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned |
+| intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
-The global-prior agreement is the reassuring half: three independent implementations of
-Smyth (2004) landing on the same numbers is good evidence all three are right.
+**Two conventions separate a default toolkit run from PRISM**, and neither changes a conclusion:
 
-The trend disagreement is not a bug in either tool. They are **different estimators that share a
-name**:
+- **The log pseudocount.** The toolkit's dispatcher adds the smallest value / 100 before log2,
+  because a matrix it is handed may hold zeros. PRISM's matrix is log2 of a LINEAR parquet and adds
+  nothing. On the serum cohort this moved low-abundance log ratios by up to 1.4e-3. Set
+  `config.log_pseudocount = 0` to remove it.
+- **The LOWESS interpolation distance.** PRISM's prior LOWESS interpolates between points closer
+  than 1% of the x range, which a peptide-level contrast needs in order to return in under a second
+  (`VariancePriors.SmoothTrend`). The toolkit fits every point. On the serum cohort this moved the
+  prior by up to 1.4e-3 relative and p-values by up to 8e-4.
 
-- **limma `trend=TRUE`** (`EmpiricalBayes.SqueezeVarTrend`, offered as **limma-trend**): fitFDist with
-  a covariate. A natural cubic spline of `log(s^2)` on mean **log2** expression, with the spline df
-  chosen as `1 + (n>=3) + (n>=6) + (n>=30)`. The prior scale **and** the prior degrees of freedom
-  are both re-estimated from that spline fit.
-- **toolkit `moderation="intensity_trend"`** (`_fit_intensity_trend_prior`; PRISM's
-  `VariancePriors.IntensityTrend`, and the **default**): a LOWESS of
-  `log(within-group variance)` on `log(within-group mean)` computed on **raw, pre-log** intensities,
-  one point per (feature, group); converted back to log space by the delta method
-  (`var_log ~ var_raw / mean_raw^2`) and combined across groups as a sample-size-weighted mean. The
-  prior degrees of freedom stay at the **global** `d0` - only the per-feature scale is replaced.
+**The intensity trend and limma's `trend=TRUE` are still different estimators** that happen to share
+a name. limma fits a natural cubic spline of `log(s^2)` on mean **log2** expression, one point per
+feature, with spline df `1 + (n>=3) + (n>=6) + (n>=30)`. The intensity trend fits a LOWESS of
+log(within-group variance) on log(within-group mean) on **raw** intensities, one point per (feature,
+group), converted to log space by the delta method. What they now share is the second step: each
+estimates the prior's level and `d0` from the residuals around its own trend. The intensity trend
+gained that step in dotnet-v26.28.0 / toolkit v26.8.0. Before it, the two disagreed by a median 11.7%
+and up to 265% on the same case, and 3 of 7 hits differed. Against the **global** prior either trend
+differs more (median 5-13%), which is the point of a trend prior.
 
-So they differ in the smoother (spline vs LOWESS), in the space the trend is fit in (log2
-abundance vs raw intensity), in what contributes a point (a feature vs a feature-group pair), and
-in whether the prior df is re-estimated. Expecting them to agree to more than a few percent would
-be expecting a coincidence.
+So: quote which tool, which prior and which version produced a hit list. To compare across tools,
+use the intensity trend in both (the same estimator) or the global prior in both.
 
-PRISM now implements both, so the disagreement is selectable rather than baked in - but it is still
-a disagreement, and the two remain different estimators that happen to share a name. Two practical
-consequences:
-
-- **Do not treat a result from one as reproducing a result from the other** when the trend prior is
-  on. Quote which tool and which moderation produced a hit list.
-- **`moderation="limma"` is the setting to compare across the two tools.** If a comparison is the
-  point, use it in both - PRISM's equivalent is the **Global** prior.
-- **To reproduce a toolkit run at its own default**, leave PRISM on **Intensity trend**: that is the
-  same estimator, held to the toolkit by a committed golden.
-
-The toolkit's own global prior also differs from limma's `fitFDist` in two small ways that do not
-matter on dense proteomics data and could on sparse: it drops zero and negative residual variances
-from the prior fit where limma floors them at `1e-5 * median` and keeps them, and it has no
+The toolkit's own global prior differs from limma's `fitFDist` in two small ways that do not matter
+on dense proteomics data and could on sparse: it drops zero and negative residual variances from
+the prior fit where limma floors them at `1e-5 * median` and keeps them, and it has no
 single-feature branch (limma returns `df_prior = 0` there).
 
 ## Cross-checking a PRISM result against the toolkit
 
 ```python
-cfg.moderation = "limma"   # not the default; the comparable setting
+cfg.moderation = "intensity_trend"   # the default in both tools
+cfg.log_pseudocount = 0              # PRISM adds none
+# For a prior on the QC/reference injections, as PRISM's default does when the run has them:
+cfg.variance_prior_group_column = "sample_type"
+cfg.variance_prior_groups = ["reference", "qc"]
 ```
 
 and read the PRISM side from the same matrix PRISM reported on
-(`corrected_proteins.parquet` / `corrected_peptides.parquet`, which are **linear** - log2 them
-first; see the scale conventions in `CLAUDE.md`).
+(`corrected_proteins.parquet` / `corrected_peptides.parquet`, which are **linear** - the toolkit's
+`normalization_method = "prism"` log2s them; see the scale conventions in `CLAUDE.md`). PRISM's
+trend log2fc is the change across the observed span; divide by the span to compare with the
+toolkit's per-unit slope.
 
 ## Detection (peptide on/off)
 

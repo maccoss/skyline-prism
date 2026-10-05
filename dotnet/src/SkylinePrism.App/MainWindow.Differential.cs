@@ -298,16 +298,14 @@ public partial class MainWindow
     /// two copies of a paragraph this long would drift.
     /// </remarks>
     private const string PriorFromControlsHelp =
-        "Fit the variance prior on the run's QC and reference replicates - the default wherever the "
-        + "run has them. A design group's within-group spread contains the inter-subject biology "
-        + "the analysis is looking for, so a prior fitted on it describes measurement noise plus "
-        + "that biology and over-shrinks real signal; dedicated control injections are nominal "
-        + "replicates, so their spread is the measurement variance the prior is meant to describe. "
-        + "Only the per-feature scale comes from them - the prior degrees of freedom stay global, "
-        + "estimated from the study samples, so the amount of shrinkage still matches the data "
-        + "being analyzed. Usually the controls take no part in the contrast itself - they carry no "
-        + "study condition and no timepoint - and the status line says so when they do. Untick to fit on the "
-        + "contrast groups instead, which is only worth doing to reproduce an older result.";
+        "Take the shape of the variance prior - how noise changes with intensity - from the run's "
+        + "QC and reference replicates. This is the default wherever the run has them. They show that "
+        + "relationship without any biology in the way, and they take no part in the contrast, so "
+        + "the prior does not come from the samples it is applied to. How high the trend sits, and "
+        + "how much weight it gets, are fitted to the contrast's own residuals either way: pooled "
+        + "injections lack the biology a study sample carries, so at their own level they would make "
+        + "every test optimistic. The status line shows how far the trend was scaled. Untick to take "
+        + "the shape from the contrast groups instead.";
 
     /// <summary>
     /// Suppress the pane's selector handlers until the returned scope is disposed.
@@ -778,16 +776,14 @@ public partial class MainWindow
         if (controls is null && DiffPriorFromControlsCheck.IsChecked == true)
             DiffPriorFromControlsCheck.IsChecked = false;
 
-        // DEFAULT ON wherever the run has controls to fit on, because that is what the lab does and
-        // the reason is statistical, not habit: the design groups of a real study contain the
-        // biological variation the analysis exists to find, so a prior fitted on them describes
-        // measurement noise PLUS that biology and shrinks genuine effects toward nothing. QC and
-        // reference injections are nominal replicates, so their spread is the measurement variance
-        // the prior is supposed to describe. Only the per-feature scale comes from them; the prior
-        // degrees of freedom stay global, estimated from the study samples, so the AMOUNT of
-        // shrinkage is still calibrated to the data being analyzed - which is what makes this
-        // defensible rather than simply looser. Matches proteomics-toolkit's
-        // variance_prior_group_column, which passes fit["d0"] through the same way.
+        // DEFAULT ON wherever the run has controls to fit on. The controls give the trend's SHAPE
+        // cleanly - noise against intensity with no biology mixed in - and they are not the samples
+        // being moderated. They do NOT give its level: that, and the prior df, are fitted to the
+        // contrast's residuals (Differential.WithCalibratedLevel), because pooled injections lack
+        // the biology the residuals carry. Up to dotnet-v26.27.0 the controls' own level was used,
+        // on the argument that a design-group prior "shrinks genuine effects toward nothing". That
+        // made every between-subject test optimistic; see docs/differential-analysis.md. Matches
+        // proteomics-toolkit's variance_prior_group_column from v26.8.0.
         //
         // Set once per loaded dataset, not on every control change, or unticking it would be
         // undone by the next keystroke elsewhere in the toolbar.
@@ -1473,9 +1469,22 @@ public partial class MainWindow
         DiffStatusText.Text =
             $"{options.Describe(res.VariancePrior)}: {n}, {trendColumn} {FormatRange(_diffTrendRange)} - "
             + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
-            + $"{adj}.{note} "
+            + $"{adj}.{PriorFitNote(res)}{note} "
             + "Click a point (or a row) for its trajectory; it also selects in Skyline. Hover for the gene.";
     }
+
+    /// <summary>
+    /// How the intensity-trend prior was fitted - the trend's source and how far it was scaled to the
+    /// residuals - led by a space for appending to a status line, or empty for any other prior.
+    /// </summary>
+    /// <remarks>
+    /// The source sets only the trend's shape; the factor is how far its own level was from the noise
+    /// the contrast is tested against, and the same words the CLI and the CSV header print.
+    /// </remarks>
+    private static string PriorFitNote(DifferentialResult res)
+        => res.DescribePriorFit() is { } fit
+            ? $" {char.ToUpperInvariant(fit[0])}{fit[1..]}."
+            : string.Empty;
 
     private static string FormatRange((double Min, double Max)? range) =>
         range is { } r
@@ -1557,7 +1566,7 @@ public partial class MainWindow
         DiffStatusText.Text =
             $"{options.Describe(res.VariancePrior)}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
             + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
-            + $"{adj}.{note} "
+            + $"{adj}.{PriorFitNote(res)}{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
 

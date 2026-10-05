@@ -88,10 +88,12 @@ public sealed class DifferentialResult
     internal DifferentialResult(IReadOnlyList<DifferentialRow> rows, int nA, int nB,
         int nFeaturesTotal, int nFeaturesTested, double dfResidual, double dfPrior,
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
-        IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0)
+        IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0,
+        double priorLevel = double.NaN)
     {
         TrendRange = trendRange;
         NSubjects = nSubjects;
+        PriorLevel = priorLevel;
         Rows = rows;
         NA = nA;
         NB = nB;
@@ -131,6 +133,35 @@ public sealed class DifferentialResult
 
     /// <summary>Which variance prior was fitted (<c>global</c>, <c>intensity_trend</c>, ...).</summary>
     public string VariancePrior { get; }
+
+    /// <summary>
+    /// The factor the intensity trend was scaled by to fit this design's residuals; NaN for every
+    /// other prior.
+    /// </summary>
+    /// <remarks>
+    /// The trend's source sets its shape only, and this is how far its own level was from the noise
+    /// the design is tested against. Above 1 means the residuals are noisier than the trend's source:
+    /// the usual case for control pools, which lack the study's biology. Below 1 is usual for design
+    /// groups under a paired or within-subject model, whose subject block removes spread the groups
+    /// still contain.
+    /// </remarks>
+    public double PriorLevel { get; }
+
+    /// <summary>
+    /// One line on how the intensity-trend prior was fitted, for a status line or a file header;
+    /// null for every other prior.
+    /// </summary>
+    public string? DescribePriorFit()
+    {
+        if (!double.IsFinite(PriorLevel))
+            return null;
+        var source = VariancePrior.EndsWith("controls", StringComparison.Ordinal) ? "controls" : "design groups";
+        var df = double.IsPositiveInfinity(DfPrior)
+            ? "inf"
+            : DfPrior.ToString("0.##", CultureInfo.InvariantCulture);
+        return string.Create(CultureInfo.InvariantCulture,
+            $"prior: intensity trend from the {source}, scaled x{PriorLevel:0.###} to these residuals; prior df {df}");
+    }
 
     /// <summary>Design columns actually used, excluding the intercept and group term.</summary>
     public IReadOnlyList<string> CovariatesUsed { get; }
@@ -446,7 +477,7 @@ public static class Differential
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
-        var (squeezed, variancePrior) = FitPrior(
+        var (squeezed, variancePrior, priorLevel) = FitPrior(
             options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
 
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
@@ -500,7 +531,7 @@ public static class Differential
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
-            trendRange, nSubjects);
+            trendRange, nSubjects, priorLevel);
     }
 
     /// <summary>
@@ -919,7 +950,7 @@ public static class Differential
     /// global prior - saying so in <paramref name="messages"/> - whenever the requested one cannot be
     /// fitted, because a silently substituted prior is a silently different p-value.
     /// </summary>
-    private static (SqueezeVarResult Squeezed, string Name) FitPrior(
+    private static (SqueezeVarResult Squeezed, string Name, double Level) FitPrior(
         DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
         double[] variances, LinearModelFit fit, List<int> tested, List<string> messages,
         IReadOnlyCollection<int> fitColumns)
@@ -940,14 +971,14 @@ public static class Differential
         {
             messages.Add("This prior needs a peptide count per feature, which only the protein-level "
                 + "matrix carries - the global prior was used instead.");
-            return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global");
+            return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
         }
 
         switch (options.Prior)
         {
             case VariancePrior.LimmaTrend when fit.Amean.All(double.IsFinite):
                 return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
-                    "limma-trend");
+                    "limma-trend", double.NaN);
 
             case VariancePrior.LimmaTrend:
                 messages.Add("Mean expression has non-finite values - the limma-trend prior is "
@@ -979,17 +1010,20 @@ public static class Differential
                     messages.Add($"{shared} sample(s) are both in the fit and in the variance "
                         + "prior's groups, so the prior is not independent of the data it moderates.");
 
-                var prior = VariancePriors.IntensityTrend(expr, tested, priorGroups);
-                if (prior is not null)
-                    // The SOURCE is part of the answer, not a detail: a prior fitted on control
-                    // replicates describes measurement variance, one fitted on design groups
-                    // describes measurement variance PLUS whatever biology those groups contain,
-                    // and the second systematically over-shrinks the effects being looked for. Two
-                    // results are not comparable unless they used the same source.
-                    return (WithGlobalDf(variances, fit.DfResidual, prior),
+                var shape = VariancePriors.IntensityTrend(expr, tested, priorGroups);
+                if (shape is not null)
+                {
+                    // The groups give the trend its SHAPE. Its level and the prior df are fitted to
+                    // this design's residuals, because neither source measures the noise the
+                    // design is tested against - see WithCalibratedLevel. The source is still named:
+                    // it decides the shape, and two results are comparable only on the same one.
+                    var squeezed = WithCalibratedLevel(variances, fit.DfResidual, shape, out var level);
+                    return (squeezed,
                         options.PriorGroupColumns is not null
                             ? "intensity-trend from controls"
-                            : "intensity-trend from design groups");
+                            : "intensity-trend from design groups",
+                        level);
+                }
 
                 messages.Add("Too few usable (feature, group) points to fit the intensity trend - "
                     + "the global prior was used instead.");
@@ -1000,14 +1034,14 @@ public static class Differential
             {
                 var prior = VariancePriors.PeptideCountTrend(variances, counts!);
                 if (prior is not null)
-                    return (WithGlobalDf(variances, fit.DfResidual, prior), "peptide-count");
+                    return (WithGlobalDf(variances, fit.DfResidual, prior), "peptide-count", double.NaN);
                 messages.Add("Too few features carry a usable peptide count to fit the trend - the "
                     + "global prior was used instead.");
                 break;
             }
         }
 
-        return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global");
+        return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
     }
 
     /// <summary>
@@ -1015,11 +1049,11 @@ public static class Differential
     /// replicates the caller nominated.
     /// </summary>
     /// <remarks>
-    /// The override exists because a design group's within-group spread contains inter-subject
-    /// BIOLOGY, which inflates the prior and over-shrinks real signal. Pointing it at dedicated QC or
-    /// reference injections measures instrument-and-workflow variance instead, which is what the
-    /// prior is supposed to describe - and those replicates take no part in the contrast, so their
-    /// columns exist only in the FULL matrix, which is why these indices are absolute.
+    /// The override takes the intensity trend's SHAPE from dedicated QC or reference injections,
+    /// which trace noise against intensity with no biology mixed in. Its level is fitted to the
+    /// residuals either way (<see cref="WithCalibratedLevel"/>). Those replicates take no part in the
+    /// contrast, so their columns exist only in the FULL matrix, which is why these indices are
+    /// absolute.
     /// </remarks>
     private static IReadOnlyList<IReadOnlyList<int>> PriorGroups(
         DifferentialOptions options, int[] cols, int nA, int nB)
@@ -1039,19 +1073,54 @@ public static class Differential
     }
 
     /// <summary>
-    /// A per-feature prior scale paired with the GLOBAL prior degrees of freedom.
+    /// A per-feature prior scale paired with the GLOBAL prior degrees of freedom - the DEqMS
+    /// peptide-count prior, whose scale is already fitted on these residuals.
     /// </summary>
-    /// <remarks>
-    /// Every toolkit-style prior works this way - it fits a scale and leaves the degrees of freedom
-    /// alone - and that is exactly what separates them from limma's trend, which re-estimates both.
-    /// Kept in one place so a new prior cannot accidentally re-estimate the df and still call itself
-    /// one of these.
-    /// </remarks>
     private static SqueezeVarResult WithGlobalDf(double[] variances, double dfResidual, double[] prior)
     {
         var global = EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual);
         return EmpiricalBayes.SqueezeVarWithScale(
             variances, dfResidual, prior, global.DfPrior, global.Warnings);
+    }
+
+    /// <summary>
+    /// An intensity trend used for its SHAPE, with its level and the prior degrees of freedom fitted
+    /// to the design's own residual variances.
+    /// </summary>
+    /// <remarks>
+    /// <para>The trend is fitted on within-group variances, and no source of groups measures the noise
+    /// a design is tested against. Control pools carry instrument noise only, while a study residual
+    /// also carries biology. On the Verapamil serum cohort the residuals ran about 2x above the pools'
+    /// trend. Design groups under a paired or within-subject model still contain the between-subject
+    /// spread the subject block removes, about 0.7x on the same cohort. And a LOWESS of log variance
+    /// is biased low by the log of a chi-square draw: a factor of 0.81 at six samples per group, 0.28
+    /// at two.</para>
+    /// <para>Up to dotnet-v26.27.0 the trend was used at its source's level, with the prior df taken
+    /// from the residuals around their own global mean - a df measured against one level and applied
+    /// to another. With controls, a large df made the posterior the pools' technical variance outright.
+    /// On simulated nulls that put 40% of p-values under 0.05 for an unpaired contrast, and 0.17% for a
+    /// paired one fitted on its design groups.</para>
+    /// <para>The fix is limma's fitFDist with the trend as a known covariate offset: the moment fit
+    /// runs on <c>s^2 / trend</c>, so its scale is the factor the trend is multiplied by and its df
+    /// measures how tightly the residuals follow the scaled trend. It is the same estimator
+    /// <c>proteomics-toolkit</c> uses from v26.8.0 (<c>_calibrate_trend_to_design</c>), and the
+    /// composition is pinned to it by <c>toolkit_end_to_end.json</c>.</para>
+    /// </remarks>
+    /// <param name="level">The factor the trend was multiplied by.</param>
+    private static SqueezeVarResult WithCalibratedLevel(
+        double[] variances, double dfResidual, double[] shape, out double level)
+    {
+        var ratio = new double[variances.Length];
+        for (var i = 0; i < ratio.Length; i++)
+            ratio[i] = variances[i] / shape[i];
+        var calibrated = EmpiricalBayes.SqueezeVarGlobal(ratio, dfResidual);
+        level = calibrated.VarPrior[0];
+
+        var prior = new double[shape.Length];
+        for (var i = 0; i < prior.Length; i++)
+            prior[i] = level * shape[i];
+        return EmpiricalBayes.SqueezeVarWithScale(
+            variances, dfResidual, prior, calibrated.DfPrior, calibrated.Warnings);
     }
 
     private static double ModeratedPValue(double t, double dfTotal)

@@ -271,6 +271,8 @@ public static class Program
             $"  n = {bLabel} {result.NB} vs {aLabel} {result.NA}; "
             + $"{result.NFeaturesTested} of {result.NFeaturesTotal} "
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        if (result.DescribePriorFit() is { } priorFit)
+            Console.WriteLine($"  {priorFit}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 
@@ -509,6 +511,8 @@ public static class Program
         Console.WriteLine(
             $"  n = {n}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        if (result.DescribePriorFit() is { } priorFit)
+            Console.WriteLine($"  {priorFit}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 
@@ -727,13 +731,11 @@ public static class Program
                 $"--test {DifferentialTokens.Test(test)} does not apply to --design {DifferentialTokens.Design(design)}. "
                 + $"That design runs: {string.Join(", ", allowed.Select(DifferentialTokens.Test))}.");
 
-        // The prior's per-feature SCALE comes from the run's QC and reference replicates whenever
-        // it has any. That is the default, not an option, because the design groups of a real study
-        // contain the biology the analysis exists to find: a prior fitted on them describes
-        // measurement noise plus that biology, and shrinks genuine effects toward nothing. Control
-        // injections are nominal replicates, so their spread IS the measurement variance the prior
-        // is meant to describe. The prior degrees of freedom stay global either way, so the amount
-        // of shrinkage remains calibrated to the study samples.
+        // The intensity trend's SHAPE comes from the run's QC and reference replicates whenever it
+        // has any: they trace noise against intensity with no biology mixed in, and they are not
+        // the samples being moderated. Its level and the prior df are fitted to the contrast's own
+        // residuals whichever source gives the shape (Differential.WithCalibratedLevel), because
+        // pooled injections lack the biology those residuals carry.
         IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
         var fromGroups = opts.GetSingleOrNull("--prior-from-groups") is not null;
         var fromControls = opts.GetSingleOrNull("--prior-from-controls") is not null;
@@ -1250,15 +1252,13 @@ public static class Program
             --prior PRIOR          Variance prior for the moderated t: intensity-trend
                                    (default, matches the lab's proteomics-toolkit),
                                    global, limma-trend, peptide-count
-            --prior-from-controls  Fit the variance prior on the QC and reference replicates.
-                                   This is the DEFAULT whenever the run has two or more replicates
-                                   of a control type; passing it makes that explicit and turns a
-                                   missing control set into an error rather than a fallback
-            --prior-from-groups    Fit the variance prior on the contrast groups instead. Their
-                                   spread includes the biological variation the analysis is looking
-                                   for, so the prior describes measurement noise plus that biology
-                                   and shrinks genuine effects toward nothing - use only to
-                                   reproduce an older result
+            --prior-from-controls  Take the intensity trend's SHAPE from the QC and reference
+                                   replicates. This is the DEFAULT whenever the run has two or more
+                                   replicates of a control type; passing it makes that explicit and
+                                   turns a missing control set into an error rather than a fallback.
+                                   The trend's level and weight are fitted to the contrast's own
+                                   residuals either way, and the output says by what factor
+            --prior-from-groups    Take the trend's shape from the contrast groups instead
             --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
             --correction METHOD    bh (default), by, holm, bonferroni, none
             --alpha A              p-value threshold for the printed hit count (default 0.05)

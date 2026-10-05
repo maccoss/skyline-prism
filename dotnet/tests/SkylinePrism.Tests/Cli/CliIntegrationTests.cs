@@ -882,14 +882,13 @@ public class CliIntegrationTests
     }
 
     /// <summary>
-    /// The variance prior is fitted on the control replicates by default, and says so - and
-    /// --prior-from-groups restores the older behavior for reproducing an earlier result.
+    /// The intensity trend takes its shape from the control replicates by default, and says so -
+    /// and --prior-from-groups takes it from the contrast groups instead.
     /// </summary>
     /// <remarks>
-    /// The default matters: a prior taken from the contrast groups of a real study describes
-    /// measurement noise plus the biology those groups carry, and shrinks the effects being looked
-    /// for. This pins that the default is the control-based one and that the two are distinguishable
-    /// from the output alone.
+    /// The source sets the trend's shape and its level is fitted to the residuals either way, so the
+    /// two give different numbers and must be distinguishable from the output alone. This pins that
+    /// the default is the control-based one and that the source is named.
     /// </remarks>
     [Fact]
     public void Differential_FitsThePriorOnControlsByDefault_AndNamesTheSource()

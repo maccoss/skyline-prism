@@ -75,14 +75,14 @@ public enum VariancePrior
     /// <summary>
     /// The lab's default: a LOWESS of log(within-group variance) on log(within-group MEAN INTENSITY),
     /// fitted on RAW pre-log intensities, one point per (feature, group), converted back to log space
-    /// by the delta method. Only the per-feature scale is replaced; the prior degrees of freedom stay
-    /// global.
+    /// by the delta method. That gives the prior's SHAPE; its level and the prior degrees of freedom
+    /// are then fitted to the design's residuals around it.
     /// </summary>
     /// <remarks>
     /// This is <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and it is NOT the same
     /// estimator as <see cref="LimmaTrend"/> despite both being called an intensity trend. See
-    /// <c>docs/differential-analysis.md</c>: they disagree by a median 3-7% on p-values and up to 178%
-    /// on individual features.
+    /// <c>docs/differential-analysis.md</c>: they differ in the smoother, the space and what
+    /// contributes a point, and agree to a median 0.9% on p-values (at most 18%) on the trend golden.
     /// </remarks>
     IntensityTrend,
 
@@ -176,10 +176,11 @@ public sealed record DifferentialOptions
     /// toolkit's <c>variance_prior_group_column</c>. Null uses the contrast arms.
     /// </summary>
     /// <remarks>
-    /// <para>Pointing this at dedicated QC or reference replicates keeps inter-subject biology out of
-    /// the prior. A design group's within-group spread is part biology and part measurement, and only
-    /// the second is what a variance prior is meant to describe; including the first inflates the
-    /// prior and over-shrinks genuine signal.</para>
+    /// <para>Pointing this at dedicated QC or reference replicates takes the intensity trend's SHAPE
+    /// from samples with no biology in them, which trace noise against intensity cleanly. It does not
+    /// set the trend's level: that is fitted to the design residuals whichever groups give the shape,
+    /// because control pools lack the biology the residuals carry and would otherwise make every test
+    /// optimistic (see <c>Differential.WithCalibratedLevel</c>).</para>
     /// <para>A LIST OF GROUPS, not one pooled set, and the distinction matters: the variance is
     /// computed WITHIN each group, so pooling QC and reference replicates into one would count the
     /// systematic difference between two different materials as measurement noise. Grouping by the

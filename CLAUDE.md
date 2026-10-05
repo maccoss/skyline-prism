@@ -1099,8 +1099,10 @@ amounts, so their CVs need not improve together). It caught both reversions abov
 
 ### [TODO] Not Yet Implemented
 
-- **A more general source for the differential variance prior.** PRISM fits it on the control
-  replicates by default, and finds them by looking up `sample_type` against a fixed vocabulary
+- **A more general source for the differential variance prior.** PRISM takes the intensity
+  trend's shape from the control replicates by default (its level is always fitted to the
+  contrast's residuals - see `Differential.WithCalibratedLevel`), and finds them by looking up
+  `sample_type` against a fixed vocabulary
   (`ControlSampleTypes.Values`: Standard, Quality Control, QC, reference, qc). The lab's
   `proteomics-toolkit` is more general - `variance_prior_group_column` names ANY metadata column and
   `variance_prior_groups` restricts which of its values count, so a document whose QC classes live

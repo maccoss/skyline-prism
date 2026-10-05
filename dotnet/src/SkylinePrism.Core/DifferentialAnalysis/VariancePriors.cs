@@ -15,11 +15,13 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// cubic spline of log(residual variance) against mean <b>log2</b> expression and re-estimates the
 /// prior degrees of freedom from that fit. The toolkit fits a LOWESS of log(within-group variance)
 /// against log(within-group mean) on <b>raw, pre-log</b> intensities, one point per (feature, group),
-/// converts back to log space by the delta method, and leaves the prior degrees of freedom at the
-/// global value. They differ in the smoother, the space, what contributes a point, and whether the
-/// prior df moves - so they disagree by a median 3-7% on p-values and up to 178% on individual
-/// features (<c>docs/differential-analysis.md</c>). Neither is wrong; they are not interchangeable,
-/// and a result has to say which one produced it.</para>
+/// and converts back to log space by the delta method. They differ in the smoother, the space and what
+/// contributes a point. What they share is that the prior's level and degrees of freedom are fitted to
+/// the residuals around the trend: limma does it inside fitFDist, and this trend is handed to
+/// <c>Differential.WithCalibratedLevel</c>, which does the same thing with the curve supplied. So what
+/// this class returns is a SHAPE, not a finished prior. The two agree to a median 0.9% on p-values on
+/// the trend golden (<c>docs/differential-analysis.md</c>), but they are not interchangeable, and a
+/// result has to say which one produced it.</para>
 /// <para><b>Why raw intensities are free here.</b> The toolkit has to carry a separate pre-log copy
 /// of the matrix because its dispatcher log-transforms in place. PRISM's matrix is log2 of a LINEAR
 /// parquet, so the raw intensity is just <c>2^x</c> - exact, since that is the transform that
@@ -46,7 +48,11 @@ internal static class VariancePriors
     /// 0.62 s.</para>
     /// <para>The cost is a small approximation: points closer together than delta are linearly
     /// interpolated rather than individually fitted, which moved the fitted values by at most ~3e-5
-    /// relative in the same measurement, far below anything that changes a conclusion. On inputs the
+    /// relative in the same measurement, far below anything that changes a conclusion. On a real
+    /// cohort (3,595 serum proteins, prior fitted on 12 reference and QC injections) it is the only
+    /// thing left between PRISM and the toolkit: it moves the per-feature prior SCALE by at most
+    /// 1.4e-3 relative (median 2.5e-4) and p-values by at most 8e-4, and handing the toolkit the same
+    /// delta closes the gap to ~1e-12. On inputs the
     /// size of the goldens it makes NO difference at all - 1% of the x range there is narrower than
     /// the spacing between points, so nothing is interpolated and the fit is identical, which is why
     /// those still assert against the reference at 1e-9. The approximation only ever engages where

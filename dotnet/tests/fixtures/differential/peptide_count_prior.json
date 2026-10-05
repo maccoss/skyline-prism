@@ -1,5 +1,5 @@
 {
-  "reference": "proteomics_toolkit.statistical_analysis._fit_count_dependent_prior (moderation='deqms'), v26.7.1",
+  "reference": "proteomics_toolkit.statistical_analysis._fit_count_dependent_prior (moderation='deqms'), v26.8.0",
   "note": "Per-feature prior SCALE, in the same log2 space the residual variances are already in - unlike the intensity trend there is no delta-method conversion, because nothing is fitted on the raw scale. The prior degrees of freedom stay global.",
   "cases": [
     {

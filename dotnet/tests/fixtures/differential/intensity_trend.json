@@ -1,6 +1,6 @@
 {
-  "reference": "proteomics_toolkit.statistical_analysis._fit_intensity_trend_prior (moderation='intensity_trend'), v26.7.1",
-  "note": "Per-feature PRIOR SCALE, in log2 space. The prior DEGREES OF FREEDOM are not part of this estimator - they stay at the global value squeezeVar returns, which is exactly what makes it the toolkit's prior rather than limma's trend=TRUE. `expr_log2` is what PRISM holds in memory; the reference was handed 2**expr_log2.",
+  "reference": "proteomics_toolkit.statistical_analysis._fit_intensity_trend_prior (moderation='intensity_trend'), v26.8.0",
+  "note": "Per-feature trend SHAPE, in log2 space: the prior before its level and degrees of freedom are fitted to the design residuals (that step is pinned by toolkit_end_to_end.json). `expr_log2` is what PRISM holds in memory; the reference was handed 2**expr_log2.",
   "cases": [
     {
       "name": "eight_features_two_groups",

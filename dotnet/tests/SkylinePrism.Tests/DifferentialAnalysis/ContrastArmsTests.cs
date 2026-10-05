@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using SkylinePrism.Core.DifferentialAnalysis;
+using SkylinePrism.Core.Numerics;
 using Xunit;
 
 namespace SkylinePrism.Tests.DifferentialAnalysis;
@@ -248,11 +249,15 @@ public class TrendDesignRoutingTests
 /// Where the intensity-trend prior takes its groups from, and why it matters.
 /// </summary>
 /// <remarks>
-/// The prior's per-feature scale should describe MEASUREMENT variance. Fitted on the design groups
-/// of a real study it describes measurement variance plus the biology those groups contain, and the
-/// moderation then shrinks the very effects the analysis is looking for. These pin that the two
-/// sources genuinely produce different numbers, and that the result records which one ran - two
-/// results are not comparable unless they used the same source.
+/// The groups give the trend its SHAPE: how variance changes with intensity. Its level is then fitted
+/// to the design's residuals, because the residual is what the test is against, and neither source
+/// measures it: the controls lack the study's biology, and design groups under a paired model carry
+/// spread the subject block removes. These pin that the source still changes the numbers (it sets the
+/// shape), that the result records which one ran, and that it no longer sets the level.
+/// <para>Up to dotnet-v26.27.0 the source DID set the level, and this class asserted the consequence
+/// as the point of the option: a control prior shrank every residual toward technical noise, so |t|
+/// rose for most features. That was the miscalibration - on simulated nulls it put 40% of p-values
+/// under 0.05 for an unpaired contrast. See <c>Differential.WithCalibratedLevel</c>.</para>
 /// </remarks>
 public class VariancePriorSourceTests
 {
@@ -317,8 +322,7 @@ public class VariancePriorSourceTests
         var fromGroups = Run(null);
         var fromControls = Run(controls);
 
-        // The prior degrees of freedom are estimated from the study residuals either way, so the
-        // AMOUNT of shrinkage is unchanged - only the target moves.
+        // The same design either way; only the prior differs.
         Assert.Equal(fromGroups.DfResidual, fromControls.DfResidual, 12);
 
         var g = fromGroups.Rows.ToDictionary(r => r.FeatureId);
@@ -333,17 +337,35 @@ public class VariancePriorSourceTests
     }
 
     [Fact]
-    public void ATighterControlPrior_ShrinksTowardSmallerVariance_SoTIsLarger()
+    public void ATighterControlSource_SetsTheShape_NotTheLevel()
     {
-        // The direction the lab's practice exists to produce: a prior taken from nominal replicates
-        // is smaller than one taken from groups carrying biology, so genuine effects survive
-        // moderation instead of being shrunk toward nothing.
+        // The controls here are 10x tighter than the arms (0.12 vs 1.2 spread), so their trend sits
+        // about 100x below the residuals in variance. Used at its own level it pulled every posterior
+        // toward technical noise and raised |t| across the board. Fitted to the residuals, it is
+        // lifted back up, and |t| lands where the design-group prior puts it.
         var (_, _, _, _, controls) = Cohort();
-        var g = Run(null).Rows.ToDictionary(r => r.FeatureId);
-        var c = Run(controls).Rows.ToDictionary(r => r.FeatureId);
+        var fromGroups = Run(null);
+        var fromControls = Run(controls);
 
-        var larger = g.Keys.Count(id => Math.Abs(c[id].T) > Math.Abs(g[id].T));
-        Assert.True(larger > g.Count / 2,
-            $"expected the control prior to raise |t| for most features; it raised {larger}/{g.Count}");
+        Assert.InRange(fromGroups.PriorLevel, 0.8, 1.6); // the arms ARE the residual, bar the log bias
+        Assert.True(fromControls.PriorLevel > 20,
+            $"the tight controls' trend should be scaled far up; it was scaled x{fromControls.PriorLevel:0.##}");
+
+        var g = fromGroups.Rows.ToDictionary(r => r.FeatureId);
+        var c = fromControls.Rows.ToDictionary(r => r.FeatureId);
+        var ratio = Stats.Median(g.Keys.Select(id => Math.Abs(c[id].T) / Math.Abs(g[id].T)).ToArray());
+        Assert.InRange(ratio, 0.9, 1.1);
+    }
+
+    [Fact]
+    public void TheLevelIsReported_AndOnlyForTheIntensityTrend()
+    {
+        var (expr, ids, a, b, _) = Cohort();
+        var global = Differential.Run(expr, ids, a, b, new DifferentialOptions { Prior = VariancePrior.Global });
+
+        Assert.True(double.IsNaN(global.PriorLevel));
+        Assert.Null(global.DescribePriorFit());
+        Assert.StartsWith("prior: intensity trend from the design groups, scaled x",
+            Run(null).DescribePriorFit(), StringComparison.Ordinal);
     }
 }

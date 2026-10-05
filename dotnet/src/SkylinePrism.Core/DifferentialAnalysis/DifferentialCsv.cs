@@ -45,6 +45,8 @@ public static class DifferentialCsv
         if (result.IsTrend && restrictions is { Count: > 0 } && QuantRestriction.Describe(restrictions) is { Length: > 0 } kept)
             w.WriteLine($"# restricted to: {kept} (only those samples were fitted)");
         w.WriteLine($"# method: {options.Describe(result.VariancePrior)}, {CorrectionName(options.Correction)}");
+        if (result.DescribePriorFit() is { } priorFit)
+            w.WriteLine($"# {priorFit}");
         w.WriteLine(result.IsTrend
             ? $"# n: {result.NA} samples"
               + (result.NSubjects > 0 ? $" in {result.NSubjects} subjects" : string.Empty)

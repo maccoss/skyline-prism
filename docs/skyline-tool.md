@@ -553,21 +553,25 @@ are strongly correlated — the dependence BH's assumptions do not cover.
 
 | Prior | What it fits |
 |---|---|
-| **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), replacing only the prior *scale*. |
+| **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), giving the prior's *shape*; its level and *degrees of freedom* are then fitted to the contrast's own residuals. |
 | **Global** | One prior for every feature - Smyth (2004). |
 | **limma-trend** | limma's `trend=TRUE`: a natural cubic spline against mean **log2** expression, which also re-estimates the prior *degrees of freedom*. |
 | **Peptide count** | DEqMS (Zhu 2020): a LOWESS against `log(peptide count)`. What it adds is that a protein rolled up from many peptides is better determined than one rolled up from few *at the same intensity* — information abundance alone does not carry. Protein level only, so it is hidden at peptide level. |
 
 **Intensity trend and limma-trend are different estimators despite the similar names** - different
-smoother, different scale, different unit of observation, and only one of them moves the prior degrees
-of freedom. They disagree by a median 3-7% on p-values, so a hit list should say which one produced it.
+smoother, different scale, different unit of observation. Both now fit the prior degrees of freedom
+around their own trend, and they agree closely (a median 0.9% on p-values on PRISM's test case), but
+a hit list should still say which one produced it.
 
-**from controls** fits the prior on the run's QC and reference replicates instead of on the contrast
-groups. A design group's within-group spread is part biology and part measurement, and only the second
-is what a variance prior is meant to describe; including the first inflates the prior and over-shrinks
-genuine signal. The controls take no part in the contrast itself, and each control type is its own
-group — pooling QC with reference would count the systematic gap between two different materials as
-measurement noise. The box is unavailable on a run with fewer than two control replicates.
+**from controls** takes the intensity trend's *shape* from the run's QC and reference replicates
+instead of from the contrast groups: they show how noise changes with intensity without any biology
+in the way. How high the trend sits is still fitted to the contrast's own residuals, because pooled
+injections lack the biology a study sample carries. Taken at their own level, they made every test
+optimistic, which is how PRISM behaved up to dotnet-v26.27.0. The status line says how far the
+trend was scaled (`scaled x2.01 to these residuals`). The controls take no part in the contrast itself, and each
+control type is its own group — pooling QC with reference would count the systematic gap between two
+different materials as measurement noise. The box is unavailable on a run with fewer than two control
+replicates. See `docs/differential-analysis.md` for the calibration and the numbers behind it.
 
 Whichever combination is chosen, **the status line names the method that produced the result**, along
 with the sample counts the test actually used and anything it could not honor (a covariate a rank test

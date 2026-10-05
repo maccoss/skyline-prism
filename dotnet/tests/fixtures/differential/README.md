@@ -11,9 +11,13 @@ inmoose. `DifferentialGoldenTests` reads them.
 > by editing the generator and re-running it; do not hand-edit a `.json`.
 
 ```bash
-# from the repository root
-uv run dotnet/tests/fixtures/differential/generate.py
+# from the repository root - name the fixture(s) to rewrite
+uv run dotnet/tests/fixtures/differential/generate.py toolkit_end_to_end
 ```
+
+With no name, every fixture is regenerated. That is rarely what you want: it rewrites the others
+under whatever library versions resolve today, and once rewrote seven of ten pre-existing goldens
+purely from numpy/scipy drift.
 
 The dependency versions are pinned in the script's PEP 723 header, so `uv run` needs nothing
 installed. Without `uv`, install those exact versions and run it with `python`.
@@ -38,14 +42,27 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `paired.json` | `SimpleTests` paired t / Wilcoxon, and the paired moderated design | `scipy.stats.ttest_rel`, `scipy.stats.wilcoxon(method="asymptotic")`, lstsq + `squeezeVar` |
 | `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
 | `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
+| `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
 
-**One reference is a sibling lab tool, deliberately.** `intensity_trend.json` is pinned to
+**One reference is a sibling lab tool, deliberately.** `intensity_trend.json` (and with it
+`peptide_count_prior.json` and `toolkit_end_to_end.json`) is pinned to
 `proteomics-toolkit`, not to a third-party library, because the estimator is not a published formula
 with an independent implementation to check against - it IS that tool's
 `moderation="intensity_trend"`, and reproducing it is the whole requirement. It stands to PRISM as
 `inmoose` does for `squeezeVar`: the definition, not a second opinion. The rule below forbids
 consulting the code under test, which this does not. Regenerating it needs the toolkit installed (the
 PEP 723 header pulls it from git).
+
+`toolkit_end_to_end.json` goes through the toolkit's top-level call rather than a private function,
+because what it pins is the composition: reference and QC pools outside the design give the trend's
+shape, and its level and degrees of freedom are fitted to the design's residuals. That calibration
+step is limma's `fitFDist` with the trend as a known offset, so the generator also hands the toolkit's
+residuals and trend to `inmoose.limma.squeezeVar` and refuses to write a case where the two disagree.
+Two conventions are aligned rather than tolerated, and the generator says how. The toolkit is run with `log_pseudocount=0`, because
+PRISM adds none. Its inputs keep every prior point more than 1% of the x range from the next, so
+PRISM's LOWESS `delta` interpolates nothing, and the generator refuses to write a case where that
+fails. On the Verapamil serum cohort the same comparison agreed to ~1e-11. Its cohort is synthetic,
+because a clinical one cannot be committed.
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under
 test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.

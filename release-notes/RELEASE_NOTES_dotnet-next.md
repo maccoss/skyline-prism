@@ -82,7 +82,32 @@ as the GitHub Release description and fails if it is missing.
 - **The Differential plots no longer have a legend over the data.** The "significant / not significant"
   box sat in the lower right of the Volcano and Detection plots, on top of points. Red only ever meant
   "past the lines drawn on the plot", and the status line gives the count and the rule.
+- **The default variance prior was used at the wrong level, so moderated p-values were miscalibrated.**
+  The intensity-trend prior takes its shape from a LOWESS of within-group variance against intensity.
+  By default that is fitted on the run's QC and reference injections. The prior was then used at the
+  level those groups gave, but no source of groups measures the noise a contrast is tested against.
+  Pooled injections lack the biology a study sample carries, so their trend sat too low and made
+  tests optimistic. Design groups under a paired or within-subject model contain the between-subject
+  spread the subject block removes, so their trend sat too high and cost power. The trend is now
+  multiplied by a level fitted, together with the prior degrees of freedom, to the contrast's own
+  residuals: limma's `fitFDist` with the trend as a known offset. On 40 null permutations of a
+  3,595-protein serum cohort, the share of p-values below 0.05 went from 6.1% to 4.6% for an
+  unpaired contrast and from 7.0% to 5.8% for a paired one. On simulated nulls it went from 40% to
+  4.9%, and for a paired contrast fitted on its design groups from 0.17% to 5.1%; a calibrated test
+  gives 5%. The CLI, the CSV header and the quant report now say how far the trend was scaled
+  (`prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2`).
+  `proteomics-toolkit` v26.8.0 makes the same change, and a new golden holds the two to each other
+  across unpaired, paired and trend designs. See "The intensity prior: shape from the controls, level
+  and weight from the design" in `docs/differential-analysis.md`.
 
 ## Performance
 
 ## Breaking Changes
+
+- **Moderated p-values under the default intensity-trend prior change.** A prior shaped on the controls
+  is less optimistic than before. A paired or within-subject contrast with its prior shaped on the
+  design groups is more powerful. An unpaired contrast on design groups barely moves. On the serum
+  cohort this was checked against, the one protein that cleared FDR 0.05 in the within-subject trend
+  over weeks 0-12 still does (p 5.3e-7 to 1.0e-6). `--prior-from-groups` no longer says to use it
+  only to reproduce an older result: it changes the trend's shape, not its level. To reproduce a
+  result from dotnet-v26.27.0 or earlier, run that version.
