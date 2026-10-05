@@ -183,6 +183,11 @@ public sealed class PanoramaPublisher
             + ". Republishing from PRISM replaces this page; Panorama keeps the earlier versions of its text.");
 
         var current = await _client.GetWikiPageAsync(container, pageName, cancellationToken).ConfigureAwait(false) ?? existing;
+        // Attaching takes a while, and re-reading the page adopts its newest version: an edit made on
+        // Panorama meanwhile would be saved over under that version's own token. So it is checked again,
+        // and refused like an edit found at the start; the token still guards the last moment.
+        if (!replaceEdited)
+            CheckOwnership(current, container, pageName, replaceEdited: false);
         _say($"Saving the wiki page {pageName}");
         await _client.SaveWikiPageAsync(container, pageName, title, body, current, showAttachments: false, cancellationToken)
             .ConfigureAwait(false);
@@ -356,11 +361,16 @@ public sealed class PanoramaPublisher
             : name[..(MaxPageName - 9)].TrimEnd('-') + "-"
               + Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name)))[..8];
 
+    /// <summary>Why a wiki page name cannot be used, or null when it can.</summary>
+    public static string? PageNameProblem(string name) =>
+        !string.IsNullOrWhiteSpace(name) && Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}$")
+            ? null
+            : $"'{name}' is not a usable wiki page name: use letters, digits, '-', '_' and '.', starting with a letter or digit.";
+
     private static void ValidatePageName(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) || !Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}$"))
-            throw new PanoramaException(
-                $"'{name}' is not a usable wiki page name: use letters, digits, '-', '_' and '.', starting with a letter or digit.");
+        if (PageNameProblem(name) is { } problem)
+            throw new PanoramaException(problem);
     }
 
     /// <summary>The footer PRISM writes at the bottom of each page it owns.</summary>
@@ -489,6 +499,25 @@ public sealed class PanoramaPublisher
         }
 
         return new UploadedDirectory(destination, PanoramaPaths.BrowserUrl(destination, _client.Server), uploaded, skipped, sent);
+    }
+
+    /// <summary>
+    /// Sends one file of an uploaded directory again when Panorama's copy differs from it, verified the
+    /// way the upload is. For <c>panorama.json</c>, which a publish changes after uploading it.
+    /// </summary>
+    /// <returns>Whether it was sent.</returns>
+    public async Task<bool> RefreshUploadedFileAsync(string localPath, string destination, CancellationToken cancellationToken = default)
+    {
+        var name = Path.GetFileName(localPath);
+        var md5 = await LocalMd5Async(localPath, cancellationToken).ConfigureAwait(false);
+        if ((await _client.Md5sAsync(destination, cancellationToken).ConfigureAwait(false)).TryGetValue(name, out var there) && there == md5)
+            return false;
+
+        _say($"Updating {name} in {destination}");
+        await _client.UploadFileAsync(localPath, destination, name, null, cancellationToken).ConfigureAwait(false);
+        if (!(await _client.Md5sAsync(destination, cancellationToken).ConfigureAwait(false)).TryGetValue(name, out var stored) || stored != md5)
+            throw new PanoramaException($"{name} was sent again to {destination} and Panorama's copy still does not match the local file.");
+        return true;
     }
 
     /// <summary>What is actually sent for a local file: the file itself, or its Panorama-safe form.</summary>

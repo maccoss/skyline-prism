@@ -57,6 +57,9 @@ internal sealed class FakePanorama : HttpMessageHandler
     /// <summary>Attachments a saved page body pointed at that the page did not have when it was saved.</summary>
     public List<string> MissingAtSave { get; } = new();
 
+    /// <summary>Runs after files are attached to a page: someone editing it on Panorama meanwhile.</summary>
+    public Action<Page>? AfterAttach { get; set; }
+
     private int _nextWebPartId = 1000;
 
     /// <summary>The page a browser opens for the folder: the dashboard of a Panorama folder, the portal page otherwise.</summary>
@@ -361,6 +364,8 @@ internal sealed class FakePanorama : HttpMessageHandler
             }
         }
 
+        if (add.Count > 0)
+            AfterAttach?.Invoke(page);
         return Json(new
         {
             success = true,

@@ -115,6 +115,64 @@ public sealed class PanoramaPublisherTests : IDisposable
     }
 
     [Fact]
+    public async Task AnEditMadeOnPanoramaWhileThePlotsAttach_IsRefused_NotSavedOver()
+    {
+        // The save re-reads the page for its newest version; without a second ownership check it would
+        // save over an edit made in the meantime, under that edit's own version token.
+        _server.AfterAttach = page => page.Body = "<p>A note someone added just now.</p>" + page.Body;
+
+        var ex = await Assert.ThrowsAsync<PanoramaException>(() => Publisher().PublishReportAsync(
+            Path.Combine(_outputDir, "qc_report.html"), Container, "PRISM-QC-run", "t", null, replaceEdited: false));
+
+        Assert.Contains("edited on Panorama", ex.Message, StringComparison.Ordinal);
+        Assert.StartsWith("<p>A note someone added just now.</p>", PageNamed("PRISM-QC-run").Body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("qc")]
+    [InlineData("quant")]
+    [InlineData("links")]
+    public async Task AnUnusablePageName_IsRefusedBeforeAnythingIsSent_UploadIncluded(string which)
+    {
+        var request = Request() with
+        {
+            QcPage = which == "qc" ? "my page" : null,
+            QuantPage = which == "quant" ? "my page" : null,
+            LinksFolder = Container,
+            LinksPage = which == "links" ? "my page" : null,
+        };
+
+        Assert.Contains(OutputPublishing.Problems(request), p => p.Contains("'my page' is not a usable wiki page name", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<PanoramaException>(() => OutputPublishing.RunAsync(_client, request));
+        Assert.Empty(_server.Requests); // not a byte of the directory went up first
+    }
+
+    [Fact]
+    public async Task AClientSignedInToAnotherServer_IsRefusedBeforeAnythingIsSent()
+    {
+        var ex = await Assert.ThrowsAsync<PanoramaException>(() => OutputPublishing.RunAsync(_client,
+            Request() with { Server = new Uri("https://panorama.test:8443") }));
+
+        Assert.Contains("Signed in to https://panorama.test, but asked to publish to https://panorama.test:8443", ex.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(_server.Requests);
+    }
+
+    [Fact]
+    public async Task TheUploadedPanoramaJson_EndsUpLikeTheLocalOne_WithWhatThePublishRecorded()
+    {
+        MakePanoramaFolder();
+        await OutputPublishing.RunAsync(_client, WithLinks());
+
+        // The quant page and the web part's id are recorded after the upload; the copy on Panorama is
+        // what a directory restored from it remembers.
+        var uploaded = Encoding.UTF8.GetString(_server.Files[Container + "/@files/run-2026-10/panorama.json"]);
+        Assert.Equal(File.ReadAllText(Path.Combine(_outputDir, PanoramaTargets.FileName)), uploaded);
+        Assert.Contains("links_web_part_id", uploaded, StringComparison.Ordinal);
+        Assert.Contains("quant_pages", uploaded, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnotherOutputDirectoryWithTheSameName_CannotReplaceItsPage()
     {
         var other = Path.Combine(Path.GetTempPath(), "prism_pub_" + Guid.NewGuid().ToString("N"), "run-2026-10");

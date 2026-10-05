@@ -89,6 +89,16 @@ public static class OutputPublishing
         if (request.RawFolder is not null && PanoramaPaths.IsFileArea(request.RawFolder)
             && string.Equals(PanoramaPaths.ToFolder(request.RawFolder).TrimEnd('/'), request.Destination, StringComparison.OrdinalIgnoreCase))
             problems.Add("The output directory would be uploaded over the raw files folder; it has the same name.");
+        // Checked here, before anything is sent: found inside the publish, a bad name would fail only
+        // after the whole output directory had been uploaded.
+        foreach (var (folder, page) in new[]
+                 {
+                     (request.QcFolder, request.ResolvedQcPage),
+                     (request.QuantFolder, request.ResolvedQuantPage),
+                     (request.LinksFolder, request.ResolvedLinksPage),
+                 })
+            if (folder is not null && PanoramaPublisher.PageNameProblem(page) is { } problem)
+                problems.Add(problem);
         return problems;
     }
 
@@ -157,6 +167,13 @@ public static class OutputPublishing
     {
         if (Problems(request) is { Count: > 0 } problems)
             throw new PanoramaException(string.Join(" ", problems));
+        // The request names the server the targets are recorded for; the client is the one the publish
+        // goes to. Different, the pages would go to one server while panorama.json remembered the other.
+        if (!string.Equals(client.Server.GetLeftPart(UriPartial.Authority), request.Server.GetLeftPart(UriPartial.Authority),
+                StringComparison.OrdinalIgnoreCase))
+            throw new PanoramaException(
+                $"Signed in to {client.Server.GetLeftPart(UriPartial.Authority)}, but asked to publish to "
+                + $"{request.Server.GetLeftPart(UriPartial.Authority)}. Sign in to that server first.");
 
         var targets = request.ToTargets(PanoramaTargets.Load(request.OutputDir));
         targets = targets with { PublishId = targets.PublishId ?? Guid.NewGuid().ToString("N") };
@@ -246,6 +263,22 @@ public static class OutputPublishing
         }
 
         targets.Save(request.OutputDir);
+        if (upload is not null)
+        {
+            // The publish changes panorama.json after uploading it - the quant pages, the web part's id - and
+            // the uploaded copy is what a directory restored from Panorama remembers: left stale, a republish
+            // from it would leave quant pages off the links page and add a second web part.
+            try
+            {
+                await publisher.RefreshUploadedFileAsync(Path.Combine(request.OutputDir, PanoramaTargets.FileName), upload.Destination,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (PanoramaException ex)
+            {
+                say?.Invoke($"Everything is published, but the uploaded {PanoramaTargets.FileName} could not be brought up to date ({ex.Message}).");
+            }
+        }
+
         return new PublishOutcome(upload, qc, quant, links, onFolderPage, note);
     }
 

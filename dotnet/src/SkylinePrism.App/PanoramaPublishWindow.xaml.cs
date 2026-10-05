@@ -36,6 +36,9 @@ public partial class PanoramaPublishWindow : Window
     // must neither replace the newer client nor leak its own.
     private int _signInAttempt;
 
+    // The server of the current client, or of the sign-in still running when there is none yet.
+    private Uri? _signInServer;
+
     internal PanoramaPublishWindow(string outputDir)
     {
         InitializeComponent();
@@ -168,18 +171,28 @@ public partial class PanoramaPublishWindow : Window
 
     private void OnServerChanged(object sender, RoutedEventArgs e)
     {
-        if (_client is not null && !string.Equals(_client.Server.Host, Server.Host, StringComparison.OrdinalIgnoreCase))
-        {
-            _client.Dispose();
-            _client = null;
-            _ = SignInQuietlyAsync();
-        }
+        // Against the sign-in still running as well as a finished one: changed while the first quiet
+        // sign-in is under way, there is no client yet to compare, and that sign-in would otherwise
+        // install a client for the server the box no longer names.
+        if (_signInServer is not null && SameServer(_signInServer, Server))
+            return;
+        _client?.Dispose();
+        _client = null;
+        _ = SignInQuietlyAsync();
     }
+
+    /// <summary>
+    /// Whether two addresses name one server: scheme, host and port, as a request goes. The host alone
+    /// would take http and https, or another port, for the same server and keep the old client.
+    /// </summary>
+    internal static bool SameServer(Uri a, Uri b) =>
+        string.Equals(a.GetLeftPart(UriPartial.Authority), b.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
 
     private async Task SignInQuietlyAsync()
     {
         var attempt = ++_signInAttempt;
         var server = Server;
+        _signInServer = server;
         SignInText.Text = $"Signing in to {server.Host}...";
         try
         {
@@ -215,6 +228,7 @@ public partial class PanoramaPublishWindow : Window
         if (PanoramaSignInWindow.Ask(this, PanoramaSignIn.ForThisComputer(Server), why) is not { } client)
             return;
         _signInAttempt++; // a quiet sign-in still running must not replace this one
+        _signInServer = client.Server;
         _client?.Dispose();
         _client = client;
         SignInText.Text = $"Signed in with {client.Credential}{(client.Credential.Source == "typed" ? "" : $", saved by {client.Credential.Source}")}.";

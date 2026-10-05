@@ -145,6 +145,15 @@ public sealed class PanoramaPublishWindowTests : IDisposable
         Assert.Equal("/MacCoss/maccoss/Lab", links);
     }
 
+    [Theory]
+    [InlineData("https://panoramaweb.org", "https://PanoramaWeb.org/", true)]
+    [InlineData("https://panoramaweb.org", "http://panoramaweb.org", false)]
+    [InlineData("https://panoramaweb.org", "https://panoramaweb.org:8443", false)]
+    [InlineData("https://panoramaweb.org", "https://panoramaweb.org:443", true)]
+    public void AServerIsTheSameOnlyIfSchemeHostAndPortAre(string a, string b, bool same) =>
+        // The host alone took http for https, or another port, for the server already signed in to.
+        Assert.Equal(same, PanoramaPublishWindow.SameServer(new Uri(a), new Uri(b)));
+
     [Fact]
     public void TheSignInWindow_ConstructsWithItsPreselectedChoice()
     {

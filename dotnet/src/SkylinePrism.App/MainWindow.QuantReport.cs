@@ -125,6 +125,9 @@ public partial class MainWindow
         finally
         {
             QuantReportButton.IsEnabled = true;
+            // A quant report is enough to publish, so a directory written with the QC report turned off
+            // becomes publishable here.
+            UpdatePublishEnabled();
         }
     }
 }

@@ -3087,13 +3087,47 @@ public partial class MainWindow : Window
     /// to a completed run, as Open QC Report is, left it disabled for the usual case - opening an
     /// output directory produced earlier to publish it.
     /// </summary>
-    private void UpdatePublishEnabled()
+    private void UpdatePublishEnabled() => _ = UpdatePublishEnabledAsync();
+
+    // Each look at the Output directory's reports is numbered, and only the latest may set the button.
+    private int _publishProbe;
+
+    /// <summary>How long the Output directory box must be still before its reports are looked for.</summary>
+    private static readonly TimeSpan PublishProbeDelay = TimeSpan.FromMilliseconds(300);
+
+    /// <remarks>
+    /// The Output directory box's TextChanged reaches here on every keystroke, and on a network share -
+    /// a UNC path half typed, a server that is slow to answer - one File.Exists can block for seconds.
+    /// So the look waits until the box has been still for <see cref="PublishProbeDelay"/>, runs off the
+    /// UI thread, and is dropped if a newer one has started meanwhile.
+    /// </remarks>
+    private async Task UpdatePublishEnabledAsync()
     {
         if (PublishButton is null)
             return;
+        var probe = ++_publishProbe;
         var dir = OutputDirBox?.Text?.Trim();
-        PublishButton.IsEnabled = !_isRunning && !string.IsNullOrEmpty(dir)
-            && (File.Exists(Path.Combine(dir, "qc_report.html")) || File.Exists(Path.Combine(dir, "quant", "quant_report.html")));
+        if (_isRunning || string.IsNullOrEmpty(dir))
+        {
+            PublishButton.IsEnabled = false;
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(PublishProbeDelay);
+            if (probe != _publishProbe)
+                return;
+            var hasReport = await Task.Run(() =>
+                File.Exists(Path.Combine(dir, "qc_report.html")) || File.Exists(Path.Combine(dir, "quant", "quant_report.html")));
+            if (probe == _publishProbe)
+                PublishButton.IsEnabled = hasReport && !_isRunning;
+        }
+        catch (Exception)
+        {
+            // Started and not awaited: a look that fails leaves the button as it was rather than taking
+            // the tool down (UiThreadSafetyTests).
+        }
     }
 
     /// <summary>
