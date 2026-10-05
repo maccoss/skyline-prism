@@ -56,8 +56,11 @@ public static class TrendSamples
         }
 
         if (subjectLabels is null)
+            // Worded for the person reading it, not the caller: both front ends show this message
+            // as it stands, and it used to name a property of DifferentialOptions.
             throw new ArgumentException(
-                "A within-subject trend needs a subject column (DifferentialOptions.SubjectLabels).");
+                "A within-subject trend needs a subject column: the metadata column that "
+                + "identifies each subject, so each one's level can be taken out of the slope.");
 
         // Group by subject, then keep only subjects that can carry a slope. A subject needs at
         // least two DISTINCT trend values: with one sample, or with several all at the same x, its

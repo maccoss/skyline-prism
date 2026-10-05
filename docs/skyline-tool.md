@@ -483,6 +483,17 @@ notebook, no Python, no network except the optional enrichment call. It reads
 directory, so it works on a finished run or any previous run's output directory, with or without a live
 Skyline connection.
 
+**Where the settings are.** They sit in a column on the left of the plot rather than a toolbar above
+it, grouped in the order you decide them: **Compare** (the design: Unpaired, Paired, Trend, Trend by
+subject), **Level**, **Comparison** (the samples: Group by and the arms, or the trend axis and
+restriction), **Hits** (the significance rule), and **Method** (test, prior, covariates, correction).
+**Method** is folded away by default because its defaults are the right ones for most analyses, but its
+current state is always shown underneath in one line - `Moderated t · intensity trend from controls ·
+Benjamini-Hochberg` - so you can see what ran without opening it. The **«** button hides the whole
+column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
+Detection, Enrichment) is a set of tabs above the plot, beside **Quant report...**. Every setting reruns
+the contrast as you change it; there is no Run button.
+
 Pick the **Level** (protein or peptide), a **Group by** metadata column, and the values to contrast
 (**A** vs **B**); a positive log2 fold change means higher in B. Both arms are tick lists, so either
 can be the **union** of several values — `experimental + reference` against `qc` as one arm, say. A
@@ -616,7 +627,7 @@ suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
 
 ### The quant report
 
-**Quant report...** (beside **Run**) writes a self-contained `quant_report.html` to a `quant/` folder
+**Quant report...** (above the plot, beside the view tabs) writes a self-contained `quant_report.html` to a `quant/` folder
 in the output directory — the quantification counterpart to the QC report. It runs the pane's current
 contrast across every view and bundles them into one page that shares the QC report's Analysis
 Information header, so the report names the version, date, host and inputs of the run behind the
@@ -661,11 +672,17 @@ samples, nothing is added and the status line says so. The same join runs headle
 
 Evaluates a **protein panel** — a marker set — against the corrected matrix. Pick one or more panels from
 **Panels** (the same lists the Dynamic Range plot uses: your own plus PRISM's shipped panels; tick
-several to union them), a **Level**, a **Group by** column, and a **View**:
+several to union them), a **Level**, a **Group by** column, and **Heatmap columns** — group means or per
+sample. The settings sit in a collapsible column on the left, as on the Differential pane.
 
 - The **heatmap** shows each matched member's abundance, **row z-scored on log2**, as marker × group
   (group means) or marker × sample (per-sample). Blue-white-red is centered at zero; the colorbar is the
-  scale.
+  scale. The heatmap labels only what can be read. In the per-sample view each group is named once,
+  centered under its block of columns, with a line between groups. Sample IDs aren't shown: there are too
+  many to read at cohort size, and the group is what you need from that view. A group narrower than its
+  name drops its label a line so neighbors don't run together. A panel with more than 30 members names
+  every k-th row rather than every row in unreadable type. The full lists are in the quant report's
+  CSVs.
 - The **boxplot** below shows, per group, each sample's mean marker z-score — the panel's overall level in
   that group.
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Controls;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.Numerics;
@@ -18,6 +19,20 @@ namespace SkylinePrism.App;
 /// </summary>
 public partial class MainWindow
 {
+    private void OnMarkersSettingsCollapse(object sender, RoutedEventArgs e) => SetMarkersSettingsVisible(false);
+
+    private void OnMarkersSettingsExpand(object sender, RoutedEventArgs e) => SetMarkersSettingsVisible(true);
+
+    /// <summary>
+    /// Show or hide the Markers settings panel, leaving a strip to bring it back - the same behavior
+    /// as the Differential pane's, so the two panes are learned once.
+    /// </summary>
+    private void SetMarkersSettingsVisible(bool visible)
+    {
+        MarkersSettingsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        MarkersSettingsExpandButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     private DifferentialDataset? _markersDataset;
     private string? _markersDir;
     private FeatureLevel _markersLevel;
@@ -191,7 +206,7 @@ public partial class MainWindow
     }
 
     private FeatureLevel MarkersSelectedLevel() =>
-        (MarkersLevelCombo.SelectedItem as ComboBoxItem)?.Content as string == "Peptide"
+        (MarkersLevelCombo.SelectedItem as ListBoxItem)?.Content as string == "Peptide"
             ? FeatureLevel.Peptide
             : FeatureLevel.Protein;
 
@@ -287,7 +302,7 @@ public partial class MainWindow
             return;
         }
 
-        var perSample = (MarkersViewCombo.SelectedItem as ComboBoxItem)?.Content as string == "Per sample";
+        var perSample = (MarkersViewCombo.SelectedItem as ListBoxItem)?.Content as string == "Per sample";
         var identities = Enumerable.Range(0, ds.FeatureIds.Length).Select(ds.IdentityOf).ToList();
         var result = MarkerPanel.Evaluate(ds.ExprLog2, identities, groups,
             ds.SampleIds, combined, perSample);
@@ -309,7 +324,8 @@ public partial class MainWindow
         MarkersHeatPlot.Reset();
         var heat = MarkersHeatPlot.Plot;
         PlotRenderer.DrawValueHeatmap(heat, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
-            result.SymmetricMax, "row z-score", annotate: false);
+            result.SymmetricMax, "row z-score", annotate: false,
+            columnGroups: result.ColumnGroups, groupNames: result.GroupNames, fontScale: 0.7);
         heat.Title($"{combined.Name} (row z-scored log2) - "
             + (perSample ? "per sample" : $"group means by {groupCol}"));
         MarkersHeatPlot.Refresh();
@@ -414,7 +430,11 @@ public partial class MainWindow
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, result.GroupNames);
         plt.XLabel(groupCol);
         plt.YLabel("mean marker z-score");
-        PlotRenderer.StyleQcPlot(plt);
+        // Scaled down as a whole, the way StyleQcPlot asks to be. Its sizes are for a figure copied
+        // into a paper; this box plot is the lower two-fifths of a pane, and at full size its axis
+        // text took most of that height - the boxes were squeezed into a sliver and the y-axis title
+        // was cut to "mean marker z-". At this scale it matches the heatmap above it.
+        PlotRenderer.StyleQcPlot(plt, fontScale: 0.55);
         // Reserve left-axis room so the rotated y-axis title is not clipped at the pane edge.
         plt.Axes.Left.MinimumSize = 60;
 

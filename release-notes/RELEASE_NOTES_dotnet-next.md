@@ -25,8 +25,42 @@ as the GitHub Release description and fails if it is missing.
   is refused, with the values it does have. Restricted samples are counted separately from samples with
   no value on the axis, and a quant report records the restriction in the command that reproduces it.
   Fitting the within-subject Verapamil trend now gives weeks 0 to 12 over 50 samples in 10 subjects.
+- **The Differential and Markers settings are in a collapsible column beside the plot.** The
+  Differential toolbar had grown to 15 drop-downs and 16 labels in one wrapping row, about twice the
+  window's width. At the default size it wrapped to four lines and took the plot's height, and hiding
+  one control reflowed everything after it. The settings are now grouped top to bottom in the order you
+  decide them: the design, the level, the samples being compared, the hit rule, and the method. Choices
+  of two to four options (design, level, adjusted or raw p, heatmap columns) are now buttons that show
+  every option instead of drop-downs. **Method** is folded away by default with its current state shown
+  in one line, so you can see what ran without opening it. The view (Volcano, Detection, Enrichment)
+  is tabs above the plot. **«** hides the column to give the plot the full width. The Markers pane
+  has the same layout.
+- **The window opens at a size that suits the screen.** It used to open at a fixed 1040 × 740: a small
+  box on a large monitor, and at that width the plot was about 600 pixels beside the new settings
+  column. It now opens at 85% of the screen (up to 1600 × 1000), with a minimum of 960 × 640.
 
 ## Bug Fixes
+
+- **The per-sample marker heatmap no longer draws sample names across the data.** On a 96-sample
+  cohort, 96 rotated sample IDs were drawn over the heatmap, its title, and its row labels, and nothing
+  underneath could be read. Each group is now named once, centered under its block of columns with a
+  line between groups, which is what that view is read for. Group names wider than their block are
+  staggered onto two lines so neighbors don't run together (two six-sample control groups had read as
+  "Quality ControlStandard").
+- **A large marker panel no longer labels every row in unreadable type.** Labels shrank to 6pt as a
+  panel grew and still overlapped; the 158-member histone panel was a smear. Now at most 30 rows are
+  named (every k-th) at a readable size. The full list is in the quant report's CSV.
+- **The Markers box plot is readable.** It used font sizes meant for an exported figure in a strip
+  two-fifths of the pane tall. The axis text took most of the height, the boxes were squeezed into a
+  sliver, and the y-axis title was cut to "mean marker z-". It is now scaled to match the heatmap above it.
+- **The Differential plot clears when the current settings can't produce a result.** Picking a design
+  that still needs a subject column, or a group-by with no arms ticked, left the previous result on
+  screen under a message saying nothing had run. That plot had a different design and a different axis
+  label, and read as the answer to the new question.
+- **A missing subject column is asked for in plain words.** The message named an internal property
+  (`DifferentialOptions.SubjectLabels`), which a person can't act on, and the paired version pointed at
+  a "Pair by" control that no longer exists. Both front ends now say which column is needed and why.
+  In the pane, an empty Subject picker prompts for a choice instead of running and failing.
 
 - **The Differential pane's "Group by" label now hides under a trend design, and the QC Plots pane's
   label no longer disappears.** The QC pane's label was named as if it belonged to the Differential

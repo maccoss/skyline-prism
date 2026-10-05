@@ -865,14 +865,45 @@ public static partial class PlotRenderer
         plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
     }
 
+    /// <summary>Past this many columns a heatmap stops naming each one.</summary>
+    private const int ManyColumns = 15;
+
+    /// <summary>The most row labels a heatmap names; beyond it, every k-th.</summary>
+    private const int MaxRowLabels = 30;
+
     /// <summary>
     /// Draw a diverging value heatmap into a LIVE plot (not a PNG): rows down, columns across, a blue-
     /// white-red scale centered at zero over the symmetric range +/-<paramref name="symmetricMax"/>.
     /// Used for the row z-scored marker-panel heatmap. Row 0 is drawn at the TOP (matplotlib
     /// orientation). NaN cells are light grey. Cell values are annotated when the grid is small.
     /// </summary>
+    /// <param name="columnGroups">
+    /// The group index of each column, into <paramref name="groupNames"/>, for a per-sample heatmap.
+    /// When given and there are too many columns to name, the axis names the GROUP under each run of
+    /// columns instead of every sample - see the remarks.
+    /// </param>
+    /// <param name="fontScale">
+    /// Passed to <see cref="StyleQcPlot"/>. 1 for an exported figure; the Markers pane passes less,
+    /// because there the heatmap shares a pane with a box plot and a full-size title crowds both.
+    /// </param>
+    /// <remarks>
+    /// <para><b>Too many labels is the failure, not too few.</b> A per-sample heatmap on a 96-sample
+    /// cohort drew 96 sample ids rotated across the grid - over the data, the title and the row
+    /// labels - and a 158-member panel drew 158 row labels at 6pt, overlapping into a smear. Neither
+    /// told the reader anything. So the axes show what can actually be read:</para>
+    /// <list type="bullet">
+    /// <item>Columns: when there are more than fit, and the columns are samples ordered by group, the
+    /// axis names each group once, centred under its run, with a line between groups. A sample id is
+    /// not what a per-sample heatmap is read for - which group the column is in is.</item>
+    /// <item>Rows: at most <see cref="MaxRowLabels"/> are named, every k-th, at a legible size - the
+    /// convention seaborn's heatmap follows - rather than every row at a size nobody can read. The
+    /// full list is in the companion CSV.</item>
+    /// </list>
+    /// </remarks>
     public static void DrawValueHeatmap(Plot plt, double[,] values, string[] columnLabels,
-        string[] rowLabels, double symmetricMax, string colorBarLabel, bool annotate)
+        string[] rowLabels, double symmetricMax, string colorBarLabel, bool annotate,
+        IReadOnlyList<int>? columnGroups = null, IReadOnlyList<string>? groupNames = null,
+        double fontScale = 1.0)
     {
         var nRows = values.GetLength(0);
         var nCols = values.GetLength(1);
@@ -908,40 +939,94 @@ public static partial class PlotRenderer
                     t.LabelFontColor = Math.Abs(values[i, j]) > range * 0.55 ? Colors.White : Colors.Black;
                 }
 
-        var colPos = new double[nCols];
-        for (var j = 0; j < nCols; j++)
-            colPos[j] = j + 0.5;
-        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(colPos, columnLabels);
+        // Columns. Up to ManyColumns they are named one by one, horizontally. Past that, a per-sample
+        // heatmap names its groups instead; any other wide heatmap rotates its labels to hang BELOW the
+        // grid (-45 from the label's right end, as the Ion accounting bars do - +45 sent them up across
+        // the cells).
+        var bySpan = nCols > ManyColumns && columnGroups is { Count: > 0 } && groupNames is { Count: > 0 }
+            && columnGroups.Count == nCols;
+        if (bySpan)
+        {
+            var pos = new List<double>();
+            var lab = new List<string>();
+            var start = 0;
+            for (var j = 1; j <= nCols; j++)
+            {
+                if (j < nCols && columnGroups![j] == columnGroups[start])
+                    continue;
+                var g = columnGroups![start];
+                pos.Add((start + j) / 2.0);
+                lab.Add(g >= 0 && g < groupNames!.Count ? groupNames[g] : string.Empty);
+                // A divider between runs, so where one group ends is visible inside the grid itself.
+                if (j < nCols)
+                {
+                    var line = plt.Add.VerticalLine(j);
+                    line.Color = Colors.Black;
+                    line.LineWidth = 1.5f;
+                }
 
-        var rowPos = new double[nRows];
-        var yLabels = new string[nRows];
+                start = j;
+            }
+
+            // A group only a few samples wide is narrower than its own name, and neighbouring names then
+            // run together ("Quality ControlStandard" on a cohort with six of each). When any run is
+            // narrower than its label - one character per column is the conservative reading, columns
+            // being at least a character wide at any sensible window size - alternate labels drop a
+            // line, so adjacent names never share one.
+            var widths = new List<int>();
+            var startIdx = 0;
+            for (var j = 1; j <= nCols; j++)
+            {
+                if (j < nCols && columnGroups![j] == columnGroups[startIdx])
+                    continue;
+                widths.Add(j - startIdx);
+                startIdx = j;
+            }
+
+            var stagger = lab.Count > 1 && lab.Where((t, k) => t.Length > widths[k]).Any();
+            if (stagger)
+                for (var k = 1; k < lab.Count; k += 2)
+                    lab[k] = "\n" + lab[k];
+
+            plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos.ToArray(), lab.ToArray());
+        }
+        else
+        {
+            var colPos = new double[nCols];
+            for (var j = 0; j < nCols; j++)
+                colPos[j] = j + 0.5;
+            plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(colPos, columnLabels);
+        }
+
+        // Rows: every k-th, so no more than MaxRowLabels are named, at a size that can be read.
+        var step = Math.Max(1, (int)Math.Ceiling(nRows / (double)MaxRowLabels));
+        var rowPos = new List<double>();
+        var yLabels = new List<string>();
         for (var i = 0; i < nRows; i++)
         {
-            rowPos[i] = i + 0.5;
-            yLabels[i] = rowLabels[nRows - 1 - i]; // y is flipped (row 0 at top)
+            var source = nRows - 1 - i; // y is flipped (row 0 at top)
+            if (source % step != 0)
+                continue;
+            rowPos.Add(i + 0.5);
+            yLabels.Add(rowLabels[source]);
         }
-        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(rowPos, yLabels);
+        plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(rowPos.ToArray(), yLabels.ToArray());
 
-        StyleQcPlot(plt);
+        StyleQcPlot(plt, fontScale);
         plt.Axes.Left.FrameLineStyle.Width = 0;
         plt.Axes.Bottom.FrameLineStyle.Width = 0;
         plt.Axes.Right.FrameLineStyle.Width = 0;
         plt.Axes.Top.FrameLineStyle.Width = 0;
         plt.Axes.Left.MajorTickStyle.Length = 0;
         plt.Axes.Bottom.MajorTickStyle.Length = 0;
-        // Row labels shrink as the panel grows so a big marker set does not overlap into an unreadable
-        // smear; columns are far fewer, so they keep a readable size.
-        plt.Axes.Left.TickLabelStyle.FontSize = nRows > 60 ? 6 : nRows > 45 ? 7 : nRows > 30 ? 9 : 12;
+        plt.Axes.Left.TickLabelStyle.FontSize = nRows <= 15 ? 12 : nRows <= 30 ? 11 : 10;
         plt.Axes.Bottom.TickLabelStyle.FontSize = 12;
         plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
 
-        // Only rotate the column labels when there are too many to sit horizontally (per-sample view).
-        // For a handful of wide group columns, horizontal labels read straight and never rotate up into
-        // the bottom cells. Reserve axis space either way so labels sit BELOW the grid, not over it.
-        var rotate = nCols > 15;
-        plt.Axes.Bottom.TickLabelStyle.Rotation = rotate ? 45 : 0;
-        plt.Axes.Bottom.TickLabelStyle.Alignment = rotate ? Alignment.MiddleRight : Alignment.UpperCenter;
-        plt.Axes.Bottom.MinimumSize = rotate ? 96 : 32;
+        var rotate = !bySpan && nCols > ManyColumns;
+        plt.Axes.Bottom.TickLabelStyle.Rotation = rotate ? -45 : 0;
+        plt.Axes.Bottom.TickLabelStyle.Alignment = rotate ? Alignment.UpperRight : Alignment.UpperCenter;
+        plt.Axes.Bottom.MinimumSize = rotate ? 96 : bySpan ? 48 : 32;
         plt.Axes.Left.MinimumSize = 72;
 
         // Pin the view to the cell extent so the grid fills the plot (auto-scale leaves it floating in a
@@ -1352,7 +1437,8 @@ public static partial class PlotRenderer
     {
         var plt = new Plot();
         DrawValueHeatmap(plt, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
-            result.SymmetricMax, "row z-score", annotate);
+            result.SymmetricMax, "row z-score", annotate,
+            columnGroups: result.ColumnGroups, groupNames: result.GroupNames);
         if (!string.IsNullOrEmpty(title))
             plt.Title(title);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);

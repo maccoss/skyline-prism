@@ -162,7 +162,7 @@ public partial class MainWindow
     }
 
     private FeatureLevel DiffSelectedLevel() =>
-        (DiffLevelCombo.SelectedItem as ComboBoxItem)?.Content as string == "Peptide"
+        (DiffLevelCombo.SelectedItem as ListBoxItem)?.Content as string == "Peptide"
             ? FeatureLevel.Peptide
             : FeatureLevel.Protein;
 
@@ -181,7 +181,7 @@ public partial class MainWindow
 
     /// <summary>The design the Design combo is pointing at.</summary>
     private DifferentialDesign DiffSelectedDesign() =>
-        ((DiffDesignCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        ((DiffDesignCombo.SelectedItem as ListBoxItem)?.Tag as string) switch
         {
             "Paired" => DifferentialDesign.Paired,
             "LinearTrend" => DifferentialDesign.LinearTrend,
@@ -511,7 +511,7 @@ public partial class MainWindow
     /// </remarks>
     private SignificanceRule DiffRule() => new()
     {
-        UseAdjusted = (DiffPKindCombo.SelectedItem as ComboBoxItem)?.Tag as string != "Raw",
+        UseAdjusted = (DiffPKindCombo.SelectedItem as ListBoxItem)?.Tag as string != "Raw",
         // The floor is not 0: -log10(0) is +infinity, and the volcano draws its guide line at
         // exactly that, which leaves the plot with a non-finite axis limit and nothing on it. A cut
         // of zero admits no feature either, so nothing is lost by refusing to go below the
@@ -663,7 +663,7 @@ public partial class MainWindow
         PopulateTrendColumns(numeric);
         ShowTest(DiffDesignTrendItem, numeric.Count > 0);
         ShowTest(DiffDesignTrendSubjectItem, numeric.Count > 0);
-        if (DiffDesignCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        if (DiffDesignCombo.SelectedItem is ListBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
             {
@@ -715,7 +715,7 @@ public partial class MainWindow
         // TryGetGroups against the hidden arm pickers and surface Core's "call RunTrend instead"
         // message, which is written for a caller and not for a reader.
         ShowTest(DiffViewEnrichmentItem, !trend);
-        if (DiffViewCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        if (DiffViewCombo.SelectedItem is ListBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
             {
@@ -794,14 +794,73 @@ public partial class MainWindow
         DiffCovariatesCombo.IsEnabled = moderated;
     }
 
-    private static void ShowTest(ComboBoxItem item, bool applies)
+    private static void ShowTest(UIElement item, bool applies)
     {
         item.Visibility = applies ? Visibility.Visible : Visibility.Collapsed;
         item.IsEnabled = applies;
     }
 
+    private void OnDiffSettingsCollapse(object sender, RoutedEventArgs e) => SetDiffSettingsVisible(false);
+
+    private void OnDiffSettingsExpand(object sender, RoutedEventArgs e) => SetDiffSettingsVisible(true);
+
+    /// <summary>
+    /// Show or hide the settings panel. Hidden, it leaves a thin strip to bring it back, because a
+    /// control that vanishes without a way home is a control nobody hides twice.
+    /// </summary>
+    private void SetDiffSettingsVisible(bool visible)
+    {
+        DiffSettingsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        DiffSettingsExpandButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnDiffMethodExpanderToggled(object sender, RoutedEventArgs e) => UpdateDiffMethodSummary();
+
+    /// <summary>
+    /// The Method section in one line - "Moderated t · intensity trend from controls · BH" - shown
+    /// while the section is folded away.
+    /// </summary>
+    /// <remarks>
+    /// The method is folded by default because its defaults are the right ones and most analyses
+    /// never touch it. Folding it must not HIDE it, though: a p-value means something different
+    /// under a different prior or correction, so what ran has to be readable without opening
+    /// anything. Refreshed from <see cref="RunCurrentViewAsync"/>, which every control change
+    /// funnels through, so no change to the method can leave the line stale.
+    /// </remarks>
+    private void UpdateDiffMethodSummary()
+    {
+        if (DiffMethodExpander.IsExpanded)
+        {
+            DiffMethodSummary.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        static string? Shown(ComboBox c) =>
+            (c.SelectedItem as ComboBoxItem)?.Content as string;
+
+        var parts = new List<string>();
+        if (Shown(DiffTestCombo) is { } test)
+            parts.Add(test);
+        if (DiffPriorCombo.Visibility == Visibility.Visible && Shown(DiffPriorCombo) is { } prior)
+        {
+            var fromControls = DiffPriorFromControlsCheck.Visibility == Visibility.Visible
+                && DiffPriorFromControlsCheck.IsChecked == true;
+            parts.Add(prior.ToLowerInvariant() + (fromControls ? " from controls" : string.Empty));
+        }
+
+        var covariates = (DiffCovariatesCombo.ItemsSource as IEnumerable<QcGroupValue>)
+            ?.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        if (covariates is { Count: > 0 })
+            parts.Add("adjusted for " + string.Join(", ", covariates));
+        if (Shown(DiffCorrectionCombo) is { } correction)
+            parts.Add(correction);
+
+        DiffMethodSummary.Text = string.Join(" · ", parts);
+        DiffMethodSummary.Visibility = parts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private DiffView DiffSelectedView() =>
-        ((DiffViewCombo.SelectedItem as ComboBoxItem)?.Content as string) switch
+        ((DiffViewCombo.SelectedItem as ListBoxItem)?.Content as string) switch
         {
             "Detection" => DiffView.Detection,
             "Enrichment" => DiffView.Enrichment,
@@ -1216,6 +1275,7 @@ public partial class MainWindow
 
     private async Task RunCurrentViewAsync()
     {
+        UpdateDiffMethodSummary();
         if (_diffDataset is null)
         {
             DiffStatusText.Text = "Load a run first (point the output directory at a finished PRISM run).";
@@ -1307,6 +1367,21 @@ public partial class MainWindow
                 ? "Pick what to fit the trend against. A column whose values embed a number is "
                   + "offered once per number it holds - check the line underneath says the one you mean."
                 : "This run has no column a trend can be fitted against.";
+            ClearDiffOutput();
+            return;
+        }
+
+        // Each early return below clears the plot. Left up, the previous run's volcano - another design,
+        // another axis label - sat under a status line saying nothing had run, and read as this result.
+        //
+        // An empty Subject picker under a within-subject trend is a choice not yet made, not a failure:
+        // asked for here rather than letting the run start and come back as "Cannot run this trend".
+        if (DiffSelectedDesign() == DifferentialDesign.LinearTrendWithinSubject
+            && DiffPairByCombo.SelectedItem is not string)
+        {
+            DiffStatusText.Text = "Pick the Subject column - the one that identifies each person or "
+                + "donor - so the slope is estimated within each subject.";
+            ClearDiffOutput();
             return;
         }
 
@@ -1319,6 +1394,7 @@ public partial class MainWindow
         if (columns.Length == 0)
         {
             DiffStatusText.Text = "Restrict to: no sample matches the ticked values.";
+            ClearDiffOutput();
             return;
         }
 
@@ -1331,7 +1407,11 @@ public partial class MainWindow
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             if (StillCurrent(request))
+            {
                 DiffStatusText.Text = "Cannot run this trend: " + ex.Message;
+                ClearDiffOutput();
+            }
+
             return;
         }
 
@@ -1404,6 +1484,7 @@ public partial class MainWindow
         {
             DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
                 + "arm. A value cannot be in both.";
+            ClearDiffOutput();
             return;
         }
 
@@ -1423,7 +1504,11 @@ public partial class MainWindow
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             if (StillCurrent(request))
+            {
                 DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+                ClearDiffOutput();
+            }
+
             return;
         }
 
@@ -1472,6 +1557,7 @@ public partial class MainWindow
         {
             DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
                 + "arm. A value cannot be in both.";
+            ClearDiffOutput();
             return;
         }
 
@@ -1616,6 +1702,7 @@ public partial class MainWindow
         {
             DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
                 + "arm. A value cannot be in both.";
+            ClearDiffOutput();
             return;
         }
 
@@ -1651,7 +1738,11 @@ public partial class MainWindow
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             if (StillCurrent(request))
+            {
                 DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+                ClearDiffOutput();
+            }
+
             return;
         }
 
@@ -1873,8 +1964,9 @@ public partial class MainWindow
             // say what is missing and wait rather than throwing from the run.
             if (DiffSelectedDesign() == DifferentialDesign.Paired && DiffSubjectLabels() is null)
             {
-                DiffStatusText.Text = "Paired: choose the metadata column that identifies the subject "
-                    + "under 'Pair by'.";
+                DiffStatusText.Text = "Paired: pick the Subject column - the one that identifies each "
+                    + "person or donor - so their two samples can be matched.";
+                ClearDiffOutput();
                 return;
             }
 

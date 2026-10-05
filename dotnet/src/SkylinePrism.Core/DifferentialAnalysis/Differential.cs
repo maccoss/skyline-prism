@@ -228,8 +228,11 @@ public static class Differential
         if (options.Design == DifferentialDesign.Paired)
         {
             if (options.SubjectLabels is null)
+                // Worded for the person reading it, not the caller: both front ends show this
+                // message as it stands, and it used to name a property of this options type.
                 throw new ArgumentException(
-                    "A paired design needs a pairing column (DifferentialOptions.SubjectLabels).");
+                    "A paired design needs a subject column: the metadata column that identifies "
+                    + "each subject, so their two samples can be matched.");
 
             var resolved = PairedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns);
             pairs = resolved.Pairs;

@@ -38,9 +38,27 @@ public partial class MainWindow : Window
     /// </summary>
     private readonly System.Collections.ObjectModel.ObservableCollection<PrismInput> _inputs = new();
 
+    /// <summary>
+    /// Open at a size that suits the screen rather than a fixed 1040 x 740.
+    /// </summary>
+    /// <remarks>
+    /// The fixed size was set when the panes were a single row of controls over a plot. The analysis
+    /// panes now carry a settings column beside the plot, and at 1040 wide that left the plot about
+    /// 600 px - while on a large monitor the window opened as a small box in one corner. 85% of the
+    /// work area, capped where a bigger window stops helping, and never below the XAML minimum.
+    /// </remarks>
+    private void FitToScreen()
+    {
+        var area = SystemParameters.WorkArea;
+        Width = Math.Max(MinWidth, Math.Min(1600, area.Width * 0.85));
+        Height = Math.Max(MinHeight, Math.Min(1000, area.Height * 0.88));
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+    }
+
     public MainWindow()
     {
         InitializeComponent();
+        FitToScreen();
         // Long enough to read a paragraph. The default is five seconds, which was fine when the
         // pane carried the same text and is not now that the tooltip is the only copy.
         System.Windows.Controls.ToolTipService.ShowDurationProperty.OverrideMetadata(

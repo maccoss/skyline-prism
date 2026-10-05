@@ -21,7 +21,19 @@ public sealed record MarkerPanelResult(
     double[][] PanelScoreByGroup,
     IReadOnlyList<string> NotDetected,
     int Found,
-    int Total);
+    int Total)
+{
+    /// <summary>
+    /// The group of each heatmap column, as an index into <see cref="GroupNames"/>: one column per
+    /// group in the group-means view, one per sample - ordered by group - in the per-sample view.
+    /// </summary>
+    /// <remarks>
+    /// What lets a per-sample heatmap name its GROUPS under each run of columns rather than every
+    /// sample id, which at cohort size is unreadable and is not what the view is read for. An
+    /// init-only property, not a positional one, so every existing construction keeps compiling.
+    /// </remarks>
+    public int[] ColumnGroups { get; init; } = Array.Empty<int>();
+}
 
 /// <summary>Builds a <see cref="MarkerPanelResult"/> from a loaded differential matrix and a protein list.</summary>
 public static class MarkerPanel
@@ -139,10 +151,12 @@ public static class MarkerPanel
         // Heatmap.
         double[,] heat;
         string[] columnLabels;
+        int[] columnGroups;
         if (!perSample)
         {
             heat = new double[matched.Count, groupNames.Length];
             columnLabels = groupNames;
+            columnGroups = Enumerable.Range(0, groupNames.Length).ToArray();
             for (var m = 0; m < matched.Count; m++)
                 for (var g = 0; g < groupNames.Length; g++)
                 {
@@ -167,6 +181,7 @@ public static class MarkerPanel
                 .ToArray();
             heat = new double[matched.Count, order.Length];
             columnLabels = order.Select(k => sampleIds[included[k]]).ToArray();
+            columnGroups = order.Select(k => groupOf[k]).ToArray();
             for (var m = 0; m < matched.Count; m++)
                 for (var c = 0; c < order.Length; c++)
                     heat[m, c] = z[m, order[c]];
@@ -204,7 +219,10 @@ public static class MarkerPanel
             symMax = 1.0;
 
         return new MarkerPanelResult(markerLabels, markerFeatureIds, columnLabels, heat, symMax, groupNames,
-            panelScoreByGroup, notDetected, found, total);
+            panelScoreByGroup, notDetected, found, total)
+        {
+            ColumnGroups = columnGroups,
+        };
     }
 
     /// <summary>
