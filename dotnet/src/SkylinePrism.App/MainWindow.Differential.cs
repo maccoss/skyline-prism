@@ -457,9 +457,11 @@ public partial class MainWindow
 
         using (SuppressDiff())
         {
-            DiffRestrictValuesCombo.ItemsSource =
-                distinct.Select(v => new QcGroupValue { Name = v }).ToList();
-            DiffRestrictValuesCombo.Text = string.Empty;
+            // Changed refreshes the closed-state text as boxes are ticked, the way the arm lists do.
+            DiffRestrictValuesCombo.ItemsSource = distinct
+                .Select(v => new QcGroupValue { Name = v, Changed = UpdateDiffArmSummaries })
+                .ToList();
+            UpdateDiffArmSummaries();
         }
     }
 
@@ -597,7 +599,11 @@ public partial class MainWindow
     {
         if (!DiffIsTrend())
             return "log2 fold change (B / A)";
-        var col = DiffTrendColumn() ?? "trend";
+        // The SHORT name ("Week"), not the label: the label is what tells two readings of one column
+        // apart in the picker, but as an axis title it ran past both ends of the plot.
+        var col = (DiffTrendOverCombo.SelectedItem as TrendAxisOption)?.Short is { Length: > 0 } shortName
+            ? shortName
+            : DiffTrendColumn() ?? "trend";
         // The observed span is in the label, because the axis is a change ACROSS it and the number
         // is meaningless without knowing across what.
         return _diffTrendRange is { } r
@@ -1054,6 +1060,11 @@ public partial class MainWindow
         DiffBCombo.Text = SummarizeArm(_diffBValues);
         var covariates = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
         DiffCovariatesCombo.Text = covariates.Count == 0 ? "(none)" : string.Join(", ", covariates);
+        // The Restrict-to values are a tick list too, and were added without this - so a ticked study
+        // closed to a blank box, reading as though nothing had been chosen.
+        DiffRestrictValuesCombo.Text = DiffRestrictValues() is { Count: > 0 } kept
+            ? string.Join(", ", kept)
+            : "(tick values to keep)";
     }
 
     /// <summary>
@@ -1418,9 +1429,11 @@ public partial class MainWindow
         if (!StillCurrent(request))
             return;
 
-        // The span the effect is measured across, for the axis label. Taken from the samples the
-        // fit actually used, which is why it comes back from Core rather than from the raw column.
-        var used = xValues.Where(double.IsFinite).ToList();
+        // The span the effect is measured across, for the axis label - over the samples the fit
+        // USED. This read every finite x in the column while its comment said otherwise, so with a
+        // restriction a Verapamil-only fit was labelled "-2 to 12", -2 being a Liraglutide timepoint:
+        // a range the model never saw, on the axis whose numbers are a change across it.
+        var used = columns.Select(c => xValues[c]).Where(double.IsFinite).ToList();
         _diffTrendRange = used.Count > 0 ? (used.Min(), used.Max()) : null;
 
         // A trend has no arms, so the per-feature view has no two groups to box. The scatter reads

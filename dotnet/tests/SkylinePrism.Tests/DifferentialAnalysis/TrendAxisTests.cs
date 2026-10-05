@@ -66,6 +66,19 @@ public class TrendAxisTests
     }
 
     [Fact]
+    public void EachAxisHasAShortNameForAPlotAxis()
+    {
+        // The full label tells two readings of one column apart; as an axis title it ran past both
+        // ends of the plot. The short name is the word the number was read after.
+        var options = TrendAxis.OptionsFor("Longitudinal Draw Description", Verapamil);
+        Assert.Equal("Week", options.Single(o => o.Label.EndsWith("(Week)", StringComparison.Ordinal)).Short);
+        Assert.Equal("V", options.Single(o => o.Label.EndsWith("(V)", StringComparison.Ordinal)).Short);
+
+        // A plain numeric column is already its own short name.
+        Assert.Equal("Week", Assert.Single(TrendAxis.OptionsFor("Week", new string?[] { "0", "2", "4" })).Short);
+    }
+
+    [Fact]
     public void AValueWithNoNumberReadsAsNaN_AndDoesNotDisqualifyTheColumn()
     {
         // "na" carries no timepoint; TrendSamples drops a non-finite x and says how many.

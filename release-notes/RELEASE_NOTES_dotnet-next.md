@@ -57,6 +57,13 @@ as the GitHub Release description and fails if it is missing.
   that still needs a subject column, or a group-by with no arms ticked, left the previous result on
   screen under a message saying nothing had run. That plot had a different design and a different axis
   label, and read as the answer to the new question.
+- **The Differential pane's trend span now covers the samples the fit used.** The axis title and status
+  line read the span from every value in the trend column, while the code's comment said it came from
+  the fitted samples. Whenever samples were left out, the label described a range the model never saw.
+  A Verapamil-only fit was labelled "-2 to 12", where -2 is a Liraglutide timepoint, on the axis whose
+  numbers are a change across that span. It now reads "0 to 12", matching the command line and the CSV
+  header. The axis title also uses the short name of the axis ("log2 change across Week") instead of
+  the full label, which no longer fit on the plot.
 - **A missing subject column is asked for in plain words.** The message named an internal property
   (`DifferentialOptions.SubjectLabels`), which a person can't act on, and the paired version pointed at
   a "Pair by" control that no longer exists. Both front ends now say which column is needed and why.

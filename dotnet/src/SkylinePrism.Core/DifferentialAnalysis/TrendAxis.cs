@@ -26,7 +26,20 @@ public sealed record TrendAxisOption(
     string Label,
     IReadOnlyList<(string Value, double Number)> Preview,
     int Distinct,
-    int Covered);
+    int Covered)
+{
+    /// <summary>
+    /// A short name for where space is tight - a plot axis. The word the number was read after
+    /// ("Week") when there is one; otherwise the full <see cref="Label"/>.
+    /// </summary>
+    /// <remarks>
+    /// The full label names the column AND the reading, and has to: it is what tells two readings of
+    /// one column apart in a picker, and it is what a recorded command carries. But as an axis title
+    /// it was "log2 change across Longitudinal Draw Description (Week) (0 to 12)", which no plot is
+    /// wide enough for - it was cut at both ends. Init-only, so constructions elsewhere still compile.
+    /// </remarks>
+    public string Short { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// Reading a trend's x axis out of a metadata column, including one whose values are text with a
@@ -90,7 +103,7 @@ public static class TrendAxis
                 : new[]
                 {
                     new TrendAxisOption(column, 0, column, Array.Empty<(string, double)>(),
-                        distinctWhole, numbers.Count),
+                        distinctWhole, numbers.Count) { Short = column },
                 };
         }
 
@@ -124,9 +137,12 @@ public static class TrendAxis
                 continue;
 
             var covered = present.Count(v => byValue.ContainsKey(v));
-            options.Add(new TrendAxisOption(
-                column, pos, LabelFor(column, pos, maxNumbers, HintFor(matches, pos)),
-                PreviewOf(byValue), distinct, covered));
+            var hint = HintFor(matches, pos);
+            var label = LabelFor(column, pos, maxNumbers, hint);
+            options.Add(new TrendAxisOption(column, pos, label, PreviewOf(byValue), distinct, covered)
+            {
+                Short = hint ?? label,
+            });
         }
 
         return options.OrderByDescending(o => o.Distinct).ThenBy(o => o.Position).ToList();
