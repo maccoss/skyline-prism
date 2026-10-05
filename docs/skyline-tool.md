@@ -789,9 +789,10 @@ rebuilds them.
 
 **Publish to Panorama...** (bottom right, beside Open QC Report) publishes the current output directory:
 the QC report and the quant report as wiki pages, each in a Panorama folder you choose with **Browse...**,
-the whole output directory uploaded next to the folder holding the raw files, and a links page shown at
-the top of a folder's own page (**Links on the folder's page**; it follows the QC folder until you choose
-another, and adding it to the page needs folder administrator permission). The window opens on
+the whole output directory uploaded next to the folder holding the raw files, and a links page shown on a
+folder's own page, right after Targeted MS Runs (**Links on the folder's page**; it follows the QC folder,
+or the quant folder without a QC page, until you choose another, and adding it to the page needs folder
+administrator permission). The window opens on
 the folders this output directory was last published to (its `panorama.json`), signs in with the sign-in
 PanoramaBridge saved on this computer when there is one, and shows the plan before anything is sent.
 Publishing again updates the same pages - Panorama keeps the earlier versions of their text - uploads only files that
