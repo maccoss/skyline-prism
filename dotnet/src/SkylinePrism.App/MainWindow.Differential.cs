@@ -1885,7 +1885,7 @@ public partial class MainWindow
         AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
         plt.Add.VerticalLine(0.0);
         plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
-        plt.ShowLegend();
+        plt.HideLegend(); // as on the Volcano: the lines and the status line say what the colors mean
         plt.XLabel("log odds ratio (B / A)");
         plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);
@@ -2390,7 +2390,10 @@ public partial class MainWindow
         // re-seeded rather than carried over from the previous contrast.
         AddVolcanoOverlays(plt);
 
-        plt.ShowLegend();
+        // No legend. The colors mean only "past the lines drawn on the plot", and the status line
+        // gives the count and the rule; the legend box was the one element that sat on the data.
+        // Hidden explicitly: ScottPlot draws one by default for any series with LegendText.
+        plt.HideLegend();
         plt.XLabel(DiffXAxisLabel());
         var corrected = DiffSelectedCorrection() != MultipleTesting.None;
         // Name what is actually on the axis - the rule decides, because the reader can now ask for
@@ -2640,7 +2643,7 @@ public partial class MainWindow
         AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
         plt.Add.VerticalLine(0.0);
         plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
-        plt.ShowLegend();
+        plt.HideLegend(); // as on the Volcano: the lines and the status line say what the colors mean
         plt.XLabel("detection rate difference (B - A)");
         plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);

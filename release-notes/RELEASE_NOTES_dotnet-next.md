@@ -75,6 +75,9 @@ as the GitHub Release description and fails if it is missing.
   no name) stayed on screen with nothing next to it.
 - **The Differential pane no longer has a Run button.** Every selector already reruns the contrast when
   it changes, so the button never needed pressing.
+- **The Differential plots no longer have a legend over the data.** The "significant / not significant"
+  box sat in the lower right of the Volcano and Detection plots, on top of points. Red only ever meant
+  "past the lines drawn on the plot", and the status line gives the count and the rule.
 
 ## Performance
 
