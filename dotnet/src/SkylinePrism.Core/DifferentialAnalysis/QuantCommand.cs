@@ -118,8 +118,7 @@ public static class QuantCommand
             Listed(args, "-b", request.BLevels, "an arm B level");
         }
 
-        if ((o.Design is DifferentialDesign.Paired or DifferentialDesign.LinearTrendWithinSubject)
-            && request.SubjectColumn is not null)
+        if (o.Design.UsesSubjects() && request.SubjectColumn is not null)
             Single(args, "--subject", request.SubjectColumn, "the subject column");
 
         args.AddRange(new[] { "--test", DifferentialTokens.Test(o.Test) });

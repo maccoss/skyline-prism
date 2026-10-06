@@ -11,7 +11,8 @@ public enum DifferentialDesign
     /// <summary>
     /// Two measurements of the same subject. Fitted as a FIXED-effect subject block
     /// (<c>[1, treat, subject one-hot]</c>), which is what the lab's toolkit does - not a random
-    /// effect. A random-intercept model is a separate thing and is not implemented yet.
+    /// effect. For subjects sampled several times in a contrast BETWEEN subjects, see
+    /// <see cref="BlockedBySubject"/>.
     /// </summary>
     Paired,
 
@@ -39,6 +40,43 @@ public enum DifferentialDesign
     /// mixed model is a different estimator and is still not implemented.</para>
     /// </remarks>
     LinearTrendWithinSubject,
+
+    /// <summary>
+    /// Two groups where a subject can contribute several samples: the samples of one subject are
+    /// modelled as CORRELATED rather than independent, limma's
+    /// <c>duplicateCorrelation(block = subject)</c> followed by <c>lmFit(block =, correlation =)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the design for a contrast between subjects - sex, onset site, any grouping that
+    /// is constant within a subject - when subjects were sampled more than once. A fixed subject
+    /// block (<see cref="Paired"/>) cannot fit that: the subject is nested in the group and absorbs
+    /// the contrast. Treating the samples as independent (<see cref="Unpaired"/>) can, but it counts
+    /// a subject's repeated samples as separate evidence, which understates the standard error.</para>
+    /// <para>One correlation is estimated for every feature at once: a REML estimate per feature,
+    /// averaged on the atanh scale with 15% trimmed from each end (Smyth, Michaud &amp; Scott 2005).
+    /// The contrast is then fitted by generalized least squares at that correlation and moderated
+    /// as usual. It is not a per-feature mixed model. Hoffman &amp; Roussos 2021 (dream,
+    /// doi:10.1093/bioinformatics/btaa687) show its costs: a slight increase in type I error at
+    /// larger sample sizes in their simulations, and under-correction - so more false positives -
+    /// for any feature whose own intra-subject correlation is above the shared one. They also show
+    /// that ignoring the correlation altogether does not control the false-positive rate.</para>
+    /// <para>A subject may appear in both groups; the correlation then also covers a within-subject
+    /// contrast, as in limma. Moderated t only: the simple tests have no way to use it.</para>
+    /// </remarks>
+    BlockedBySubject,
+}
+
+/// <summary>Questions about a <see cref="DifferentialDesign"/> that several callers ask.</summary>
+public static class DifferentialDesigns
+{
+    /// <summary>Whether the design fits a slope rather than two arms.</summary>
+    public static bool IsTrend(this DifferentialDesign design) =>
+        design is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject;
+
+    /// <summary>Whether the design reads a subject column.</summary>
+    public static bool UsesSubjects(this DifferentialDesign design) =>
+        design is DifferentialDesign.Paired or DifferentialDesign.LinearTrendWithinSubject
+            or DifferentialDesign.BlockedBySubject;
 }
 
 /// <summary>The estimator applied to the design.</summary>
@@ -151,8 +189,10 @@ public sealed record DifferentialOptions
     public MultipleTesting Correction { get; init; } = MultipleTesting.BenjaminiHochberg;
 
     /// <summary>
-    /// Pairing key per sample column, for <see cref="DifferentialDesign.Paired"/> and for the paired
-    /// tests. Indexed by the ORIGINAL matrix column, so it is read through the selected columns.
+    /// Subject per sample column, for <see cref="DifferentialDesign.Paired"/>, the paired tests,
+    /// <see cref="DifferentialDesign.LinearTrendWithinSubject"/> and
+    /// <see cref="DifferentialDesign.BlockedBySubject"/>. Indexed by the ORIGINAL matrix column, so it
+    /// is read through the selected columns.
     /// </summary>
     public IReadOnlyList<string?>? SubjectLabels { get; init; }
 
@@ -247,6 +287,7 @@ public sealed record DifferentialOptions
             DifferentialDesign.Paired => "paired",
             DifferentialDesign.LinearTrend => $"linear trend{over}",
             DifferentialDesign.LinearTrendWithinSubject => $"linear trend{over}, within subject",
+            DifferentialDesign.BlockedBySubject => "unpaired, blocked by subject",
             _ => "unpaired",
         };
         return $"{test}, {design}";

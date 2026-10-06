@@ -443,6 +443,8 @@ public static class QuantAnalysis
             ClinicalCsvs: ds.AttachedClinicalCsvs.ToList(),
             Command: commandLine,
             CommandUnavailable: noCommand,
+            Subject: options.Design.UsesSubjects() ? request.SubjectColumn : null,
+            BlockCorrelation: res.IsBlocked ? res.BlockCorrelation : null,
             DetectionTest: detection is null
                 ? null
                 : DetectionAnalysis.Describe(detection) + (detection.Identifiable ? string.Empty : " (not identifiable - no result)"));

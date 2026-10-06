@@ -18,6 +18,7 @@ public static class DifferentialTokens
         DifferentialDesign.Paired => "paired",
         DifferentialDesign.LinearTrend => "trend",
         DifferentialDesign.LinearTrendWithinSubject => "trend-within-subject",
+        DifferentialDesign.BlockedBySubject => "blocked",
         _ => "unpaired",
     };
 

@@ -849,6 +849,8 @@ public class CliIntegrationTests
             foreach (var t in new[] { DifferentialTest.ModeratedT, DifferentialTest.PairedT, DifferentialTest.Wilcoxon })
                 Accepted(With(twoArm, "--design", DifferentialTokens.Design(DifferentialDesign.Paired),
                     "--subject", "Subject", "--test", DifferentialTokens.Test(t)));
+            Accepted(With(twoArm, "--design", DifferentialTokens.Design(DifferentialDesign.BlockedBySubject),
+                "--subject", "Subject"));
             Accepted(With(Array.Empty<string>(), "--design", DifferentialTokens.Design(DifferentialDesign.LinearTrend),
                 "--trend-over", "Week"));
             Accepted(With(Array.Empty<string>(), "--design",
@@ -857,7 +859,7 @@ public class CliIntegrationTests
 
             // Every enum value was exercised above.
             Assert.Equal(6, Enum.GetValues<DifferentialTest>().Length);
-            Assert.Equal(4, Enum.GetValues<DifferentialDesign>().Length);
+            Assert.Equal(5, Enum.GetValues<DifferentialDesign>().Length);
         }
         finally
         {

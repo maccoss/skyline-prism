@@ -59,15 +59,23 @@ below. Neither touches any file `prism run` wrote.
 |---|---|---|
 | `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
 
-Four to six `#` comment lines precede the header, because a results file outlives the shell that
+Four to seven `#` comment lines precede the header, because a results file outlives the shell that
 produced it and every one of these is a question a reader asks of it:
 
 ```text
 # contrast: condition = Disease vs Control (positive log2FC is higher in Disease)
 # method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
 # prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
-# n: Disease 40 vs Control 12; tested 4,812 of 4,900
+# n: 12 vs 40; tested 4812 of 4900
 # hit rule (rows are NOT filtered by it): adj.P < 0.05, |log2FC| >= 1
+```
+
+`# n:` gives arm A's sample count, then arm B's. Under `--design blocked` a line naming the
+intra-subject correlation follows the prior line, and `# n:` also counts subjects in each arm:
+
+```text
+# blocked by subject: intra-subject correlation 0.441 across 15 subjects
+# n: 28 (7 subjects) vs 35 (8 subjects); tested 7602 of 7602
 ```
 
 The method line names the prior that **actually ran**, which is not always the one requested - a

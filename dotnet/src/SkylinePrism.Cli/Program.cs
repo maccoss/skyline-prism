@@ -274,6 +274,9 @@ public static partial class Program
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
         if (result.DescribePriorFit() is { } priorFit)
             Console.WriteLine($"  {priorFit}");
+        if (result.DescribeBlocking() is { } blocking)
+            Console.WriteLine($"  blocked by subject: {blocking}; subjects {bLabel} {result.SubjectsB} vs "
+                + $"{aLabel} {result.SubjectsA}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 
@@ -582,8 +585,9 @@ public static partial class Program
             "paired" => DifferentialDesign.Paired,
             "trend" => DifferentialDesign.LinearTrend,
             "trend-within-subject" or "trend-repeated" => DifferentialDesign.LinearTrendWithinSubject,
+            "blocked" => DifferentialDesign.BlockedBySubject,
             var other => throw new ArgumentException(
-                $"--design must be unpaired, paired, trend or trend-within-subject, not '{other}'"),
+                $"--design must be unpaired, paired, blocked, trend or trend-within-subject, not '{other}'"),
         };
         var test = (opts.GetSingleOrNull("--test") ?? "moderated").ToLowerInvariant() switch
         {
@@ -614,12 +618,12 @@ public static partial class Program
         };
 
         string?[]? subjects = null;
-        // One column, two designs: it matches each subject's two samples under --design paired, and
-        // gives each subject its own level under --design trend-within-subject. --subject is the
-        // name that reads correctly for both; --pair-by stays as its alias.
+        // One column, three designs: it matches each subject's two samples under --design paired,
+        // gives each subject its own level under --design trend-within-subject, and marks which
+        // samples are correlated under --design blocked. --subject is the name that reads correctly
+        // for all three; --pair-by stays as its alias.
         var pairBy = opts.GetSingleOrNull("--subject", "--pair-by");
-        var needsSubject = design is DifferentialDesign.Paired
-            or DifferentialDesign.LinearTrendWithinSubject;
+        var needsSubject = design.UsesSubjects();
         if (needsSubject)
         {
             if (pairBy is null)
@@ -633,7 +637,7 @@ public static partial class Program
         {
             // Silently ignoring it would report an unpaired result for a command that reads paired.
             throw new ArgumentException(
-                "--subject needs --design paired or --design trend-within-subject.");
+                "--subject needs --design paired, blocked or trend-within-subject.");
         }
 
         var isTrend = design is DifferentialDesign.LinearTrend
@@ -1225,6 +1229,12 @@ public static partial class Program
         subjects are followed across that column - treating one subject's repeated
         samples as independent understates the standard error.
 
+        A BLOCKED design is for a two-arm contrast BETWEEN subjects (sex, onset site)
+        where subjects were sampled more than once. A subject's samples are modelled as
+        correlated - one correlation shared by every feature, as limma's
+        duplicateCorrelation estimates it - rather than as independent evidence. A
+        paired design cannot do this: there the subject block absorbs the contrast.
+
         Options:
             --clinical CSV...      Join an external clinical table to the samples first, exactly as
                                    the pane's Clinical CSV input does (key column detected by value);
@@ -1232,11 +1242,12 @@ public static partial class Program
                                    --subject, --trend-over and --markers-group-by. Repeatable: several
                                    tables are joined in the order given
             --level LEVEL          protein (default) or peptide
-            --design DESIGN        unpaired (default), paired, trend, trend-within-subject
+            --design DESIGN        unpaired (default), paired, blocked, trend, trend-within-subject
             --subject COL          Metadata column identifying the subject (alias: --pair-by).
                                    Required by --design paired, which matches each subject's two
-                                   samples, and by --design trend-within-subject, which gives each
-                                   subject its own level
+                                   samples, by --design blocked, which treats each subject's samples
+                                   as correlated, and by --design trend-within-subject, which gives
+                                   each subject its own level
             --trend-over AXIS      The column to fit a slope against; required by, and only valid
                                    with, a trend design. A column of plain numbers is named directly
                                    ("Week"). A column whose values EMBED a number is named for the
@@ -1297,6 +1308,10 @@ public static partial class Program
             # A within-subject design: each subject's pre and post sample
             prism differential -d output/ --group-by timepoint -a Pre -b Post \
                 --design paired --pair-by subject --test paired-t
+
+            # Between subjects, when each subject was sampled several times
+            prism differential -d output/ --group-by sex -a F -b M \
+                --design blocked --subject patient_id
 
             # A dose-response, one sample per subject
             prism differential -d output/ --design trend --trend-over dose_mg

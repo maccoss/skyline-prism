@@ -28,6 +28,23 @@ public class QuantConfigTests
         EnrichmentDirection: "both",
         MarkerPanels: new[] { "EV markers" });
 
+    /// <summary>
+    /// A design that reads a subject column records it, and a blocked one its correlation: without
+    /// them the record cannot be re-run, and the free-text command is absent whenever the request
+    /// holds something no command line can carry.
+    /// </summary>
+    [Fact]
+    public void ToYaml_Blocked_RecordsSubjectAndCorrelation()
+    {
+        var yaml = (TwoGroup() with { Design = "blocked", Subject = "Patient (paper)", BlockCorrelation = 0.441 })
+            .ToYaml();
+
+        Assert.Contains("design: blocked\nsubject: Patient (paper)\nblock_correlation: 0.441\n",
+            yaml.Replace("\r\n", "\n"));
+        Assert.DoesNotContain("subject:", TwoGroup().ToYaml());
+        Assert.DoesNotContain("block_correlation", TwoGroup().ToYaml());
+    }
+
     [Fact]
     public void ToYaml_TwoGroup_HasContrastArmsAndSections()
     {

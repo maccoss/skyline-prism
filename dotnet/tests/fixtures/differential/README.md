@@ -42,6 +42,7 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `paired.json` | `SimpleTests` paired t / Wilcoxon, and the paired moderated design | `scipy.stats.ttest_rel`, `scipy.stats.wilcoxon(method="asymptotic")`, lstsq + `squeezeVar` |
 | `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
 | `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
+| `blocked.json` | `DuplicateCorrelation.Estimate`, `LinearModel.FitBlocked`, and `Differential.Run` under `BlockedBySubject` | R `limma::duplicateCorrelation` + `lmFit(block=, correlation=)` + `eBayes`, written by `generate_blocked.R` |
 | `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend; the two-arm designs with both an infinite and a finite d0) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
 
 **One reference is a sibling lab tool, deliberately.** `intensity_trend.json` (and with it
@@ -66,6 +67,50 @@ because a clinical one cannot be committed.
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under
 test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.
+
+## `blocked.json` comes from R, not from `generate.py`
+
+The subject-blocked design - a contrast whose groups are constant within subject (sex, onset site)
+when subjects contribute several samples - has no Python reference: inmoose 0.9.1 ports neither
+`duplicateCorrelation` nor the blocked `lmFit`. limma is the definition, so the generator is an R
+script, as `sva/generate.R` is for ComBat:
+
+```bash
+# from the repository root; needs R with BiocManager::install("limma") (statmod comes with it)
+Rscript dotnet/tests/fixtures/differential/generate_blocked.R
+```
+
+It writes the same string-float encoding as `generate.py` (17 significant digits rather than
+Python's shortest repr, which round-trips the same 64 bits), and records the R, limma and statmod
+versions that ran in the fixture's `versions` field.
+
+**How tightly the per-feature correlations can be held depends on how they are computed.**
+`duplicateCorrelation` asks statmod's `mixedModel2Fit` for each feature's REML variance components
+with `maxit = 20` and an absolute tolerance of 1e-6 on the scoring step, so limma's own values are
+not the REML optimum. The fixture carries both: `atanh_correlations` (what limma returns) and
+`atanh_correlations_converged` (the same fits re-solved to 1e-14 / 1000 iterations). The largest
+gap between the two is about 1e-5 on the atanh scale in most cases and 2.4e-3 in
+`singletons_and_covariate`, where a near-flat likelihood sits against limma's lower bound. So an
+implementation that replays statmod's damped Fisher scoring step for step can be held to limma
+closely; one that maximizes the REML likelihood another way agrees only to that gap, and the test
+must say which it is asserting.
+
+limma also bounds every per-feature correlation to `[1/(1 - largest block) + 0.01, 0.99]` before
+the 15%-trimmed mean on the atanh scale. `correlation_bounds` hits both ends, and
+`singletons_and_covariate` hits the floor. The two inputs limma answers with a correlation of 0
+and a warning - every block of size 1, and a block already encoded in the design (the paired
+design) - are under `degenerate`.
+
+**The same comparison on a real cohort** is `check_blocked_cohort.py`. It hands the matrix PRISM
+tested to limma (through `Rscript`) and compares the result with the `differential.csv` PRISM wrote
+for the same contrast under `--prior global --correction none`. The docstring has the commands. The
+cohort quoted in `docs/differential-analysis.md` is not committed, but the script runs on any PRISM
+output directory, so the claim can be re-checked on any data at hand.
+
+**Not the same method as `proteomics-toolkit`'s mixed model.** The toolkit fits a per-feature
+`statsmodels` `mixedlm` with a random subject intercept: one correlation per feature, no consensus
+across features, no empirical-Bayes moderation, and normal-approximation p-values. It is a
+different estimator, so it is neither the reference here nor expected to agree with it.
 
 ## Three things that are deliberately not what they first appear
 

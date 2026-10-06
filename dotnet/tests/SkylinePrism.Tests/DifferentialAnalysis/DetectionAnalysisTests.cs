@@ -60,6 +60,47 @@ public class DetectionAnalysisTests
         return s;
     }
 
+    /// <summary>
+    /// Under the blocked design detection tests the samples that HAVE a subject - the ones the
+    /// differential fits and the plots draw - and says it does not account for repeated subjects.
+    /// </summary>
+    [Fact]
+    public void Blocked_TestsTheSamplesWithASubject_AndSaysRepeatsAreNotAccountedFor()
+    {
+        var (ds, det, a, b) = Setup();
+        var subjects = Subjects(ds, a, b);
+        subjects[a[0]] = null;
+        var keptA = a.Skip(1).ToList();
+
+        var r = DetectionAnalysis.Run(det, ds, a, b, DifferentialDesign.BlockedBySubject, subjects, null,
+            MultipleTesting.BenjaminiHochberg);
+
+        Assert.Equal(DetectionMethod.FisherExact, r.Method);
+        Assert.Equal(UnpairedReason.RepeatedSubjects, r.UnpairedReason);
+        Assert.Equal((keptA.Count, b.Count), (r.NA, r.NB));
+        Assert.Equal(1, r.SamplesWithoutSubject);
+        Assert.Equal(0, r.DroppedSamples);
+        var expected = DetectionTest.Run(det.Matrix, det.PeptideIds, InDet(ds, det, keptA), InDet(ds, det, b));
+        Assert.Equal(expected, r.Rows);
+        var (usedA, usedB) = PairedSamples.ColumnsUsed(DifferentialDesign.BlockedBySubject, subjects, a, b);
+        Assert.Equal(keptA, usedA);
+        Assert.Equal(b, usedB);
+    }
+
+    [Fact]
+    public void Blocked_WithNoRepeatedSubject_HasNoNote()
+    {
+        var (ds, det, a, b) = Setup();
+        var subjects = new string?[ds.SampleIds.Length];
+        foreach (var c in a.Concat(b))
+            subjects[c] = $"own{c}";
+
+        var r = DetectionAnalysis.Run(det, ds, a, b, DifferentialDesign.BlockedBySubject, subjects, null,
+            MultipleTesting.BenjaminiHochberg);
+
+        Assert.Equal(UnpairedReason.None, r.UnpairedReason);
+    }
+
     [Fact]
     public void Unpaired_NoCovariates_RunsFisherOnTheRemappedColumns()
     {

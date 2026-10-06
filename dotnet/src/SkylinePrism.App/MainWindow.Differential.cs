@@ -184,6 +184,7 @@ public partial class MainWindow
         ((DiffDesignCombo.SelectedItem as ListBoxItem)?.Tag as string) switch
         {
             "Paired" => DifferentialDesign.Paired,
+            "BlockedBySubject" => DifferentialDesign.BlockedBySubject,
             "LinearTrend" => DifferentialDesign.LinearTrend,
             "LinearTrendWithinSubject" => DifferentialDesign.LinearTrendWithinSubject,
             _ => DifferentialDesign.Unpaired,
@@ -659,7 +660,7 @@ public partial class MainWindow
         var paired = design == DifferentialDesign.Paired;
         var trend = design is DifferentialDesign.LinearTrend
             or DifferentialDesign.LinearTrendWithinSubject;
-        var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
+        var blocked = design == DifferentialDesign.BlockedBySubject;
 
         // A trend design needs an axis to fit against. With none in the run, both trend entries are
         // collapsed AND disabled - and if one was already selected (a clinical CSV was detached, say)
@@ -678,9 +679,9 @@ public partial class MainWindow
             return;
         }
 
-        // The subject column is meaningful under a paired design and a within-subject trend, and
-        // nowhere else.
-        var pairVisibility = paired || withinSubject ? Visibility.Visible : Visibility.Collapsed;
+        // The subject column is meaningful under a paired design, a blocked one and a within-subject
+        // trend, and nowhere else.
+        var pairVisibility = design.UsesSubjects() ? Visibility.Visible : Visibility.Collapsed;
         DiffPairByLabel.Visibility = pairVisibility;
         DiffPairByCombo.Visibility = pairVisibility;
 
@@ -706,9 +707,11 @@ public partial class MainWindow
         // arrow-key and type-ahead selection skip only disabled items, so hiding alone would leave
         // an inapplicable test one keypress away. Every two-sample test is meaningless on a trend:
         // there are no two samples to compare, only a slope.
-        ShowTest(DiffTestWelchItem, !paired && !trend);
-        ShowTest(DiffTestStudentItem, !paired && !trend);
-        ShowTest(DiffTestMannWhitneyItem, !paired && !trend);
+        // The blocked design runs the moderated t alone: the other tests count every sample as
+        // independent and have nowhere to put the correlation.
+        ShowTest(DiffTestWelchItem, !paired && !trend && !blocked);
+        ShowTest(DiffTestStudentItem, !paired && !trend && !blocked);
+        ShowTest(DiffTestMannWhitneyItem, !paired && !trend && !blocked);
         ShowTest(DiffTestPairedTItem, paired);
         ShowTest(DiffTestWilcoxonItem, paired);
 
@@ -1563,10 +1566,16 @@ public partial class MainWindow
         // res.NA/NB, not a.Count/b.Count: a paired design drops unmatched subjects, so the arms the
         // test actually used can be smaller than the arms that were picked. Reporting the picked
         // sizes would credit the result with samples that took no part in it.
+        // Under a blocked design the subjects are what a between-subject contrast has to work with,
+        // so they are counted beside the samples, with the correlation the fit used.
+        var arms = res.IsBlocked
+            ? $"{aVal} (n={res.NA}, {res.SubjectsA} subjects) vs {bVal} (n={res.NB}, {res.SubjectsB} subjects)"
+            : $"{aVal} (n={res.NA}) vs {bVal} (n={res.NB})";
+        var blocking = res.DescribeBlocking() is { } b2 ? $" Blocked by subject: {b2}." : string.Empty;
         DiffStatusText.Text =
-            $"{options.Describe(res.VariancePrior)}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
+            $"{options.Describe(res.VariancePrior)}: {arms} - "
             + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
-            + $"{adj}.{PriorFitNote(res)}{note} "
+            + $"{adj}.{PriorFitNote(res)}{blocking}{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
 
@@ -1661,6 +1670,8 @@ public partial class MainWindow
         var droppedNote = result.DroppedSamples > 0
             ? $" ({result.DroppedSamples} samples not in merged_data)"
             : string.Empty;
+        if (result.SamplesWithoutSubject > 0)
+            droppedNote += $" ({result.SamplesWithoutSubject} samples with no subject left out)";
 
         switch (result.Method)
         {
@@ -1996,6 +2007,14 @@ public partial class MainWindow
                 return;
             }
 
+            if (DiffSelectedDesign() == DifferentialDesign.BlockedBySubject && DiffSubjectLabels() is null)
+            {
+                DiffStatusText.Text = "Blocked by subject: pick the Subject column - the one that "
+                    + "identifies each person or donor - so each subject's samples are treated as correlated.";
+                ClearDiffOutput();
+                return;
+            }
+
             await RunCurrentViewAsync();
         }
         catch (Exception ex)
@@ -2011,9 +2030,8 @@ public partial class MainWindow
         {
             if (!IsInitialized || _diffSuppress || _diffDataset is null)
                 return;
-            if (DiffSelectedDesign() is not (DifferentialDesign.Paired
-                or DifferentialDesign.LinearTrendWithinSubject))
-                return; // only those two designs consult the subject column
+            if (!DiffSelectedDesign().UsesSubjects())
+                return; // only those designs consult the subject column
             await RunCurrentViewAsync();
         }
         catch (Exception ex)

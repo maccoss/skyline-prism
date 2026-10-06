@@ -18,6 +18,7 @@ public class DifferentialTokensTests
     [InlineData(DifferentialDesign.Paired, "paired")]
     [InlineData(DifferentialDesign.LinearTrend, "trend")]
     [InlineData(DifferentialDesign.LinearTrendWithinSubject, "trend-within-subject")]
+    [InlineData(DifferentialDesign.BlockedBySubject, "blocked")]
     public void Design(DifferentialDesign design, string token) =>
         Assert.Equal(token, DifferentialTokens.Design(design));
 

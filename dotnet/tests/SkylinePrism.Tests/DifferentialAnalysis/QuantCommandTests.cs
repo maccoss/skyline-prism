@@ -15,7 +15,8 @@ namespace SkylinePrism.Tests.DifferentialAnalysis;
 public class QuantCommandTests
 {
     private static QuantRequest Request(string outputDir, string[] a, string[] b,
-        DifferentialOptions? options = null, ProteinList[]? panels = null, string? markerGroupBy = null)
+        DifferentialOptions? options = null, ProteinList[]? panels = null, string? markerGroupBy = null,
+        string? subjectColumn = null)
     {
         var ds = DifferentialDataset.Load(Fixtures.Path2("mini", "e2e-sum", "output"), FeatureLevel.Protein);
         return new QuantRequest
@@ -29,6 +30,7 @@ public class QuantCommandTests
             BLevels = b,
             MarkerPanels = panels ?? Array.Empty<ProteinList>(),
             MarkerGroupBy = markerGroupBy,
+            SubjectColumn = subjectColumn,
         };
     }
 
@@ -119,6 +121,19 @@ public class QuantCommandTests
             out var args, out _));
         Assert.DoesNotContain("--adjust-for", args);
         Assert.Contains("welch", args);
+    }
+
+    /// <summary>The blocked design records its subject column, or the command would run unpaired.</summary>
+    [Fact]
+    public void ABlockedDesign_RecordsItsSubjectColumn()
+    {
+        var blocked = new DifferentialOptions { Design = DifferentialDesign.BlockedBySubject };
+        var request = Request("out", new[] { "qc" }, new[] { "experimental" }, blocked, subjectColumn: "batch");
+
+        Assert.True(QuantCommand.TryArguments(request, out var args, out _));
+        var list = args.ToList();
+        Assert.Equal("blocked", list[list.IndexOf("--design") + 1]);
+        Assert.Equal("batch", list[list.IndexOf("--subject") + 1]);
     }
 
     /// <summary>

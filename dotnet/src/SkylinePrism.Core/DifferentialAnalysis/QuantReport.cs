@@ -164,6 +164,9 @@ public static class QuantReport
             if (det.DroppedSamples > 0)
                 sb.Append($"<p class=\"note\">{det.DroppedSamples} contrast sample(s) are not in "
                     + "merged_data and took no part.</p>");
+            if (det.SamplesWithoutSubject > 0)
+                sb.Append($"<p class=\"note\">{det.SamplesWithoutSubject} contrast sample(s) have no "
+                    + "subject and were left out, as the differential leaves them out.</p>");
 
             if (!det.Identifiable)
             {
@@ -240,11 +243,13 @@ public static class QuantReport
         Kv(sb, "Method", options.Describe(res.VariancePrior));
         if (res.DescribePriorFitBody() is { } priorFit)
             Kv(sb, "Variance prior", priorFit);
+        if (res.DescribeBlocking() is { } blocking)
+            Kv(sb, "Blocked by subject", blocking);
         Kv(sb, "Multiple testing", DifferentialCsv.CorrectionName(options.Correction));
         Kv(sb, "Hit rule", rule.Describe(effectName));
         Kv(sb, "Groups", res.IsTrend
             ? $"n = {res.NA}" + (res.NSubjects > 0 ? $" ({res.NSubjects} subjects)" : string.Empty)
-            : $"A n = {res.NA}, B n = {res.NB}");
+            : res.DescribeArms());
         Kv(sb, "Features tested", $"{res.NFeaturesTested} of {res.NFeaturesTotal}");
         if (res.CovariatesUsed.Count > 0)
             Kv(sb, "Adjusted for", string.Join(", ", res.CovariatesUsed));
@@ -378,6 +383,8 @@ public static class QuantReport
             + QuantAnalysis.DetectionQ.ToString("0.##", Inv));
         if (DetectionAnalysis.UnpairedNote(det.UnpairedReason) is { } unpaired)
             w.WriteLine("# " + unpaired);
+        if (det.SamplesWithoutSubject > 0)
+            w.WriteLine($"# {det.SamplesWithoutSubject} contrast sample(s) have no subject and were left out");
 
         const string shared = "peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b";
         switch (det.Method)

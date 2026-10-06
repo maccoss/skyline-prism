@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.LinearAlgebra.Factorization;
 using SkylinePrism.Core.Numerics;
@@ -135,5 +136,111 @@ public static class LinearModel
         }
 
         return new LinearModelFit(coefficients, sigma, amean, stdevUnscaled, dfResidual);
+    }
+
+    /// <summary>
+    /// Generalized least squares with correlated samples within each block - limma's
+    /// <c>lmFit(M, design, block = block, correlation = correlation)</c> on complete data. Samples in
+    /// the same block are given correlation <paramref name="correlation"/> and samples in different
+    /// blocks none; every sample has the same variance.
+    /// </summary>
+    /// <remarks>
+    /// <para>Fitted the way limma fits it: with <c>V</c> that correlation matrix and <c>V = L L'</c>
+    /// its Cholesky factor, the data and the design are both multiplied by <c>L^-1</c>, which makes the
+    /// samples uncorrelated, and the result goes through <see cref="Fit"/>. So the coefficients,
+    /// <c>sigma</c> (from the whitened residuals) and the unscaled standard errors
+    /// (<c>sqrt(diag((X' V^-1 X)^-1))</c>) are GLS ones, and the residual degrees of freedom are still
+    /// <c>n - p</c>.</para>
+    /// <para><see cref="LinearModelFit.Amean"/> is the mean of the ORIGINAL data, not the whitened
+    /// data, as in limma - it is the intensity a trend prior is fitted against.</para>
+    /// <para>Rows must be complete, as for <see cref="Fit"/>. limma refits a feature with missing
+    /// values on the correlation matrix of its observed samples; the differential path never needs
+    /// that, because it tests complete features only.</para>
+    /// </remarks>
+    /// <param name="dataFeaturesBySamples">LOG2 abundances, features x samples.</param>
+    /// <param name="designSamplesByCoef">The design, samples x coefficients.</param>
+    /// <param name="block">Each sample's block (subject).</param>
+    /// <param name="correlation">The intra-block correlation, strictly between -1 and 1.</param>
+    public static LinearModelFit FitBlocked(double[,] dataFeaturesBySamples, double[,] designSamplesByCoef,
+        IReadOnlyList<string> block, double correlation)
+    {
+        var nFeatures = dataFeaturesBySamples.GetLength(0);
+        var nSamples = dataFeaturesBySamples.GetLength(1);
+        var nCoef = designSamplesByCoef.GetLength(1);
+        if (block.Count != nSamples)
+            throw new ArgumentException(
+                $"{block.Count} block labels for {nSamples} samples.", nameof(block));
+        if (!(Math.Abs(correlation) < 1))
+            throw new ArgumentException(
+                $"The intra-block correlation is {correlation}; it must be strictly between -1 and 1.",
+                nameof(correlation));
+
+        var v = new DenseMatrix(nSamples, nSamples);
+        for (var i = 0; i < nSamples; i++)
+            for (var j = 0; j < nSamples; j++)
+                v[i, j] = i == j ? 1.0 : string.Equals(block[i], block[j], StringComparison.Ordinal) ? correlation : 0.0;
+
+        // A negative correlation is not positive definite for every block size: limma bounds each
+        // feature's estimate at 1/(1 - largest block) + 0.01 for exactly this reason, but a caller
+        // can still pass something outside it.
+        Cholesky<double> chol;
+        try
+        {
+            chol = v.Cholesky();
+        }
+        catch (ArgumentException)
+        {
+            throw new ArgumentException(
+                $"An intra-block correlation of {correlation} is not valid for blocks this large "
+                + "(the correlation matrix is not positive definite).", nameof(correlation));
+        }
+
+        var lower = chol.Factor.ToArray();
+        var whitenedDesign = ForwardSubstitute(lower, designSamplesByCoef, rowsAreSamples: true);
+        var whitenedData = ForwardSubstitute(lower, dataFeaturesBySamples, rowsAreSamples: false);
+
+        var fit = Fit(whitenedData, whitenedDesign);
+        var amean = new double[nFeatures];
+        var row = new double[nSamples];
+        for (var i = 0; i < nFeatures; i++)
+        {
+            for (var s = 0; s < nSamples; s++)
+                row[s] = dataFeaturesBySamples[i, s];
+            amean[i] = NumpyMath.Mean(row);
+        }
+
+        return new LinearModelFit(fit.Coefficients, fit.Sigma, amean, fit.StdevUnscaled, fit.DfResidual);
+    }
+
+    /// <summary>
+    /// <c>L^-1 B</c> for lower-triangular <paramref name="lower"/>, by forward substitution, one
+    /// column of <c>B</c> at a time. <paramref name="b"/> holds samples along its rows when
+    /// <paramref name="rowsAreSamples"/> (a design), or along its columns (a features x samples
+    /// matrix, returned in the same orientation).
+    /// </summary>
+    private static double[,] ForwardSubstitute(double[,] lower, double[,] b, bool rowsAreSamples)
+    {
+        var n = lower.GetLength(0);
+        var k = rowsAreSamples ? b.GetLength(1) : b.GetLength(0);
+        var result = new double[b.GetLength(0), b.GetLength(1)];
+        var x = new double[n];
+        for (var j = 0; j < k; j++)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var sum = rowsAreSamples ? b[i, j] : b[j, i];
+                for (var m = 0; m < i; m++)
+                    sum -= lower[i, m] * x[m];
+                x[i] = sum / lower[i, i];
+            }
+
+            for (var i = 0; i < n; i++)
+                if (rowsAreSamples)
+                    result[i, j] = x[i];
+                else
+                    result[j, i] = x[i];
+        }
+
+        return result;
     }
 }

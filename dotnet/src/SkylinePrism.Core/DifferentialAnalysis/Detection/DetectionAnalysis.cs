@@ -31,6 +31,12 @@ public enum UnpairedReason
 
     /// <summary>Subjects were matched, but no matched pair has both its samples in merged_data.</summary>
     NoPairInMergedData,
+
+    /// <summary>
+    /// The design is blocked by subject and some subject has several samples in the arms, which the
+    /// detection tests - all of which count samples as independent - cannot take into account.
+    /// </summary>
+    RepeatedSubjects,
 }
 
 /// <summary>
@@ -52,8 +58,10 @@ public sealed class DetectionAnalysisResult
     internal DetectionAnalysisResult(DetectionMethod method, IReadOnlyList<DetectionRow> rows,
         int nA, int nB, int droppedSamples, UnpairedReason unpairedReason,
         IReadOnlyList<DetectionPairedRow>? pairedRows = null, int pairsNotInMerged = 0,
-        IReadOnlyList<string>? pairMessages = null, DetectionGlmResult? glm = null)
+        IReadOnlyList<string>? pairMessages = null, DetectionGlmResult? glm = null,
+        int samplesWithoutSubject = 0)
     {
+        SamplesWithoutSubject = samplesWithoutSubject;
         Method = method;
         Rows = rows;
         NA = nA;
@@ -84,6 +92,13 @@ public sealed class DetectionAnalysisResult
 
     /// <summary>Arm samples that are absent from merged_data and so took no part.</summary>
     public int DroppedSamples { get; }
+
+    /// <summary>
+    /// Picked samples a blocked design left out for having no subject - the same ones the
+    /// differential leaves out. Counted apart from <see cref="DroppedSamples"/>, which are samples
+    /// missing from merged_data.
+    /// </summary>
+    public int SamplesWithoutSubject { get; }
 
     /// <summary>Why a paired design ran an unpaired test, or <see cref="Detection.UnpairedReason.None"/>.</summary>
     public UnpairedReason UnpairedReason { get; }
@@ -148,6 +163,18 @@ public static class DetectionAnalysis
         if (design is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject)
             throw new ArgumentException("Detection compares two groups, and a trend design has none.");
 
+        // A blocked design tests the samples that have a subject - the same ones the differential
+        // fits and the plots draw - so the two sections of one report agree on n.
+        var repeatsASubject = false;
+        var withoutSubject = 0;
+        if (design == DifferentialDesign.BlockedBySubject && subjectLabels is not null)
+        {
+            var blocked = BlockedSamples.Resolve(subjectLabels, groupA, groupB);
+            (groupA, groupB) = (blocked.A, blocked.B);
+            repeatsASubject = BlockedSamples.RepeatsASubject(blocked);
+            withoutSubject = blocked.Dropped;
+        }
+
         var detIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < detection.SampleIds.Length; i++)
             detIndex[detection.SampleIds[i]] = i;
@@ -197,7 +224,9 @@ public static class DetectionAnalysis
             matchedButMissing = pairs.Count;
         }
 
-        var unpaired = !paired ? UnpairedReason.None
+        var unpaired = repeatsASubject
+            ? UnpairedReason.RepeatedSubjects
+            : !paired ? UnpairedReason.None
             : covariates is not null ? UnpairedReason.Covariates
             : matchedButMissing > 0 ? UnpairedReason.NoPairInMergedData
             : UnpairedReason.NoMatchedSubjects;
@@ -210,12 +239,12 @@ public static class DetectionAnalysis
                     r.RateA, r.RateB, r.P, r.Q)).ToList()
                 : new List<DetectionRow>();
             return new DetectionAnalysisResult(DetectionMethod.FirthGlm, rows, aCols.Count, bCols.Count,
-                dropped, unpaired, glm: glm);
+                dropped, unpaired, glm: glm, samplesWithoutSubject: withoutSubject);
         }
 
         var fisher = DetectionTest.Run(detection.Matrix, detection.PeptideIds, aCols, bCols);
         return new DetectionAnalysisResult(DetectionMethod.FisherExact, fisher, aCols.Count, bCols.Count,
-            dropped, unpaired, pairsNotInMerged: matchedButMissing);
+            dropped, unpaired, pairsNotInMerged: matchedButMissing, samplesWithoutSubject: withoutSubject);
     }
 
     /// <summary>
@@ -258,6 +287,10 @@ public static class DetectionAnalysis
     /// </remarks>
     public static string? UnpairedNote(UnpairedReason reason) => reason switch
     {
+        UnpairedReason.RepeatedSubjects =>
+            "Note: detection does NOT account for repeated samples - the test counts every sample as "
+            + "independent, and some subjects contribute several, so its p-values are too small. The "
+            + "blocked design's correlation has no counterpart in the detection tests.",
         UnpairedReason.Covariates =>
             "Note: adjusted detection is UNPAIRED - the paired form needs conditional logistic "
             + "regression, which is not implemented - so this uses every sample in the arms, "
