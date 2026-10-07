@@ -661,13 +661,16 @@ public partial class MainWindow
             or DifferentialDesign.LinearTrendWithinSubject;
         var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
 
-        // A trend design needs an axis to fit against. With none in the run, both trend entries are
-        // collapsed AND disabled - and if one was already selected (a clinical CSV was detached, say)
-        // the design falls back rather than leaving an invisible selection.
+        // A trend design needs an axis to fit against. With none - no run loaded, or a run with no
+        // numeric column - both trend entries are GRAYED, with a tooltip saying what would enable
+        // them, and a selected one falls back to Unpaired (a clinical CSV was detached, say).
+        // Grayed rather than collapsed: collapsed, the entries were on screen when the window opened
+        // (nothing had applied this rule yet) and vanished at the first click, with nothing to say
+        // they existed or how to get them back.
         var axes = DiffTrendAxes();
         PopulateTrendColumns(axes);
-        ShowTest(DiffDesignTrendItem, axes.Count > 0);
-        ShowTest(DiffDesignTrendSubjectItem, axes.Count > 0);
+        GrayUnlessTrendable(DiffDesignTrendItem, axes.Count > 0);
+        GrayUnlessTrendable(DiffDesignTrendSubjectItem, axes.Count > 0);
         if (DiffDesignCombo.SelectedItem is ListBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
@@ -797,6 +800,79 @@ public partial class MainWindow
         DiffCovariatesCombo.IsEnabled = moderated;
     }
 
+    /// <summary>
+    /// What each trend design is for - the one place it is written; the Compare list's own tooltip
+    /// points here rather than repeating it.
+    /// </summary>
+    private const string TrendHelp =
+        "Fit a slope against a numeric column - a time, a dose, a numeric stage - instead of "
+        + "contrasting two arms. Every sample counts as independent, so use it when each subject gives "
+        + "one sample.";
+
+    private const string TrendBySubjectHelp =
+        "The same slope when the same subjects are followed across the column: each subject gets its "
+        + "own level, so the slope is estimated within subject. Treating one subject's repeated samples "
+        + "as independent understates the standard error.";
+
+    /// <summary>Whether a run is being read, so the trend tooltip does not call it "not loaded".</summary>
+    private bool _diffLoading;
+
+    /// <summary>A trend design entry: enabled when the run has an axis to fit against, otherwise grayed.</summary>
+    /// <remarks>
+    /// Its tooltip is written when it opens (<see cref="OnTrendItemToolTipOpening"/>), from the state
+    /// at that moment, because the reason - no run, a run still loading, a run with no numeric
+    /// column - can change between this running and the reader hovering. The XAML sets
+    /// <c>ToolTipService.ShowOnDisabled</c>, without which WPF hides a disabled element's tooltip at
+    /// exactly the moment it is the only explanation (see DisabledControlHelpTests). The placeholder
+    /// set here is what makes WPF raise ToolTipOpening at all.
+    /// </remarks>
+    private static void GrayUnlessTrendable(ListBoxItem item, bool hasAxis)
+    {
+        item.Visibility = Visibility.Visible;
+        item.IsEnabled = hasAxis;
+        item.ToolTip ??= string.Empty;
+    }
+
+    private void OnTrendItemToolTipOpening(object sender, ToolTipEventArgs e)
+    {
+        if (sender is not ListBoxItem item)
+            return;
+        var help = ReferenceEquals(item, DiffDesignTrendSubjectItem) ? TrendBySubjectHelp : TrendHelp;
+        item.ToolTip = item.IsEnabled
+            ? help
+            : _diffLoading
+                ? "Unavailable until the run finishes loading. A trend needs a numeric column to fit a slope against."
+                : _diffDataset is null
+                    ? "Unavailable: no run is loaded. Set the output directory above to a finished PRISM run. "
+                      + "A trend needs a numeric column to fit a slope against."
+                    : "Unavailable: this run has no numeric column to fit a slope against. Attach a clinical "
+                      + "CSV that has one (a time, a dose, a numeric stage), or annotate one in the Skyline "
+                      + "document and re-export." + Environment.NewLine + Environment.NewLine + help;
+    }
+
+    /// <summary>
+    /// Empty every picker that lists the run's columns or values, for when there is no run - so the
+    /// previous run's Group by, arms, covariates and subject columns are not left on screen under a
+    /// path they do not belong to.
+    /// </summary>
+    private void ClearDiffPickers()
+    {
+        using (SuppressDiff())
+        {
+            DiffGroupByCombo.ItemsSource = null;
+            _diffAValues = new List<QcGroupValue>();
+            _diffBValues = new List<QcGroupValue>();
+            DiffACombo.ItemsSource = null;
+            DiffBCombo.ItemsSource = null;
+            _diffCovariateValues = new List<QcGroupValue>();
+            DiffCovariatesCombo.ItemsSource = null;
+            DiffPairByCombo.ItemsSource = null;
+            DiffRestrictColumnCombo.ItemsSource = null;
+        }
+
+        UpdateDiffArmSummaries();
+    }
+
     private static void ShowTest(UIElement item, bool applies)
     {
         item.Visibility = applies ? Visibility.Visible : Visibility.Collapsed;
@@ -878,6 +954,10 @@ public partial class MainWindow
         {
             InvalidateDifferential();
             ClearDiffOutput();
+            ClearDiffPickers();
+            // Applied now, not at the first click: until something ran it the Trend entries looked
+            // available, and then grayed the moment anything was clicked.
+            UpdateDiffControls();
             DiffStatusText.Text = "Set a PRISM output directory above to run a contrast.";
             return;
         }
@@ -918,6 +998,7 @@ public partial class MainWindow
         var request = ++_diffRequest;
 
         DifferentialDataset ds;
+        _diffLoading = true;
         try
         {
             ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
@@ -926,12 +1007,21 @@ public partial class MainWindow
         {
             if (request == _diffRequest)
             {
+                _diffLoading = false;
                 InvalidateDifferential();
+                // No run: the previous run's columns and values must not stay on screen under the
+                // new path, and with nothing to fit a trend against those entries gray now, as the
+                // no-directory case does, rather than looking available.
+                ClearDiffPickers();
+                UpdateDiffControls();
                 DiffStatusText.Text = "Load failed: " + ex.Message;
             }
 
             return;
         }
+
+        if (request == _diffRequest)
+            _diffLoading = false;
 
         if (request != _diffRequest)
             return; // a newer load superseded this one

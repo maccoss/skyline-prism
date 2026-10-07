@@ -26,8 +26,12 @@
                                 <Setter TargetName="Bd" Property="Background" Value="#D6E6F8" />
                                 <Setter Property="Foreground" Value="#0C447C" />
                             </Trigger>
+                            <!-- A grayed segment has to READ as grayed: light text alone on the
+                                 white tile looked like an ordinary choice, and a choice that looks
+                                 clickable but is not is the thing these tooltips exist to explain. -->
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#AAAAAA" />
+                                <Setter TargetName="Bd" Property="Background" Value="#EFEFEF" />
+                                <Setter Property="Foreground" Value="#A6A6A6" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -644,15 +648,20 @@
                                         <StackPanel Margin="12,0,12,12">
                                 <TextBlock Text="Compare" Margin="0,2,0,3" Foreground="#555" />
                                 <ListBox x:Name="DiffDesignCombo" SelectionChanged="OnDiffDesignChanged"
-                                ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a subject column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. The two 'Trend' designs fit a slope against a NUMERIC column (time, dose, a numeric stage) instead of contrasting two arms; pick 'within subject' when the same subjects are followed across that column, because treating one subject's repeated samples as independent understates the standard error and reports more hits than the data support." Style="{StaticResource SegmentedTwoColumn}">
+                                ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a subject column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. The two 'Trend' designs fit a slope against a numeric column instead of contrasting two arms - hover each for when it applies." Style="{StaticResource SegmentedTwoColumn}">
                                 <ListBoxItem Tag="Unpaired">Unpaired</ListBoxItem>
                                 <ListBoxItem Tag="Paired">Paired</ListBoxItem>
-                                <!-- Collapsed AND disabled when the run carries no numeric
-                                metadata column, by UpdateDiffControls: WPF's arrow-key and
-                                type-ahead selection skip disabled items but not collapsed
-                                ones, so hiding alone leaves them a keypress away. -->
-                                <ListBoxItem x:Name="DiffDesignTrendItem" Tag="LinearTrend">Trend</ListBoxItem>
-                                <ListBoxItem x:Name="DiffDesignTrendSubjectItem" Tag="LinearTrendWithinSubject">Trend by subject</ListBoxItem>
+                                <!-- GRAYED (disabled, still shown) when no run is loaded or the run
+                                has no numeric column, by UpdateDiffControls, with a tooltip saying
+                                what would enable them - hiding them made the entries vanish at the
+                                first click with no way to learn why. Disabled also keeps WPF's
+                                arrow-key and type-ahead selection off them. The tooltip is written
+                                in code when it opens, so it can name the reason as it stands then;
+                                ShowOnDisabled is what lets it show. -->
+                                <ListBoxItem x:Name="DiffDesignTrendItem" Tag="LinearTrend"
+                                ToolTipService.ShowOnDisabled="True" ToolTipOpening="OnTrendItemToolTipOpening">Trend</ListBoxItem>
+                                <ListBoxItem x:Name="DiffDesignTrendSubjectItem" Tag="LinearTrendWithinSubject"
+                                ToolTipService.ShowOnDisabled="True" ToolTipOpening="OnTrendItemToolTipOpening">Trend by subject</ListBoxItem>
                                 </ListBox>
                                 <TextBlock Text="Level" Margin="0,10,0,3" Foreground="#555" />
                                 <ListBox x:Name="DiffLevelCombo" SelectionChanged="OnDiffLevelChanged"
