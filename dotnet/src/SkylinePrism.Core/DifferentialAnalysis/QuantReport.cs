@@ -246,8 +246,8 @@ public static class QuantReport
             ? $"n = {res.NA}" + (res.NSubjects > 0 ? $" ({res.NSubjects} subjects)" : string.Empty)
             : $"A n = {res.NA}, B n = {res.NB}");
         Kv(sb, "Features tested", $"{res.NFeaturesTested} of {res.NFeaturesTotal}");
-        if (res.CovariatesUsed.Count > 0)
-            Kv(sb, "Adjusted for", string.Join(", ", res.CovariatesUsed));
+        if (res.CovariatesAdjusted.Count > 0)
+            Kv(sb, "Adjusted for", string.Join(", ", res.CovariatesAdjusted));
         sb.Append("</table>");
         sb.Append("<details><summary>Quantification parameters (YAML)</summary><pre>")
           .Append(HtmlEncode(quant.ToYaml())).Append("</pre></details>");

@@ -122,6 +122,25 @@ public class QuantCommandTests
     }
 
     /// <summary>
+    /// Every covariate's type is recorded, inferred or not, so a later change to the inference rule
+    /// cannot make the recorded command fit a different model.
+    /// </summary>
+    [Fact]
+    public void EveryCovariateType_IsRecorded()
+    {
+        var ds = DifferentialDataset.Load(Fixtures.Path2("mini", "e2e-sum", "output"), FeatureLevel.Protein);
+        var options = new DifferentialOptions
+        {
+            Covariates = new[] { Covariate.FromMetadata("batch", ds.MetadataValues("batch"), CovariateKind.Categorical) },
+        };
+
+        Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }, options),
+            out var args, out _));
+        var list = args.ToList();
+        Assert.Equal("batch=categorical", list[list.IndexOf("--covariate-type") + 1]);
+    }
+
+    /// <summary>
     /// --markers is emitted only with a column to group by: a trend with none wrote no marker section,
     /// and the CLI refuses --markers on a trend without --markers-group-by.
     /// </summary>

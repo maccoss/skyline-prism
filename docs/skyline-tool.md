@@ -504,7 +504,12 @@ change the answer.
 categorical ones dummy-coded — which is how a disease-vs-control contrast is run with batch (or sex,
 PMI, ...) held. Only the moderated t can honor a covariate; it is the only test with a design matrix
 to put one in, so the control grays out for the others rather than letting a ticked covariate look
-like it was applied.
+like it was applied. It sits in the Comparison section, not inside Method, because what a
+covariate is fitted as changes every p-value. Each ticked column gets its own box below the picker:
+a **Numeric | Categorical** toggle (greyed for a text column, which can only be categorical), a line
+saying why it has that type, and - before anything runs - an orange note when the design will drop
+or skip it, such as a patient ID nested in the groups. Switching the type or removing the column
+(its x) reruns the contrast. See "Covariate types" in `differential-analysis.md` for the rule.
 
 **Design** says how the samples are related:
 

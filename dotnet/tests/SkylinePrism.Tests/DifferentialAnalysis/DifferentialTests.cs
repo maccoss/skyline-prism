@@ -221,9 +221,13 @@ public class DifferentialTests
     [Fact]
     public void FromMetadata_InfersNumericVsCategorical()
     {
-        // All non-null values parse as numbers -> numeric (integer-coded batch is centered, not dummied).
-        var numeric = Assert.IsType<NumericCovariate>(
+        // An integer-coded batch is categories, not one centered column - see CovariateTypingTests.
+        Assert.IsType<CategoricalCovariate>(
             Covariate.FromMetadata("batch", new string?[] { "1", "2", "3", null }));
+
+        // Asked for numeric, it is numeric, and a missing value is NaN.
+        var numeric = Assert.IsType<NumericCovariate>(
+            Covariate.FromMetadata("batch", new string?[] { "1", "2", "3", null }, CovariateKind.Numeric));
         Assert.Equal(1.0, numeric.Values[0], 12);
         Assert.True(double.IsNaN(numeric.Values[3])); // null -> NaN (missing)
 

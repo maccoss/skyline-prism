@@ -41,6 +41,8 @@ public sealed record QuantContrast(
 /// <param name="ClinicalCsvs">Clinical CSVs joined to the samples (<see cref="DifferentialDataset.AttachedClinicalCsvs"/>), if any.</param>
 /// <param name="PriorUsed">The prior that actually ran, with its source (<see cref="DifferentialResult.VariancePrior"/>,
 /// e.g. "intensity-trend from controls"); it differs from the request when a requested prior had to fall back.</param>
+/// <param name="CovariateTypes">Each requested covariate as <c>COLUMN=numeric|categorical</c>, the form
+/// <c>--covariate-type</c> takes - the type it was fitted as, inferred or set.</param>
 public sealed record QuantConfig(
     string Level,
     QuantContrast Contrast,
@@ -60,7 +62,8 @@ public sealed record QuantConfig(
     IReadOnlyList<string>? ClinicalCsvs = null,
     string? Command = null,
     string? CommandUnavailable = null,
-    string? DetectionTest = null)
+    string? DetectionTest = null,
+    IReadOnlyList<string>? CovariateTypes = null)
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -109,6 +112,10 @@ public sealed record QuantConfig(
         sb.Append("prior_used: ").Append(Yaml(PriorUsed)).Append('\n');
         sb.Append("correction: ").Append(Correction).Append('\n');
         sb.Append("covariates: ").Append(YamlList(Covariates)).Append('\n');
+        // The design columns above do not say whether an integer column was fitted as one centered
+        // column or as categories; this does, in the form --covariate-type takes.
+        if (CovariateTypes is { Count: > 0 })
+            sb.Append("covariate_types: ").Append(YamlList(CovariateTypes)).Append('\n');
         sb.Append("hit_rule: ").Append(Yaml(HitRule)).Append('\n');
         sb.Append("detection:\n");
         sb.Append("  enabled: ").Append(DetectionEnabled ? "true" : "false").Append('\n');

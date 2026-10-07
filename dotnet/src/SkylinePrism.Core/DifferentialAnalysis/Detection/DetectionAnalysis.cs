@@ -143,7 +143,7 @@ public static class DetectionAnalysis
         DetectionMatrixData detection, DifferentialDataset dataset,
         IReadOnlyList<int> groupA, IReadOnlyList<int> groupB, DifferentialDesign design,
         IReadOnlyList<string?>? subjectLabels, IReadOnlyList<string>? covariateColumns,
-        MultipleTesting correction)
+        MultipleTesting correction, IReadOnlyDictionary<string, CovariateKind>? covariateKinds = null)
     {
         if (design is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject)
             throw new ArgumentException("Detection compares two groups, and a trend design has none.");
@@ -160,7 +160,7 @@ public static class DetectionAnalysis
             throw new DetectionSamplesNotFoundException();
 
         var dropped = groupA.Count - aCols.Count + (groupB.Count - bCols.Count);
-        var covariates = CovariatesFor(dataset, covariateColumns, detection.SampleIds);
+        var covariates = CovariatesFor(dataset, covariateColumns, detection.SampleIds, covariateKinds);
         var paired = design == DifferentialDesign.Paired;
         var matchedButMissing = 0;
 
@@ -221,10 +221,12 @@ public static class DetectionAnalysis
     /// <summary>
     /// The named metadata columns as covariates aligned to <paramref name="targetSampleIds"/> - the
     /// detection matrix's column order, not the dataset's. A sample the dataset does not know gets no
-    /// value. Null when no column is named.
+    /// value. Null when no column is named. A column in <paramref name="kinds"/> is given that type;
+    /// any other gets the inferred one (<see cref="CovariateTyping.Infer"/>).
     /// </summary>
     public static IReadOnlyList<Covariate>? CovariatesFor(DifferentialDataset dataset,
-        IReadOnlyList<string>? columns, IReadOnlyList<string> targetSampleIds)
+        IReadOnlyList<string>? columns, IReadOnlyList<string> targetSampleIds,
+        IReadOnlyDictionary<string, CovariateKind>? kinds = null)
     {
         if (columns is null || columns.Count == 0)
             return null;
@@ -240,7 +242,10 @@ public static class DetectionAnalysis
             var aligned = new string?[targetSampleIds.Count];
             for (var k = 0; k < targetSampleIds.Count; k++)
                 aligned[k] = indexById.TryGetValue(targetSampleIds[k], out var di) ? colValues[di] : null;
-            result.Add(Covariate.FromMetadata(col, aligned));
+            // The type is inferred from the dataset's whole column, not from this alignment: the
+            // detection matrix may hold fewer samples, and a column must not change type with them.
+            CovariateKind? kind = kinds is not null && kinds.TryGetValue(col, out var chosen) ? chosen : null;
+            result.Add(Covariate.FromMetadata(col, aligned, kind, inferFrom: colValues));
         }
 
         return result;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -209,7 +209,7 @@ public static partial class Program
         var opts = ParseOptions(args,
             multiValue: new HashSet<string>
                 { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical",
-                  "--restrict-to" });
+                  "--restrict-to", "--covariate-type" });
         var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
         RefuseReportFlagsWithoutReport(opts);
         // Resolved before anything runs, so a mistyped panel name refuses the command rather than
@@ -274,6 +274,8 @@ public static partial class Program
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
         if (result.DescribePriorFit() is { } priorFit)
             Console.WriteLine($"  {priorFit}");
+        if (result.CovariatesAdjusted.Count > 0)
+            Console.WriteLine($"  adjusted for {string.Join(", ", result.CovariatesAdjusted)}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 
@@ -453,6 +455,33 @@ public static partial class Program
     }
 
     /// <summary>
+    /// <c>--covariate-type COLUMN=numeric|categorical</c>, each naming an <c>--adjust-for</c> column.
+    /// </summary>
+    /// <remarks>
+    /// Split at the LAST '=': the type is one of two words, so a column whose name holds an '=' still
+    /// comes back whole.
+    /// </remarks>
+    private static Dictionary<string, CovariateKind> ParseCovariateTypes(ParsedOptions opts, List<string> adjustFor)
+    {
+        var kinds = new Dictionary<string, CovariateKind>(StringComparer.Ordinal);
+        foreach (var spec in opts.GetList("--covariate-type"))
+        {
+            var eq = spec.LastIndexOf('=');
+            var kind = eq > 0 ? CovariateTyping.ParseToken(spec[(eq + 1)..]) : null;
+            if (kind is null)
+                throw new ArgumentException(
+                    $"--covariate-type wants COLUMN=numeric or COLUMN=categorical, not '{spec}'.");
+            var column = spec[..eq].Trim();
+            if (!adjustFor.Contains(column, StringComparer.Ordinal))
+                throw new ArgumentException(
+                    $"--covariate-type names '{column}', which is not an --adjust-for column.");
+            kinds[column] = kind.Value;
+        }
+
+        return kinds;
+    }
+
+    /// <summary>
     /// <c>--restrict-to COLUMN=VALUE[,VALUE...]</c>, validated against the run's own metadata.
     /// </summary>
     private static IReadOnlyList<QuantRestriction> ParseRestrictions(ParsedOptions opts)
@@ -514,6 +543,8 @@ public static partial class Program
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
         if (result.DescribePriorFit() is { } priorFit)
             Console.WriteLine($"  {priorFit}");
+        if (result.CovariatesAdjusted.Count > 0)
+            Console.WriteLine($"  adjusted for {string.Join(", ", result.CovariatesAdjusted)}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 
@@ -688,8 +719,10 @@ public static partial class Program
             QuantAnalysis.ValidateRestrictions(ParseRestrictions(opts), dataset, "--restrict-to");
         }
 
+        var adjustFor = SplitLevels(opts.GetList("--adjust-for"));
+        var kinds = ParseCovariateTypes(opts, adjustFor);
         var covariates = new List<Covariate>();
-        foreach (var name in SplitLevels(opts.GetList("--adjust-for")))
+        foreach (var name in adjustFor)
         {
             if (!dataset.MetadataColumns.Contains(name))
                 throw new ArgumentException($"No metadata column '{name}' to adjust for.");
@@ -702,7 +735,8 @@ public static partial class Program
             if (!string.IsNullOrEmpty(tested) && string.Equals(name, tested, StringComparison.Ordinal))
                 throw new ArgumentException(
                     $"'{name}' is the term being tested; adjusting for it would leave nothing to test.");
-            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name)));
+            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name),
+                kinds.TryGetValue(name, out var kind) ? kind : null));
         }
         if (covariates.Count > 0 && test != DifferentialTest.ModeratedT)
             throw new ArgumentException(
@@ -1263,6 +1297,14 @@ public static partial class Program
                                    residuals either way, and the output says by what factor
             --prior-from-groups    Take the trend's shape from the contrast groups instead
             --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
+            --covariate-type COL=TYPE
+                                   Fit an --adjust-for column as numeric or categorical;
+                                   repeatable. Without it a column of numbers is categorical when
+                                   it holds whole numbers that repeat across samples and its name
+                                   contains a whole word such as patient, subject, donor, id,
+                                   batch, plate, cycle, set or run, or when its values are whole
+                                   numbers with at most 10 distinct values; numeric otherwise. The
+                                   output names the type each covariate was fitted as
             --correction METHOD    bh (default), by, holm, bonferroni, none
             --alpha A              p-value threshold for the printed hit count (default 0.05)
             --raw-p                Apply --alpha to the RAW p rather than the adjusted one. For

@@ -130,7 +130,14 @@ public static class QuantCommand
             && ControlSampleTypes.PriorGroups(ds.MetadataValues("sample_type")) is not null)
             args.Add("--prior-from-groups");
         if (o.Covariates is { Count: > 0 } covariates)
+        {
             Listed(args, "--adjust-for", covariates.Select(c => c.Name), "a covariate column");
+            // Every covariate's type, not only an overridden one: the inference rule can change
+            // between releases, and a recorded command must fit the same model whenever it is run.
+            foreach (var c in covariates)
+                Single(args, "--covariate-type", c.Name + "=" + CovariateTyping.Token(c.Kind),
+                    "a covariate column");
+        }
         args.AddRange(new[] { "--correction", DifferentialTokens.Correction(o.Correction) });
         args.AddRange(new[] { "--alpha", rule.PThreshold.ToString("R", inv) });
         if (!rule.UseAdjusted)

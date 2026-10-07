@@ -851,6 +851,12 @@ public class CliIntegrationTests
                     "--subject", "Subject", "--test", DifferentialTokens.Test(t)));
             Accepted(With(Array.Empty<string>(), "--design", DifferentialTokens.Design(DifferentialDesign.LinearTrend),
                 "--trend-over", "Week"));
+            // Each covariate type word, as QuantCommand records it for every covariate.
+            foreach (var k in Enum.GetValues<CovariateKind>())
+                Accepted(With(twoArm, "--adjust-for", "Week", "--covariate-type", "Week=" + CovariateTyping.Token(k)));
+            // A type for a column that is not adjusted for, or a word that is not a type, is refused.
+            Assert.NotEqual(0, Invoke(With(twoArm, "--adjust-for", "Week", "--covariate-type", "Subject=numeric")).Item1);
+            Assert.NotEqual(0, Invoke(With(twoArm, "--adjust-for", "Week", "--covariate-type", "Week=ordinal")).Item1);
             Accepted(With(Array.Empty<string>(), "--design",
                 DifferentialTokens.Design(DifferentialDesign.LinearTrendWithinSubject),
                 "--trend-over", "Week", "--subject", "Subject"));

@@ -58,7 +58,97 @@ public partial class MainWindow
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
     private string? _clinicalCsvPath;
-    private List<QcGroupValue> _diffCovariateValues = new();
+    private List<DiffCovariateChoice> _diffCovariateValues = new();
+
+    /// <summary>The ticked covariates, one row each, in the order they appear in the picker.</summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<DiffCovariateChoice> _diffCovariateRows = new();
+
+    /// <summary>A row's x: stop adjusting for that column, and rerun.</summary>
+    private async void OnDiffCovariateRemove(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if ((sender as FrameworkElement)?.DataContext is not DiffCovariateChoice choice)
+                return;
+            choice.IsSelected = false;
+            if (_diffDataset is not null && !_diffSuppress)
+                await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffCovariateRemove), ex);
+        }
+    }
+
+    /// <summary>A type switched on a row: the model changed, so rerun.</summary>
+    private async void OnDiffCovariateKindChanged()
+    {
+        try
+        {
+            RefreshDiffCovariateRows();
+            UpdateDiffMethodSummary();
+            if (_diffDataset is not null && !_diffSuppress)
+                await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffCovariateKindChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the covariate rows from the ticks, and write each one's note - what the design will
+    /// do with it over the arms as they stand now (<see cref="Differential.CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int})"/>).
+    /// </summary>
+    /// <remarks>
+    /// Called whenever something the note depends on changes: a tick, a type, the arms, the design.
+    /// It reads metadata only, so it is cheap. With no arms picked yet there is nothing to be nested
+    /// in, and the note stays empty rather than guessing.
+    /// </remarks>
+    private void RefreshDiffCovariateRows()
+    {
+        var ticked = _diffCovariateValues.Where(v => v.IsSelected).ToList();
+        if (!ticked.SequenceEqual(_diffCovariateRows))
+        {
+            _diffCovariateRows.Clear();
+            foreach (var t in ticked)
+                _diffCovariateRows.Add(t);
+        }
+
+        if (_diffDataset is null)
+            return;
+        // The options the run would use, so the preview takes the same design path (pairing,
+        // subject block, trend selection) and reports what that path will do.
+        var options = DiffOptions(null);
+        var trend = DiffIsTrend();
+        int[]? trendColumns = trend ? DiffTrendColumns() : null;
+        var x = trend ? DiffTrendValues() : null;
+        var testedColumn = trend ? DiffTrendAxis()?.Column : null;
+        List<int>? a = null, b = null;
+        if (!trend && !TryGetGroups(out _, out a, out b, out _, out _))
+            a = b = null;
+
+        foreach (var row in ticked)
+        {
+            if (testedColumn is not null && string.Equals(row.Name, testedColumn, StringComparison.Ordinal))
+            {
+                // WithoutTestedTerm removes it from the run; say so rather than preview a fit it gets no part in.
+                row.Note = "This is the column the trend is fitted against, so it is left out of the adjustment.";
+                continue;
+            }
+
+            var cov = DetectionAnalysis.CovariatesFor(_diffDataset, new[] { row.Name }, _diffDataset.SampleIds,
+                row.Overridden ? new Dictionary<string, CovariateKind> { [row.Name] = row.Kind } : null)!.Single();
+            IReadOnlyList<string> notes = trend
+                ? trendColumns is { Length: > 0 } && x is not null
+                    ? Differential.CovariateNotes(cov, trendColumns, x, options)
+                    : Array.Empty<string>()
+                : a is { Count: > 0 } && b is { Count: > 0 }
+                    ? Differential.CovariateNotes(cov, a, b, options)
+                    : Array.Empty<string>();
+            row.Note = string.Join(" ", notes);
+        }
+    }
 
     // The two contrast arms, as tick lists. An arm is a SET of metadata values whose samples are
     // pooled, not a single value - which is what lets two control classes be contrasted against the
@@ -795,6 +885,8 @@ public partial class MainWindow
 
         DiffCovariatesLabel.IsEnabled = moderated;
         DiffCovariatesCombo.IsEnabled = moderated;
+        DiffCovariateRows.IsEnabled = moderated;
+        RefreshDiffCovariateRows();
     }
 
     private static void ShowTest(UIElement item, bool applies)
@@ -851,8 +943,8 @@ public partial class MainWindow
             parts.Add(prior.ToLowerInvariant() + (fromControls ? " from controls" : string.Empty));
         }
 
-        var covariates = (DiffCovariatesCombo.ItemsSource as IEnumerable<QcGroupValue>)
-            ?.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        var covariates = (DiffCovariatesCombo.ItemsSource as IEnumerable<DiffCovariateChoice>)
+            ?.Where(v => v.IsSelected).Select(v => $"{v.Name} ({CovariateTyping.Token(v.Kind)})").ToList();
         if (covariates is { Count: > 0 })
             parts.Add("adjusted for " + string.Join(", ", covariates));
         if (Shown(DiffCorrectionCombo) is { } correction)
@@ -1055,13 +1147,15 @@ public partial class MainWindow
     {
         DiffACombo.Text = SummarizeArm(_diffAValues);
         DiffBCombo.Text = SummarizeArm(_diffBValues);
-        var covariates = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
-        DiffCovariatesCombo.Text = covariates.Count == 0 ? "(none)" : string.Join(", ", covariates);
+        // The rows below the picker carry the names and types, so the closed picker only counts.
+        var ticked = _diffCovariateValues.Count(v => v.IsSelected);
+        DiffCovariatesCombo.Text = ticked == 0 ? "(none - tick columns to add)" : $"{ticked} column{(ticked == 1 ? "" : "s")} - see below";
         // The Restrict-to values are a tick list too, and were added without this - so a ticked study
         // closed to a blank box, reading as though nothing had been chosen.
         DiffRestrictValuesCombo.Text = DiffRestrictValues() is { Count: > 0 } kept
             ? string.Join(", ", kept)
             : "(tick values to keep)";
+        RefreshDiffCovariateRows();
     }
 
     /// <summary>
@@ -1082,9 +1176,20 @@ public partial class MainWindow
         // Any metadata column can be a covariate except the sample id itself and the contrast column.
         _diffCovariateValues = _diffDataset.MetadataColumns
             .Where(c => c != groupByColumn && c != "sample")
-            .Select(c => new QcGroupValue { Name = c, Changed = UpdateDiffArmSummaries })
+            .Select(c =>
+            {
+                var inferred = CovariateTyping.Infer(c, _diffDataset.MetadataValues(c));
+                // Kind before the callbacks, so setting it raises nothing.
+                return new DiffCovariateChoice
+                {
+                    Name = c, Inferred = inferred, Kind = inferred.Kind,
+                    Changed = OnDiffCovariateChoiceChanged, KindChanged = OnDiffCovariateKindChanged,
+                };
+            })
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
+        DiffCovariateRows.ItemsSource = _diffCovariateRows;
+        RefreshDiffCovariateRows();
     }
 
     /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>
@@ -1114,7 +1219,22 @@ public partial class MainWindow
     private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds) =>
         _diffDataset is null
             ? null
-            : DetectionAnalysis.CovariatesFor(_diffDataset, SelectedCovariateNames(), targetSampleIds);
+            : DetectionAnalysis.CovariatesFor(_diffDataset, SelectedCovariateNames(), targetSampleIds,
+                SwitchedCovariateKinds());
+
+    /// <summary>
+    /// The ticked covariates whose type was switched from the inferred one. Only those: a type that
+    /// was left alone is inferred again in Core, so the result records it as inferred, with the reason.
+    /// </summary>
+    private Dictionary<string, CovariateKind> SwitchedCovariateKinds() =>
+        _diffCovariateValues.Where(v => v.IsSelected && v.Overridden).ToDictionary(v => v.Name, v => v.Kind);
+
+    /// <summary>A tick or a type switch: refresh the closed-state text and the method line.</summary>
+    private void OnDiffCovariateChoiceChanged()
+    {
+        UpdateDiffArmSummaries();
+        UpdateDiffMethodSummary();
+    }
 
     /// <summary>The metadata columns ticked in Adjust for.</summary>
     private List<string> SelectedCovariateNames() =>
@@ -1451,8 +1571,8 @@ public partial class MainWindow
             .ToList();
 
         var nSig = res.Rows.Count(rule.IsSignificant);
-        var adj = res.CovariatesUsed.Count > 0
-            ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}"
+        var adj = res.CovariatesAdjusted.Count > 0
+            ? $"; adjusted for {string.Join(", ", res.CovariatesAdjusted)}"
             : string.Empty;
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
         // A restriction removes samples from the column list (DiffTrendColumns), so TrendSamples never
@@ -1555,7 +1675,7 @@ public partial class MainWindow
             .ToList();
 
         var nSig = res.Rows.Count(rule.IsSignificant);
-        var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
+        var adj = res.CovariatesAdjusted.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesAdjusted)}" : string.Empty;
         // Name the method. With a menu this size the status line is the only record of what
         // produced a hit list, and any message Core raised (an unhonored covariate, a prior that
         // could not be fitted) belongs beside it rather than nowhere.
@@ -1640,7 +1760,7 @@ public partial class MainWindow
         try
         {
             result = await Task.Run(() => DetectionAnalysis.Run(det, dataset, a, b, design, subjects,
-                covariateNames, correction));
+                covariateNames, correction, SwitchedCovariateKinds()));
         }
         catch (DetectionSamplesNotFoundException ex)
         {

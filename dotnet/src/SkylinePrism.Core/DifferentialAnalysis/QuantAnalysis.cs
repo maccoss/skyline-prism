@@ -330,7 +330,7 @@ public static class QuantAnalysis
                 detMatrix ??= DetectionMatrix.Load(request.OutputDir, DetectionQ, null);
                 detection = DetectionAnalysis.Run(detMatrix, ds, request.GroupA, request.GroupB,
                     options.Design, options.SubjectLabels, options.Covariates?.Select(c => c.Name).ToList(),
-                    options.Correction);
+                    options.Correction, options.Covariates?.ToDictionary(c => c.Name, c => c.Kind));
                 if (DetectionAnalysis.UnpairedNote(detection.UnpairedReason) is { } unpaired)
                     notes.Add(unpaired);
                 if (!detection.Identifiable)
@@ -443,6 +443,7 @@ public static class QuantAnalysis
             ClinicalCsvs: ds.AttachedClinicalCsvs.ToList(),
             Command: commandLine,
             CommandUnavailable: noCommand,
+            CovariateTypes: options.Covariates?.Select(c => $"{c.Name}={CovariateTyping.Token(c.Kind)}").ToList(),
             DetectionTest: detection is null
                 ? null
                 : DetectionAnalysis.Describe(detection) + (detection.Identifiable ? string.Empty : " (not identifiable - no result)"));

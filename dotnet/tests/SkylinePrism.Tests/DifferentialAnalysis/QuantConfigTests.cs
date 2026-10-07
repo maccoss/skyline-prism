@@ -29,6 +29,14 @@ public class QuantConfigTests
         MarkerPanels: new[] { "EV markers" });
 
     [Fact]
+    public void ToYaml_RecordsCovariateTypes_InTheCommandLineForm()
+    {
+        var yaml = (TwoGroup() with { CovariateTypes = new[] { "age=numeric", "Patient (paper)=categorical" } }).ToYaml();
+        Assert.Contains("covariate_types: [age=numeric, Patient (paper)=categorical]", yaml);
+        Assert.DoesNotContain("covariate_types", TwoGroup().ToYaml());
+    }
+
+    [Fact]
     public void ToYaml_TwoGroup_HasContrastArmsAndSections()
     {
         var yaml = TwoGroup().ToYaml();
