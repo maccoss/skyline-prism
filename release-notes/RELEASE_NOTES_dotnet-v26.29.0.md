@@ -102,12 +102,12 @@ This release also added a design for contrasts between subjects who were each sa
   command always named its prior, so one recorded earlier kept that prior - but not necessarily the
   rest of its model: the degrees-of-freedom cap applied where it bound, an integer-coded label
   covariate became categorical unless `--covariate-type COLUMN=numeric` was added, and a blank or
-  `#N/A` covariate value became missing (see below). `--prior-from-controls` and `--prior-from-groups` applied
-  only to the old estimator: beside any other prior they were noted rather than silently ignored, and
-  the pane showed **from controls** only beside it, with help that no longer suggested setting QC
-  sample types in Skyline to enable it. A new test pinned the property the default was chosen for,
-  calibration by intensity, on a seeded simulated null. `docs/differential-analysis.md` ("Why
-  limma-trend is the default") has the measurements.
+  `#N/A` covariate value became missing (see below). `--prior-from-controls` and
+  `--prior-from-groups` applied only to the old estimator: beside any other prior they were noted
+  rather than silently ignored, and the pane showed **from controls** only beside it, with help that
+  no longer suggested setting QC sample types in Skyline to enable it. A new test pinned the property
+  the default was chosen for, calibration by intensity, on a seeded simulated null.
+  `docs/differential-analysis.md` ("Why limma-trend is the default") has the measurements.
 
 - **Covariate types changed for integer-coded columns.** A covariate column of repeating whole
   numbers whose name contained patient, subject, participant, individual, donor, animal, mouse, id,
