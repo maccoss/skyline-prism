@@ -522,7 +522,8 @@ after the word in front of it - `(Week)`, `(V)`. Those are different quantities,
 selects an axis automatically when the column is plain numbers. A line below the **Trend over** picker
 shows what the chosen axis parsed, so you can check it is the one you meant. **Restrict to** fits the trend on
 only some samples (one study of two, say). Without it, studies that share a timescale are merged into
-one slope. With no axis anywhere in the run, both trend entries are hidden and disabled. See
+one slope. With no run loaded, or no axis anywhere in the run, both trend entries are grayed, and
+their tooltip says what would enable them. See
 [`differential-analysis.md`](differential-analysis.md) for the details. **Detection** is hidden too: it compares
 observed-versus-not between two groups, and a trend has none. Clicking a point opens the feature's
 **trajectory** - abundance against the trend column with the fitted line, plus one faint line per
