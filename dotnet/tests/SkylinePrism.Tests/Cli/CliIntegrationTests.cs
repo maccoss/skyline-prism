@@ -322,11 +322,10 @@ public class CliIntegrationTests
             Assert.True(File.Exists(csv), "the default results path is inside the output directory");
 
             // The status line names the method that produced the numbers - with a menu this size it
-            // is the only thing that makes a saved console log interpretable.
-            // The prior's SOURCE is part of the headline, and the mini fixture has QC and reference
-            // replicates, so the default is to fit on them rather than on the contrast groups.
-            Assert.Contains("moderated t (intensity-trend prior from controls), unpaired", output,
-                StringComparison.Ordinal);
+            // is the only thing that makes a saved console log interpretable. The default prior is
+            // limma-trend, whose curve is fitted to the contrast's own residuals, so it has no source
+            // to name - the mini fixture's QC and reference replicates do not enter it.
+            Assert.Contains("moderated t (limma-trend prior), unpaired", output, StringComparison.Ordinal);
             Assert.Contains("sample_type = experimental vs qc", output, StringComparison.Ordinal);
             Assert.Contains("Benjamini-Hochberg", output, StringComparison.Ordinal);
 
@@ -945,16 +944,19 @@ public class CliIntegrationTests
     }
 
     /// <summary>
-    /// The intensity trend takes its shape from the control replicates by default, and says so -
-    /// and --prior-from-groups takes it from the contrast groups instead.
+    /// The default prior is limma-trend. The deprecated intensity trend is still there to reproduce
+    /// earlier results: with <c>--prior intensity-trend</c> it takes its shape from the control
+    /// replicates by default, says so, and says it is deprecated - and --prior-from-groups takes the
+    /// shape from the contrast groups instead.
     /// </summary>
     /// <remarks>
     /// The source sets the trend's shape and its level is fitted to the residuals either way, so the
-    /// two give different numbers and must be distinguishable from the output alone. This pins that
-    /// the default is the control-based one and that the source is named.
+    /// two give different numbers and must be distinguishable from the output alone. A source flag
+    /// beside a prior with no shape source is accepted - a command recorded before limma-trend became
+    /// the default can carry one - but noted, not silently ignored.
     /// </remarks>
     [Fact]
-    public void Differential_FitsThePriorOnControlsByDefault_AndNamesTheSource()
+    public void Differential_DefaultsToLimmaTrend_AndTheIntensityTrendStillNamesItsSource()
     {
         var outDir = TempDir();
         try
@@ -967,16 +969,25 @@ public class CliIntegrationTests
             }.Concat(extra).ToArray();
 
             var byDefault = Invoke(Args()).Output;
-            var byGroups = Invoke(Args("--prior-from-groups")).Output;
-            var byControls = Invoke(Args("--prior-from-controls")).Output;
-            var header = File.ReadLines(Path.Combine(outDir, "d.csv")).TakeWhile(l => l.StartsWith('#')).ToList();
+            Assert.Contains("moderated t (limma-trend prior)", byDefault, StringComparison.Ordinal);
+            Assert.DoesNotContain("deprecated", byDefault, StringComparison.Ordinal);
 
-            Assert.Contains("intensity-trend prior from controls", byDefault, StringComparison.Ordinal);
+            var stale = Invoke(Args("--prior-from-groups")).Output;
+            Assert.Contains("--prior-from-groups applies only to --prior intensity-trend", stale, StringComparison.Ordinal);
+            Assert.Contains("moderated t (limma-trend prior)", stale, StringComparison.Ordinal);
+
+            var byGroups = Invoke(Args("--prior", "intensity-trend", "--prior-from-groups")).Output;
+            var byControls = Invoke(Args("--prior", "intensity-trend")).Output;
+            var header = File.ReadLines(Path.Combine(outDir, "d.csv")).TakeWhile(l => l.StartsWith('#')).ToList();
+            var explicitControls = Invoke(Args("--prior", "intensity-trend", "--prior-from-controls")).Output;
+
             Assert.Contains("intensity-trend prior from controls", byControls, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior from controls", explicitControls, StringComparison.Ordinal);
             Assert.Contains("intensity-trend prior from design groups", byGroups, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior is deprecated", byControls, StringComparison.Ordinal);
 
             // How far the trend was scaled is part of the answer: printed, and kept in the file.
-            Assert.Contains("prior: intensity trend from the controls, scaled x", byDefault, StringComparison.Ordinal);
+            Assert.Contains("prior: intensity trend from the controls, scaled x", byControls, StringComparison.Ordinal);
             Assert.Contains("prior: intensity trend from the design groups, scaled x", byGroups, StringComparison.Ordinal);
             Assert.Contains(header, l => l.StartsWith("# prior: intensity trend from the controls, scaled x", StringComparison.Ordinal));
 

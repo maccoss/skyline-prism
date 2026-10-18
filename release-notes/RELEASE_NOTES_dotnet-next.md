@@ -72,6 +72,23 @@ as the GitHub Release description and fails if it is missing.
 
 ## Breaking Changes
 
+- **The default variance prior became limma-trend, and the intensity trend was deprecated.** The
+  intensity trend - proteomics-toolkit's estimator, shaped on the QC and reference pools and the
+  default until now - was calibrated on average but tilted by intensity: on random-label nulls the
+  brightest fifth of features reached 7-9% false positives at p < 0.05 and the dimmest only 2-4%,
+  because the pools carry technical variance only while study samples add biology that is roughly
+  flat on the log scale. It also halved the prior's weight: in simulation it found 52% of true
+  two-fold effects at BH 5% where limma-trend found 71% (unpaired, 5 vs 5). limma-trend - limma's
+  `trend=TRUE`, still an intensity-dependent prior, but with its curve fitted to the contrast's own
+  residuals - was calibrated at every intensity in every design tested: unpaired, paired,
+  within-subject and between-subject trends, on the `cohort` fixture, the Verapamil serum cohort and
+  simulation. Every default p-value changed. The pane labels it **Intensity trend (limma)**. The old
+  estimator is still `--prior intensity-trend` (**Intensity trend, toolkit (deprecated)** in the
+  pane), and says it is deprecated in every result that uses it. A recorded command always names its
+  prior, so one recorded earlier reproduces as it ran. `--prior-from-controls` and
+  `--prior-from-groups` now apply only to it, and are noted rather than silently ignored beside any
+  other prior; the pane shows **from controls** only for it.
+
 - **Covariate types changed for integer-coded columns.** A covariate column of repeating whole
   numbers whose name contains patient, subject, participant, individual, donor, animal, mouse, id,
   batch, plate, site, center, cohort, group, cycle, set or run is now categorical by default where it

@@ -266,7 +266,8 @@ public partial class MainWindow
             "Global" => VariancePrior.Global,
             "LimmaTrend" => VariancePrior.LimmaTrend,
             "PeptideCount" => VariancePrior.PeptideCount,
-            _ => VariancePrior.IntensityTrend,
+            "IntensityTrend" => VariancePrior.IntensityTrend,
+            _ => VariancePrior.LimmaTrend,
         };
 
     /// <summary>The design the Design combo is pointing at.</summary>
@@ -726,7 +727,8 @@ public partial class MainWindow
             TrendColumn = DiffIsTrend() ? DiffTrendColumn() : null,
             TimeValues = DiffIsTrend() ? DiffTrendValues() : null,
             PeptideCounts = _diffDataset?.PeptideCounts,
-            PriorGroupColumns = DiffPriorFromControlsCheck.IsChecked == true
+            PriorGroupColumns = DiffSelectedPrior() == VariancePrior.IntensityTrend
+                                && DiffPriorFromControlsCheck.IsChecked == true
                 ? DiffControlColumns()
                 : null,
             MinPerGroup = 2,
@@ -846,14 +848,16 @@ public partial class MainWindow
         {
             using (SuppressDiff())
             {
-                DiffPriorCombo.SelectedIndex = 0; // Intensity trend, valid at either level
+                DiffPriorCombo.SelectedIndex = 0; // the default (limma-trend), valid at either level
             }
         }
 
         // Fitting the prior on controls only means something for a prior that HAS a per-feature
         // scale, and only where the run actually has control replicates to fit it on.
         var controls = DiffControlColumns();
-        var scaled = DiffSelectedPrior() != VariancePrior.Global;
+        // Only the deprecated intensity trend takes a shape from anywhere: limma-trend fits its curve
+        // to the residuals, so a "from controls" box beside it would be ticked and do nothing.
+        var scaled = DiffSelectedPrior() == VariancePrior.IntensityTrend;
         DiffPriorFromControlsCheck.Visibility = moderated && scaled
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -1065,7 +1069,7 @@ public partial class MainWindow
                 DiffViewCombo.SelectedIndex = 0;
             if (DiffLevelCombo.SelectedItem is null)
                 DiffLevelCombo.SelectedIndex = 0;
-            // Index 0 is Intensity trend - the lab's default, and deliberately NOT set in the XAML.
+            // Index 0 is the default, limma-trend - deliberately NOT set in the XAML.
             if (DiffPriorCombo.SelectedItem is null)
                 DiffPriorCombo.SelectedIndex = 0;
             if (DiffTestCombo.SelectedItem is null)
