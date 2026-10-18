@@ -1,15 +1,16 @@
-﻿# Differential analysis
+﻿﻿# Differential analysis
 
 The Skyline tool's **Differential** pane runs a limma empirical-Bayes moderated-t contrast on a
 PRISM output directory: protein or peptide level, two groups from any metadata or clinical column,
 optional covariate adjustment, and a choice of empirical-Bayes variance prior. The statistics live
 in `SkylinePrism.Core.DifferentialAnalysis` and are reachable without the GUI.
 
-The **default prior is the lab's own**, `VariancePriors.IntensityTrend` - the same estimator as
-`proteomics-toolkit`'s `moderation="intensity_trend"`, and pinned to it by `intensity_trend.json`
-(the trend's shape) and `toolkit_end_to_end.json` (the whole analysis). limma's `trend=TRUE` is still
-available as **limma-trend**, and the two are not the same thing; the section below is about exactly
-that.
+The **default prior is limma-trend** - limma's `trend=TRUE`, an intensity-dependent prior whose curve
+is fitted to the contrast's own residuals. Up to dotnet-v26.28.0 the default was the lab's intensity
+trend, `VariancePriors.IntensityTrend`, the same estimator as `proteomics-toolkit`'s
+`moderation="intensity_trend"` and pinned to it by `intensity_trend.json` and
+`toolkit_end_to_end.json`. It is now deprecated and kept to reproduce earlier results, for the reason
+in "Why limma-trend is the default" below. The two are not the same estimator despite the names.
 
 ## What each quantity is held to
 
@@ -46,8 +47,8 @@ outcome needs conditional logistic regression, which is not implemented. Under t
 detection has no counterpart: it runs Fisher (or Firth) on samples and says that its p-values do not
 account for subjects sampled more than once.
 
-Variance priors: **global** (Smyth 2004), **intensity trend** (the default - see below), **limma-trend**
-(`trend=TRUE`), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
+Variance priors: **global** (Smyth 2004), **limma-trend** (`trend=TRUE`, the default), **intensity
+trend** (deprecated - see below), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
 `_fit_count_dependent_prior`). The intensity trend and limma-trend both estimate the prior *degrees of
 freedom* around their trend. The peptide-count prior keeps limma's global value, as DEqMS does, and
 is used exactly as DEqMS defines it: limma with a prior scale that follows peptide count. It is not
@@ -108,7 +109,59 @@ counted in the status line. Covariates constant within every subject (sex, genot
 dropped for the same reason they are under a paired design: a within-subject slope cannot estimate a
 between-subject effect.
 
+### Why limma-trend is the default
+
+Until the release after dotnet-v26.28.0 the default was the intensity trend with its shape taken from
+the QC and reference pools (next section). Its overall false-positive rate was right - about 5% of null
+p-values below 0.05 - but split by intensity it was not: optimistic for bright features and
+conservative for dim ones, the two cancelling in the average. The calibration work in the next section
+was all measured overall, which is how it went unseen.
+
+The cause is the curve's shape. On the log2 scale the moderated t works on, a feature's variance is
+roughly (CV / ln 2)^2. The pools carry technical noise only: its absolute SD rises with intensity
+(shot noise goes as about the square root of the signal), so its CV - the log-scale noise - falls,
+towards a floor set by multiplicative sources such as injection and integration. Study samples add
+biological variation, which is multiplicative - a roughly constant CV - and so close to flat on the
+log scale. One scale factor cannot fit a falling curve to a flatter one: scaled to fit on average, the
+pool curve sits too low at high intensity and too high at low. The mismatch also roughly halves the
+fitted prior df, so the prior moderates less and the test loses power. limma-trend has no source to
+get wrong: it fits its curve to the contrast's own residual variances, so it follows whatever mix of
+technical and biological variance the design leaves.
+
+The share of null p-values below 0.05 in the dimmest and brightest fifth of features (a calibrated
+test gives 5% in both), from random-label nulls - splits, label swaps within subject, or weeks
+shuffled within subject:
+
+| Data, design | intensity trend from pools | from design groups | limma-trend |
+|---|---|---|---|
+| `cohort` fixture (327 peptides), unpaired 3 vs 3 | 2.4% -> 8.9% | 6.2% -> 4.7% | 5.0% -> 5.3% |
+| `cohort` fixture, between-subject trend, 10 samples | 3.5% -> 8.0% | n/a | 5.2% -> 6.0% |
+| Verapamil serum (3,595 proteins), paired week 0 vs 12 | 4.6% -> 7.0% | 6.1% -> 3.7% | 5.2% -> 5.6% |
+| Verapamil, within-subject trend over weeks 0-12 | 5.0% -> 6.2% | n/a | 5.2% -> 5.7% |
+| Verapamil, unpaired 5 vs 5 (week-0 samples) | 3.8% -> 6.9% | 5.0% -> 4.5% | 4.7% -> 5.1% |
+| simulated, paired, 6 subjects | 2.1% -> 9.4% | 9.2% -> 2.7% | 5.1% -> 5.3% |
+
+The design-group shape is no fix: in a paired design the groups carry the between-subject spread that
+the subject block removes, so it tilts the other way, and a trend design has no groups at all. Where a
+paired or within-subject design's residual really is technical only - repeat draws from a person that
+differ only by measurement - the pool shape is right, and simulation shows it flat at 5% there; real
+people vary from visit to visit, and the Verapamil rows show it.
+
+Power, simulated at BH 5% with a two-fold effect in 10% of features: the pool-shaped prior found 52%
+of true effects against limma-trend's 71% (unpaired 5 vs 5; 30% against 58% of the dim ones), and 89%
+against 95% (paired, 6 subjects), with its false hits piled on bright features. limma-trend matched
+the best of everything tested in every design and size (100 to 3,000 features), including a prototype
+that kept the pool curve and added a fitted flat floor.
+
+The intensity trend is still available - `--prior intensity-trend`, or **Intensity trend, toolkit
+(deprecated)** in the pane - so an earlier result can be reproduced. A recorded command always names
+its prior, so one recorded before the change reproduces as it ran. Every result that uses it says it
+is deprecated. `proteomics-toolkit`'s default is still the pool-shaped intensity trend, so the two
+tools disagree on default runs until it changes too.
+
 ### The intensity prior: shape from the controls, level and weight from the design
+
+This section describes the deprecated intensity trend - the default up to dotnet-v26.28.0.
 
 A moderated t replaces each protein's own variance estimate, which is noisy with few samples, by a
 weighted average of that estimate and a prior:
@@ -199,8 +252,9 @@ the factor are printed everywhere the prior is.
 Controls are found by looking up `sample_type` against a fixed vocabulary - Skyline's **Standard**
 and **Quality Control**, plus PRISM's own `reference` and `qc`. A run whose replicates are all
 Unknown therefore has no control set: the pane **grays** the option rather than hiding it, and its
-tooltip says to set those sample types in the Skyline document, so the analysis that would have been
-available is discoverable rather than invisible. `proteomics-toolkit` can name any metadata column
+tooltip says the shape then comes from the contrast groups. Up to dotnet-v26.28.0 it also suggested
+setting those sample types in the Skyline document; it no longer does, because the pool shape is what
+the deprecation is about. `proteomics-toolkit` can name any metadata column
 here; PRISM deliberately does not, because the prior source changes every p-value and a free-text
 picker invites pointing it at something that is not a set of technical replicates. See the note in
 `CLAUDE.md`.
@@ -463,7 +517,7 @@ The report contains:
 
 - the analysis parameters, as a table and as YAML (also written to `quant_parameters.yaml` /
   `.json`), recorded in `prism differential`'s own flag values - `design: paired`, `test: moderated`,
-  `prior: intensity-trend`, `correction: bh`, and each arm as a list of its levels
+  `prior: limma-trend`, `correction: bh`, and each arm as a list of its levels
   (`group_a: [qc, reference]`). The prior that actually ran is recorded beside the requested one as
   `prior_used`, since a requested prior can fall back;
 - **the command that regenerates it** - the full `prism differential ... --report` line, every
@@ -509,7 +563,7 @@ compare depends on the prior:
 | prior | agreement |
 |---|---|
 | global (toolkit `moderation="limma"`) | **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma (inmoose) - three implementations of Smyth (2004) on the same numbers - except P.Value where limma's df cap binds (an infinite prior df, or a small feature set): there PRISM and limma agree and the toolkit does not; see below |
-| intensity trend (both tools' **default**) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned. P.Value differs wherever the df cap binds, as for the global prior |
+| intensity trend (the toolkit's default; **deprecated** in PRISM, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned. P.Value differs wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
 **Two conventions separate a default toolkit run from PRISM**, and neither changes a conclusion:
@@ -556,10 +610,14 @@ own `eBayes`, and `toolkit_end_to_end.json` records both p-values for the same t
 
 ## Cross-checking a PRISM result against the toolkit
 
+This matches PRISM's deprecated `--prior intensity-trend`. A default PRISM run uses limma-trend, which
+the toolkit's intensity trend does not reproduce; to cross-check one, run PRISM with
+`--prior intensity-trend` as well, or compare against limma's `eBayes(trend = TRUE)`.
+
 ```python
-cfg.moderation = "intensity_trend"   # the default in both tools
+cfg.moderation = "intensity_trend"   # the toolkit's default; PRISM's --prior intensity-trend
 cfg.log_pseudocount = 0              # PRISM adds none
-# For a prior on the QC/reference injections, as PRISM's default does when the run has them:
+# For a prior on the QC/reference injections, as PRISM's intensity trend takes when the run has them:
 cfg.variance_prior_group_column = "sample_type"
 cfg.variance_prior_groups = ["reference", "qc"]
 ```

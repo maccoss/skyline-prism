@@ -123,6 +123,29 @@ public class QuantCommandTests
         Assert.Contains("welch", args);
     }
 
+    /// <summary>
+    /// The prior is always named, so a command recorded under one default reproduces under another;
+    /// and only the deprecated intensity trend carries a shape source - for limma-trend, the default,
+    /// a <c>--prior-from-groups</c> would be a flag with nothing to act on.
+    /// </summary>
+    [Fact]
+    public void ThePriorIsAlwaysNamed_AndOnlyTheIntensityTrendCarriesASource()
+    {
+        // The mini fixture has QC and reference replicates, so a source choice is possible.
+        Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }),
+            out var byDefault, out _));
+        var list = byDefault.ToList();
+        Assert.Equal(VariancePrior.LimmaTrend, new DifferentialOptions().Prior);
+        Assert.Equal("limma-trend", list[list.IndexOf("--prior") + 1]);
+        Assert.DoesNotContain("--prior-from-groups", list);
+
+        var fromGroups = new DifferentialOptions { Prior = VariancePrior.IntensityTrend };
+        Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }, fromGroups),
+            out var intensity, out _));
+        Assert.Contains("intensity-trend", intensity);
+        Assert.Contains("--prior-from-groups", intensity);
+    }
+
     /// <summary>The blocked design records its subject column, or the command would run unpaired.</summary>
     [Fact]
     public void ABlockedDesign_RecordsItsSubjectColumn()

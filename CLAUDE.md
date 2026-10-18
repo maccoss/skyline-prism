@@ -1150,18 +1150,13 @@ amounts, so their CVs need not improve together). It caught both reversions abov
 
 ### [TODO] Not Yet Implemented
 
-- **A more general source for the differential variance prior.** PRISM takes the intensity
-  trend's shape from the control replicates by default (its level is always fitted to the
-  contrast's residuals - see `Differential.WithCalibratedLevel`), and finds them by looking up
-  `sample_type` against a fixed vocabulary
-  (`ControlSampleTypes.Values`: Standard, Quality Control, QC, reference, qc). The lab's
-  `proteomics-toolkit` is more general - `variance_prior_group_column` names ANY metadata column and
-  `variance_prior_groups` restricts which of its values count, so a document whose QC classes live
-  in, say, a `QC_Category` annotation is covered. That generality was **deliberately not** carried
-  over: the prior source changes every p-value in the result, and a free-text column picker invites
-  someone to point it at something that is not a set of technical replicates at all, which would be
-  worse than not having the option. Revisit only with a concrete cohort that needs it, and keep the
-  "these must be nominal replicates" constraint visible in whatever replaces it.
+- **Remove the deprecated intensity-trend prior** after a release or two. It was the default up to
+  dotnet-v26.28.0 and is kept only so earlier results reproduce. Removing it also removes
+  `--prior-from-controls` / `--prior-from-groups`, the pane's "from controls" box and
+  `ControlSampleTypes.PriorGroups`' role in the differential. Do **not** reopen "a more general source
+  for the prior's shape" (the toolkit's free-text `variance_prior_group_column`): the measurements in
+  `docs/differential-analysis.md` ("Why limma-trend is the default") show the source itself is the
+  problem - no set of OTHER samples has the residuals' mix of technical and biological variance.
 - Per-batch RT models with cross-validation
 - Quality-weighted protein rollup
 - directLFQ (see below)
@@ -1229,6 +1224,14 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    of documents merged. See `MergedDataset` for the sizing trade (it was measured in both directions,
    and the intuitive answer was wrong) and `docs/output_files.md` for the layout. Row CONTENT remains
    the cross-engine parity contract; row ORDER and file layout explicitly are not.
+7. **The default moderated-t prior is limma-trend** (measured). An intensity-dependent prior is wanted,
+   and limma-trend is the one whose curve comes from the residuals the test uses. The lab's intensity
+   trend took its shape from the QC/reference pools, and was calibrated on average but tilted by
+   intensity - optimistic for bright features, conservative for dim - because the pools carry
+   technical variance only. Its design-group variant tilts the other way in paired designs.
+   `docs/differential-analysis.md` ("Why limma-trend is the default") has the real and simulated
+   nulls. **Check a prior's calibration BY INTENSITY, not overall**: the overall rate was 5% the whole
+   time, and every earlier calibration check measured only that.
 
 > [!CAUTION]
 > **DuckDB.NET has three defaults that will silently cost you memory or correctness.** All three were

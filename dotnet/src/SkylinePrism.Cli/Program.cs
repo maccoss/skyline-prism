@@ -630,7 +630,7 @@ public static partial class Program
             "mann-whitney" or "mannwhitney" => DifferentialTest.MannWhitney,
             var other => throw new ArgumentException($"Unknown --test '{other}'"),
         };
-        var prior = (opts.GetSingleOrNull("--prior") ?? "intensity-trend").ToLowerInvariant() switch
+        var prior = (opts.GetSingleOrNull("--prior") ?? "limma-trend").ToLowerInvariant() switch
         {
             "intensity-trend" => VariancePrior.IntensityTrend,
             "global" => VariancePrior.Global,
@@ -770,11 +770,11 @@ public static partial class Program
                 $"--test {DifferentialTokens.Test(test)} does not apply to --design {DifferentialTokens.Design(design)}. "
                 + $"That design runs: {string.Join(", ", allowed.Select(DifferentialTokens.Test))}.");
 
-        // The intensity trend's SHAPE comes from the run's QC and reference replicates whenever it
-        // has any: they trace noise against intensity with no biology mixed in, and they are not
-        // the samples being moderated. Its level and the prior df are fitted to the contrast's own
-        // residuals whichever source gives the shape (Differential.WithCalibratedLevel), because
-        // pooled injections lack the biology those residuals carry.
+        // Where the deprecated intensity trend takes its SHAPE: the run's QC and reference replicates
+        // whenever it has any, unless --prior-from-groups. Its level and the prior df are fitted to
+        // the contrast's own residuals whichever source gives the shape
+        // (Differential.WithCalibratedLevel). No other prior has a shape source: limma-trend fits its
+        // curve to the residuals themselves.
         IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
         var fromGroups = opts.GetSingleOrNull("--prior-from-groups") is not null;
         var fromControls = opts.GetSingleOrNull("--prior-from-controls") is not null;
@@ -782,11 +782,18 @@ public static partial class Program
             throw new ArgumentException(
                 "--prior-from-controls and --prior-from-groups ask for opposite things.");
 
-        if (!fromGroups && dataset.MetadataColumns.Contains("sample_type"))
+        // Accepted rather than refused, because a command recorded before limma-trend became the
+        // default can carry one beside any prior - but said, so it is not silently ignored.
+        if (prior != VariancePrior.IntensityTrend && (fromGroups || fromControls))
+            Console.WriteLine($"Note: {(fromControls ? "--prior-from-controls" : "--prior-from-groups")} "
+                + $"applies only to --prior intensity-trend; the {DifferentialTokens.Prior(prior)} prior "
+                + "has no shape source, so it was ignored.");
+
+        if (prior == VariancePrior.IntensityTrend && !fromGroups && dataset.MetadataColumns.Contains("sample_type"))
             priorGroups = ControlSampleTypes.PriorGroups(dataset.MetadataValues("sample_type"));
 
         // Asked for explicitly, an absent source is an error rather than a silent fallback.
-        if (fromControls && priorGroups is null)
+        if (prior == VariancePrior.IntensityTrend && fromControls && priorGroups is null)
             throw new ArgumentException(
                 "--prior-from-controls found no control type with two or more replicates.");
 
@@ -1297,16 +1304,19 @@ public static partial class Program
                                    contrast, -a and -b already choose the samples.
             --test TEST            moderated (default), welch, student, paired-t,
                                    wilcoxon, mann-whitney
-            --prior PRIOR          Variance prior for the moderated t: intensity-trend
-                                   (default, matches the lab's proteomics-toolkit),
-                                   global, limma-trend, peptide-count
-            --prior-from-controls  Take the intensity trend's SHAPE from the QC and reference
-                                   replicates. This is the DEFAULT whenever the run has two or more
-                                   replicates of a control type; passing it makes that explicit and
-                                   turns a missing control set into an error rather than a fallback.
-                                   The trend's level and weight are fitted to the contrast's own
-                                   residuals either way, and the output says by what factor
-            --prior-from-groups    Take the trend's shape from the contrast groups instead
+            --prior PRIOR          Variance prior for the moderated t: limma-trend (default; an
+                                   intensity-dependent prior whose curve is fitted to the contrast's
+                                   own residuals), global, peptide-count, or intensity-trend
+                                   (deprecated: proteomics-toolkit's estimator, whose shape from the
+                                   QC/reference pools is optimistic for bright features and
+                                   conservative for dim ones - see docs/differential-analysis.md)
+            --prior-from-controls  With --prior intensity-trend: take its SHAPE from the QC and
+                                   reference replicates. That is its default whenever the run has
+                                   two or more replicates of a control type; passing it makes that
+                                   explicit and turns a missing control set into an error. Its level
+                                   and weight are fitted to the contrast's own residuals either way
+            --prior-from-groups    With --prior intensity-trend: take its shape from the contrast
+                                   groups instead
             --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
             --covariate-type COL=TYPE
                                    Fit an --adjust-for column as numeric or categorical;

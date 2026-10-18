@@ -22,8 +22,8 @@ public class DisabledControlHelpTests
 
     /// <summary>
     /// The prior-source checkbox is grayed when the run has no control replicates - deliberately,
-    /// rather than hidden, so a reader learns the option exists and that setting sample types in
-    /// Skyline would enable it. That only works if the tooltip survives being disabled.
+    /// rather than hidden, so its tooltip can say why it is off. That only works if the tooltip
+    /// survives being disabled.
     /// </summary>
     [Fact]
     public void ThePriorSourceCheckbox_ShowsItsTooltipWhileDisabled()

@@ -1392,13 +1392,20 @@ public static class Differential
                 // would fold the trend itself into the "noise" it is meant to describe, inflating
                 // the prior for exactly the features that have a real slope and over-shrinking
                 // them. So it degrades to the global prior and says how to get a real one back.
-                messages.Add("The intensity-trend prior needs sample groups to take a within-group "
-                    + "variance from, and a trend design has none - the global prior was used. Fit "
-                    + "the prior on the QC and reference replicates to use it here.");
+                messages.Add("The intensity-trend prior (deprecated) needs sample groups to take a "
+                    + "within-group variance from, and a trend design has none - the global prior was used. "
+                    + "limma-trend, the default, needs no groups.");
                 break;
 
             case VariancePrior.IntensityTrend:
             {
+                // Still available, so earlier results can be reproduced, but no longer the default,
+                // and every result that uses it says why - see VariancePrior.IntensityTrend.
+                messages.Add("The intensity-trend prior is deprecated: its shape comes from other samples "
+                    + "than this contrast's residuals, which tilts it by intensity - shaped on the "
+                    + "QC/reference pools it is optimistic for bright features and conservative for dim "
+                    + "ones. limma-trend, the default, fits its curve to the residuals themselves. See "
+                    + "docs/differential-analysis.md.");
                 // The prior is cleanest when its samples take no part in the fit - the usual case,
                 // since control injections carry no timepoint and no study condition. They CAN
                 // overlap: a contrast whose own arm is the QC samples, or a trend over something

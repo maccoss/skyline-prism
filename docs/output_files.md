@@ -64,8 +64,7 @@ produced it and every one of these is a question a reader asks of it:
 
 ```text
 # contrast: condition = Disease vs Control (positive log2FC is higher in Disease)
-# method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
-# prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
+# method: moderated t (limma-trend prior), unpaired, Benjamini-Hochberg
 # n: 12 vs 40; tested 4812 of 4900
 # hit rule (rows are NOT filtered by it): adj.P < 0.05, |log2FC| >= 1
 ```
@@ -79,10 +78,16 @@ intra-subject correlation follows the prior line, and `# n:` also counts subject
 ```
 
 The method line names the prior that **actually ran**, which is not always the one requested - a
-trend design has no groups for the intensity trend, a peptide matrix has no peptide counts - and the
-hit rule is recorded as *not* having filtered the rows, because every tested feature is in the file.
-The `# prior:` line appears under the intensity-trend prior only. Its source sets the trend's shape,
-and the factor says how far the trend was scaled to match this contrast's residuals.
+trend design has no groups for the deprecated intensity trend, a peptide matrix has no peptide counts -
+and the hit rule is recorded as *not* having filtered the rows, because every tested feature is in the
+file. Under the deprecated intensity-trend prior (`--prior intensity-trend`) a `# prior:` line follows
+the method line. Its source sets the trend's shape, and the factor says how far the trend was scaled to
+match this contrast's residuals:
+
+```text
+# method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
+# prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
+```
 
 Under a trend design the first line reads differently, and says what `log2fc` now means. A trend
 restricted to some of the samples (`--restrict-to`, or **Restrict to** in the pane) adds a line saying
@@ -93,8 +98,8 @@ which, since every row below was fitted on those samples only:
 # restricted to: Study = Verapamil (only those samples were fitted)
 ```
 
-So a file has four lines at the least (contrast or trend, method, n, hit rule), a fifth for the
-intensity-trend prior, and a sixth for a restricted trend. Read past the lines that start with `#`
+So a file has four lines at the least (contrast or trend, method, n, hit rule), one more each for
+the deprecated intensity-trend prior, a blocked design and a restricted trend. Read past the lines that start with `#`
 rather than skipping a fixed number.
 
 ### Quant report
@@ -108,7 +113,7 @@ nothing to show is omitted rather than written empty, so not every file below is
 | File | One row per | Holds |
 |---|---|---|
 | `quant_report.html` | - | Self-contained report: the QC report's Analysis Information header, the analysis parameters (table + YAML), and a section per view (differential, detection, enrichment, markers) with embedded plots. Long tables are shown as a capped preview pointing to the CSV |
-| `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as YAML and machine-readable JSON. Design, test, prior and correction are recorded as `prism differential`'s flag values (`paired`, `moderated`, `intensity-trend`, `bh`) and each arm as a list of its levels, as `-a`/`-b` take them; `prior_used` records the prior that actually ran, which can differ from the one requested. `covariate_types` gives each covariate as `COLUMN=numeric` or `COLUMN=categorical`, the type it was fitted as and the form `--covariate-type` takes. `clinical_csv` lists any clinical table that was joined (`--clinical`, or the pane's Clinical CSV input), since a contrast on one of its columns cannot be reproduced from the output directory alone. `command` is the complete `prism differential ... --report` line that regenerates the report, as a literal YAML block so it pastes into a shell unchanged - or, where no command line can carry a value (a level containing a comma, say), `command_unavailable` says why. `detection.test` names the detection test that ran |
+| `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as YAML and machine-readable JSON. Design, test, prior and correction are recorded as `prism differential`'s flag values (`paired`, `moderated`, `limma-trend`, `bh`) and each arm as a list of its levels, as `-a`/`-b` take them; `prior_used` records the prior that actually ran, which can differ from the one requested. `covariate_types` gives each covariate as `COLUMN=numeric` or `COLUMN=categorical`, the type it was fitted as and the form `--covariate-type` takes. `clinical_csv` lists any clinical table that was joined (`--clinical`, or the pane's Clinical CSV input), since a contrast on one of its columns cannot be reproduced from the output directory alone. `command` is the complete `prism differential ... --report` line that regenerates the report, as a literal YAML block so it pastes into a shell unchanged - or, where no command line can carry a value (a level containing a comma, say), `command_unavailable` says why. `detection.test` names the detection test that ran |
 | `differential.csv` | tested feature | The same file `prism differential` writes above - written by the same code, so the `#` provenance lines, the columns and the number format are identical |
 | `differential_values.csv` | tested feature | The RAW per-sample abundances behind the contrast, **LINEAR** (`2^log2`, matching `corrected_*.parquet`), over the samples the contrast ran on - under a paired design, the matched subjects only. Not written for a trend, whose fitted sample subset the result does not record |
 | `detection.csv` | peptide | Two-group contrasts only. A `# test:` line names the test - the one the Detection pane runs for the same contrast: Fisher exact, McNemar's exact test when paired, the Firth GLM when adjusted - and a second `#` line says why when a paired design ran unpaired. Then `peptide`, `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, the test's own columns (McNemar: the discordant counts `only_a`, `only_b`, with `n_a`/`n_b` the matched-pair count; Firth: `log_odds_ratio`), `p_value`, `adj_p_value`. Not written when the adjusted model is not identifiable (the report says so) |

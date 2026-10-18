@@ -1,4 +1,4 @@
-﻿# The Skyline external tool
+﻿﻿# The Skyline external tool
 
 PRISM ships as a Skyline external tool: a Windows window that runs the pipeline on one or more Skyline
 documents and then shows interactive plots of the result. Installation is in the
@@ -488,7 +488,7 @@ it, grouped in the order you decide them: **Compare** (the design: Unpaired, Pai
 subject), **Level**, **Comparison** (the samples: Group by and the arms, or the trend axis and
 restriction), **Hits** (the significance rule), and **Method** (test, prior, covariates, correction).
 **Method** is folded away by default because its defaults are the right ones for most analyses, but its
-current state is always shown underneath in one line - `Moderated t; intensity trend from controls;
+current state is always shown underneath in one line - `Moderated t; intensity trend (limma);
 Benjamini-Hochberg` - so you can see what ran without opening it. The button at the top right of the
 settings column hides the whole column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
 Detection, Enrichment) is a set of tabs above the plot, beside **Quant report...**. Every setting reruns
@@ -559,25 +559,26 @@ are strongly correlated — the dependence BH's assumptions do not cover.
 
 | Prior | What it fits |
 |---|---|
-| **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), giving the prior's *shape*; its level and *degrees of freedom* are then fitted to the contrast's own residuals. |
+| **Intensity trend (limma)** (default) | limma's `trend=TRUE`: a natural cubic spline of each feature's residual variance against its mean **log2** intensity, fitted to the contrast's own residuals, which also re-estimates the prior *degrees of freedom*. It follows whatever mix of technical and biological variance the design leaves, so it is calibrated at every intensity. |
 | **Global** | One prior for every feature - Smyth (2004). |
-| **limma-trend** | limma's `trend=TRUE`: a natural cubic spline against mean **log2** expression, which also re-estimates the prior *degrees of freedom*. |
 | **Peptide count** | DEqMS (Zhu 2020): a LOWESS against `log(peptide count)`. What it adds is that a protein rolled up from many peptides is better determined than one rolled up from few *at the same intensity* — information abundance alone does not carry. Protein level only, so it is hidden at peptide level. |
+| **Intensity trend, toolkit (deprecated)** | The default up to dotnet-v26.28.0, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, giving the prior's *shape* from the QC/reference pools (or the contrast groups); its level and *degrees of freedom* are then fitted to the contrast's own residuals. Kept to reproduce earlier results. Shaped on the pools it is optimistic for bright features and conservative for dim ones - see "Why limma-trend is the default" in [`differential-analysis.md`](differential-analysis.md). |
 
-**Intensity trend and limma-trend are different estimators despite the similar names** - different
-smoother, different scale, different unit of observation. Both now fit the prior degrees of freedom
-around their own trend, and they agree closely (a median 0.9% on p-values on PRISM's test case), but
-a hit list should still say which one produced it.
+**The two intensity trends are different estimators despite the similar names** - different
+smoother, different scale, different source for the curve's shape - so a hit list should say which one
+produced it.
 
-**from controls** takes the intensity trend's *shape* from the run's QC and reference replicates
-instead of from the contrast groups: they show how noise changes with intensity without any biology
-in the way. How high the trend sits is still fitted to the contrast's own residuals, because pooled
-injections lack the biology a study sample carries. Taken at their own level, they made every test
-optimistic, which is how PRISM behaved up to dotnet-v26.27.0. The status line says how far the
-trend was scaled (`scaled x2.01 to these residuals`). The controls take no part in the contrast itself, and each
-control type is its own group: pooling QC with reference would count the systematic gap between two
-different materials as measurement noise. The box is unavailable on a run with fewer than two control
-replicates. See `docs/differential-analysis.md` for the calibration and the numbers behind it.
+**from controls**, shown only beside the deprecated intensity trend, takes that trend's *shape* from
+the run's QC and reference replicates instead of from the contrast groups, as it did by default up to
+dotnet-v26.28.0. That shape is what the deprecation is about: the pools carry technical noise only,
+whose log-scale variance falls with intensity, while study samples add biology that is roughly flat,
+so the prior is optimistic for bright features and conservative for dim ones. How high the trend sits
+is fitted to the contrast's own residuals; taken at the pools' own level, as up to dotnet-v26.27.0,
+every test was optimistic. The status line says how far the trend was scaled
+(`scaled x2.01 to these residuals`). Each control type is its own group: pooling QC with reference
+would count the systematic gap between two materials as measurement noise. The box is grayed on a run
+with fewer than two replicates of any control type. See `docs/differential-analysis.md` for the
+numbers.
 
 Whichever combination is chosen, **the status line names the method that produced the result**, along
 with the sample counts the test actually used and anything it could not honor (a covariate a rank test

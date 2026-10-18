@@ -123,9 +123,11 @@ public static class QuantCommand
 
         args.AddRange(new[] { "--test", DifferentialTokens.Test(o.Test) });
         args.AddRange(new[] { "--prior", DifferentialTokens.Prior(o.Prior) });
-        // The command's default IS to fit the prior on the controls whenever the run has any, so only
-        // the opposite choice - on a run that has controls - needs saying.
-        if (o.PriorGroupColumns is null && ds.MetadataColumns.Contains("sample_type")
+        // The intensity trend's default IS to take its shape from the controls whenever the run has
+        // any, so only the opposite choice - on a run that has controls - needs saying. No other prior
+        // has a shape source, so for them there is nothing to say.
+        if (o.Prior == VariancePrior.IntensityTrend
+            && o.PriorGroupColumns is null && ds.MetadataColumns.Contains("sample_type")
             && ControlSampleTypes.PriorGroups(ds.MetadataValues("sample_type")) is not null)
             args.Add("--prior-from-groups");
         if (o.Covariates is { Count: > 0 } covariates)

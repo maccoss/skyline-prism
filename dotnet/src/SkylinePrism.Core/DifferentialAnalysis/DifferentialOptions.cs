@@ -111,23 +111,33 @@ public enum VariancePrior
     Global,
 
     /// <summary>
-    /// The lab's default: a LOWESS of log(within-group variance) on log(within-group MEAN INTENSITY),
-    /// fitted on RAW pre-log intensities, one point per (feature, group), converted back to log space
-    /// by the delta method. That gives the prior's SHAPE; its level and the prior degrees of freedom
-    /// are then fitted to the design's residuals around it.
+    /// DEPRECATED, kept to reproduce earlier results. A LOWESS of log(within-group variance) on
+    /// log(within-group MEAN INTENSITY), fitted on RAW pre-log intensities, one point per (feature,
+    /// group), converted back to log space by the delta method. That gives the prior's SHAPE; its
+    /// level and the prior degrees of freedom are then fitted to the design's residuals around it.
     /// </summary>
     /// <remarks>
-    /// This is <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and it is NOT the same
-    /// estimator as <see cref="LimmaTrend"/> despite both being called an intensity trend. See
-    /// <c>docs/differential-analysis.md</c>: they differ in the smoother, the space and what
-    /// contributes a point, and agree to a median 0.9% on p-values (at most 18%) on the trend golden.
+    /// <para>This is <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and it is NOT the
+    /// same estimator as <see cref="LimmaTrend"/> despite both being called an intensity trend: they
+    /// differ in the smoother, the space and what contributes a point.</para>
+    /// <para>It was the default until the release after dotnet-v26.28.0. With its shape taken from the
+    /// QC/reference pools - its default source - it is calibrated on average but tilted by intensity:
+    /// the pools carry technical variance only, whose log-scale variance falls with intensity, while
+    /// the samples add biological variance that is roughly flat on that scale, so one scale factor
+    /// leaves the prior too low for bright features and too high for dim ones. Random-split nulls put
+    /// the brightest fifth at 6-9% false positives at p &lt; 0.05 and the dimmest at 2-5%, and the
+    /// mismatch roughly halves the prior df, costing power. Shaped on the design groups instead, it
+    /// tilts the other way in a paired design. See <c>docs/differential-analysis.md</c>.</para>
     /// </remarks>
     IntensityTrend,
 
     /// <summary>
-    /// limma's own <c>trend=TRUE</c>: a natural cubic spline of log(residual variance) on mean LOG2
-    /// expression, re-estimating the prior degrees of freedom as well as the scale. Kept because it is
-    /// what limma does and what the committed inmoose goldens pin, but it is not the lab's default.
+    /// The default: limma's own <c>trend=TRUE</c>, a natural cubic spline of log(residual variance) on
+    /// mean LOG2 expression, re-estimating the prior degrees of freedom as well as the scale. An
+    /// intensity-dependent prior whose curve is fitted to the residuals the test uses, so it follows
+    /// whatever mix of technical and biological variance the design leaves - calibrated by intensity
+    /// in every design tested (unpaired, paired, within- and between-subject trend). Pinned to limma
+    /// by the inmoose and R goldens.
     /// </summary>
     LimmaTrend,
 
@@ -167,10 +177,10 @@ public enum MultipleTesting
 /// <see cref="Prior"/>. Kept as one record rather than a widening parameter list because the
 /// combinations are what a caller reasons about, and because a record can gain an axis without
 /// breaking every call site.</para>
-/// <para>The defaults are the lab's defaults: an unpaired moderated-t with the intensity-trend prior.
-/// Note that <see cref="Prior"/> defaults to <see cref="VariancePrior.IntensityTrend"/> rather than
-/// <see cref="VariancePrior.Global"/>, which is a deliberate change from the old <c>trend: false</c>
-/// default - see the release notes.</para>
+/// <para>The defaults are the lab's defaults: an unpaired moderated-t with the limma-trend prior, an
+/// intensity-dependent prior fitted to the contrast's own residuals. It replaced the deprecated
+/// <see cref="VariancePrior.IntensityTrend"/> as the default in the release after dotnet-v26.28.0;
+/// see the release notes and <see cref="VariancePrior"/>.</para>
 /// </remarks>
 public sealed record DifferentialOptions
 {
@@ -184,7 +194,7 @@ public sealed record DifferentialOptions
 
     public DifferentialTest Test { get; init; } = DifferentialTest.ModeratedT;
 
-    public VariancePrior Prior { get; init; } = VariancePrior.IntensityTrend;
+    public VariancePrior Prior { get; init; } = VariancePrior.LimmaTrend;
 
     public MultipleTesting Correction { get; init; } = MultipleTesting.BenjaminiHochberg;
 
