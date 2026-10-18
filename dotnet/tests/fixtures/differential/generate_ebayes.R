@@ -23,11 +23,8 @@
 #   install.packages("BiocManager")
 #   BiocManager::install("limma")
 #
-# Run from the repository root:
+# Run from the repository root (on Windows, Rscript.exe is in the R installation's bin folder):
 #   Rscript dotnet/tests/fixtures/differential/generate_ebayes.R
-#
-# Windows:
-#   & "C:\Program Files\R\R-4.5.1\bin\Rscript.exe" dotnet/tests/fixtures/differential/generate_ebayes.R
 #
 # Generated with R 4.5.1 and limma 3.66.0. The versions that actually ran are written into the
 # fixture's `versions` field, so a regeneration under different ones shows up in the diff.

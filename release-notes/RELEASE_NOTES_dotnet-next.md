@@ -12,7 +12,7 @@ as the GitHub Release description and fails if it is missing.
   tested and a large or infinite prior df, PRISM read the t off `df.residual + df.prior` - a normal,
   when the prior df was infinite - where limma's `eBayes` caps it at the residual df pooled over the
   features, `pmin(df.residual + df.prior, sum(df.residual))`. On 8 features at 4 residual df with an
-  infinite prior, a t of 5.49 had been given p = 4.0e-8; on limma's 32 df it is 4.8e-6. Every design
+  infinite prior, a t of 5.49 had been given p = 4.0e-8; on limma's 32 df it became 4.8e-6. Every design
   and prior got the cap. With a finite prior df, a cohort of hundreds or thousands of features was
   unaffected: its pooled df is far above `df.residual + df.prior`. With an infinite prior df, every
   result moved from a normal onto t on the pooled df - for 3,000 features at 8 residual df, p rose by

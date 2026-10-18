@@ -380,8 +380,8 @@ compare depends on the prior:
 
 | prior | agreement |
 |---|---|
-| global (toolkit `moderation="limma"`) | **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma (inmoose) - three implementations of Smyth (2004) on the same numbers |
-| intensity trend (both tools' **default**) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned |
+| global (toolkit `moderation="limma"`) | **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma (inmoose) - three implementations of Smyth (2004) on the same numbers - except P.Value where limma's df cap binds (an infinite prior df, or a small feature set): there PRISM and limma agree and the toolkit does not; see below |
+| intensity trend (both tools' **default**) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned. P.Value differs wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
 **Two conventions separate a default toolkit run from PRISM**, and neither changes a conclusion:
@@ -436,7 +436,9 @@ cfg.variance_prior_group_column = "sample_type"
 cfg.variance_prior_groups = ["reference", "qc"]
 ```
 
-and read the PRISM side from the same matrix PRISM reported on
+Compare t, not P.Value, when the prior df is infinite or few features are tested: PRISM's p is on
+limma's capped df (`DifferentialResult.DfTotal`) and the toolkit's is not (see the df cap above).
+Read the PRISM side from the same matrix PRISM reported on
 (`corrected_proteins.parquet` / `corrected_peptides.parquet`, which are **linear** - the toolkit's
 `normalization_method = "prism"` log2s them; see the scale conventions in `CLAUDE.md`). PRISM's
 trend log2fc is the change across the observed span; divide by the span to compare with the

@@ -481,12 +481,17 @@ def limma_df_total(df_residual: float, df_prior: float, n_features: int) -> floa
     return min(df_residual + df_prior, df_residual * n_features)
 
 
-def limma_p(t, df_residual: float, df_prior: float) -> tuple[np.ndarray, np.ndarray]:
-    """Two-sided p and BH-adjusted p for moderated t statistics, on limma's capped df.total."""
+def limma_p(t, df_residual, df_prior: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Two-sided p and BH-adjusted p for moderated t statistics, on limma's capped df.total.
+
+    ``df_residual`` is per feature, as limma's is, and is summed for the pooled df rather than
+    assumed equal across features. Returns ``(p, adj_p, df_total)``.
+    """
     t = np.asarray(t, dtype=float)
-    df_total = limma_df_total(df_residual, df_prior, len(t))
+    df_res = np.broadcast_to(np.asarray(df_residual, dtype=float), t.shape)
+    df_total = np.minimum(df_res + df_prior, df_res.sum())
     p = 2.0 * scipy.stats.t.sf(np.abs(t), df=df_total)
-    return p, multipletests(p, method="fdr_bh")[1]
+    return p, multipletests(p, method="fdr_bh")[1], df_total
 
 
 def moderated_t(expr: np.ndarray, design: np.ndarray, coef_idx: int, trend: bool):
@@ -510,10 +515,7 @@ def moderated_t(expr: np.ndarray, design: np.ndarray, coef_idx: int, trend: bool
 
     df_total = limma_df_total(df_res, df_prior, expr.shape[0])
     t = beta[:, coef_idx] / (stdev_unscaled[coef_idx] * np.sqrt(var_post))
-    if np.isinf(df_total):
-        pval = 2.0 * scipy.stats.norm.cdf(-np.abs(t))
-    else:
-        pval = 2.0 * scipy.stats.t.cdf(-np.abs(t), df=df_total)
+    pval = 2.0 * scipy.stats.t.cdf(-np.abs(t), df=df_total)
     adj = multipletests(pval, method="fdr_bh")[1]
     return {
         "logfc": beta[:, coef_idx],
@@ -1204,10 +1206,7 @@ def gen_paired() -> None:
     df_total = limma_df_total(df_resid, df_prior, n_feat)
     # stdev_unscaled[1] = sqrt(v_c); same quantity as gen_moderated_t, spelled the same way.
     t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
-    if np.isinf(df_total):
-        p_mod = 2.0 * scipy.stats.norm.cdf(-np.abs(t_mod))
-    else:
-        p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
+    p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
 
     write(
         "paired.json",
@@ -1269,10 +1268,7 @@ def gen_trend() -> None:
         var_post = np.atleast_1d(sq["var_post"])
         df_total = limma_df_total(df_resid, df_prior, expr.shape[0])
         t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
-        if np.isinf(df_total):
-            p_mod = 2.0 * scipy.stats.norm.cdf(-np.abs(t_mod))
-        else:
-            p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
+        p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
         amean = expr.mean(axis=1)
         return beta[1, :], t_mod, p_mod, df_resid, df_prior, amean
 
@@ -1546,7 +1542,14 @@ def gen_toolkit_end_to_end() -> None:
                              "posterior it exists to pin")
         # The toolkit computes p on df.residual + d0 with no cap; limma's eBayes, and PRISM, cap it at
         # the pooled residual df. Same t, so both are kept: `p` is the toolkit's, `p_limma` limma's.
-        p_limma, adj_p_limma = limma_p(res["t"].to_numpy(float), float(df_resid[0]), float(df_prior[0]))
+        p_limma, adj_p_limma, df_total = limma_p(res["t"].to_numpy(float), df_resid, float(df_prior[0]))
+        # Where the cap does not bind, limma's p IS the toolkit's: check it, so the claim in the note
+        # stays true if a future toolkit changes its own p step. Where it binds, they must differ.
+        binds = bool(np.any(df_resid + df_prior[0] > df_total))
+        same = np.allclose(p_limma, res["P.Value"].to_numpy(float), rtol=1e-12, atol=0.0)
+        if same == binds:
+            raise SystemExit(f"{name}: the cap {'binds' if binds else 'does not bind'}, yet the "
+                             f"toolkit's p and limma's are {'equal' if same else 'different'}")
         cases.append({
             "name": name,
             "design": design,

@@ -362,10 +362,12 @@ public class DifferentialGoldenTests
     /// finite one, an infinite limma-trend prior) and one ordinary case must not move.
     /// </summary>
     /// <remarks>
-    /// t and p at 1e-9, as for <c>moderated_t.json</c>: the infinite-prior cases are closed form, and
-    /// the finite one goes through <c>trigammaInverse</c>, a Newton iteration limma stops once a step
-    /// is below 1e-8 relative - quadratic convergence leaves the value far closer than that, and it
-    /// is the iteration, not the arithmetic, that sets the bound.
+    /// Two tolerances, by what stands between the data and the number. With an infinite prior df the
+    /// posterior variance and the capped df involve no iterative solve, so t and p are held to 1e-12;
+    /// the measured worst is 2.3e-13, the limma-trend case's p, whose prior comes out of a spline
+    /// fit. With a finite one, d0 comes out of <c>trigammaInverse</c>, a Newton iteration limma stops
+    /// once a step is below 1e-8 relative, so t and p are held to 1e-9 as in
+    /// <c>moderated_t.json</c>; the measured worst is 2.5e-12, a t near zero.
     /// </remarks>
     [Theory]
     [MemberData(nameof(EBayesCases))]
@@ -385,8 +387,11 @@ public class DifferentialGoldenTests
         var res = Differential.Run(expr, featureIds, Enumerable.Range(0, nA).ToArray(),
             Enumerable.Range(nA, nB).ToArray(), options);
 
+        var dfPrior = Golden.Num(c, "df_prior");
+        var tol = double.IsPositiveInfinity(dfPrior) ? 1e-12 : 1e-9;
         Golden.Close(Golden.Num(c, "df_residual"), res.DfResidual, 1e-15, $"{name}/df_residual");
-        Golden.Close(Golden.Num(c, "df_prior"), res.DfPrior, 1e-9, $"{name}/df_prior");
+        Golden.Close(dfPrior, res.DfPrior, 1e-9, $"{name}/df_prior");
+        Golden.Close(Golden.Num(c, "df_total"), res.DfTotal, tol, $"{name}/df_total");
         var byId = res.Rows.ToDictionary(r => r.FeatureId, StringComparer.Ordinal);
         var logfc = Golden.Vec(c, "logfc");
         var t = Golden.Vec(c, "t");
@@ -395,8 +400,8 @@ public class DifferentialGoldenTests
         {
             var row = byId[$"F{i}"];
             Golden.Close(logfc[i], row.LogFc, 1e-11, $"{name}/F{i}/logFC");
-            Golden.Close(t[i], row.T, 1e-9, $"{name}/F{i}/t");
-            Golden.Close(p[i], row.PValue, 1e-9, $"{name}/F{i}/p");
+            Golden.Close(t[i], row.T, tol, $"{name}/F{i}/t");
+            Golden.Close(p[i], row.PValue, tol, $"{name}/F{i}/p");
         }
     }
 

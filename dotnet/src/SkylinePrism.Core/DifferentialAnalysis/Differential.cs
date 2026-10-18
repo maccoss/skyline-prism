@@ -89,8 +89,9 @@ public sealed class DifferentialResult
         int nFeaturesTotal, int nFeaturesTested, double dfResidual, double dfPrior,
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
         IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0,
-        double priorLevel = double.NaN)
+        double priorLevel = double.NaN, double dfTotal = double.NaN)
     {
+        DfTotal = dfTotal;
         TrendRange = trendRange;
         NSubjects = nSubjects;
         PriorLevel = priorLevel;
@@ -130,6 +131,14 @@ public sealed class DifferentialResult
 
     /// <summary>Empirical-Bayes prior degrees of freedom. May be <see cref="double.PositiveInfinity"/>.</summary>
     public double DfPrior { get; }
+
+    /// <summary>
+    /// The degrees of freedom the moderated t's p-values were computed on:
+    /// <see cref="DfResidual"/> + <see cref="DfPrior"/>, capped at the residual df pooled over the
+    /// features tested, as limma's <c>eBayes</c> caps it - so never infinite, even when
+    /// <see cref="DfPrior"/> is. NaN for the tests that are not moderated.
+    /// </summary>
+    public double DfTotal { get; }
 
     /// <summary>Which variance prior was fitted (<c>global</c>, <c>intensity_trend</c>, ...).</summary>
     public string VariancePrior { get; }
@@ -497,7 +506,9 @@ public static class Differential
         // infinite - uncapped, the t would be read off a normal, claiming more certainty than the
         // residuals hold - and otherwise only when few features are tested and the prior df is large.
         // Every feature here shares one design and the complete-case filter, so the pooled df is
-        // nTested x DfResidual.
+        // nTested x DfResidual. limma also pools the reduced df of features it fits with missing
+        // values; PRISM does not fit those at all, so on a matrix with NaNs its cap is the lower of
+        // the two - pooled over the features actually tested.
         var dfTotal = Math.Min(fit.DfResidual + squeezed.DfPrior, nTested * fit.DfResidual);
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
 
@@ -549,7 +560,7 @@ public static class Differential
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
-            trendRange, nSubjects, priorLevel);
+            trendRange, nSubjects, priorLevel, dfTotal);
     }
 
     /// <summary>
