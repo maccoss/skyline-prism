@@ -1,4 +1,4 @@
-﻿# The Skyline external tool
+﻿﻿# The Skyline external tool
 
 PRISM ships as a Skyline external tool: a Windows window that runs the pipeline on one or more Skyline
 documents and then shows interactive plots of the result. Installation is in the
@@ -568,15 +568,17 @@ are strongly correlated — the dependence BH's assumptions do not cover.
 smoother, different scale, different source for the curve's shape - so a hit list should say which one
 produced it.
 
-**from controls** (shown only for the deprecated intensity trend) takes its *shape* from the run's QC and reference replicates
-instead of from the contrast groups: they show how noise changes with intensity without any biology
-in the way. How high the trend sits is still fitted to the contrast's own residuals, because pooled
-injections lack the biology a study sample carries. Taken at their own level, they made every test
-optimistic, which is how PRISM behaved up to dotnet-v26.27.0. The status line says how far the
-trend was scaled (`scaled x2.01 to these residuals`). The controls take no part in the contrast itself, and each
-control type is its own group: pooling QC with reference would count the systematic gap between two
-different materials as measurement noise. The box is unavailable on a run with fewer than two control
-replicates. See `docs/differential-analysis.md` for the calibration and the numbers behind it.
+**from controls**, shown only beside the deprecated intensity trend, takes that trend's *shape* from
+the run's QC and reference replicates instead of from the contrast groups, as it did by default up to
+dotnet-v26.28.0. That shape is what the deprecation is about: the pools carry technical noise only,
+whose log-scale variance falls with intensity, while study samples add biology that is roughly flat,
+so the prior is optimistic for bright features and conservative for dim ones. How high the trend sits
+is fitted to the contrast's own residuals; taken at the pools' own level, as up to dotnet-v26.27.0,
+every test was optimistic. The status line says how far the trend was scaled
+(`scaled x2.01 to these residuals`). Each control type is its own group: pooling QC with reference
+would count the systematic gap between two materials as measurement noise. The box is grayed on a run
+with fewer than two replicates of any control type. See `docs/differential-analysis.md` for the
+numbers.
 
 Whichever combination is chosen, **the status line names the method that produced the result**, along
 with the sample counts the test actually used and anything it could not honor (a covariate a rank test

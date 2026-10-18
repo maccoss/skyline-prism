@@ -390,14 +390,14 @@ public partial class MainWindow
     /// two copies of a paragraph this long would drift.
     /// </remarks>
     private const string PriorFromControlsHelp =
-        "Take the shape of the variance prior - how noise changes with intensity - from the run's "
-        + "QC and reference replicates. This is the default wherever the run has them. They show that "
-        + "relationship without any biology in the way, and they take no part in the contrast, so "
-        + "the prior does not come from the samples it is applied to. How high the trend sits, and "
-        + "how much weight it gets, are fitted to the contrast's own residuals either way: pooled "
-        + "injections lack the biology a study sample carries, so at their own level they would make "
-        + "every test optimistic. The status line shows how far the trend was scaled. Untick to take "
-        + "the shape from the contrast groups instead.";
+        "For the deprecated toolkit intensity trend only, kept to reproduce earlier results: take its "
+        + "shape - how noise changes with intensity - from the run's QC and reference replicates, as "
+        + "it does by default wherever the run has them. The pools carry technical noise only, so the "
+        + "shape they give is tilted: the prior is optimistic for bright features and conservative "
+        + "for dim ones. How high the trend sits, and how much weight it gets, are fitted to the "
+        + "contrast's own residuals either way, and the status line shows how far it was scaled. "
+        + "Untick to take the shape from the contrast groups instead. The default prior, Intensity "
+        + "trend (limma), fits its curve to the residuals themselves and needs neither.";
 
     /// <summary>
     /// Suppress the pane's selector handlers until the returned scope is disposed.
@@ -861,16 +861,15 @@ public partial class MainWindow
             ? Visibility.Visible
             : Visibility.Collapsed;
         DiffPriorFromControlsCheck.IsEnabled = controls is not null;
-        // GREYED, not hidden, and the tooltip says what to do about it. Hiding would be the usual
-        // treatment for an option that needs action elsewhere, but it teaches nothing: a reader who
-        // never sees the control never learns that setting sample types in Skyline would improve
-        // the analysis. The tooltip is rewritten rather than appended to, so the disabled case
+        // GRAYED, not hidden, so the box beside the deprecated prior does not appear and vanish as
+        // runs change, and the tooltip says why it is off. It no longer suggests setting sample
+        // types in Skyline to enable it: the pool shape is what tilts this prior, so there is
+        // nothing to gain. The tooltip is rewritten rather than appended to, so the disabled case
         // leads with the reason instead of burying it under a paragraph about what the option does.
         DiffPriorFromControlsCheck.ToolTip = controls is not null
             ? PriorFromControlsHelp
-            : "Unavailable: this run has no sample type with two or more replicates. Set replicates "
-              + "to Quality Control or Standard in the Skyline document and re-export, and the "
-              + "variance prior will be fitted on them."
+            : "Unavailable: this run has no sample type with two or more replicates, so the intensity "
+              + "trend takes its shape from the contrast groups."
               + Environment.NewLine + Environment.NewLine + PriorFromControlsHelp;
         if (controls is null && DiffPriorFromControlsCheck.IsChecked == true)
             DiffPriorFromControlsCheck.IsChecked = false;

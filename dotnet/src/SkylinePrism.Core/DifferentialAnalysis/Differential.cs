@@ -1392,8 +1392,8 @@ public static class Differential
                 // would fold the trend itself into the "noise" it is meant to describe, inflating
                 // the prior for exactly the features that have a real slope and over-shrinking
                 // them. So it degrades to the global prior and says how to get a real one back.
-                messages.Add("The intensity-trend prior needs sample groups to take a within-group "
-                    + "variance from, and a trend design has none - the global prior was used. "
+                messages.Add("The intensity-trend prior (deprecated) needs sample groups to take a "
+                    + "within-group variance from, and a trend design has none - the global prior was used. "
                     + "limma-trend, the default, needs no groups.");
                 break;
 

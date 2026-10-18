@@ -1,4 +1,4 @@
-﻿# Differential analysis
+﻿﻿# Differential analysis
 
 The Skyline tool's **Differential** pane runs a limma empirical-Bayes moderated-t contrast on a
 PRISM output directory: protein or peptide level, two groups from any metadata or clinical column,
@@ -252,8 +252,9 @@ the factor are printed everywhere the prior is.
 Controls are found by looking up `sample_type` against a fixed vocabulary - Skyline's **Standard**
 and **Quality Control**, plus PRISM's own `reference` and `qc`. A run whose replicates are all
 Unknown therefore has no control set: the pane **grays** the option rather than hiding it, and its
-tooltip says to set those sample types in the Skyline document, so the analysis that would have been
-available is discoverable rather than invisible. `proteomics-toolkit` can name any metadata column
+tooltip says the shape then comes from the contrast groups. Up to dotnet-v26.28.0 it also suggested
+setting those sample types in the Skyline document; it no longer does, because the pool shape is what
+the deprecation is about. `proteomics-toolkit` can name any metadata column
 here; PRISM deliberately does not, because the prior source changes every p-value and a free-text
 picker invites pointing it at something that is not a set of technical replicates. See the note in
 `CLAUDE.md`.
@@ -516,7 +517,7 @@ The report contains:
 
 - the analysis parameters, as a table and as YAML (also written to `quant_parameters.yaml` /
   `.json`), recorded in `prism differential`'s own flag values - `design: paired`, `test: moderated`,
-  `prior: intensity-trend`, `correction: bh`, and each arm as a list of its levels
+  `prior: limma-trend`, `correction: bh`, and each arm as a list of its levels
   (`group_a: [qc, reference]`). The prior that actually ran is recorded beside the requested one as
   `prior_used`, since a requested prior can fall back;
 - **the command that regenerates it** - the full `prism differential ... --report` line, every
