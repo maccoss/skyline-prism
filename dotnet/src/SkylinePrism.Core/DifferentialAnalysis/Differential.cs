@@ -492,7 +492,13 @@ public static class Differential
         var (squeezed, variancePrior, priorLevel) = FitPrior(
             options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
 
-        var dfTotal = fit.DfResidual + squeezed.DfPrior;
+        // limma's eBayes caps the total at the residual df pooled over every feature tested:
+        // df.total = pmin(df.residual + df.prior, sum(df.residual)). It binds whenever the prior df is
+        // infinite - uncapped, the t would be read off a normal, claiming more certainty than the
+        // residuals hold - and otherwise only when few features are tested and the prior df is large.
+        // Every feature here shares one design and the complete-case filter, so the pooled df is
+        // nTested x DfResidual.
+        var dfTotal = Math.Min(fit.DfResidual + squeezed.DfPrior, nTested * fit.DfResidual);
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
 
         var pValues = new double[nTested];

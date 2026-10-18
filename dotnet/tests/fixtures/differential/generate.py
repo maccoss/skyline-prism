@@ -469,6 +469,26 @@ def gen_lmfit() -> None:
 # --------------------------------------------------------------------------------------------
 
 
+def limma_df_total(df_residual: float, df_prior: float, n_features: int) -> float:
+    """The moderated t's degrees of freedom, as limma's ``eBayes`` sets them.
+
+    ``df.total = pmin(df.residual + df.prior, sum(df.residual))``: never more than the residual df
+    pooled over every feature tested. It binds whenever the prior df is infinite, and otherwise only
+    when few features are tested and the prior df is large. These hand compositions once left it
+    out, and so did PRISM, which they then agreed with. ``ebayes.json`` (written by ``generate_ebayes.R``) calls R limma's ``eBayes``
+    itself, so the step cannot be lost from both sides again.
+    """
+    return min(df_residual + df_prior, df_residual * n_features)
+
+
+def limma_p(t, df_residual: float, df_prior: float) -> tuple[np.ndarray, np.ndarray]:
+    """Two-sided p and BH-adjusted p for moderated t statistics, on limma's capped df.total."""
+    t = np.asarray(t, dtype=float)
+    df_total = limma_df_total(df_residual, df_prior, len(t))
+    p = 2.0 * scipy.stats.t.sf(np.abs(t), df=df_total)
+    return p, multipletests(p, method="fdr_bh")[1]
+
+
 def moderated_t(expr: np.ndarray, design: np.ndarray, coef_idx: int, trend: bool):
     """limma's lmFit -> squeezeVar -> moderated t -> BH, composed from the reference libraries.
 
@@ -488,7 +508,7 @@ def moderated_t(expr: np.ndarray, design: np.ndarray, coef_idx: int, trend: bool
     df_prior = float(np.atleast_1d(sv["df_prior"])[0])
     var_post = np.atleast_1d(sv["var_post"])
 
-    df_total = df_res + df_prior
+    df_total = limma_df_total(df_res, df_prior, expr.shape[0])
     t = beta[:, coef_idx] / (stdev_unscaled[coef_idx] * np.sqrt(var_post))
     if np.isinf(df_total):
         pval = 2.0 * scipy.stats.norm.cdf(-np.abs(t))
@@ -1181,7 +1201,7 @@ def gen_paired() -> None:
     sq = squeezeVar(sigma2, df_resid)
     df_prior = float(np.atleast_1d(sq["df_prior"])[0])
     var_post = np.atleast_1d(sq["var_post"])
-    df_total = df_resid + df_prior
+    df_total = limma_df_total(df_resid, df_prior, n_feat)
     # stdev_unscaled[1] = sqrt(v_c); same quantity as gen_moderated_t, spelled the same way.
     t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
     if np.isinf(df_total):
@@ -1247,7 +1267,7 @@ def gen_trend() -> None:
         sq = squeezeVar(sigma2, df_resid)
         df_prior = float(np.atleast_1d(sq["df_prior"])[0])
         var_post = np.atleast_1d(sq["var_post"])
-        df_total = df_resid + df_prior
+        df_total = limma_df_total(df_resid, df_prior, expr.shape[0])
         t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
         if np.isinf(df_total):
             p_mod = 2.0 * scipy.stats.norm.cdf(-np.abs(t_mod))
@@ -1524,6 +1544,9 @@ def gen_toolkit_end_to_end() -> None:
         if finite_d0 and not np.isfinite(df_prior[0]):
             raise SystemExit(f"{name}: d0 came out infinite, so this case would not reach the finite-d0 "
                              "posterior it exists to pin")
+        # The toolkit computes p on df.residual + d0 with no cap; limma's eBayes, and PRISM, cap it at
+        # the pooled residual df. Same t, so both are kept: `p` is the toolkit's, `p_limma` limma's.
+        p_limma, adj_p_limma = limma_p(res["t"].to_numpy(float), float(df_resid[0]), float(df_prior[0]))
         cases.append({
             "name": name,
             "design": design,
@@ -1539,6 +1562,8 @@ def gen_toolkit_end_to_end() -> None:
             "t": vec(res["t"]),
             "p": vec(res["P.Value"]),
             "adj_p": vec(res["adj.P.Val"]),
+            "p_limma": vec(p_limma),
+            "adj_p_limma": vec(adj_p_limma),
             "amean": vec(res["AveExpr"]),
             "prior_scale": vec(res["intensity_s0_sq"]),
             "prior_level": num(prior_level),
@@ -1646,7 +1671,11 @@ def gen_toolkit_end_to_end() -> None:
                 "convention (B - A, or slope x span of x); `slope` is the toolkit's own trend "
                 "coefficient. The pools give the trend's SHAPE; `prior_level` is the factor it was "
                 "scaled by to fit the design residuals, `prior_scale` the result, and `df_prior` "
-                "(posterior_df - residual_df) the df fitted with it. The toolkit was run with "
+                "(posterior_df - residual_df) the df fitted with it. `p`/`adj_p` are the toolkit's, "
+                "on residual_df + df_prior uncapped; `p_limma`/`adj_p_limma` are the same t on "
+                "limma's eBayes df.total = pmin(residual_df + df_prior, sum(residual_df)), which is "
+                "what PRISM computes. They differ only where that cap binds (an infinite df_prior "
+                "here). The toolkit was run with "
                 "log_pseudocount=0 because PRISM adds none, "
                 "and the inputs keep every prior point more than 1% of the x range from the next, "
                 "so PRISM's LOWESS delta interpolates nothing."

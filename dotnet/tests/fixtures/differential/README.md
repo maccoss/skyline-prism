@@ -1,7 +1,7 @@
 # Differential-analysis goldens
 
 Reference values for `SkylinePrism.Core.DifferentialAnalysis`, produced by scipy, statsmodels and
-inmoose. `DifferentialGoldenTests` reads them.
+inmoose - and one, `ebayes.json`, by R limma itself. `DifferentialGoldenTests` reads them.
 
 > [!NOTE]
 > **These are NOT frozen, unlike every other fixture directory here.** The `refanchored/` and
@@ -22,6 +22,22 @@ purely from numpy/scipy drift.
 The dependency versions are pinned in the script's PEP 723 header, so `uv run` needs nothing
 installed. Without `uv`, install those exact versions and run it with `python`.
 
+**The machine can move the inputs too, not just the libraries.** Some cases build their inputs
+through numpy operations whose last bit is not the same everywhere (an `exp`, a `mean`), so
+regenerating on another machine can rewrite them by about 1e-16 relative even under the pinned
+versions: on Windows, three of `moderated_t.json`'s six cases moved that way. When a change should
+move one case, regenerate and splice that case in, and leave the others as written. That is how
+`moderated_t.json`'s `infinite_prior_df`, whose inputs are literals, took limma's df cap, while the
+cases the cap does not touch were kept byte for byte.
+
+`ebayes.json` is written by an R script, not by `generate.py`, because inmoose 0.9.1's `eBayes`
+crashes whenever the prior df is infinite - the case it exists to pin:
+
+```bash
+# from the repository root; needs R with limma (BiocManager::install("limma"))
+Rscript dotnet/tests/fixtures/differential/generate_ebayes.R
+```
+
 ## What is the reference for what
 
 | Fixture | PRISM type | Reference |
@@ -32,6 +48,7 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `spline.json` | `NaturalSplineBasis.Build` | `inmoose.utils.splines.ns` |
 | `lmfit.json` | `LinearModel.Fit` | `numpy.linalg.lstsq` + the textbook OLS formulas |
 | `moderated_t.json` | `Differential.Run` | the four above, composed the way limma composes them |
+| `ebayes.json` | `Differential.Run`, including the cap on the moderated t's df | R `limma::lmFit` + `eBayes`, called whole, written by `generate_ebayes.R` |
 | `fisher.json` | `Detection.FisherExact` | `scipy.stats.fisher_exact(alternative="two-sided")` |
 | `firth.json` | `Detection.FirthLogit` | `scipy.optimize` on the penalized log-likelihood |
 | `detection_lrt.json` | `Detection.DetectionGlm` | the above, twice, + `scipy.stats.chi2.sf(., 1)` |

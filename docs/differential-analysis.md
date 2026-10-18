@@ -414,6 +414,18 @@ on dense proteomics data and could on sparse: it drops zero and negative residua
 the prior fit where limma floors them at `1e-5 * median` and keeps them, and it has no
 single-feature branch (limma returns `df_prior = 0` there).
 
+**The moderated t's degrees of freedom are capped, as limma caps them, and the toolkit's are not.**
+limma's `eBayes` - and PRISM, from the release after dotnet-v26.28.0 - never gives the t more degrees
+of freedom than the residuals pooled over every feature tested:
+`df.total = pmin(df.residual + df.prior, sum(df.residual))`. The toolkit and the PRISM Differential
+Explorer use `df.residual + df.prior` uncapped. The two agree whenever `df.prior` is finite and below
+`(features tested - 1) x df.residual`, which on a real cohort of hundreds or thousands of features it
+is. With an infinite prior df they always part, because the uncapped t is read off a normal: for
+3,000 features at 8 residual df the capped p is higher by 0.1% at t = 3 and 4.5% at t = 8. On a
+small feature set they part by far more: 8 features at 4 residual df with an infinite prior give a t
+of 5.49 a p of 4.0e-8 uncapped and 4.8e-6 on limma's 32 df. `ebayes.json` pins PRISM to R limma's
+own `eBayes`, and `toolkit_end_to_end.json` records both p-values for the same t.
+
 ## Cross-checking a PRISM result against the toolkit
 
 ```python

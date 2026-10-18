@@ -9,6 +9,12 @@ namespace SkylinePrism.Tests.DifferentialAnalysis;
 /// Parity tests for <see cref="SignificanceScan"/> against the Python explorer's
 /// <c>significance_scan</c> / <c>_enumerate_splits</c> / <c>scan_summary</c>.
 /// </summary>
+/// <remarks>
+/// The splits, their order and their hit counts are the explorer's. A split's min q is too, except
+/// where limma's df cap binds: the explorer uses df.residual + df.prior uncapped, and PRISM caps it
+/// at the residual df pooled over the 8 features, as limma's eBayes does. Those q-values are R limma
+/// 3.66.0's, <c>min(p.adjust(eBayes(lmFit(x, design))$p.value[, 2], "BH"))</c> on the same grid.
+/// </remarks>
 public class SignificanceScanTests
 {
     private const int Fn = 8;
@@ -56,7 +62,8 @@ public class SignificanceScanTests
         Assert.Equal(4, res.Rows[0].NA);
         Assert.Equal(8, res.Rows[0].NB);
         Assert.Equal(2, res.Rows[0].NSig);
-        AssertRel(1.038708214235576e-17, res.Rows[0].MinQ, 1e-9);
+        // limma's, on df.total 80 (the explorer, uncapped on a normal: 1.038708214235576e-17).
+        AssertRel(1.6917700034439032e-12, res.Rows[0].MinQ, 1e-9);
 
         Assert.Equal("g3", res.Rows[1].A);
         Assert.Equal(0, res.Rows[1].NSig);
@@ -78,7 +85,8 @@ public class SignificanceScanTests
         Assert.Equal("g1", res.Rows[0].A);
         Assert.Equal("g3", res.Rows[0].B);
         Assert.Equal(2, res.Rows[0].NSig);
-        AssertRel(5.542228508823184e-14, res.Rows[0].MinQ, 1e-9);
+        // limma's, on df.total 48 (the explorer, uncapped on a normal: 5.542228508823184e-14).
+        AssertRel(3.717533205464489e-09, res.Rows[0].MinQ, 1e-9);
 
         Assert.Equal("g1", res.Rows[1].A);
         Assert.Equal("g2", res.Rows[1].B);

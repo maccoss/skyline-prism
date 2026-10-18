@@ -11,6 +11,12 @@ namespace SkylinePrism.Tests.DifferentialAnalysis;
 /// Explorer's <c>differential()</c> (which drives inmoose 0.9.1 lmFit + squeezeVar + scipy t.cdf +
 /// statsmodels BH). The input matrix is a deterministic rational grid reproduced bit-for-bit here,
 /// and reference values come from running that same grid through the explorer.
+/// <para>Except the p-values where limma's df cap binds. The explorer composes squeezeVar and t.cdf by
+/// hand and uses df.residual + df.prior uncapped; limma's eBayes, and PRISM, cap it at the residual
+/// df pooled over the features (here 8 x 4 = 32). With an infinite prior the explorer's t is
+/// therefore read off a normal and PRISM's off t(32), so those p-values are R limma 3.66.0's,
+/// <c>eBayes(lmFit(BuildMatrix(hetero), cbind(1, c(0, 0, 0, 1, 1, 1))), trend = ...)</c>. Every t,
+/// logFC and prior df below is still the explorer's.</para>
 /// </summary>
 public class DifferentialTests
 {
@@ -73,18 +79,19 @@ public class DifferentialTests
         var f0 = byId["f0"];
         Assert.Equal(3.44444444444444, f0.LogFc, 12);
         Assert.Equal(5.490812290348585, f0.T, 11);
-        AssertRel(4.0008939083426606e-08, f0.PValue, 1e-9);
-        AssertRel(3.2007151266741285e-07, f0.AdjPValue, 1e-9);
+        // R limma's, on df.total 32 (the explorer, uncapped on a normal: 4.0008939083426606e-08).
+        AssertRel(4.7623416267531505e-06, f0.PValue, 1e-9);
+        AssertRel(3.1904904008668492e-05, f0.AdjPValue, 1e-9);
         Assert.Equal(10.666666666666666, f0.MeanA, 12);
         Assert.Equal(14.111111111111112, f0.MeanB, 12);
 
         var f2 = byId["f2"];
         Assert.Equal(-3.3333333333333344, f2.LogFc, 12);
         Assert.Equal(-5.313689313240575, f2.T, 11);
-        AssertRel(1.0742771784671925e-07, f2.PValue, 1e-9);
+        AssertRel(7.976226002167123e-06, f2.PValue, 1e-9);
 
         // A null feature.
-        AssertRel(0.4786398352857747, byId["f4"].PValue, 1e-9);
+        AssertRel(0.48376939586866452, byId["f4"].PValue, 1e-9);
     }
 
     [Fact]
@@ -126,10 +133,11 @@ public class DifferentialTests
         var byId = res.Rows.ToDictionary(r => r.FeatureId);
         Assert.Equal(3.44444444444444, byId["f0"].LogFc, 12);
         Assert.Equal(2.6829479370580227, byId["f0"].T, 9);
-        AssertRel(0.007297635004183641, byId["f0"].PValue, 1e-9);
-        AssertRel(0.034911717404574286, byId["f0"].AdjPValue, 1e-9);
+        // R limma's, on df.total 32: the trend prior's df is infinite here too.
+        AssertRel(0.011452504642660328, byId["f0"].PValue, 1e-9);
+        AssertRel(0.053015621441247898, byId["f0"].AdjPValue, 1e-9);
         Assert.Equal(-2.622531131612897, byId["f2"].T, 9);
-        AssertRel(0.008727929351143571, byId["f2"].PValue, 1e-9);
+        AssertRel(0.013253905360311975, byId["f2"].PValue, 1e-9);
     }
 
     [Fact]
