@@ -89,9 +89,8 @@ public sealed class DifferentialResult
         int nFeaturesTotal, int nFeaturesTested, double dfResidual, double dfPrior,
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
         IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0,
-        double priorLevel = double.NaN, double dfTotal = double.NaN)
+        double priorLevel = double.NaN)
     {
-        DfTotal = dfTotal;
         TrendRange = trendRange;
         NSubjects = nSubjects;
         PriorLevel = priorLevel;
@@ -138,7 +137,9 @@ public sealed class DifferentialResult
     /// features tested, as limma's <c>eBayes</c> caps it - so never infinite, even when
     /// <see cref="DfPrior"/> is. NaN for the tests that are not moderated.
     /// </summary>
-    public double DfTotal { get; }
+    public double DfTotal => double.IsNaN(DfResidual)
+        ? double.NaN
+        : Differential.CappedDfTotal(DfResidual, DfPrior, NFeaturesTested);
 
     /// <summary>Which variance prior was fitted (<c>global</c>, <c>intensity_trend</c>, ...).</summary>
     public string VariancePrior { get; }
@@ -501,15 +502,7 @@ public static class Differential
         var (squeezed, variancePrior, priorLevel) = FitPrior(
             options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
 
-        // limma's eBayes caps the total at the residual df pooled over every feature tested:
-        // df.total = pmin(df.residual + df.prior, sum(df.residual)). It binds whenever the prior df is
-        // infinite - uncapped, the t would be read off a normal, claiming more certainty than the
-        // residuals hold - and otherwise only when few features are tested and the prior df is large.
-        // Every feature here shares one design and the complete-case filter, so the pooled df is
-        // nTested x DfResidual. limma also pools the reduced df of features it fits with missing
-        // values; PRISM does not fit those at all, so on a matrix with NaNs its cap is the lower of
-        // the two - pooled over the features actually tested.
-        var dfTotal = Math.Min(fit.DfResidual + squeezed.DfPrior, nTested * fit.DfResidual);
+        var dfTotal = CappedDfTotal(fit.DfResidual, squeezed.DfPrior, nTested);
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
 
         var pValues = new double[nTested];
@@ -560,7 +553,7 @@ public static class Differential
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
-            trendRange, nSubjects, priorLevel, dfTotal);
+            trendRange, nSubjects, priorLevel);
     }
 
     /// <summary>
@@ -1160,6 +1153,22 @@ public static class Differential
         return EmpiricalBayes.SqueezeVarWithScale(
             variances, dfResidual, prior, calibrated.DfPrior, calibrated.Warnings);
     }
+
+    /// <summary>
+    /// The moderated t's degrees of freedom as limma's <c>eBayes</c> sets them:
+    /// <c>df.total = pmin(df.residual + df.prior, sum(df.residual))</c>.
+    /// </summary>
+    /// <remarks>
+    /// It binds whenever the prior df is infinite - uncapped, the t would be read off a normal,
+    /// claiming more certainty than the residuals hold - and otherwise only when few features are
+    /// tested and the prior df is large. Every tested feature shares one design and the complete-case
+    /// filter, so the pooled df is <paramref name="nTested"/> x <paramref name="dfResidual"/>. limma
+    /// also pools the reduced df of features it fits with missing values; PRISM does not fit those at
+    /// all, so on a matrix with NaNs its cap is the lower of the two - pooled over the features
+    /// actually tested.
+    /// </remarks>
+    internal static double CappedDfTotal(double dfResidual, double dfPrior, int nTested) =>
+        Math.Min(dfResidual + dfPrior, nTested * dfResidual);
 
     private static double ModeratedPValue(double t, double dfTotal)
     {
