@@ -852,11 +852,10 @@ public partial class MainWindow
             }
         }
 
-        // Fitting the prior on controls only means something for a prior that HAS a per-feature
-        // scale, and only where the run actually has control replicates to fit it on.
-        var controls = DiffControlColumns();
         // Only the deprecated intensity trend takes a shape from anywhere: limma-trend fits its curve
-        // to the residuals, so a "from controls" box beside it would be ticked and do nothing.
+        // to the residuals, so a "from controls" box beside it would be ticked and do nothing. And it
+        // can be fitted on controls only where the run actually has control replicates.
+        var controls = DiffControlColumns();
         var scaled = DiffSelectedPrior() == VariancePrior.IntensityTrend;
         DiffPriorFromControlsCheck.Visibility = moderated && scaled
             ? Visibility.Visible

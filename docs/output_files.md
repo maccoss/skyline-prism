@@ -64,8 +64,7 @@ produced it and every one of these is a question a reader asks of it:
 
 ```text
 # contrast: condition = Disease vs Control (positive log2FC is higher in Disease)
-# method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
-# prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
+# method: moderated t (limma-trend prior), unpaired, Benjamini-Hochberg
 # n: 12 vs 40; tested 4812 of 4900
 # hit rule (rows are NOT filtered by it): adj.P < 0.05, |log2FC| >= 1
 ```
@@ -79,10 +78,16 @@ intra-subject correlation follows the prior line, and `# n:` also counts subject
 ```
 
 The method line names the prior that **actually ran**, which is not always the one requested - a
-trend design has no groups for the intensity trend, a peptide matrix has no peptide counts - and the
-hit rule is recorded as *not* having filtered the rows, because every tested feature is in the file.
-The `# prior:` line appears under the intensity-trend prior only. Its source sets the trend's shape,
-and the factor says how far the trend was scaled to match this contrast's residuals.
+trend design has no groups for the deprecated intensity trend, a peptide matrix has no peptide counts -
+and the hit rule is recorded as *not* having filtered the rows, because every tested feature is in the
+file. Under the deprecated intensity-trend prior (`--prior intensity-trend`) a `# prior:` line follows
+the method line. Its source sets the trend's shape, and the factor says how far the trend was scaled to
+match this contrast's residuals:
+
+```text
+# method: moderated t (intensity-trend prior from controls), unpaired, Benjamini-Hochberg
+# prior: intensity trend from the controls, scaled x2.01 to these residuals; prior df 3.2
+```
 
 Under a trend design the first line reads differently, and says what `log2fc` now means. A trend
 restricted to some of the samples (`--restrict-to`, or **Restrict to** in the pane) adds a line saying
@@ -93,8 +98,8 @@ which, since every row below was fitted on those samples only:
 # restricted to: Study = Verapamil (only those samples were fitted)
 ```
 
-So a file has four lines at the least (contrast or trend, method, n, hit rule), a fifth for the
-intensity-trend prior, and a sixth for a restricted trend. Read past the lines that start with `#`
+So a file has four lines at the least (contrast or trend, method, n, hit rule), one more each for
+the deprecated intensity-trend prior, a blocked design and a restricted trend. Read past the lines that start with `#`
 rather than skipping a fixed number.
 
 ### Quant report

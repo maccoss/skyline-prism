@@ -125,7 +125,7 @@ public enum VariancePrior
     /// the pools carry technical variance only, whose log-scale variance falls with intensity, while
     /// the samples add biological variance that is roughly flat on that scale, so one scale factor
     /// leaves the prior too low for bright features and too high for dim ones. Random-split nulls put
-    /// the brightest fifth at 7-9% false positives at p &lt; 0.05 and the dimmest at 2-4%, and the
+    /// the brightest fifth at 6-9% false positives at p &lt; 0.05 and the dimmest at 2-5%, and the
     /// mismatch roughly halves the prior df, costing power. Shaped on the design groups instead, it
     /// tilts the other way in a paired design. See <c>docs/differential-analysis.md</c>.</para>
     /// </remarks>
