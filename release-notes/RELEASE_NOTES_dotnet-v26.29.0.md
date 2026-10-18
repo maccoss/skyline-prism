@@ -11,9 +11,11 @@ patient ID or a batch number, became categorical.
 
 To reproduce a result from dotnet-v26.28.0, pass `--prior intensity-trend` (a quant report's recorded
 command already named its prior), and `--covariate-type COLUMN=numeric` for an integer-coded label
-covariate; where the degrees-of-freedom cap bound, p-values still differed. proteomics-toolkit and the
-PRISM Differential Explorer still defaulted to the intensity trend at this release, so default runs of
-the three tools differed.
+covariate, which an earlier command did not record. Two changes had no switch: where the
+degrees-of-freedom cap bound, p-values still differed, and a covariate value that was blank or written
+`#N/A`, `NA` or `NULL` became missing rather than a category of its own, so a sample holding one was
+skipped. proteomics-toolkit and the PRISM Differential Explorer still defaulted to the intensity trend
+at this release, so default runs of the three tools differed.
 
 This release also added a design for contrasts between subjects who were each sampled more than once.
 
@@ -97,8 +99,10 @@ This release also added a design for contrasts between subjects who were each sa
   trend (limma)**, and the status line, CSV header and quant report named it `limma-trend`. The old
   estimator remained available as `--prior intensity-trend` (**Intensity trend, toolkit
   (deprecated)** in the pane), and every result that used it said it was deprecated. A recorded
-  command always named its prior, so one recorded earlier reproduced as it ran, apart from the
-  degrees-of-freedom cap where it bound. `--prior-from-controls` and `--prior-from-groups` applied
+  command always named its prior, so one recorded earlier kept that prior - but not necessarily the
+  rest of its model: the degrees-of-freedom cap applied where it bound, an integer-coded label
+  covariate became categorical unless `--covariate-type COLUMN=numeric` was added, and a blank or
+  `#N/A` covariate value became missing (see below). `--prior-from-controls` and `--prior-from-groups` applied
   only to the old estimator: beside any other prior they were noted rather than silently ignored, and
   the pane showed **from controls** only beside it, with help that no longer suggested setting QC
   sample types in Skyline to enable it. A new test pinned the property the default was chosen for,
