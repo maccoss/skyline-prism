@@ -6,6 +6,7 @@ using System.Text;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Visualization;
+using static System.FormattableString;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -92,15 +93,15 @@ public static partial class QcReport
             + "MAD/0.6745). A low shape correlation or isotope dot product counts; retention time and "
             + "FWHM count in either direction. A precursor's score in a run is the root mean square "
             + "of its z's, and each run is shown by the median and 10-90% range of its precursors' "
-            + $"scores ({result.Precursors:N0} precursors). Runs whose median is more than "
-            + $"{PeakQuality.FlagMultiple:0} times the cohort's are labeled, and marked in every panel "
+            + Invariant($"scores ({result.Precursors:N0} precursors). Runs whose median is more than ")
+            + Invariant($"{PeakQuality.FlagMultiple:0} times the cohort's are labeled, and marked in every panel ")
             + "of the second plot so the metric that moved can be read straight down. The score axis "
             + "is set by the medians, so a run whose worst precursors score far higher has its range "
             + "run off the top.</p>");
         if (!result.OrderedByAcquiredTime)
         {
             sb.Append("<p class=\"note\">The runs are in sample order, not acquisition order: "
-                + $"{result.TimedRuns:N0} of {result.Runs.Count:N0} have an acquired time. Export the "
+                + Invariant($"{result.TimedRuns:N0} of {result.Runs.Count:N0} have an acquired time. Export the ")
                 + "Acquired Time column in the transition report to order them.</p>");
         }
 

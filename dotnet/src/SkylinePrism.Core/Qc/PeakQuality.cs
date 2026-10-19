@@ -224,7 +224,7 @@ public static class PeakQuality
         var samples = MergedParquetReader.GetSortedSamples(dataset, cols.Sample, memoryBudgetMb);
         if (samples.Count == 0)
             return null;
-        var times = cols.AcquiredTime is not null && available.Contains(cols.AcquiredTime)
+        var times = cols.AcquiredTime is not null
             ? AcquisitionOrder.ReadTimes(dataset, cols.Sample, cols.AcquiredTime)
             : new Dictionary<string, DateTime>(StringComparer.Ordinal);
 

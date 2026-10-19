@@ -49,12 +49,14 @@ public static partial class PlotRenderer
         median.Color = Color.FromHex("#7f7f7f");
         median.LineWidth = 3;
         median.LinePattern = LinePattern.Dashed;
-        median.LegendText = $"cohort median {result.CohortMedian:0.00}";
+        // Invariant, like every number in the section: the table beside these plots is, and a page that
+        // reads "0,77" in the legend and "0.77" below it is two conventions on one screen.
+        median.LegendText = FormattableString.Invariant($"cohort median {result.CohortMedian:0.00}");
         var threshold = plt.Add.HorizontalLine(result.FlagThreshold);
         threshold.Color = Color.FromHex("#333333");
         threshold.LineWidth = 2;
         threshold.LinePattern = LinePattern.Dotted;
-        threshold.LegendText = $"{PeakQuality.FlagMultiple:0}x cohort median";
+        threshold.LegendText = FormattableString.Invariant($"{PeakQuality.FlagMultiple:0}x cohort median");
 
         var markerSize = RunMarkerSize(runs.Count);
         foreach (var (type, group) in ByType(runs, sampleTypes))
@@ -232,7 +234,7 @@ public static partial class PlotRenderer
     /// <summary>"run 11: WBC-IC-TS-001-011" - the replicate, without its document suffix.</summary>
     internal static string RunLabel(PeakQualityRun run, PeakQualityResult result)
     {
-        var sep = run.SampleId.IndexOf("__@__", StringComparison.Ordinal);
+        var sep = run.SampleId.IndexOf(IO.ReplicateMetadata.SampleIdSeparator, StringComparison.Ordinal);
         var replicate = sep >= 0 ? run.SampleId[..sep] : run.SampleId;
         return result.OrderedByAcquiredTime ? $"run {run.RunOrder}: {replicate}" : replicate;
     }
