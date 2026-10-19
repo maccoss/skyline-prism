@@ -11,10 +11,11 @@ patient ID or a batch number, became categorical.
 
 To reproduce a result from dotnet-v26.28.0, pass `--prior intensity-trend` (a quant report's recorded
 command already named its prior), and `--covariate-type COLUMN=numeric` for an integer-coded label
-covariate, which an earlier command did not record. Two changes had no switch: where the
-degrees-of-freedom cap bound, p-values still differed, and a covariate value that was blank or written
-`#N/A`, `NA` or `NULL` became missing rather than a category of its own, so a sample holding one was
-skipped. proteomics-toolkit and the PRISM Differential Explorer still defaulted to the intensity trend
+covariate, which an earlier command did not record. In the Differential pane, choose **Intensity
+trend, toolkit (deprecated)** under Prior and **Numeric** on the covariate. Two changes had no switch:
+where the degrees-of-freedom cap bound, p-values still differed, and a covariate value that was blank
+or written `#N/A`, `NA` or `NULL` became missing rather than a category of its own, so a covariate
+holding one in a selected sample was skipped. proteomics-toolkit and the PRISM Differential Explorer still defaulted to the intensity trend
 at this release, so default runs of the three tools differed.
 
 This release also added a design for contrasts between subjects who were each sampled more than once.
@@ -34,9 +35,8 @@ This release also added a design for contrasts between subjects who were each sa
   result matched limma to 5e-12 on p, at a correlation of 0.441, and `check_blocked_cohort.py`
   was added to repeat that comparison on any output directory. On simulated null data with a
   correlation of 0.5, the false-positive rate at 0.05 was 4.3%, against 22.8% for the unpaired test.
-  Results, the CSV
-  header and the quant report named the correlation and counted subjects per arm, and
-  `quant_parameters` recorded `block_correlation` and the `subject` column - the latter for the
+  Results, the CSV header and the quant report named the correlation and counted subjects per arm,
+  and `quant_parameters` recorded `block_correlation` and the `subject` column - the latter for the
   paired and within-subject trend designs as well. An arm with fewer than two subjects was refused,
   however many samples it held: with one subject per arm the fit would have been the unpaired one
   under another name. The detection view said that its tests did not account for repeated samples
