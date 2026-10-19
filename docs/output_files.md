@@ -725,7 +725,10 @@ this file has the same effect for one run.
 
 ### merged_data.cache.json
 
-**Purpose**: Stores fingerprints (file sizes, modification times, row counts) of input files to detect when re-merging is needed.
+**Purpose**: Records what the merge was made from and what it wrote, to detect when re-merging is
+needed. `Fingerprint` stamps the input files (path, size, last-write time) and the merge's own
+settings. `TotalRows` is the number of rows the merge wrote to `merged_data/`. `SortColumn` is the
+peptide column the rows were partitioned on (the name is left over from when the merge sorted).
 
 **Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged. Its recorded total row count is also what a `merged_data/` written before `_manifest.json` existed is checked against (see [merged_data/](#merged_data)).
 
