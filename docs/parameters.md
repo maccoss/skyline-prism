@@ -13,6 +13,10 @@ Run with `prism run -i <report.csv> -o <out/> -c config.yaml`. Keys a config omi
 defaults below - except with `--from-provenance <parameters.json>`, where they keep the earlier run's
 values and the config changes only the keys it sets.
 
+A key written with no value - `enabled:` left blank, or a list with every entry commented out - is the
+same as leaving it out. Write `[]` for an empty list. `null` sets a key only where null is its default,
+such as `parsimony.fasta_path: null` for no database.
+
 > **PRISM never silently ignores a config key.** Unrecognized keys print a `WARNING` on stderr
 > (`PrismConfig.FindUnknownKeys`), and unsupported *method choices* abort the run
 > (`PrismConfig.Validate`) — so a typo, or a key left over from the retired Python engine, is

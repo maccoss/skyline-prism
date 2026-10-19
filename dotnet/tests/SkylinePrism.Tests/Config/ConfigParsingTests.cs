@@ -53,6 +53,40 @@ public class ConfigParsingTests
             System.Text.Json.JsonSerializer.Serialize(config));
     }
 
+    /// <summary>
+    /// A key written with no value - a list whose entries are all commented out, a flag or a number
+    /// left blank - is the same as leaving the key out, so it keeps its default. YamlDotNet reads the
+    /// blank as null: a null list was dereferenced by sample-type classification, and a blank flag or
+    /// number would otherwise have bound as false or 0 with nothing said.
+    /// </summary>
+    [Theory]
+    [InlineData("sample_annotations:\n  reference_pattern:\n  #  - Pool\n")]
+    [InlineData("batch_correction:\n  enabled:\n")]
+    [InlineData("transition_rollup:\n  min_transitions:\n")]
+    [InlineData("global_normalization:\n  rt_lowess:\n    frac:\n")]
+    [InlineData("transition_rollup:\n  method:\n")]
+    public void Parse_AKeyWithNoValue_KeepsItsDefault(string yaml)
+    {
+        var config = PrismConfig.Parse(yaml);
+
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(new PrismConfig()),
+            System.Text.Json.JsonSerializer.Serialize(config));
+    }
+
+    /// <summary>
+    /// What a blank cannot express is still expressible: <c>[]</c> is an empty list, and a key whose
+    /// default is null (a FASTA path) takes an explicit null.
+    /// </summary>
+    [Fact]
+    public void Parse_AnEmptyListAndANullPath_AreValues()
+    {
+        var config = PrismConfig.Parse("sample_annotations:\n  reference_pattern: []\nparsimony:\n  fasta_path: null\n");
+
+        Assert.Empty(config.SampleAnnotations.ReferencePattern);
+        Assert.Null(config.Parsimony.FastaPath);
+    }
+
     [Fact]
     public void NewOptionKeys_Bind()
     {

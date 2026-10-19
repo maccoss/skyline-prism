@@ -178,7 +178,7 @@ public sealed class PrismPipeline
 
         // If neither metadata nor Source Document distinguishes batches (all one label), fall back
         // to estimating batches from acquisition-time gaps (ports cli.py:estimate_batches_from_parquet).
-        var estMethod = (config.BatchEstimation.Method ?? "auto").ToLowerInvariant();
+        var estMethod = BatchEstimationMethod(config);
         if (resolvedBatch.Values.Distinct().Count() <= 1
             && estMethod is not ("none" or "source")
             && cols.AcquiredTime is not null)
@@ -925,6 +925,14 @@ public sealed class PrismPipeline
         }
         File.WriteAllText(path, sb.ToString());
     }
+
+    /// <summary>
+    /// The batch-estimation method to run when no batch label distinguishes the samples. Unset means
+    /// the section's default, none: it once meant auto, so a config that left the method blank had
+    /// batches invented from acquisition gaps - the very thing the default exists to prevent.
+    /// </summary>
+    internal static string BatchEstimationMethod(PrismConfig config) =>
+        (config.BatchEstimation.Method ?? "none").ToLowerInvariant();
 
     private static string ClassifySampleType(string sampleId, string replicate, PrismConfig config)
     {
