@@ -510,6 +510,13 @@ parameters:
 prism run -i new_data.csv -o new_output/ --from-provenance old_output/parameters.json
 ```
 
+To change a few settings and keep the rest, add a YAML holding only those keys. Each key it sets
+replaces the earlier run's value, every other key is kept, and the run log names what was overridden:
+
+```bash
+prism run -o new_output/ --from-provenance old_output/parameters.json -c overrides.yaml
+```
+
 ---
 
 ### sample_metadata.csv

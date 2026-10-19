@@ -9,7 +9,9 @@ prism config-template -o config.yaml            # full annotated template
 prism config-template --minimal -o config.yaml  # common knobs only
 ```
 
-Run with `prism run -i <report.csv> -o <out/> -c config.yaml`.
+Run with `prism run -i <report.csv> -o <out/> -c config.yaml`. Keys a config omits take the built-in
+defaults below - except with `--from-provenance <parameters.json>`, where they keep the earlier run's
+values and the config changes only the keys it sets.
 
 > **PRISM never silently ignores a config key.** Unrecognized keys print a `WARNING` on stderr
 > (`PrismConfig.FindUnknownKeys`), and unsupported *method choices* abort the run
