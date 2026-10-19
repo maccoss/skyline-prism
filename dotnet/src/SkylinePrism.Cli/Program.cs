@@ -70,18 +70,25 @@ public static partial class Program
 
         PrismConfig config;
         var provenanceLoaded = false;
+        IReadOnlyList<string>? overridden = null;
         if (provenancePath is not null)
         {
             config = Provenance.LoadConfig(provenancePath, out var redirectedFasta);
+            // -c on top of a provenance changes the keys it names and keeps the rest of the earlier
+            // run's settings. It was once dropped here without a word, re-running the old settings.
+            if (configPath is not null)
+                overridden = config.ApplyOverrides(configPath, w => Console.Error.WriteLine($"WARNING: {w}"));
+            else
+                config.Validate();
             // A substituted database must never be silent: it changes protein grouping and iBAQ counts.
-            foreach (var key in redirectedFasta)
+            // One the -c replaced was not substituted, so it is not reported as though it had been.
+            foreach (var key in redirectedFasta.Except(overridden ?? Array.Empty<string>()))
                 Console.Error.WriteLine(
                     $"NOTE: {key} no longer exists; using the copy this run archived beside its outputs.");
             if (inputs.Count == 0)
                 foreach (var s in Provenance.SourceFiles(provenancePath))
                     inputs.Add(s);
             provenanceLoaded = true;
-            config.Validate();
         }
         else
         {
@@ -114,6 +121,10 @@ public static partial class Program
 
         if (provenanceLoaded)
             Log($"PRISM: loaded settings from provenance {provenancePath}");
+        if (overridden is { Count: > 0 })
+            Log($"PRISM: {configPath} overrides {string.Join(", ", overridden)}");
+        else if (overridden is not null)
+            Log($"WARNING: {configPath} changes no setting PRISM reads; running the provenance settings unchanged.");
 
         // Warned about, not refused. A CLI run is usually scripted, and something that stops a
         // pipeline to ask a question is worse than the surprise it prevents - so this says what is
@@ -1195,7 +1206,8 @@ public static partial class Program
         Options:
             -i, --input <FILE...>         Skyline transition report(s), CSV/TSV/parquet; repeatable
             -o, --output-dir <DIR>        Output directory
-            -c, --config <FILE>           YAML configuration (see 'prism config-template')
+            -c, --config <FILE>           YAML configuration (see 'prism config-template'); with
+                                          --from-provenance, only the keys it sets are changed
             -m, --metadata <FILE...>      Replicate metadata / Replicates report(s), merged; repeatable
                 --from-provenance <FILE>  Re-run with the settings from a prior parameters.json
                 --force-reprocess         Ignore the merge cache and re-read the inputs
@@ -1205,6 +1217,7 @@ public static partial class Program
             prism run -i report.csv -o out/ -c config.yaml
             prism run -i plate1.csv plate2.csv -o out/ -m replicates.csv
             prism run -i new.csv -o out2/ --from-provenance out/parameters.json
+            prism run -o out3/ --from-provenance out/parameters.json -c overrides.yaml
         """;
 
     private const string MergeHelp = """

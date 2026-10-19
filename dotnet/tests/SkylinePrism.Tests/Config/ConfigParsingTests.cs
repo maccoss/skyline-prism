@@ -35,6 +35,24 @@ public class ConfigParsingTests
         Assert.False(back.BatchCorrection.PeptideLevel);
     }
 
+    /// <summary>
+    /// A section header whose keys are all commented out sets nothing, so the section keeps its
+    /// defaults. YamlDotNet reads the empty value as null, and a null section was dereferenced -
+    /// at once for transition_rollup, later in the run for any other.
+    /// </summary>
+    [Theory]
+    [InlineData("transition_rollup:\n  # method: sum\n")]
+    [InlineData("qc_report:\n")]
+    [InlineData("global_normalization:\n  rt_lowess:\n")]
+    public void Parse_ASectionHeaderWithNothingUnderIt_KeepsItsDefaults(string yaml)
+    {
+        var config = PrismConfig.Parse(yaml);
+
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(new PrismConfig()),
+            System.Text.Json.JsonSerializer.Serialize(config));
+    }
+
     [Fact]
     public void NewOptionKeys_Bind()
     {
