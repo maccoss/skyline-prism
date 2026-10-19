@@ -15,8 +15,8 @@ covariate, which an earlier command did not record. In the Differential pane, ch
 trend, toolkit (deprecated)** under Prior and **Numeric** on the covariate. Two changes had no switch:
 where the degrees-of-freedom cap bound, p-values still differed, and a covariate value that was blank
 or written `#N/A`, `NA` or `NULL` became missing rather than a category of its own, so a covariate
-holding one in a selected sample was skipped. proteomics-toolkit and the PRISM Differential Explorer still defaulted to the intensity trend
-at this release, so default runs of the three tools differed.
+holding one in a selected sample was skipped. proteomics-toolkit and the PRISM Differential Explorer
+still defaulted to the intensity trend at this release, so default runs of the three tools differed.
 
 This release also added a design for contrasts between subjects who were each sampled more than once.
 
