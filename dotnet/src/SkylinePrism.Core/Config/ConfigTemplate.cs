@@ -152,6 +152,7 @@ output:
 qc_report:
   enabled: true
   save_plots: true          # also write the plots as PNGs to qc_plots/ (they are embedded either way)
+  peak_quality: true        # Skyline's shape correlation, dot product, RT and FWHM per run, in acquisition order
 
 # Ion accounting - how many ions reached the detector and what fraction the targets explain, at each
 # MS level - is NOT a config section. It reads the instrument files, which a PRISM run never touches,

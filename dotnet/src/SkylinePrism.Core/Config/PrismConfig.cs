@@ -187,7 +187,7 @@ public sealed class PrismConfig
             ["parsimony"] = Leaves(
                 "enabled", "fasta_path", "shared_peptide_handling", "enzyme", "enzyme_specificity"),
             ["output"] = Leaves("format", "include_residuals"),
-            ["qc_report"] = Leaves("enabled", "save_plots"),
+            ["qc_report"] = Leaves("enabled", "save_plots", "peak_quality"),
             ["sample_outlier_detection"] = Leaves("enabled", "action", "method", "iqr_multiplier", "fold_threshold"),
             ["metadata"] = Leaves("batch_column", "sample_type_column"),
             ["processing"] = Leaves("n_workers", "peptide_batch_size", "merge_memory_mb"),
@@ -448,6 +448,13 @@ public sealed class PrismConfig
     {
         public bool Enabled { get; set; } = true;
         public bool SavePlots { get; set; } = true;
+
+        /// <summary>
+        /// Draw the "Peak Quality by Acquisition Order" section: Skyline's peak-quality columns
+        /// scored per precursor and summarized per run (<see cref="Qc.PeakQuality"/>). Read from
+        /// merged_data/ each time the report is made, so it changes no cached output.
+        /// </summary>
+        public bool PeakQuality { get; set; } = true;
         // Note: plots are always base64-embedded (self-contained HTML). Linking to external PNGs
         // (Python's embed_plots: false) is a deliberate non-port - see PORTING_STATUS.md.
     }

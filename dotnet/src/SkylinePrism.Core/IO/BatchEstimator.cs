@@ -114,7 +114,11 @@ public static class BatchEstimator
         return batchNum > 1 ? map : new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
-    private static List<(string Sample, DateTime Time)> ReadSampleTimes(
+    /// <summary>
+    /// Every distinct (sample, acquired time) pair in the merged data. A sample can appear more than
+    /// once - a Skyline replicate may hold several injections, each with its own time.
+    /// </summary>
+    internal static List<(string Sample, DateTime Time)> ReadSampleTimes(
         MergedDataset dataset, string sampleCol, string acqCol)
     {
         var rows = new List<(string, DateTime)>();

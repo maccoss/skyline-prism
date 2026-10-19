@@ -234,6 +234,7 @@ Used only when neither metadata nor the Source Document distinguishes batches.
 |-----|---------|-------------|
 | `enabled` | `true` | Generate `qc_report.html` |
 | `save_plots` | `true` | Also write PNGs to `qc_plots/` |
+| `peak_quality` | `true` | Add the "Peak Quality by Acquisition Order" section: Skyline's shape correlation, isotope dot product, retention time and FWHM for every precursor, scored per run as a robust z against each precursor's own median and plotted in acquisition order, with runs whose median score exceeds twice the cohort's labeled. Read from `merged_data/` each time the report is made (seconds); omitted when the output directory has none. See [methods.md](methods.md#peak-quality-by-acquisition-order) |
 
 **Ion accounting is not a config section.** "How many ions reached the detector, and what fraction of
 them do the targets explain?" is answered by reading the instrument data files, which a PRISM run never

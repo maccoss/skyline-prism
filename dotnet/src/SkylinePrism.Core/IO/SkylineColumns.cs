@@ -33,6 +33,16 @@ public sealed class SkylineColumns
     public required string ProductCharge { get; init; }
     public required string RetentionTime { get; init; }
     public string? ShapeCorrelation { get; init; }
+
+    /// <summary>Full width at half maximum of the transition's peak, in minutes.</summary>
+    public string? Fwhm { get; init; }
+
+    /// <summary>
+    /// The precursor's isotope dot product: a PRECURSOR result, so every transition row of one
+    /// precursor in one run carries the same value.
+    /// </summary>
+    public string? IsotopeDotProduct { get; init; }
+
     public string? ProductMz { get; init; }
     public string? AcquiredTime { get; init; }
     public string? Protein { get; init; }
@@ -108,6 +118,8 @@ public sealed class SkylineColumns
             ProductCharge = Require(null, "Product Charge"),
             RetentionTime = Require(o.RetentionTime, "Retention Time"),
             ShapeCorrelation = FindColumn(available, "Shape Correlation"),
+            Fwhm = FindColumn(available, "Fwhm"),
+            IsotopeDotProduct = FindColumn(available, "Isotope Dot Product"),
             ProductMz = FindColumn(available, "Product Mz"),
             AcquiredTime = FindColumn(available, "Acquired Time"),
             Protein = Ov(o.Protein) ?? FindColumn(available, "Protein Accession"),

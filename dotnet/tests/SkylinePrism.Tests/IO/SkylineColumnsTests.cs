@@ -24,8 +24,11 @@ public class SkylineColumnsTests
             "Peptide Modified Sequence Unimod Ids", "Sample ID", "Area", "Fragment Ion",
             "Precursor Charge", "Product Charge", "Retention Time", "Shape Correlation",
             "Product Mz", "Acquired Time", "Protein Accession", "Protein", "Protein Gene", "Batch",
+            "Fwhm", "Isotope Dot Product",
         };
         var c = SkylineColumns.Detect(headers);
+        Assert.Equal("Fwhm", c.Fwhm);
+        Assert.Equal("Isotope Dot Product", c.IsotopeDotProduct);
         Assert.Equal("Peptide Modified Sequence Unimod Ids", c.Peptide);
         Assert.Equal("Sample ID", c.Sample);
         Assert.Equal("Area", c.Abundance);
@@ -58,6 +61,8 @@ public class SkylineColumnsTests
         Assert.Equal("Replicate Name", c.Sample);
         Assert.Equal("Area", c.Abundance);                    // Require falls back to the last candidate
         Assert.Null(c.ShapeCorrelation);                      // optional columns absent
+        Assert.Null(c.Fwhm);
+        Assert.Null(c.IsotopeDotProduct);
         Assert.Null(c.ProductMz);
         Assert.Null(c.Batch);
     }

@@ -89,10 +89,16 @@ public static partial class QcReport
         var signalPlots = RenderIonAccountingSection(
             outputDir, sampleCols.Count, savePlots, plotsDir, log);
 
+        // Computed from merged_data/ rather than read from a file, so it follows the run's own
+        // column overrides; whether to draw it at all is this invocation's choice, like save_plots.
+        var peakQuality = config.QcReport.PeakQuality
+            ? RenderPeakQualitySection(outputDir, runConfig, sampleTypes, savePlots, plotsDir, log)
+            : null;
+
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
             pepRaw.RowCount, protRaw.RowCount,
-            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, signalPlots,
+            pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, signalPlots, peakQuality,
             validation, runConfig, runInfo);
 
         var htmlPath = Path.Combine(outputDir, "qc_report.html");
@@ -244,7 +250,7 @@ public static partial class QcReport
         CvMetrics.BeforeAfter? pepRef, CvMetrics.BeforeAfter? pepQc,
         CvMetrics.BeforeAfter? protRef, CvMetrics.BeforeAfter? protQc,
         List<PlotSection> peptidePlots, List<PlotSection> proteinPlots,
-        List<PlotSection> signalPlots,
+        List<PlotSection> signalPlots, PeakQualitySection? peakQuality,
         ValidationStatus? validation, PrismConfig config, Provenance.RunInfo? runInfo)
     {
         // One reading for the whole page: rendering a large cohort's plots takes seconds, and a header
@@ -323,6 +329,9 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         AppendSections(sb, peptidePlots);
         sb.Append("<div class=\"section-header\">Protein-Level QC</div>");
         AppendSections(sb, proteinPlots);
+        // Beside ion accounting: both describe the runs as acquired, before any processing.
+        if (peakQuality is not null)
+            AppendPeakQuality(sb, peakQuality, sampleTypes);
         if (signalPlots.Count > 0)
         {
             sb.Append("<div class=\"section-header\">MS2 Signal Accounting</div>");
