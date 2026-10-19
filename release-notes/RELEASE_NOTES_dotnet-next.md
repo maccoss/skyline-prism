@@ -32,19 +32,22 @@ as the GitHub Release description and fails if it is missing.
   the YAML set replaced the earlier run's value and every other key was kept; a subsection merged key
   by key and a list was replaced whole. The run log named the overridden keys, an unrecognized key
   warned as it did with a plain `-c`, and a file that changed no setting said so.
-- **A config section with every key under it commented out stopped failing the run.** A bare
-  `transition_rollup:` had stopped it with "Object reference not set to an instance of an object",
-  and any other bare section had left a null for a later stage to trip over. An empty section kept
-  its defaults.
+- **A config key left with no value stopped failing the run or quietly changing a setting.** YAML
+  reads a blank as null, and PRISM had bound it as written: a blank `enabled:` under
+  `batch_correction` turned ComBat off with nothing said, a blank number became 0, a blank method
+  name or a list with every entry commented out (`reference_pattern:` alone) failed when sample types
+  were assigned, and a bare `transition_rollup:` stopped the run with "Object reference not set to an
+  instance of an object". A blank key was treated as left out and kept its default - or, with
+  `--from-provenance`, the earlier run's value. An empty list is written `[]`, and `null` still
+  cleared a key whose default is none, such as `parsimony.fasta_path`.
 - **The run log started recording what was said while the config was read.** An unrecognized
   config key's `WARNING` and the `NOTE` that a moved FASTA had been replaced by its archived copy
   were printed before `prism_run_*.log` was opened, so they had gone to stderr only; a scripted run
   that discarded stderr left a log that read as though every setting had been honored. They were
   written at the top of the log as well, in the order they were said. A run that failed had left a
   log that stopped mid-stage with no reason; it ended with the `Error:` line, and the console said
-  where the log was. The log section of
-  `docs/output_files.md`, which still showed the retired Python engine's time-stamped format, was
-  rewritten from a real run.
+  where the log was. The log section of `docs/output_files.md`, which still showed the retired
+  Python engine's time-stamped format, was rewritten from a real run.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).
@@ -52,3 +55,12 @@ as the GitHub Release description and fails if it is missing.
 ## Performance
 
 ## Breaking Changes
+
+- **A config with a blank method key produced different numbers.** Treating a blank key as left out
+  gave it its documented default instead of whatever the pipeline had made of a null:
+  `global_normalization.method:` left blank had run median normalization and ran `rt_lowess`, and
+  `batch_estimation.method:` left blank had estimated batches from acquisition-time gaps (`auto`) -
+  then ComBat-corrected across them - and estimated none. A blank `output.format:` had written
+  `corrected_peptides.` with no extension and wrote parquet. Every other blank method key already ran
+  its default. To keep a previous run's numbers, write the method it used explicitly
+  (`method: median`, `method: auto`).

@@ -40,30 +40,47 @@ public sealed class PrismConfig
             .IgnoreUnmatchedProperties()
             .Build();
         var config = deserializer.Deserialize<PrismConfig>(yaml) ?? new PrismConfig();
-        RestoreEmptySections(config);
+        if (YamlTree(yaml) is { } root)
+            KeepDefaultsForBlankKeys(root, config);
         config.TransitionRollup.ResolveLibraryAssist();
         return config;
     }
 
     /// <summary>
-    /// A section header whose keys are all commented out (<c>qc_report:</c> alone) deserializes as
-    /// null, and every reader of the section would dereference it. It sets nothing, so it gets the
-    /// section's defaults. A section whose default is null - the nested library_assist block - stays
-    /// null.
+    /// A key written with no value - a section header or a list whose entries are all commented
+    /// out, a flag or a number left blank - is the same as leaving the key out, so it keeps its
+    /// default. YamlDotNet reads the blank as null and binds it anyway: a null section or list is
+    /// dereferenced later, and a blank <c>enabled:</c> binds as false and a blank number as 0, which
+    /// would switch a stage off or zero a threshold with nothing said.
     /// </summary>
-    private static void RestoreEmptySections(object section)
+    /// <remarks>
+    /// Only where null is not the key's own default. Where it is (<c>parsimony.fasta_path</c>, the
+    /// <c>data</c> column overrides), null is a value the key can hold and binds as written - the way
+    /// to say "no database". An empty list is written <c>[]</c>, which is not a blank.
+    /// </remarks>
+    private static void KeepDefaultsForBlankKeys(IDictionary<object, object> node, object target)
     {
-        var defaults = Activator.CreateInstance(section.GetType())!;
-        foreach (var property in YamlProperties(section.GetType()))
+        var defaults = Activator.CreateInstance(target.GetType())!;
+        foreach (var kv in node)
         {
-            if (!IsSection(property.PropertyType))
+            var property = YamlProperty(target.GetType(), kv.Key);
+            if (property is null)
                 continue;
-            var value = property.GetValue(section) ?? property.GetValue(defaults);
-            property.SetValue(section, value);
-            if (value is not null)
-                RestoreEmptySections(value);
+            if (IsBlank(kv.Value, property, defaults))
+                property.SetValue(target, property.GetValue(defaults));
+            else if (IsSection(property.PropertyType)
+                     && kv.Value is IDictionary<object, object> child
+                     && property.GetValue(target) is { } section)
+                KeepDefaultsForBlankKeys(child, section);
         }
     }
+
+    /// <summary>A YAML value that stands for "not given": null where null is not the default.</summary>
+    private static bool IsBlank(object? yamlValue, PropertyInfo property, object defaults) =>
+        yamlValue is null && property.GetValue(defaults) is not null;
+
+    private static IDictionary<object, object>? YamlTree(string yaml) =>
+        new DeserializerBuilder().Build().Deserialize<object>(yaml) as IDictionary<object, object>;
 
     /// <summary>
     /// Load + resolve a config file, report any unrecognized keys via <paramref name="warn"/>
@@ -100,14 +117,16 @@ public sealed class PrismConfig
     /// paths. A key binds exactly as it would in <see cref="Parse"/> - the value copied is the one
     /// Parse produced for it - so an override means what the same YAML means passed alone. A
     /// subsection is merged key by key (<c>rt_lowess: {frac: 0.2}</c> keeps <c>n_grid_points</c>);
-    /// anything else, a list included, is replaced whole. Keys PRISM does not read are skipped here,
-    /// as Parse skips them; <see cref="FindUnknownKeys"/> is what reports them.
+    /// anything else, a list included, is replaced whole. A key with no value is the same as leaving
+    /// it out (see <see cref="KeepDefaultsForBlankKeys"/>), so here it keeps this config's value.
+    /// Keys PRISM does not read are skipped here, as Parse skips them; <see cref="FindUnknownKeys"/>
+    /// is what reports them.
     /// </summary>
     public IReadOnlyList<string> Overlay(string yaml)
     {
         var parsed = Parse(yaml);
         var applied = new List<string>();
-        if (new DeserializerBuilder().Build().Deserialize<object>(yaml) is not IDictionary<object, object> root)
+        if (YamlTree(yaml) is not { } root)
             return applied;
 
         // The nested library_assist block was folded onto the flat library_* keys when this config was
@@ -127,18 +146,18 @@ public sealed class PrismConfig
     private static void OverlaySection(
         IDictionary<object, object> node, object from, object to, string prefix, List<string> applied)
     {
+        var defaults = Activator.CreateInstance(to.GetType())!;
         foreach (var kv in node)
         {
-            var key = kv.Key?.ToString() ?? "";
-            var property = Array.Find(
-                YamlProperties(to.GetType()), p => UnderscoredNamingConvention.Instance.Apply(p.Name) == key);
-            if (property is null)
+            var property = YamlProperty(to.GetType(), kv.Key);
+            if (property is null || IsBlank(kv.Value, property, defaults))
                 continue;
-            var path = prefix.Length == 0 ? key : prefix + "." + key;
+            var path = prefix.Length == 0 ? $"{kv.Key}" : $"{prefix}.{kv.Key}";
 
             if (IsSection(property.PropertyType))
             {
-                // A section header with nothing under it sets nothing.
+                // A section header with nothing under it sets nothing - including library_assist,
+                // whose default is null and so is not caught as blank above.
                 if (kv.Value is not IDictionary<object, object> child)
                     continue;
                 var target = property.GetValue(to);
@@ -158,14 +177,18 @@ public sealed class PrismConfig
     }
 
     /// <summary>
-    /// The properties a YAML key can bind: public, with a public setter, as YamlDotNet requires. Going
-    /// by <c>CanWrite</c> would admit a private setter, and the overlay would then copy Parse's default
-    /// over a value the same key could never have set.
+    /// The property a YAML key binds to: matched by the naming convention Parse uses, and public with
+    /// a public setter, as YamlDotNet requires. Going by <c>CanWrite</c> would admit a private setter,
+    /// and the overlay would then copy Parse's default over a value the same key could never have set.
     /// </summary>
-    private static PropertyInfo[] YamlProperties(Type type) =>
-        Array.FindAll(
+    private static PropertyInfo? YamlProperty(Type type, object? key)
+    {
+        var name = key?.ToString() ?? "";
+        return Array.Find(
             type.GetProperties(BindingFlags.Public | BindingFlags.Instance),
-            p => p.GetSetMethod() is not null && p.GetGetMethod() is not null);
+            p => p.GetSetMethod() is not null && p.GetGetMethod() is not null
+                 && UnderscoredNamingConvention.Instance.Apply(p.Name) == name);
+    }
 
     /// <summary>
     /// Every config section is a class nested in PrismConfig. A nested enum or struct is a value, and
