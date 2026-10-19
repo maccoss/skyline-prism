@@ -113,7 +113,16 @@ public sealed class PrismPipeline
             // merge wrote it - a copy made over an older copy keeps partitions the merge did not write,
             // and the rollup would read them as more peptides. So the files must still add up to the
             // count the merge took (MergedDataset.Open has the case that was found).
-            var damage = MergedDataset.OpenUnverified(mergedPath).DescribeMismatch(cached.TotalRows);
+            string? damage;
+            try
+            {
+                damage = MergedDataset.OpenUnverified(mergedPath).DescribeMismatch(cached.TotalRows);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Could not even list the partitions. A merge that cannot be checked is not reused.
+                damage = $"{MergedDataset.DirectoryName} could not be checked ({ex.Message}).";
+            }
             if (damage is null)
             {
                 // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before
@@ -137,6 +146,19 @@ public sealed class PrismPipeline
 
         if (merge is null)
         {
+            // The old sidecar goes BEFORE the merge, not when the new one is written over it. Publish
+            // puts the new merged_data in place first, so until the write below, readers would check
+            // the new data against the OLD count and refuse it as damaged. And SourceFingerprint.Write
+            // swallows a failure, which would leave that old count for good. With no sidecar there is
+            // nothing to check, and the next run simply re-merges. Best-effort: a sidecar that cannot
+            // be deleted is no worse than before.
+            try
+            {
+                File.Delete(cachePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
             merge = DuckDbMerge.Merge(
                 inputs, mergedPath, replicateColumn: config.Data.SampleColumn,
                 memoryBudgetMb: config.Processing.MergeMemoryMb,

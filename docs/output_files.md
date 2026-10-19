@@ -737,7 +737,9 @@ peptide column the rows were partitioned on (the name is left over from when the
 has been changed since the merge wrote it. PRISM then logs a WARNING naming the partitions responsible,
 re-merges, and recomputes every stage, because none of the cached stages can be trusted. Readers of
 `merged_data/` make the same row-count check and refuse a directory that fails it (see the caution
-under [`merged_data/`](#merged_data)).
+under [`merged_data/`](#merged_data)). A merge deletes this file before it starts and writes it again
+once it finishes, so the old count is never compared with the new data. A directory with no sidecar
+is not checked.
 
 > [!NOTE]
 > A C# output directory from before dotnet-v26.12.0 has a `merged_data.parquet.cache.json` beside its

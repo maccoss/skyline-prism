@@ -260,6 +260,41 @@ public class StageCacheReuseTests
         }
     }
 
+    /// <summary>
+    /// A fresh merge removes the previous merge's sidecar before it starts. Publish puts the new
+    /// merged_data in place before the new sidecar is written, and the write swallows a failure, so a
+    /// sidecar left in place would have the readers check the new data against the OLD count and
+    /// refuse a correct directory as damaged. A cancelled merge shows the ordering: the previous
+    /// merge is untouched, and it is the sidecar that has gone.
+    /// </summary>
+    [Fact]
+    public void AFreshMergeDropsTheOldCountBeforeItStarts()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            PrismPipeline.Run(Inputs(), dir, Config(), null, _ => { });
+            var merged = Path.Combine(dir, "merged_data");
+            var sidecar = MergedDataset.SidecarPathFor(merged);
+            Assert.True(File.Exists(sidecar));
+
+            using var cancelled = new System.Threading.CancellationTokenSource();
+            cancelled.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => PrismPipeline.Run(
+                Inputs(), dir, Config(), null, _ => { }, forceReprocess: true,
+                cancellationToken: cancelled.Token));
+
+            Assert.False(File.Exists(sidecar), "the previous merge's count outlived the merge that replaces it");
+            Assert.True(MergedDataset.Exists(merged), "a cancelled merge must leave the previous one in place");
+            MergedDataset.Open(merged);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void ForceReprocess_ReusesNothing()
     {
