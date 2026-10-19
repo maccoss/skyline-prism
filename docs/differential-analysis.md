@@ -10,8 +10,9 @@ peptide count, it is **limma-trend-intensity-n-peptides**: limma's `trend=TRUE` 
 count as a second covariate. On the peptide-level matrix, which has no peptide counts, it is
 **limma-trend**: limma's `trend=TRUE` alone, an intensity-dependent prior. Both curves are fitted to
 the contrast's own residuals. The run names the prior it used. `proteomics-toolkit` uses the same
-names and chooses its default the same way, and both tools are pinned to one R limma golden. A
-default run gives the same p-values in either tool (see "PRISM, `proteomics-toolkit` and limma").
+names and chooses its default the same way, and both tools are pinned to one R limma golden. On
+the same matrix a default run gives the same p-values in either tool, once the toolkit's log
+pseudocount is off (see "PRISM, `proteomics-toolkit` and limma").
 
 Up to dotnet-v26.28.0 the default was the lab's intensity trend, `VariancePriors.IntensityTrend`,
 the same estimator as `proteomics-toolkit`'s `moderation="intensity-trend"` and pinned to it by
@@ -174,7 +175,7 @@ is deprecated. `proteomics-toolkit` deprecated it too, in its 26.9.0, with the s
 limma-trend cannot see peptide counts, and at protein level variance depends on them: a protein's
 measurement noise averages down over its peptides, while its biology does not. At the same
 intensity, a one-peptide protein's residual variance on the Verapamil serum cohort was 2.3-2.9 times
-a four-peptide protein's, levelling off at about 0.6-0.7 times from ten peptides on, where biology
+a four-peptide protein's, leveling off at about 0.6-0.7 times from ten peptides on, where biology
 dominates. So limma-trend tilts by peptide count: optimistic for proteins with few peptides,
 conservative for proteins with many. DEqMS (`peptide-count`) is the mirror image: it uses the count
 and not the intensity, and tilts by intensity.
@@ -183,7 +184,9 @@ and not the intensity, and tilts by intensity.
 is regressed on limma-trend's natural spline of mean log2 expression plus a natural spline of log
 peptide count. The count spline has one interior knot, at the median. It is a straight line in log
 count when the counts take only two values, or when more than half the proteins share the smallest
-or largest count, which puts the knot on the boundary. The prior df is then estimated around the
+or largest count, which puts the knot on the boundary - where R's `ns()` refuses outright, so the
+straight line is a convention the two tools share, pinned by the golden's
+`protein_median_on_boundary` case. The prior df is then estimated around the
 combined curve by limma's trigamma inversion. Everything is fitted to the contrast's own residuals,
 as for limma-trend, so it needs no QC or reference samples and assumes nothing about how fast
 variance falls with peptide count.

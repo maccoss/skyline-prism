@@ -295,8 +295,9 @@ public sealed record DifferentialOptions
     /// <param name="actualPrior">
     /// The prior that was actually fitted (<see cref="DifferentialResult.VariancePrior"/>), when the
     /// result is in hand. A requested prior can fall back - a trend design has no groups for the
-    /// intensity trend, a peptide matrix has no peptide counts - and naming the requested one then
-    /// would put a prior in the headline that did not produce the numbers underneath it.
+    /// intensity trend, and the default gives way to limma-trend on too few proteins to fit peptide
+    /// count - and naming the requested one then would put a prior in the headline that did not
+    /// produce the numbers underneath it.
     /// </param>
     public string Describe(string? actualPrior = null)
     {

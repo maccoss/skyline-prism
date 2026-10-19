@@ -147,6 +147,38 @@ public class LimmaTrendIntensityNPeptidesTests
         Assert.Contains("too few to fit a prior on intensity and peptide count", ex.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A non-finite mean expression leaves limma-trend nothing to fit, and it falls back to the global
+    /// prior. The default does the same and says so, rather than reach the count fit and refuse.
+    /// </summary>
+    [Fact]
+    public void TheDefaultWithANonFiniteMeanExpressionFallsBackAsLimmaTrendDoes()
+    {
+        var (expr, counts, _, _) = ProteinNull(11, nF: 80);
+        expr[0, 0] = double.PositiveInfinity;
+        var byDefault = Run(expr, counts, null);
+        var limmaTrend = Run(expr, counts, VariancePrior.LimmaTrend);
+        Assert.Equal("global", byDefault.VariancePrior);
+        Assert.Equal(limmaTrend.VariancePrior, byDefault.VariancePrior);
+        Assert.Contains(byDefault.Messages, m => m.Contains("non-finite", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Log count lying in the span of the intensity spline would leave the unpivoted QR a singular
+    /// system - a prior of NaNs. Two mean-expression values with one count each is the smallest case.
+    /// </summary>
+    [Fact]
+    public void ACountCollinearWithIntensityIsRefused_NotFittedToNaNs()
+    {
+        var covariate = new double[] { 10, 10, 10, 10, 20, 20, 20, 20 };
+        var logCounts = covariate.Select(c => c == 10 ? 0.0 : Math.Log(4)).ToArray();
+        var variances = new[] { 0.10, 0.20, 0.15, 0.12, 0.05, 0.07, 0.06, 0.08 };
+        Assert.True(EmpiricalBayes.CanFitIntensityAndCounts(covariate, logCounts)); // enough rows, two counts
+        var ex = Assert.Throws<ArgumentException>(() =>
+            EmpiricalBayes.SqueezeVarTrend(variances, 4, covariate, logCounts));
+        Assert.Contains("collinear", ex.Message, StringComparison.Ordinal);
+    }
+
     public static IEnumerable<object[]> CountPriors() => new[]
     {
         new object[] { VariancePrior.LimmaTrendIntensityNPeptides },

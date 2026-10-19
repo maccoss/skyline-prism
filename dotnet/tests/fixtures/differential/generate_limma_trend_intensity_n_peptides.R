@@ -116,9 +116,16 @@ moderate <- function(fit, prior, coef = 2) {
   list(s2_post = s2_post, t = t, df_total = df_total, p = 2 * pt(-abs(t), df = df_total))
 }
 
+# A natural spline in log count needs its one interior knot - the median - strictly inside the
+# range. With two distinct counts there is no room for one, and when more than half the proteins
+# share the smallest (or largest) count the median IS the boundary, where R's ns() refuses outright
+# ("all interior knots match left boundary knot"). Either way the block is log count itself, a
+# straight line: a convention both tools share, since no R call defines this case.
 count_block_for <- function(n_peptides) {
   log_n <- log(n_peptides)
-  if (length(unique(log_n)) >= 3L) splines::ns(log_n, df = 2) else matrix(log_n, ncol = 1)
+  knot <- stats::quantile(log_n, 0.5, names = FALSE)
+  inside <- length(unique(log_n)) >= 3L && knot > min(log_n) && knot < max(log_n)
+  if (inside) splines::ns(log_n, df = 2) else matrix(log_n, ncol = 1)
 }
 
 encode_case <- function(name, note, expr, n_peptides, analysis_type, design, labels, binds,
@@ -278,6 +285,21 @@ cases <- c(cases, encode_case(
   "12 proteins with 1 or 16 peptides, 3 vs 3, residual variance exactly 0.25 / n_peptides: the count term explains it all, df.prior is infinite and df.total is the pooled 48; limma-trend's df.prior is finite",
   expr, n_pep, "unpaired", a$design, a$labels, binds = TRUE, count_cols = 1))
 
+# More than half the proteins with one peptide - common where coverage is thin - puts the median
+# knot on the smallest count, so the count block is the straight line in log count even though the
+# counts take many values.
+set.seed(4242)
+n_feat <- 90
+level <- sort(runif(n_feat, 12, 26))
+n_pep <- ifelse(runif(n_feat) < 0.6, 1L, peptide_counts(n_feat))
+stopifnot(mean(n_pep == 1L) > 0.5, length(unique(n_pep)) >= 3L)
+expr <- level + sqrt(protein_variance(level, n_pep)) * matrix(rnorm(n_feat * 8), nrow = n_feat)
+expr[seq(3, n_feat, by = 9), 5:8] <- expr[seq(3, n_feat, by = 9), 5:8] + 1.2
+cases <- c(cases, encode_case(
+  "protein_median_on_boundary",
+  "90 proteins, most with one peptide and the rest 2..64, 4 vs 4: the median count is the smallest, where R's ns() refuses, so the count block is the single column log(n_peptides)",
+  expr, n_pep, "unpaired", c4$design, c4$labels, binds = FALSE, count_cols = 1))
+
 versions <- js_obj(list(
   R = js_str(paste(R.version$major, R.version$minor, sep = ".")),
   limma = js_str(as.character(packageVersion("limma")))
@@ -296,8 +318,9 @@ json <- paste0(
     "Each case's design is the one the toolkit builds for its analysis_type from the sample labels",
     "beside it, and the second coefficient is tested. spline_df is limma's rule for the Amean spline;",
     "count_cols is 2 for a natural spline of log count with one interior knot at the median, 1 when",
-    "the counts take only two values. df_prior_limma_trend is limma-trend's prior df on the same",
-    "case, for comparison.")), ",\n",
+    "the counts take only two values or the median count is the smallest or largest, where R's ns()",
+    "refuses and both tools use log count itself. df_prior_limma_trend is limma-trend's prior df on",
+    "the same case, for comparison.")), ",\n",
   "  \"versions\": ", versions, ",\n",
   "  \"cases\": [\n    ", paste(cases, collapse = ",\n    "), "\n  ]\n",
   "}\n")

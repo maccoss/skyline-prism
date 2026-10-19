@@ -1322,7 +1322,9 @@ public static partial class Program
             --prior PRIOR          Variance prior for the moderated t. Omitted, it is chosen by
                                    level: limma-trend-intensity-n-peptides for --level protein
                                    (the protein matrix carries n_peptides), limma-trend for
-                                   --level peptide. limma-trend is an intensity-dependent prior
+                                   --level peptide, and limma-trend too where the protein matrix
+                                   has no n_peptides or too few proteins to fit peptide count
+                                   (the run says which). limma-trend is an intensity-dependent prior
                                    whose curve is fitted to the contrast's own residuals;
                                    limma-trend-intensity-n-peptides adds the protein's peptide
                                    count as a second covariate (protein level only). Also global,

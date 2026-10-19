@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using MathNet.Numerics;
+using MathNet.Numerics.LinearAlgebra;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.LinearAlgebra.Factorization;
 using SkylinePrism.Core.Numerics;
@@ -205,9 +206,10 @@ public static class EmpiricalBayes
     /// Squeeze residual variances toward an intensity-dependent prior (limma-trend, Sartor 2006): the
     /// prior scale follows a natural-spline trend in <paramref name="covariate"/> (mean log-intensity)
     /// rather than a single global value. Ported from inmoose fitFDist's covariate path. The prior df is
-    /// still a single value; the prior scale is per feature. Assumes finite variances and covariate
-    /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
-    /// degrees of freedom collapse below 2.
+    /// still a single value; the prior scale is per feature. Without peptide counts it falls back to
+    /// the global prior on a non-finite variance or covariate, or when the spline degrees of freedom
+    /// collapse below 2, as limma does; with them it refuses instead (see
+    /// <paramref name="logPeptideCounts"/>).
     /// </summary>
     /// <param name="variances">Residual variance per feature.</param>
     /// <param name="dfResidual">The residual df, shared by every feature.</param>
@@ -234,7 +236,8 @@ public static class EmpiricalBayes
         if (withCounts && logPeptideCounts!.Length != n)
             throw new ArgumentException("logPeptideCounts length must match variances", nameof(logPeptideCounts));
 
-        // The trend path needs every feature usable; otherwise defer to the global prior.
+        // The trend path needs every feature usable; otherwise defer to the global prior - or, with
+        // counts, refuse, since the global prior would drop them without a word.
         for (var i = 0; i < n; i++)
             if (double.IsNaN(variances[i]) || double.IsInfinity(variances[i]) || variances[i] <= -1e-15
                 || !double.IsFinite(covariate[i]) || (withCounts && !double.IsFinite(logPeptideCounts![i])))
@@ -250,7 +253,8 @@ public static class EmpiricalBayes
         if (withCounts && !CanFitIntensityAndCounts(covariate, logPeptideCounts!))
             throw new ArgumentException(
                 $"Only {n} proteins have a usable residual variance: too few to fit a prior on intensity "
-                + "and peptide count. Use --prior limma-trend or global.");
+                + "and peptide count. Use the limma-trend or global prior instead (--prior limma-trend, or "
+                + "Intensity trend (limma) in the pane).");
         var countBlock = withCounts ? PeptideCountBasis(logPeptideCounts!) : null;
         if (splineDf < 2)
             return SqueezeVarGlobal(variances, dfResidual);
@@ -275,10 +279,21 @@ public static class EmpiricalBayes
 
         // Fit e on the natural-spline trend; the fitted values are the per-feature trend (emean) and the
         // residual mean square feeds the prior df.
-        var design = NaturalSplineBasis.Build(covariate, splineDf, includeIntercept: true);
+        Matrix<double> d = DenseMatrix.OfArray(NaturalSplineBasis.Build(covariate, splineDf, includeIntercept: true));
         if (countBlock is not null)
-            design = WithColumns(design, countBlock);
-        var d = DenseMatrix.OfArray(design);
+        {
+            d = d.Append(DenseMatrix.OfArray(countBlock));
+            // The intensity spline is full rank by construction (its df never exceed the distinct
+            // values), but log count could in principle lie in its span, and an unpivoted QR would
+            // then return a prior of NaNs rather than an error. lm.fit pivots and drops the column;
+            // refusing says what happened instead.
+            if (LinAlg.MatrixRank(d.ToArray()) < d.ColumnCount)
+                throw new ArgumentException(
+                    "Peptide count is collinear with mean expression across the proteins tested, so the "
+                    + "limma-trend-intensity-n-peptides prior cannot separate the two. Use the limma-trend "
+                    + "prior instead.");
+        }
+
         var beta = d.QR(QRMethod.Thin).Solve(DenseVector.OfArray(e));
         var fitted = d * beta;
         double rss = 0;
@@ -288,8 +303,9 @@ public static class EmpiricalBayes
             rss += r * r;
         }
 
-        // lm.fit's mean(effects[-(1:rank)]^2): the residual mean square on n - (columns) df.
-        var evar = rss / (n - design.GetLength(1)) - Trigamma(halfDf);
+        // lm.fit's mean(effects[-(1:rank)]^2): the residual mean square on n - rank df, and the design
+        // is full rank here (checked above), so the rank is its column count.
+        var evar = rss / (n - d.ColumnCount) - Trigamma(halfDf);
 
         double df2;
         var varPrior = new double[n];
@@ -366,22 +382,6 @@ public static class EmpiricalBayes
         for (var i = 0; i < logCounts.Length; i++)
             line[i, 0] = logCounts[i];
         return line;
-    }
-
-    /// <summary><paramref name="left"/> with <paramref name="right"/>'s columns appended.</summary>
-    private static double[,] WithColumns(double[,] left, double[,] right)
-    {
-        int n = left.GetLength(0), a = left.GetLength(1), b = right.GetLength(1);
-        var both = new double[n, a + b];
-        for (var i = 0; i < n; i++)
-        {
-            for (var j = 0; j < a; j++)
-                both[i, j] = left[i, j];
-            for (var j = 0; j < b; j++)
-                both[i, a + j] = right[i, j];
-        }
-
-        return both;
     }
 
     /// <summary>

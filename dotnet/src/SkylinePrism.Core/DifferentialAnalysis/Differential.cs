@@ -346,7 +346,8 @@ public static class Differential
     /// This overload offers only two variance priors: <see cref="VariancePrior.LimmaTrend"/> when
     /// <paramref name="trend"/> is true and the global prior otherwise. The others, including the
     /// deprecated <see cref="VariancePrior.IntensityTrend"/> and <see cref="VariancePrior.PeptideCount"/>,
-    /// are selected through <see cref="DifferentialOptions.Prior"/>, whose default is limma-trend.
+    /// are selected through <see cref="DifferentialOptions.Prior"/>, whose default is chosen by level
+    /// (<see cref="DifferentialOptions.ResolvedPrior"/>).
     /// </remarks>
     public static DifferentialResult Run(
         double[,] exprLog2FeaturesBySamples,
@@ -1357,9 +1358,12 @@ public static class Differential
     }
 
     /// <summary>
-    /// The variance prior the options asked for, with the name to report it under. Falls back to the
-    /// global prior - saying so in <paramref name="messages"/> - whenever the requested one cannot be
-    /// fitted, because a silently substituted prior is a silently different p-value.
+    /// The variance prior the options asked for - or, with none named, the one the level calls for
+    /// (<see cref="DifferentialOptions.ResolvedPrior"/>) - with the name to report it under. Where it
+    /// cannot be fitted, limma-trend and the deprecated intensity trend fall back to the global prior
+    /// and the default falls back as limma-trend would, each saying so in <paramref name="messages"/>,
+    /// because a silently substituted prior is a silently different p-value. A peptide-count prior
+    /// that was named refuses instead: its substitute would be a different p-value under its name.
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name, double Level) FitPrior(
         DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
@@ -1392,11 +1396,18 @@ public static class Differential
                 var logCounts = new double[counts!.Length];
                 for (var i = 0; i < logCounts.Length; i++)
                     logCounts[i] = Math.Log(counts[i]);
-                // Named, it refuses too few proteins (SqueezeVarTrend throws). As the DEFAULT it must
-                // still run, so a handful of proteins gets limma-trend instead - said here, so it is
-                // not a silent substitution. proteomics-toolkit does the same.
-                if (options.Prior is null && fit.Amean.All(double.IsFinite)
-                    && !EmpiricalBayes.CanFitIntensityAndCounts(fit.Amean, logCounts))
+                // Named, it refuses what it cannot fit (SqueezeVarTrend throws). As the DEFAULT it must
+                // still run, so it gives way to what limma-trend does with the same data - said here,
+                // so it is not a silent substitution. proteomics-toolkit does the same for a handful of
+                // proteins.
+                if (options.Prior is null && !fit.Amean.All(double.IsFinite))
+                {
+                    messages.Add("Mean expression has non-finite values - the default "
+                        + "limma-trend-intensity-n-peptides prior is unavailable, so the global prior was used.");
+                    return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
+                }
+
+                if (options.Prior is null && !EmpiricalBayes.CanFitIntensityAndCounts(fit.Amean, logCounts))
                 {
                     messages.Add($"Only {tested.Count} proteins have a usable residual variance: too few to "
                         + "fit the default limma-trend-intensity-n-peptides prior, so the default used "
