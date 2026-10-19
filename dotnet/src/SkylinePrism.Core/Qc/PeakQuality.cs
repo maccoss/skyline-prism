@@ -48,7 +48,8 @@ namespace SkylinePrism.Core.Qc;
 /// top of the matrices the rest of the report holds. Each run's values are instead counted into
 /// fixed-width histograms (<see cref="RunHistograms"/>), about 80 KB per run whatever the number of
 /// precursors, and the quantiles read back from them agree with the exact ones to within one bin
-/// width - far below what the plots can show.</para>
+/// width - far below what the plots can show. A value outside a histogram's range is kept exactly
+/// instead, so a run far off the cohort is reported as far off as it is.</para>
 /// </remarks>
 public static class PeakQuality
 {
@@ -241,13 +242,26 @@ public static class PeakQuality
 
     /// <summary>
     /// Fixed-width histograms, one per run, from which quantiles are read back to within one bin
-    /// width. Values outside the range are counted at its nearest edge, and read back as that edge.
+    /// width. Values outside the range are not binned: they are kept as they are and read back
+    /// exactly.
     /// </summary>
+    /// <remarks>
+    /// The range only has to cover where a working run's values fall. A run that is badly off -
+    /// eluting minutes from every precursor's median, say - lands outside it, and that run is the one
+    /// the section exists to show. Counting those values at the range's edge, as this first did,
+    /// reported a run shifted by 6 min as shifted by 4 and capped its score at 40, while looking like
+    /// any other measurement. Keeping them costs memory only for the values that are out of range:
+    /// on the 96-run Verapamil cohort, 0.9% of scores and 0.5% of FWHM ratios - about 400 KB.
+    /// </remarks>
     internal sealed class RunHistograms
     {
         private readonly int[] _counts;
         private readonly int[] _totals;
         private readonly int _bins;
+        // Per run, the values below and above the range, exactly; null until a run has one.
+        private readonly List<double>?[] _below;
+        private readonly List<double>?[] _above;
+        private readonly bool[] _unsorted;
 
         public RunHistograms(int runs, double lo, double hi, double width)
         {
@@ -255,9 +269,12 @@ public static class PeakQuality
             Hi = hi;
             Width = width;
             _bins = (int)Math.Round((hi - lo) / width);
-            // Two more per run: one below the range, one above it.
+            // Two more per run, counting the values below and above the range.
             _counts = new int[runs * (_bins + 2)];
             _totals = new int[runs];
+            _below = new List<double>?[runs];
+            _above = new List<double>?[runs];
+            _unsorted = new bool[runs];
         }
 
         public double Lo { get; }
@@ -272,12 +289,22 @@ public static class PeakQuality
                 return;
             int slot;
             if (value < Lo)
+            {
                 slot = 0;
+                (_below[run] ??= new List<double>()).Add(value);
+                _unsorted[run] = true;
+            }
             else if (value > Hi)
+            {
                 slot = _bins + 1;
+                (_above[run] ??= new List<double>()).Add(value);
+                _unsorted[run] = true;
+            }
             else
+            {
                 // A value exactly at Hi belongs to the last bin, not the overflow slot.
                 slot = 1 + Math.Min((int)((value - Lo) / Width), _bins - 1);
+            }
             _counts[run * (_bins + 2) + slot]++;
             _totals[run]++;
         }
@@ -286,15 +313,22 @@ public static class PeakQuality
 
         /// <summary>
         /// The q-quantile of a run's values, interpolated the way <c>numpy.percentile(method='linear')</c>
-        /// interpolates between order statistics. Each order statistic is placed inside its own bin,
-        /// so it is within one bin width of the true value, and so is any interpolation between two of
-        /// them. NaN for a run with no values.
+        /// interpolates between order statistics. An order statistic inside the range is placed inside
+        /// its own bin, so it is within one bin width of the true value; one outside the range is the
+        /// true value. Any interpolation between two of them is therefore within one bin width too.
+        /// NaN for a run with no values.
         /// </summary>
         public double Quantile(int run, double q)
         {
             var n = _totals[run];
             if (n == 0)
                 return double.NaN;
+            if (_unsorted[run])
+            {
+                _below[run]?.Sort();
+                _above[run]?.Sort();
+                _unsorted[run] = false;
+            }
             var h = q * (n - 1);
             var k = (int)Math.Floor(h);
             var lower = OrderStatistic(run, k);
@@ -304,8 +338,8 @@ public static class PeakQuality
         }
 
         /// <summary>
-        /// Estimate of the j-th smallest value (0-based): the bin holding it, with the bin's values
-        /// spread evenly across it.
+        /// The j-th smallest value (0-based): exact when it lies outside the range, otherwise estimated
+        /// from the bin holding it, with the bin's values spread evenly across it.
         /// </summary>
         private double OrderStatistic(int run, int j)
         {
@@ -317,14 +351,14 @@ public static class PeakQuality
                 if (j < below + c)
                 {
                     if (slot == 0)
-                        return Lo;
+                        return _below[run]![j - below];
                     if (slot == _bins + 1)
-                        return Hi;
+                        return _above[run]![j - below];
                     return Lo + Width * (slot - 1 + (j - below + 0.5) / c);
                 }
                 below += c;
             }
-            return Hi;
+            throw new ArgumentOutOfRangeException(nameof(j), j, "Past the last value of this run.");
         }
     }
 
@@ -334,8 +368,9 @@ public static class PeakQuality
     /// </summary>
     internal sealed class Accumulator
     {
-        // Ranges and widths per quantity. Wide enough that a real run's median sits well inside them;
-        // fine enough that one bin is invisible at the scale each panel is drawn at.
+        // Ranges and widths per quantity. Wide enough that a working run's values mostly fall inside
+        // them, since a value outside is kept exactly and costs memory; fine enough that one bin is
+        // invisible at the scale each panel is drawn at.
         internal const double ScoreMax = 40, ScoreWidth = 0.01;
         internal const double ShapeWidth = 0.001;
         internal const double DotProductWidth = 0.0005;

@@ -5,13 +5,14 @@ Goldens for the QC report's "Peak Quality by Acquisition Order" section (`Core/Q
 `generate.py` from numpy and scipy, pinned in its PEP 723 header; it imports nothing from PRISM.
 
 ```bash
-uv run dotnet/tests/fixtures/peak_quality/generate.py precursors   # or cohort, transitions
+uv run dotnet/tests/fixtures/peak_quality/generate.py precursors   # or cohort, shifted, transitions
 ```
 
 | File | What it pins | Reference | Tolerance, and why |
 |---|---|---|---|
 | `precursors.json` | one precursor's centers, z's and score | `numpy.median`, `scipy.stats.median_abs_deviation(scale='normal')`, the score formula written out | 1e-14 relative: closed-form arithmetic on sorted values |
 | `cohort.json` | per-run score median / 10th / 90th, per-run raw-metric medians, the flagged runs | `numpy.nanpercentile(method='linear')`, `numpy.nanmedian` | one histogram bin per quantity (0.01 score, 0.001 shape / RT / FWHM ratio, 0.0005 dot product): PRISM reads the quantiles back from fixed-width histograms so memory does not grow with precursors x runs, and that is the bound the read-back guarantees. Counts and flagged runs are exact |
+| `shifted.json` | the same, for a run 6 min late with peaks 5x as wide, whose RT deviation, FWHM ratio and scores all lie OUTSIDE the histogram ranges | as `cohort.json` | as `cohort.json`: values outside a range are kept exactly, so the one-bin bound still holds there |
 | `transitions.json` | each precursor's median per run over its fragment rows | `numpy.median` of the finite fragment values | 1e-15: medians of a few values |
 
 The score is PRISM's own definition, not a published method, so the reference is that definition

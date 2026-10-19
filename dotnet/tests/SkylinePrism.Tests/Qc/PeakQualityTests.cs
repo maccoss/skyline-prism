@@ -98,10 +98,17 @@ public class PeakQualityTests
             Close(score[r], s.Score[r], $"{name} score[{r}]");
     }
 
-    [Fact]
-    public void Cohort_PerRunSummaries_MatchGoldenWithinOneBin()
+    /// <summary>
+    /// <c>cohort.json</c> is a working cohort with one degraded run; <c>shifted.json</c> has a run so
+    /// far off - 6 min late, peaks 5x as wide - that its summaries lie outside every histogram range,
+    /// which must be read back as measured, not as the range's edge.
+    /// </summary>
+    [Theory]
+    [InlineData("cohort.json")]
+    [InlineData("shifted.json")]
+    public void Cohort_PerRunSummaries_MatchGoldenWithinOneBin(string fixture)
     {
-        var g = Load("cohort.json");
+        var g = Load(fixture);
         var runs = g.GetProperty("runs").GetInt32();
         double[][] Rows(string key) => g.GetProperty(key).EnumerateArray().Select(Golden.Vec).ToArray();
         var (shape, dotp, rt, fwhm) = (Rows("shape"), Rows("dotp"), Rows("rt"), Rows("fwhm"));
@@ -285,17 +292,42 @@ public class PeakQualityTests
     }
 
     [Fact]
-    public void RunHistograms_CountsOutOfRangeAtTheEdges_AndTheTopValueInsideTheRange()
+    public void RunHistograms_KeepOutOfRangeValuesExactly_AndTheTopValueInsideTheRange()
     {
         var h = new PeakQuality.RunHistograms(runs: 1, lo: -1, hi: 1, width: 0.5);
         h.Add(0, double.NaN);       // not counted
-        h.Add(0, -7);               // below: read back as -1
+        h.Add(0, 50);               // above the range: kept as it is
+        h.Add(0, -7);               // below the range: kept as it is
         h.Add(0, 1.0);              // exactly the top: the last bin, not the overflow
-        h.Add(0, 50);               // above: read back as 1
-        Assert.Equal(3, h.Count(0));
-        Assert.Equal(-1, h.Quantile(0, 0));
-        Assert.InRange(h.Quantile(0, 0.5), 0.5, 1.0);
-        Assert.Equal(1, h.Quantile(0, 1));
+        h.Add(0, 9);
+        Assert.Equal(4, h.Count(0));
+        Assert.Equal(-7, h.Quantile(0, 0));
+        Assert.Equal(50, h.Quantile(0, 1));
+        // Between two out-of-range values the interpolation is exact too: 9 + 0.5 * (50 - 9).
+        Assert.Equal(29.5, h.Quantile(0, 5.0 / 6.0), 12);
+        Assert.InRange(h.Quantile(0, 1.0 / 3.0), 0.5, 1.0);
+    }
+
+    /// <summary>
+    /// The case that showed the edge-clamping: a run 6 min off every precursor's median used to read
+    /// back as 4 min with a score capped at 40, looking like any other measurement.
+    /// </summary>
+    [Fact]
+    public void Accumulator_ReportsARunFarOutsideTheRanges_AsFarAsItIs()
+    {
+        var acc = new PeakQuality.Accumulator(5);
+        var rt = new[] { 20, 20.01, 19.99, 20.02, 26 };
+        var nan = Enumerable.Repeat(double.NaN, 5).ToArray();
+        for (var p = 0; p < 10; p++)
+            acc.Add(nan, nan, rt, nan);
+        var result = acc.Summarize(
+            new[] { "a", "b", "c", "d", "e" }, new Dictionary<string, DateTime>(), new[] { "retention time" });
+
+        var expected = PeakQuality.ScorePrecursor(nan, nan, rt, nan);
+        var last = result.Runs[4];
+        Assert.Equal(5.99, last.RtDeviation, 12);
+        Assert.Equal(expected.Score[4], last.ScoreMedian, 12);
+        Assert.True(last.ScoreMedian > PeakQuality.Accumulator.ScoreMax);
     }
 
     [Fact]

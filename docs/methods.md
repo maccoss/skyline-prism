@@ -969,7 +969,9 @@ only.
 **Precision and cost.** The per-run quantiles are read from fixed-width histograms (about 80 KB per
 run, whatever the number of precursors), which agree with the exact quantiles to within one bin:
 0.01 for the score, 0.001 for shape correlation, RT deviation (minutes) and the FWHM ratio, 0.0005
-for the dot product. Measuring a 30-million-row cohort takes about 20 s, most of it DuckDB's grouped
+for the dot product. The ranges cover where a working run's values fall (score up to 40, RT
+deviation within 4 min, FWHM ratio up to 4); a value outside them is kept exactly rather than
+counted at the edge, so a run far off the cohort is reported as far off as it is. Measuring a 30-million-row cohort takes about 20 s, most of it DuckDB's grouped
 median. Pinned by `dotnet/tests/fixtures/peak_quality/` (numpy and scipy).
 
 ## Ion Accounting

@@ -33,7 +33,7 @@ Run from the repository root:
 
     uv run dotnet/tests/fixtures/peak_quality/generate.py precursors
 
-naming the fixture(s) to rewrite (precursors, cohort, transitions); with no name all three are.
+naming the fixture(s) to rewrite (precursors, cohort, shifted, transitions); with no name all are.
 """
 
 from __future__ import annotations
@@ -292,18 +292,50 @@ def gen_cohort() -> None:
         rt[p, bad] -= 0.10
         fwhm[p, bad] *= 0.95
 
-    summary = summarize(shape, dotp, rt, fwhm)
-    write("cohort.json", {
+    write_cohort("cohort.json",
+                 "80 precursors x 12 runs, run 7 degraded. Per-run summaries are the exact numpy "
+                 "quantiles; PRISM reads them back from fixed-width histograms, so the test allows one "
+                 "bin width per quantity. Runs are in input order (acquisition order).",
+                 shape, dotp, rt, fwhm)
+
+
+def gen_shifted() -> None:
+    """A run far enough off that its summaries lie OUTSIDE PRISM's histogram ranges."""
+    rng = Rng(4242)
+    n_prec, n_runs, bad = 30, 6, 5
+    shape = np.empty((n_prec, n_runs))
+    dotp = np.empty((n_prec, n_runs))
+    rt = np.empty((n_prec, n_runs))
+    fwhm = np.empty((n_prec, n_runs))
+    for p in range(n_prec):
+        base_shape, base_dotp = rng.uniform(0.6, 0.95), rng.uniform(0.3, 0.9)
+        base_rt, base_fwhm = rng.uniform(5.0, 40.0), rng.uniform(0.05, 0.15)
+        for r in range(n_runs):
+            shape[p, r] = min(1.0, base_shape + 0.02 * rng.normal())
+            dotp[p, r] = min(1.0, max(0.0, base_dotp + 0.02 * rng.normal()))
+            rt[p, r] = base_rt + 0.01 * rng.normal()
+            fwhm[p, r] = base_fwhm * (1 + 0.03 * rng.normal())
+        # Six minutes late and five times as wide: past the RT-deviation range (+-4 min), the FWHM
+        # ratio range (4) and, for every precursor, the score range (40).
+        rt[p, bad] += 6.0
+        fwhm[p, bad] *= 5.0
+    write_cohort("shifted.json",
+                 "30 precursors x 6 runs; run 6 elutes 6 min late with peaks 5x as wide, so its RT "
+                 "deviation, FWHM ratio and every score lie outside PRISM's histogram ranges. Those "
+                 "values are kept exactly, so the test's one-bin allowance must still hold.",
+                 shape, dotp, rt, fwhm)
+
+
+def write_cohort(name: str, note: str, shape, dotp, rt, fwhm) -> None:
+    write(name, {
         "reference": REFERENCE,
-        "note": "80 precursors x 12 runs, run 7 degraded. Per-run summaries are the exact numpy "
-                "quantiles; PRISM reads them back from fixed-width histograms, so the test allows one "
-                "bin width per quantity. Runs are in input order (acquisition order).",
-        "runs": n_runs,
+        "note": note,
+        "runs": shape.shape[1],
         "shape": [vec(row) for row in shape],
         "dotp": [vec(row) for row in dotp],
         "rt": [vec(row) for row in rt],
         "fwhm": [vec(row) for row in fwhm],
-        "expected": summary,
+        "expected": summarize(shape, dotp, rt, fwhm),
     })
 
 
@@ -365,7 +397,12 @@ def gen_transitions() -> None:
     })
 
 
-FIXTURES = {"precursors": gen_precursors, "cohort": gen_cohort, "transitions": gen_transitions}
+FIXTURES = {
+    "precursors": gen_precursors,
+    "cohort": gen_cohort,
+    "shifted": gen_shifted,
+    "transitions": gen_transitions,
+}
 
 
 def main(names: list[str]) -> None:
