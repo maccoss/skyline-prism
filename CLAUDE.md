@@ -501,7 +501,7 @@ Key sections:
 - `protein_rollup`: Peptide→protein rollup (method: median_polish, sum, topn, maxlfq, ibaq)
 - `protein_normalization`: Protein-level normalization (method: median)
 - `parsimony`: Shared peptide handling (all_groups, unique_only, razor) + enzyme / enzyme_specificity
-- `qc_report`: QC report generation (enabled, save_plots)
+- `qc_report`: QC report generation (enabled, save_plots, peak_quality)
 
 ### Core/BatchCorrection/
 - `ComBat.Run()`: the entry point for a wide LOG2 matrix + batch labels
