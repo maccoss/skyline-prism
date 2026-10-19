@@ -307,9 +307,9 @@ the whole cohort — the difference between peak memory that is flat in cohort s
 > a leftover `_pep_bucket=2` added 9.9M duplicated rows to 29.9M.
 >
 > PRISM checks for this. Before anything reads `merged_data/`, the row count in its parquet footers is
-> compared with `TotalRows` in [`merged_data.cache.json`](#merged_datacachejson). Ion accounting, the
-> Spectrum density tab and detection refuse a directory that does not match, and name the partitions
-> responsible. A re-run into that directory re-merges and recomputes every stage. If you read the
+> compared with `TotalRows` in [`merged_data.cache.json`](#merged_datacachejson). The QC report's
+> peak-quality section, ion accounting, the Spectrum density tab and detection refuse a directory that
+> does not match, and name the partitions responsible. A re-run into that directory re-merges and recomputes every stage. If you read the
 > directory with the glob yourself, make the same comparison first.
 The bucket count is chosen from the row count (~12M rows per partition, capped at 256), so it grows
 with the number of documents merged while each partition stays the same size. `hive_partitioning=false`

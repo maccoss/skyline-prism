@@ -31,9 +31,10 @@ as the GitHub Release description and fails if it is missing.
   files but removing none, can keep partitions from an earlier merge that had more of them. The number of
   partitions is chosen partly from free memory, so it can differ between runs. On a 96-run cohort this left
   a stale `_pep_bucket=2` holding 9.9M duplicated rows beside 29.9M, and anything that read the whole
-  directory counted about a third more precursors than the cohort has. Ion accounting, the Spectrum
-  density tab and detection in the differential analysis now refuse such a directory, with a message
-  naming the leftover partitions. A re-run into it re-merges and recomputes every stage instead of
+  directory counted about a third more precursors than the cohort has. The QC report's peak-quality
+  section, ion accounting, the Spectrum density tab and detection in the differential analysis now
+  refuse such a directory, with a message naming the leftover partitions; the QC report shows that
+  message in place of the section and builds the rest. A re-run into it re-merges and recomputes every stage instead of
   reusing the cached merge. The check compares the parquet footers with `TotalRows` in
   `merged_data.cache.json`. It reads no column data, and took under 0.1 s on that cohort.
 
