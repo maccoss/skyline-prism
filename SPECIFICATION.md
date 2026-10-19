@@ -958,7 +958,7 @@ This ensures:
 - Transitions with interference in high-abundance samples are heavily downweighted
 - Transitions with poor correlation only in low-abundance samples get less penalty
 
-**Required Skyline columns:**
+**Skyline columns this design draws on (quality-weighted aggregation is not implemented today):**
 - `Shape Correlation`: Correlation of each transition's elution profile with the median. Low values indicate interference from co-eluting analytes at that precursor→product transition.
 - `Coeluting`: Boolean indicating apex within integration boundaries. The bundled `Skyline-PRISM` report has never exported it and no rollup that is implemented today reads it, so a quality-weighted aggregation that used it would have to add it to the report first.
 
@@ -969,7 +969,7 @@ Where:
 - $\alpha \cdot I$ = shot noise (Poisson counting statistics)
 - $\beta \cdot I^2$ = multiplicative noise (ionization efficiency)
 - $\gamma$ = additive noise (electronic)
-- quality_penalty = function of shape correlation and coelution
+- quality_penalty = function of shape correlation and, if `Coeluting` were exported, coelution
 
 **Parameter learning:**
 Parameters (α, β, γ, quality penalty terms) are learned by minimizing CV across peptides in reference samples. The optimization uses the same intensity-weighted quality metrics to ensure consistency between learning and application.
