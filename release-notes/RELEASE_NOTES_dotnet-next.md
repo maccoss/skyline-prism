@@ -46,6 +46,20 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **`prism run --from-provenance <parameters.json> -c <overrides.yaml>` stopped ignoring the
+  overrides.** The `-c` had been dropped without a word whenever a provenance file was given, so the
+  documented way to change one setting of an earlier run re-ran its old settings unchanged. Each key
+  the YAML set replaced the earlier run's value and every other key was kept; a subsection merged key
+  by key and a list was replaced whole. The run log named the overridden keys, an unrecognized key
+  warned as it did with a plain `-c`, and a file that changed no setting said so.
+- **A config key left with no value stopped failing the run or quietly changing a setting.** YAML
+  reads a blank as null, and PRISM had bound it as written: a blank `enabled:` under
+  `batch_correction` turned ComBat off with nothing said, a blank number became 0, a blank method
+  name or a list with every entry commented out (`reference_pattern:` alone) failed when sample types
+  were assigned, and a bare `transition_rollup:` stopped the run with "Object reference not set to an
+  instance of an object". A blank key was treated as left out and kept its default - or, with
+  `--from-provenance`, the earlier run's value. An empty list is written `[]`, and `null` still
+  cleared a key whose default is none, such as `parsimony.fasta_path`.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).
@@ -65,3 +79,11 @@ as the GitHub Release description and fails if it is missing.
   global prior with a message; it now stops with an error, as does the new prior. Both also refuse a
   missing, fractional or sub-1 count, counts that are all the same (what a peptide table looks like),
   and repeated feature ids, as `proteomics-toolkit` does.
+- **A config with a blank method key produced different numbers.** Treating a blank key as left out
+  gave it its documented default instead of whatever the pipeline had made of a null:
+  `global_normalization.method:` left blank had run median normalization and ran `rt_lowess`, and
+  `batch_estimation.method:` left blank had estimated batches from acquisition-time gaps (`auto`) -
+  then ComBat-corrected across them - and estimated none. A blank `output.format:` had written
+  `corrected_peptides.` with no extension and wrote parquet. Every other blank method key already ran
+  its default. To keep a previous run's numbers, write the method it used explicitly
+  (`method: median`, `method: auto`).

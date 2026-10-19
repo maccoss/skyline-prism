@@ -237,7 +237,8 @@ See **[docs/parameters.md](docs/parameters.md)** for the full parameter referenc
 it does, and its default.
 
 A run records its full configuration to `parameters.json`; `prism run --from-provenance
-out/parameters.json` reproduces an earlier run's settings.
+out/parameters.json` reproduces an earlier run's settings. Add `-c overrides.yaml` to change only the
+keys that file sets and keep the rest from the earlier run.
 
 ## Output
 

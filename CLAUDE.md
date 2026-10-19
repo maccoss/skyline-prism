@@ -690,7 +690,14 @@ prism run -i new_data.csv -o output2/ --from-provenance output1/parameters.json
 prism run -i new_data.csv -o output2/ --from-provenance output1/parameters.json -c overrides.yaml
 ```
 
-**Implementation**: `Core/Pipeline/Provenance.cs` -> `Write()` / `LoadConfig()`. The QC report reads
+With both, each key `overrides.yaml` sets replaces the provenance's value and every other key keeps
+it; a subsection merges key by key, a list is replaced whole. Unknown keys warn exactly as a plain `-c`
+does, the run log names the keys that were overridden, and a file that changes nothing says so.
+Up to dotnet-v26.29.0 the `-c` was dropped without a word whenever a provenance was given.
+
+**Implementation**: `Core/Pipeline/Provenance.cs` -> `Write()` / `LoadConfig()`; the overrides go
+through `PrismConfig.ApplyOverrides` / `Overlay`, which binds each key with `Parse` so an override
+means what the same YAML means alone. The QC report reads
 the same file for its "Analysis Information" block, so a report always names the version, date, host
 and inputs of the run that produced the numbers.
 
