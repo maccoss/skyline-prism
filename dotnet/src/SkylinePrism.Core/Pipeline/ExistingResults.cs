@@ -50,7 +50,8 @@ public sealed record ExistingResults(
     bool Measured,
     bool InputsChanged = false,
     string? Host = null,
-    IReadOnlyList<string>? Present = null)
+    IReadOnlyList<string>? Present = null,
+    bool MergedDataMismatch = false)
 {
     /// <summary>Nothing was there to begin with.</summary>
     public static readonly ExistingResults None =
@@ -136,6 +137,9 @@ public sealed record ExistingResults(
         // "different settings" sends the reader to a config diff that shows nothing.
         var why = !SameVersion
             ? "a different version of PRISM, which recomputes every stage"
+            : MergedDataMismatch
+                ? "a merged_data folder that no longer matches what its merge wrote, which it rebuilds "
+                  + "along with every stage below it"
             : InputsChanged
                 ? "input files that have changed since that run, so every stage below the merge"
                 : $"different settings for {Describe(Recomputed)}";
@@ -275,6 +279,14 @@ public sealed record ExistingResults(
         var (from, inputsChanged) = sameVersion
             ? FirstChanged(recorded, config, cache, inputs, outputDir)
             : (0, false);
+
+        // A merged_data that no longer holds what its merge wrote is rebuilt by the run, and every stage
+        // below it recomputed, whatever the settings say (PrismPipeline) - so it is said as itself,
+        // rather than left to read as "nothing changed" or blamed on a config diff that shows nothing.
+        var mergedMismatch = sameVersion && MergedDataMismatchIn(outputDir);
+        if (mergedMismatch)
+            (from, inputsChanged) = (0, false);
+
         if (from < 0)
         {
             // Nothing DIFFERENT would be written, so there is nothing to warn a log about - but the
@@ -297,7 +309,24 @@ public sealed record ExistingResults(
         // nothing to name - fall back to the outputs a reader would recognize.
         return new ExistingResults(
             true, version, date, sameVersion, recomputed,
-            files.Length > 0 ? files : present, exact, inputsChanged, host, present);
+            files.Length > 0 ? files : present, exact, inputsChanged, host, present, mergedMismatch);
+    }
+
+    /// <summary>
+    /// Whether the directory's merged_data no longer matches what its merge wrote. False when it
+    /// cannot be read at all: that is the run's to report, and this check never throws.
+    /// </summary>
+    private static bool MergedDataMismatchIn(string outputDir)
+    {
+        try
+        {
+            return MergedDataset.Inconsistencies(Path.Combine(outputDir, MergedDataset.DirectoryName)).Count > 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

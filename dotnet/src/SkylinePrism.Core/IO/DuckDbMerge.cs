@@ -331,6 +331,23 @@ public static class DuckDbMerge
                 try { Directory.Delete(staging, recursive: true); } catch (Exception) { }
         }
 
+        // The manifest goes in BEFORE the rename, so it arrives with the partitions it describes and
+        // the published directory is never without one. Every reader checks the directory against it
+        // (MergedDataset.Open), which is what catches a stray partition an outside copy left behind.
+        try
+        {
+            var manifest = MergedDataset.WriteManifest(staging);
+            if (manifest.TotalRows != totalRows)
+                throw new InvalidOperationException(
+                    $"The merge counted {totalRows:N0} rows but its files' footers hold {manifest.TotalRows:N0}; "
+                    + "the merged data was not published.");
+        }
+        catch
+        {
+            try { Directory.Delete(staging, recursive: true); } catch (Exception) { }
+            throw;
+        }
+
         Publish(staging, fullOutput);
 
         return new MergeResult(

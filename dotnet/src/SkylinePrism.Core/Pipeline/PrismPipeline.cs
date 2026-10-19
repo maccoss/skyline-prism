@@ -107,7 +107,26 @@ public sealed class PrismPipeline
             "|" + StageDependencies.Values(StageDependencies.Merge, config));
 
         DuckDbMerge.MergeResult merge;
-        if (cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath))
+        var reuseMerge = cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath);
+        if (reuseMerge)
+        {
+            // Same inputs and settings, but the directory may not hold what its merge wrote any more -
+            // an output folder copied over an older copy of itself keeps partitions the newer merge did
+            // not write, and every reader would count them. Rebuilding is the fix the reader's error
+            // would ask for, so do it here. Everything below is recomputed too: those stages are keyed
+            // on the INPUTS, so their cached outputs could have been computed from the same bad folder
+            // and nothing in their fingerprints would say so.
+            var problems = MergedDataset.Inconsistencies(mergedPath);
+            if (problems.Count > 0)
+            {
+                report($"  merged_data does not match what its merge wrote ({problems[0]}"
+                    + (problems.Count > 1 ? $"; {problems.Count - 1} more" : "")
+                    + "); rebuilding it and every stage computed from it.");
+                reuseMerge = false;
+                stageCache = StageCache.Load(outputDir, forceReprocess: true);
+            }
+        }
+        if (reuseMerge && cached is not null)
         {
             // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before the
             // merge stopped sorting; what it holds is the PEPTIDE column (the partition key). Nothing

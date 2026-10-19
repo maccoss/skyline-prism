@@ -23,6 +23,7 @@ output_dir/
 ├── peptides_log2_internal.parquet  # Peptide quantities after normalization, BEFORE ComBat (LOG2, internal)
 ├── proteins_raw.parquet            # Protein quantities before normalization (LOG2 scale)
 ├── merged_data/                    # Merged transition-level data, partitioned by peptide bucket
+│   ├── _manifest.json              #   the partitions and files this merge wrote, checked on every read
 │   ├── _pep_bucket=0/*.parquet     #   one directory per bucket; count scales with cohort size
 │   └── ...
 ├── merged_data.cache.json          # Fingerprints, for detecting when a re-merge is needed
@@ -306,6 +307,20 @@ keeps `_pep_bucket` out of the result, so the columns are exactly those listed b
 > Output directories written by releases before dotnet-v26.12.0 hold a single sorted
 > `merged_data.parquet`. These are still read (the QC report and the Spectrum density tab open either
 > layout); only a re-run rebuilds them as partitions.
+
+**`_manifest.json`** lists every partition and parquet file the merge wrote, with each file's rows
+and bytes. PRISM checks `merged_data/` against it every time it reads the directory: a partition or
+file that is not listed, one that is listed but missing, or a file whose size changed, and the
+directory is **not read** - the error names each one and says how to fix it. A plain glob cannot tell
+a stray partition from a real one, so without this every reader would count the extra rows. PRISM's
+own merge never leaves one behind, but an output folder copied between machines can: a copy that adds
+and overwrites files but never deletes them keeps any partition the newer run no longer wrote. Copy
+output folders with a mirroring copy (for example `robocopy /MIR`).
+
+`prism run` rebuilds a `merged_data/` that fails the check, and recomputes every stage below it,
+rather than stopping. A `merged_data/` written before the manifest existed is checked instead
+against the row count recorded in `merged_data.cache.json`; with neither there is nothing to check
+against, and it is read as it is.
 
 **Columns**:
 
@@ -712,7 +727,7 @@ this file has the same effect for one run.
 
 **Purpose**: Stores fingerprints (file sizes, modification times, row counts) of input files to detect when re-merging is needed.
 
-**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged.
+**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged. Its recorded total row count is also what a `merged_data/` written before `_manifest.json` existed is checked against (see [merged_data/](#merged_data)).
 
 > [!NOTE]
 > A C# output directory from before dotnet-v26.12.0 has a `merged_data.parquet.cache.json` beside its
