@@ -26,6 +26,12 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **`prism run --from-provenance <parameters.json> -c <overrides.yaml>` now applies the overrides.**
+  The `-c` was dropped without a word whenever a provenance file was given, so the documented way to
+  change one setting of an earlier run re-ran its old settings unchanged. Each key the YAML sets now
+  replaces the earlier run's value and every other key is kept; a subsection merges key by key and a
+  list is replaced whole. The run log names the keys that were overridden, an unrecognized key warns
+  as it does with a plain `-c`, and a file that changes no setting says so.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).

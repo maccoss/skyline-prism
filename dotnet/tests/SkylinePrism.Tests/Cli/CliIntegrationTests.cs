@@ -1063,4 +1063,86 @@ public class CliIntegrationTests
             Cleanup(outDir);
         }
     }
+
+    /// <summary>
+    /// <c>--from-provenance</c> with <c>-c</c> changes the settings the YAML names and keeps every
+    /// other one from the earlier run.
+    /// </summary>
+    /// <remarks>
+    /// Up to dotnet-v26.29.0 the <c>-c</c> was dropped without a word whenever a provenance file was
+    /// given, so the command line CLAUDE.md documents for "override specific settings" re-ran the old
+    /// settings unchanged. The kept settings are asserted as well as the changed one: a fix that read
+    /// the YAML INSTEAD of the provenance would pass on the override alone, and would silently put
+    /// every key the YAML does not mention back to its built-in default.
+    /// </remarks>
+    [Fact]
+    public void Run_FromProvenance_AppliesTheConfigOnTopOfIt()
+    {
+        var first = TempDir();
+        var second = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(first));
+            var provenance = Path.Combine(first, "parameters.json");
+
+            var overrides = Path.Combine(second, "overrides.yaml");
+            File.WriteAllText(overrides, """
+                transition_rollup:
+                  min_transitions: 2
+                  min_transition: 5
+                """);
+
+            var (code, output) = Invoke(
+                "run", "-i", Input1, Input2, "-o", second, "--from-provenance", provenance, "-c", overrides);
+            Assert.Equal(0, code);
+
+            var ran = SkylinePrism.Core.Pipeline.Provenance.LoadConfig(Path.Combine(second, "parameters.json"));
+            Assert.Equal(2, ran.TransitionRollup.MinTransitions); // overridden: the fixture says 1
+
+            // Kept from the provenance, where the fixture differs from the built-in default.
+            Assert.Equal("median", ran.GlobalNormalization.Method);
+            Assert.Equal(new[] { "-Pool_" }, ran.SampleAnnotations.ReferencePattern);
+            Assert.Equal(2, ran.ProteinRollup.MinPeptides);
+            Assert.False(ran.QcReport.Enabled);
+
+            // Said, not inferred: the log names the file and what it changed, and a key the YAML
+            // misspelled is warned about exactly as a plain -c run warns about it.
+            Assert.Contains("transition_rollup.min_transitions", output, StringComparison.Ordinal);
+            Assert.Contains(
+                "config key 'transition_rollup.min_transition' is not recognized", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(first);
+            Cleanup(second);
+        }
+    }
+
+    /// <summary>
+    /// A <c>-c</c> that sets nothing PRISM reads says so, rather than appearing to have been applied.
+    /// </summary>
+    [Fact]
+    public void Run_FromProvenance_WithAConfigThatSetsNothing_SaysSo()
+    {
+        var first = TempDir();
+        var second = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(first));
+            var overrides = Path.Combine(second, "overrides.yaml");
+            File.WriteAllText(overrides, "transition_rolup:\n  min_transitions: 2\n");
+
+            var (code, output) = Invoke("run", "-i", Input1, Input2, "-o", second,
+                "--from-provenance", Path.Combine(first, "parameters.json"), "-c", overrides);
+            Assert.Equal(0, code);
+            Assert.Contains("changes no setting", output, StringComparison.Ordinal);
+            Assert.Equal(1, SkylinePrism.Core.Pipeline.Provenance.LoadConfig(
+                Path.Combine(second, "parameters.json")).TransitionRollup.MinTransitions);
+        }
+        finally
+        {
+            Cleanup(first);
+            Cleanup(second);
+        }
+    }
 }
