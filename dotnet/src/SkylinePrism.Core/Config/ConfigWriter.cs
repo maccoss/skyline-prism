@@ -261,12 +261,13 @@ public static class ConfigWriter
 
     private static Dictionary<string, object?> QcReport(PrismConfig.QcReportSection qc)
     {
-        // Both written unconditionally: the QC report's own Processing Parameters table renders
+        // All written unconditionally: the QC report's own Processing Parameters table renders
         // from this, and a blank row there reads as a missing setting rather than a default one.
         return new Dictionary<string, object?>
         {
             ["enabled"] = qc.Enabled,
             ["save_plots"] = qc.SavePlots,
+            ["peak_quality"] = qc.PeakQuality,
         };
     }
 

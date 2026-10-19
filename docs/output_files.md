@@ -537,9 +537,11 @@ prism run -i new_data.csv -o new_output/ --from-provenance old_output/parameters
 | `sample` | string | Sample name (without batch suffix) |
 | `sample_type` | string | Sample type: `experimental`, `reference`, `qc`, or `blank` |
 | `batch` | string | Batch assignment for batch correction |
+| `acquired_time` | string | When the run was acquired, `yyyy-MM-dd HH:mm:ss` (the instrument PC's clock; no time zone). The replicate's earliest `Acquired Time` if it holds several injections; blank when the report has no Acquired Time |
+| `run_order` | integer | 1-based position in the acquisition sequence of every replicate in the merged data, ties broken by `sample_id`. A sample excluded as an outlier keeps its place, so the numbering can have gaps; it matches the run numbers in the QC report's peak-quality plot. Blank when `acquired_time` is |
 | *(every other Replicates column)* | string | Carried through verbatim — see below |
 
-**Replicate annotations**: after those four, the file carries **every other column** of the Skyline
+**Replicate annotations**: after those six, the file carries **every other column** of the Skyline
 Replicates report (or of the metadata files given to `-m`), with its own name and value: `SampleType`,
 `AnalyteConcentration`, and one column per replicate annotation (`Subject`, `Timepoint`, `Condition`,
 whatever the document defines). This is what makes the output directory self-contained for downstream
@@ -547,8 +549,9 @@ analysis — the study design sits beside the abundances, and a join needs no se
 
 Notes:
 
-- The four columns above keep their names and positions, so anything already reading this file works
-  unchanged.
+- The first four columns keep their names and positions, so anything already reading this file works
+  unchanged. `acquired_time` and `run_order` follow them, taken from the merged data rather than from
+  an annotation, so every cohort exported with Acquired Time has them.
 - `sample_type` and the report's own `SampleType` are **both** written, and they are not the same
   fact. `sample_type` is PRISM's mapping — `Standard` → `reference`, `Quality Control` → `qc`,
   `Solvent`/`Blank`/`Double Blank` → `blank`, everything else → `experimental` — and that mapping is
@@ -764,6 +767,11 @@ under [`merged_data/`](#merged_data)).
 - CV distributions for control samples
 - Sample correlation heatmaps
 - RT correction visualizations (if RT-lowess used)
+- Peak Quality by Acquisition Order (`qc_report.peak_quality`): Skyline's shape correlation, isotope
+  dot product, retention time and FWHM scored per run and plotted in acquisition order, with runs
+  whose median score exceeds twice the cohort's labeled. Computed from `merged_data/`, so omitted when
+  that has been deleted - see [methods.md](methods.md#peak-quality-by-acquisition-order)
+- Ion accounting, when `prism ion-accounting` has measured the directory
 
 ### qc_plots/
 

@@ -148,6 +148,7 @@ public static class StageDependencies
             // The QC report is regenerated on every run (it is seconds) and caches nothing.
             ["qc_report.enabled"] = "the QC report is never cached",
             ["qc_report.save_plots"] = "the QC report is never cached",
+            ["qc_report.peak_quality"] = "the QC report is never cached",
 
             // Folded onto the flat transition_rollup.library_* keys by PrismConfig.Parse before any
             // stage reads it, so the flat keys above already carry its effect.

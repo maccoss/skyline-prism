@@ -706,8 +706,14 @@ public sealed class PrismPipeline
         cancellationToken.ThrowIfCancellationRequested();
         report("Stage 5: Output generation");
         report("============================================================");
+        // Read here rather than with the batch estimate, which only runs as a fallback: run order is
+        // written for every cohort whose report carries an Acquired Time.
+        var acquired = cols.AcquiredTime is not null
+            ? AcquisitionOrder.ReadTimes(dataset, cols.Sample, cols.AcquiredTime)
+            : new Dictionary<string, DateTime>(StringComparer.Ordinal);
         WriteSampleMetadata(
-            Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType, metadata);
+            Path.Combine(outputDir, "sample_metadata.csv"), samples, resolvedBatch, resolvedType, metadata,
+            acquired);
         // Keep a copy of the search database beside the results. An absolute path describes the run;
         // it does not let anyone repeat it once the database has been reorganized or the output
         // directory handed to someone else.
@@ -834,14 +840,21 @@ public sealed class PrismPipeline
     }
 
     /// <summary>
-    /// Write sample_metadata.csv: PRISM's four resolved fields, then EVERY other column of the
-    /// Replicates report (or of the metadata files given to the CLI), verbatim.
+    /// Write sample_metadata.csv: PRISM's four resolved fields, the acquisition time and run order,
+    /// then EVERY other column of the Replicates report (or of the metadata files given to the CLI),
+    /// verbatim.
     /// <para>
     /// The annotations are the study - Subject, Timepoint, responder status, days between draws - and
     /// this file is where an analyst looks for them next to the abundances. PRISM interprets three of
     /// the report's columns and used to write only those, so a cohort's design reached the output
     /// directory only inside a Skyline export that most downstream code never opens. The four resolved
     /// columns keep their names and positions, so anything already reading this file still works.
+    /// </para>
+    /// <para>
+    /// `acquired_time` and `run_order` come from the merged data's Acquired Time
+    /// (<see cref="AcquisitionOrder"/>), not from an annotation, so every cohort exported with that
+    /// column has them whether or not anyone recorded an injection order in Skyline. They are blank
+    /// when the report has no Acquired Time.
     /// </para>
     /// <para>
     /// The report's own `SampleType` is carried too, even though `sample_type` is derived from it,
@@ -879,16 +892,16 @@ public sealed class PrismPipeline
         }
     }
 
-    private static void WriteSampleMetadata(
+    internal static void WriteSampleMetadata(
         string path, IReadOnlyList<string> samples,
         IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType,
-        ReplicateMetadata? metadata)
+        ReplicateMetadata? metadata, IReadOnlyDictionary<string, DateTime> acquired)
     {
-        // Every report column goes out. Only an EXACT name clash with one of the four reserved fields
-        // is adjusted, and by suffixing rather than dropping: two columns with the same header would
+        // Every report column goes out. Only an EXACT name clash with one of the reserved fields is
+        // adjusted, and by suffixing rather than dropping: two columns with the same header would
         // resolve to whichever a reader indexes first, silently, while dropping one would lose data the
         // run was asked to carry. (A replicate annotation really can be called "batch".)
-        var reserved = new[] { "sample_id", "sample", "sample_type", "batch" };
+        var reserved = new[] { "sample_id", "sample", "sample_type", "batch", "acquired_time", "run_order" };
         var extraCols = new List<(string Header, string Column)>();
         foreach (var col in metadata?.ColumnNames ?? new List<string>())
         {
@@ -898,7 +911,13 @@ public sealed class PrismPipeline
             extraCols.Add((header, col));
         }
 
-        var sb = new StringBuilder("sample_id,sample,sample_type,batch");
+        // Position in the acquisition sequence of EVERY replicate the merged data holds, so a sample
+        // excluded as an outlier keeps its place and leaves a gap: run 12 is the twelfth injection
+        // whatever the analysis kept, and the number the QC report's peak-quality plot gives it.
+        // Blank for a sample with no time.
+        var runOrder = AcquisitionOrder.Rank(acquired);
+
+        var sb = new StringBuilder("sample_id,sample,sample_type,batch,acquired_time,run_order");
         foreach (var (header, _) in extraCols)
             sb.Append(',').Append(Csv(header));
         sb.Append('\n');
@@ -909,7 +928,14 @@ public sealed class PrismPipeline
             var batch = resolvedBatch.GetValueOrDefault(sampleId, "batch1");
             var type = resolvedType.GetValueOrDefault(sampleId, "experimental");
             sb.Append(Csv(sampleId)).Append(',').Append(Csv(replicate)).Append(',')
-              .Append(type).Append(',').Append(Csv(batch));
+              .Append(type).Append(',').Append(Csv(batch)).Append(',')
+              .Append(acquired.TryGetValue(sampleId, out var time)
+                  ? time.ToString(AcquisitionOrder.TimeFormat, CultureInfo.InvariantCulture)
+                  : "")
+              .Append(',')
+              .Append(runOrder.TryGetValue(sampleId, out var order)
+                  ? order.ToString(CultureInfo.InvariantCulture)
+                  : "");
 
             var values = metadata?.ValuesFor(sampleId, replicate);
             foreach (var (_, col) in extraCols)
