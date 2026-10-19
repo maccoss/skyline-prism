@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Config;
+using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Tests.TestSupport;
 using Xunit;
@@ -204,6 +205,53 @@ public class StageCacheReuseTests
 
             Assert.DoesNotContain("Reusing peptides_rollup.parquet", string.Join("\n", log));
             Assert.True(File.Exists(Path.Combine(dir, "peptides_rollup.parquet")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A merge whose partitions no longer add up to the count recorded beside it is rebuilt, and no
+    /// stage below it is reused. The inputs are unchanged, so every fingerprint still matches; what
+    /// moved is the directory itself, which no fingerprint covers.
+    /// <para>
+    /// Recomputing everything is deliberate. A stage computed while the directory was damaged -
+    /// by a release without this check - would carry the damage under a fingerprint that is still
+    /// valid, and nothing recorded can say whether that happened.
+    /// </para>
+    /// <para>
+    /// The damage is the one found on a real cohort: a partition the merge did not write, holding a
+    /// copy of rows it did. See <c>MergedDatasetConsistencyTests</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AMergeThatNoLongerAddsUp_IsRebuilt_AndNothingBelowItIsReused()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "prism_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            PrismPipeline.Run(Inputs(), dir, Config(), null, _ => { });
+
+            var merged = Path.Combine(dir, "merged_data");
+            var real = Directory.GetDirectories(merged, MergedDataset.BucketColumn + "=*")
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .First();
+            var stale = Path.Combine(merged, MergedDataset.BucketColumn + "=99");
+            Directory.CreateDirectory(stale);
+            File.Copy(Directory.GetFiles(real, "*.parquet")[0], Path.Combine(stale, "data_0.parquet"));
+
+            var log = new System.Collections.Generic.List<string>();
+            PrismPipeline.Run(Inputs(), dir, Config(), null, log.Add);
+            var second = string.Join("\n", log);
+
+            Assert.Contains(MergedDataset.BucketColumn + "=99", second);
+            Assert.DoesNotContain("Reusing", second);
+            Assert.False(Directory.Exists(stale), "the rebuilt merge kept the partition it did not write");
+            // And the directory now agrees with its own record, so the readers open it again.
+            MergedDataset.Open(merged);
         }
         finally
         {

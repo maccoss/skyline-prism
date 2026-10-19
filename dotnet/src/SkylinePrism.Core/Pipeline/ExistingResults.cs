@@ -341,8 +341,8 @@ public sealed record ExistingResults(
                 // and its fingerprint appears in stage_cache.json only as the rollup's upstream
                 // ingredient. Asking CanReuse about it therefore always says no, and a warning that
                 // fires on every re-run is the failure this whole check exists to avoid.
-                var mergedPath = Path.Combine(outputDir, "merged_data");
-                var merged = SourceFingerprint.TryRead(mergedPath + ".cache.json");
+                var mergedPath = Path.Combine(outputDir, MergedDataset.DirectoryName);
+                var merged = SourceFingerprint.TryRead(MergedDataset.SidecarPathFor(mergedPath));
                 // The same choice the pipeline makes, or this would predict a re-merge the run is not
                 // going to do - see SourceFingerprint.Preferred.
                 var source = SourceFingerprint.Preferred(

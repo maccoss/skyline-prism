@@ -92,8 +92,8 @@ public sealed class PrismPipeline
         report("============================================================");
         report("Stage 1: Merge / prepare input");
         report("============================================================");
-        var mergedPath = Path.Combine(outputDir, "merged_data");
-        var cachePath = mergedPath + ".cache.json";
+        var mergedPath = Path.Combine(outputDir, MergedDataset.DirectoryName);
+        var cachePath = MergedDataset.SidecarPathFor(mergedPath);
         // The input files AND the column overrides: DuckDbMerge is given data.sample_column, and the
         // partitioning follows the peptide column, so a changed data.* override makes the merged table
         // wrong even though every input file is untouched. Fingerprinting only the files meant the
@@ -106,17 +106,36 @@ public sealed class PrismPipeline
             cached?.Fingerprint, inputs, outputDir,
             "|" + StageDependencies.Values(StageDependencies.Merge, config));
 
-        DuckDbMerge.MergeResult merge;
+        DuckDbMerge.MergeResult? merge = null;
         if (cached is not null && cached.Fingerprint == fingerprint && MergedDataset.Exists(mergedPath))
         {
-            // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before the
-            // merge stopped sorting; what it holds is the PEPTIDE column (the partition key). Nothing
-            // about a cached merge is sorted.
-            merge = new DuckDbMerge.MergeResult(mergedPath, cached.SortColumn, cached.TotalRows);
-            report($"  Reusing cached merge ({merge.TotalRows:N0} rows; inputs unchanged - "
-                + "pass --force-reprocess to rebuild).");
+            // Unchanged inputs say nothing about the directory itself, which can be damaged after the
+            // merge wrote it - a copy made over an older copy keeps partitions the merge did not write,
+            // and the rollup would read them as more peptides. So the files must still add up to the
+            // count the merge took (MergedDataset.Open has the case that was found).
+            var damage = MergedDataset.OpenUnverified(mergedPath).DescribeMismatch(cached.TotalRows);
+            if (damage is null)
+            {
+                // CacheEntry.SortColumn keeps its old name to stay readable by sidecars written before
+                // the merge stopped sorting; what it holds is the PEPTIDE column (the partition key).
+                // Nothing about a cached merge is sorted.
+                merge = new DuckDbMerge.MergeResult(mergedPath, cached.SortColumn, cached.TotalRows);
+                report($"  Reusing cached merge ({merge.TotalRows:N0} rows; inputs unchanged - "
+                    + "pass --force-reprocess to rebuild).");
+            }
+            else
+            {
+                // Every stage below is recomputed too, not just the merge. Their fingerprints are still
+                // valid - the inputs did not change - but one computed while the directory was damaged,
+                // by a release without this check, carries the damage under them, and nothing recorded
+                // can say whether that happened. A directory altered outside PRISM vouches for nothing.
+                report("  WARNING: " + damage);
+                report("  Re-merging from the inputs, and recomputing every stage after it.");
+                stageCache = StageCache.Load(outputDir, forceReprocess: true);
+            }
         }
-        else
+
+        if (merge is null)
         {
             merge = DuckDbMerge.Merge(
                 inputs, mergedPath, replicateColumn: config.Data.SampleColumn,

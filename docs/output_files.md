@@ -298,6 +298,19 @@ SELECT * FROM read_parquet('output/merged_data/**/*.parquet', hive_partitioning=
 Rows are **not** sorted. All of a peptide's rows are guaranteed to be in exactly one bucket, which is
 what lets the transition rollup (Stage 2) sort and stream one partition at a time instead of sorting
 the whole cohort — the difference between peak memory that is flat in cohort size and one that is not.
+
+> [!CAUTION]
+> **Copy an output directory to a new folder, or replace the old copy outright. Never merge it into an
+> older copy.** The number of buckets is chosen partly from free memory, so two runs of the same cohort
+> can write different numbers of them. A copy or sync that replaces files but deletes none keeps the
+> older run's extra buckets beside the newer run's. The glob above then reads both: on a 96-run cohort,
+> a leftover `_pep_bucket=2` added 9.9M duplicated rows to 29.9M.
+>
+> PRISM checks for this. Before anything reads `merged_data/`, the row count in its parquet footers is
+> compared with `TotalRows` in [`merged_data.cache.json`](#merged_datacachejson). Ion accounting, the
+> Spectrum density tab and detection refuse a directory that does not match, and name the partitions
+> responsible. A re-run into that directory re-merges and recomputes every stage. If you read the
+> directory with the glob yourself, make the same comparison first.
 The bucket count is chosen from the row count (~12M rows per partition, capped at 256), so it grows
 with the number of documents merged while each partition stays the same size. `hive_partitioning=false`
 keeps `_pep_bucket` out of the result, so the columns are exactly those listed below.
@@ -710,9 +723,18 @@ this file has the same effect for one run.
 
 ### merged_data.cache.json
 
-**Purpose**: Stores fingerprints (file sizes, modification times, row counts) of input files to detect when re-merging is needed.
+**Purpose**: Records what the merge was made from and what it wrote, to detect when re-merging is
+needed. `Fingerprint` stamps the input files (path, size, last-write time) and the merge's own
+settings. `TotalRows` is the number of rows the merge wrote to `merged_data/`. `SortColumn` is the
+peptide column the rows were partitioned on (the name is left over from when the merge sorted).
 
-**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged.
+**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise PRISM reuses
+`merged_data/` only when the inputs still match `Fingerprint` AND the parquet footers in
+`merged_data/` still add up to `TotalRows`. When the inputs match but the rows do not, the directory
+has been changed since the merge wrote it. PRISM then logs a WARNING naming the partitions responsible,
+re-merges, and recomputes every stage, because none of the cached stages can be trusted. Readers of
+`merged_data/` make the same row-count check and refuse a directory that fails it (see the caution
+under [`merged_data/`](#merged_data)).
 
 > [!NOTE]
 > A C# output directory from before dotnet-v26.12.0 has a `merged_data.parquet.cache.json` beside its

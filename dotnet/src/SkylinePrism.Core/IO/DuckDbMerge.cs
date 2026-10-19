@@ -84,7 +84,14 @@ public static class DuckDbMerge
         int MemoryBudgetMb = 0, int Partitions = 1)
     {
         /// <summary>The merged data, ready to scan whole or one partition at a time.</summary>
-        public MergedDataset Dataset() => MergedDataset.Open(OutputPath);
+        /// <remarks>
+        /// Not checked against the sidecar's count, as <see cref="MergedDataset.Open"/> is: this
+        /// result's <see cref="TotalRows"/> was either just counted from what was written or already
+        /// checked against the directory by the caller that reused it. Checking again would read every
+        /// footer twice - and if the sidecar could not be rewritten after a fresh merge, would refuse
+        /// the new data over the OLD merge's count.
+        /// </remarks>
+        public MergedDataset Dataset() => MergedDataset.OpenUnverified(OutputPath);
     }
 
     /// <summary>
@@ -303,7 +310,7 @@ public static class DuckDbMerge
             // than scanning the data back.
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
-                $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(MergedDataset.Open(staging).ScanTarget)}', "
+                $"SELECT COUNT(*) FROM read_parquet('{SqlEscape(MergedDataset.OpenUnverified(staging).ScanTarget)}', "
                 + "hive_partitioning=false)";
             totalRows = Convert.ToInt64(cmd.ExecuteScalar());
             merged = true;

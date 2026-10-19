@@ -1224,6 +1224,15 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    of documents merged. See `MergedDataset` for the sizing trade (it was measured in both directions,
    and the intuitive answer was wrong) and `docs/output_files.md` for the layout. Row CONTENT remains
    the cross-engine parity contract; row ORDER and file layout explicitly are not.
+
+   **Read it through `MergedDataset.Locate` + `Open`, never a glob of your own.** `Open` checks that
+   the partitions' footer row counts add up to `TotalRows` in `merged_data.cache.json`, and refuses the
+   directory if they do not. The bucket count follows free memory, so it varies between runs. A copy of
+   an output directory made over an older copy (files replaced, none removed) therefore kept a 3-bucket
+   merge's `_pep_bucket=2` beside the 2-bucket merge that replaced it: 9.9M duplicated rows on 29.9M,
+   which every recursive reader counted. The pipeline's merge-cache reuse makes the same check
+   (`DescribeMismatch`). On a mismatch it re-merges and recomputes every stage, since a stage computed
+   while the directory was damaged would still pass its fingerprint check.
 7. **The default moderated-t prior is limma-trend** (measured). An intensity-dependent prior is wanted,
    and limma-trend is the one whose curve comes from the residuals the test uses. The lab's intensity
    trend took its shape from the QC/reference pools, and was calibrated on average but tilted by
