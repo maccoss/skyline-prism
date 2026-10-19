@@ -318,9 +318,11 @@ and overwrites files but never deletes them keeps any partition the newer run no
 output folders with a mirroring copy (for example `robocopy /MIR`).
 
 `prism run` rebuilds a `merged_data/` that fails the check, and recomputes every stage below it,
-rather than stopping. A `merged_data/` written before the manifest existed is checked instead
-against the row count recorded in `merged_data.cache.json`; with neither there is nothing to check
-against, and it is read as it is.
+rather than stopping. It clears `stage_cache.json` before it starts, so a run stopped part-way through
+the repair cannot leave the stages computed from the bad folder to be reused by the next one; if the
+file cannot be cleared, the run stops. A `merged_data/` written before the manifest existed is
+checked instead against the row count recorded in `merged_data.cache.json`; with neither there is
+nothing to check against, and it is read as it is.
 
 **Columns**:
 
@@ -710,7 +712,8 @@ are all reused, and `corrected_peptides.parquet` is byte-identical to the previo
 `transition_rollup.method` and everything downstream of it rebuilds.
 
 `prism run --force-reprocess` reuses nothing (but still records, so the next run benefits). Deleting
-this file has the same effect for one run.
+this file has the same effect for one run. A run that finds `merged_data/` no longer matching what its
+merge wrote empties this file itself before rebuilding (see `merged_data/` above).
 
 > [!IMPORTANT]
 > **Stage reuse applies to closed `.sky` documents and pre-exported reports.** A closed document also

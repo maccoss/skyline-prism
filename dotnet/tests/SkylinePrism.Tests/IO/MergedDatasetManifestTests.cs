@@ -246,6 +246,47 @@ public class MergedDatasetManifestTests
         }
     }
 
+    /// <summary>
+    /// A manifest with a null entry or a name listed twice is malformed. It must come back as an
+    /// inconsistency like any other - not as a NullReferenceException or a duplicate-key exception that
+    /// escapes the check, which would stop `prism run` from repairing the directory and break the GUI's
+    /// pre-run inspection.
+    /// </summary>
+    [Theory]
+    [InlineData("null-partition")]
+    [InlineData("null-file")]
+    [InlineData("duplicate-partition")]
+    [InlineData("duplicate-file")]
+    public void AMalformedManifestIsAnInconsistencyNotACrash(string damage)
+    {
+        var dir = NewDir("malformed");
+        try
+        {
+            var target = Path.Combine(dir, "merged_data");
+            MergeInto(target);
+            var manifestPath = Path.Combine(target, MergedDataset.ManifestFileName);
+            var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))!;
+            var partitions = json["Partitions"]!.AsArray();
+            var files = partitions[0]!["Files"]!.AsArray();
+            switch (damage)
+            {
+                case "null-partition": partitions.Add(null); break;
+                case "null-file": files.Add(null); break;
+                case "duplicate-partition": partitions.Add(partitions[0]!.DeepClone()); break;
+                case "duplicate-file": files.Add(files[0]!.DeepClone()); break;
+            }
+            File.WriteAllText(manifestPath, json.ToJsonString());
+
+            var problems = MergedDataset.Inconsistencies(target);
+            Assert.NotEmpty(problems);
+            Assert.Throws<MergedDatasetMismatchException>(() => MergedDataset.Open(target));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
     [Fact]
     public void AMissingPartitionIsRefused()
     {
@@ -361,6 +402,146 @@ public class MergedDatasetManifestTests
             Assert.DoesNotContain(log, line => line.Contains("Reusing cached merge", StringComparison.Ordinal));
             Assert.False(Directory.Exists(stale), "the rebuilt merge still holds the copied-in partition");
             Assert.Empty(MergedDataset.Inconsistencies(merged));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    private const string ReusedRollup = "Reusing peptides_rollup.parquet";
+
+    private static PrismConfig MiniConfig() =>
+        PrismConfig.Load(Path.Combine(Fixtures.Path2("mini", "e2e-sum"), "config.yaml"));
+
+    /// <summary>
+    /// The repair must be durable before it starts. A run that stops right after rebuilding the merge -
+    /// cancelled, killed, out of disk - leaves a CONSISTENT merged_data behind, and the stages below it
+    /// are keyed on the inputs, which did not change. If forgetting them had happened only in memory, the
+    /// next run would find a clean merge and recorded stages vouching for outputs computed from the
+    /// damaged one, and reuse them. So the stage cache is cleared on disk first, and the retry recomputes.
+    /// </summary>
+    [Fact]
+    public void ARepairThatStopsPartWayStillLeavesNothingToReuse()
+    {
+        var dir = NewDir("stopped");
+        try
+        {
+            var inputs = new[] { Plate1, Plate2 };
+            var config = MiniConfig();
+            PrismPipeline.Run(inputs, dir, config);
+
+            // The control: an undamaged re-run does reuse the rollup, so its absence below means something.
+            var plain = new List<string>();
+            PrismPipeline.Run(inputs, dir, config, log: plain.Add);
+            Assert.Contains(plain, l => l.Contains(ReusedRollup, StringComparison.Ordinal));
+
+            CopyInStalePartition(Path.Combine(dir, MergedDataset.DirectoryName));
+
+            // Stop the run the moment the rebuilt merge is reported - after the repair, before any stage
+            // below it has been recomputed and recorded.
+            using var stop = new System.Threading.CancellationTokenSource();
+            Assert.ThrowsAny<OperationCanceledException>(() => PrismPipeline.Run(
+                inputs, dir, config,
+                log: l => { if (l.Contains("Merged ", StringComparison.Ordinal)) stop.Cancel(); },
+                cancellationToken: stop.Token));
+            Assert.Empty(MergedDataset.Inconsistencies(Path.Combine(dir, MergedDataset.DirectoryName)));
+
+            var retry = new List<string>();
+            PrismPipeline.Run(inputs, dir, config, log: retry.Add);
+            Assert.DoesNotContain(retry, l => l.Contains(ReusedRollup, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    /// <summary>
+    /// The check runs whenever merged_data is there, not only when the merge would have been reused. With
+    /// its cache sidecar gone, the merge is rebuilt anyway - but the stages below are still keyed on the
+    /// unchanged inputs and would be reused, though they may have been computed from the damaged folder.
+    /// </summary>
+    [Fact]
+    public void AMismatchIsCaughtEvenWhenTheMergeSidecarIsGone()
+    {
+        var dir = NewDir("nosidecar");
+        try
+        {
+            var inputs = new[] { Plate1, Plate2 };
+            var config = MiniConfig();
+            PrismPipeline.Run(inputs, dir, config);
+            var merged = Path.Combine(dir, MergedDataset.DirectoryName);
+            CopyInStalePartition(merged);
+            File.Delete(MergedDataset.CachePathFor(merged));
+
+            var log = new List<string>();
+            PrismPipeline.Run(inputs, dir, config, log: log.Add);
+
+            Assert.Contains(log, l => l.Contains("does not match", StringComparison.Ordinal));
+            Assert.DoesNotContain(log, l => l.Contains(ReusedRollup, StringComparison.Ordinal));
+            Assert.Empty(MergedDataset.Inconsistencies(merged));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    /// <summary>
+    /// Every partition gone but the manifest still there: MergedDataset.Exists says no merge, so the
+    /// merge is rebuilt - and the manifest says what was lost, which is reason enough not to trust the
+    /// stages computed from it either.
+    /// </summary>
+    [Fact]
+    public void AMergeWithEveryPartitionGoneStillDisablesReuse()
+    {
+        var dir = NewDir("allgone");
+        try
+        {
+            var inputs = new[] { Plate1, Plate2 };
+            var config = MiniConfig();
+            PrismPipeline.Run(inputs, dir, config);
+            var merged = Path.Combine(dir, MergedDataset.DirectoryName);
+            foreach (var partition in PartitionDirs(merged))
+                Directory.Delete(partition, recursive: true);
+            Assert.False(MergedDataset.Exists(merged));
+
+            var log = new List<string>();
+            PrismPipeline.Run(inputs, dir, config, log: log.Add);
+
+            Assert.Contains(log, l => l.Contains("does not match", StringComparison.Ordinal));
+            Assert.DoesNotContain(log, l => l.Contains(ReusedRollup, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    /// <summary>
+    /// Forgetting the stages is what makes the repair safe to interrupt, so a failure to forget must
+    /// stop the run rather than be swallowed the way a failed Record is - forgetting only in memory
+    /// is the defect this exists to prevent.
+    /// </summary>
+    [Fact]
+    public void ForgettingTheStagesFailsLoudlyWhenTheCacheCannotBeCleared()
+    {
+        var dir = NewDir("forget");
+        try
+        {
+            var inputs = new[] { Plate1, Plate2 };
+            var config = MiniConfig();
+            PrismPipeline.Run(inputs, dir, config);
+            var cachePath = Path.Combine(dir, StageCache.FileName);
+            Assert.False(StageCache.Load(dir).IsEmpty);
+
+            using (new FileStream(cachePath, FileMode.Open, FileAccess.Read, FileShare.None))
+                Assert.Throws<IOException>(() => StageCache.Forget(dir));
+            Assert.False(StageCache.Load(dir).IsEmpty);
+
+            StageCache.Forget(dir);
+            Assert.True(StageCache.Load(dir).IsEmpty);
         }
         finally
         {

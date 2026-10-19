@@ -310,12 +310,23 @@ public sealed class MergedDataset
             if (m?.Partitions is null)
                 throw new InvalidDataException($"{ManifestFileName} lists no partitions.");
             // Names are joined onto the merged_data path, so anything but a bare partition or file
-            // name - a separator, "..", an absolute path - would point the check outside it.
+            // name - a separator, "..", an absolute path - would point the check outside it. A null
+            // entry or a name listed twice is refused here too: the check keys partitions and files by
+            // name, and either would otherwise surface as a crash instead of a reason not to read.
+            var partitionNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in m.Partitions)
-                if (!IsBareName(p.Name) || !p.Name.StartsWith(BucketColumn + "=", StringComparison.Ordinal)
-                    || p.Files is null || p.Files.Any(f => !IsBareName(f.Name)))
+            {
+                if (p is null || !IsBareName(p.Name) || !p.Name.StartsWith(BucketColumn + "=", StringComparison.Ordinal)
+                    || p.Files is null || p.Files.Any(f => f is null || !IsBareName(f.Name)))
                     throw new InvalidDataException(
-                        $"{ManifestFileName} lists an entry that is not a partition or file inside merged_data: {p.Name}");
+                        $"{ManifestFileName} lists an entry that is not a partition or file inside merged_data: {p?.Name ?? "(null)"}");
+                if (!partitionNames.Add(p.Name))
+                    throw new InvalidDataException($"{ManifestFileName} lists {p.Name} more than once.");
+                var fileNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var f in p.Files)
+                    if (!fileNames.Add(f.Name))
+                        throw new InvalidDataException($"{ManifestFileName} lists {p.Name}/{f.Name} more than once.");
+            }
             return m;
         }
         catch (JsonException ex)

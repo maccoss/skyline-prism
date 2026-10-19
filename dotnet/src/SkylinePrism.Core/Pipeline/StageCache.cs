@@ -74,6 +74,35 @@ public sealed class StageCache
     }
 
     /// <summary>
+    /// Forget every recorded stage, ON DISK, before anything is recomputed - for when the outputs the
+    /// entries vouch for can no longer be trusted, though nothing in their fingerprints says so. Yields
+    /// a cache that reuses nothing but still records, like <see cref="Load"/> with forceReprocess.
+    /// </summary>
+    /// <remarks>
+    /// Throws rather than swallowing a failed write (unlike <see cref="Record"/>): forgetting only in
+    /// memory is not forgetting. A run that stopped after the repair would leave the entries on disk
+    /// and the next run would reuse them, so a run that cannot clear them must not start the repair.
+    /// Written empty rather than deleted, since a delete Windows has only marked pending would leave
+    /// the old file readable.
+    /// </remarks>
+    /// <exception cref="IOException">The sidecar could not be cleared.</exception>
+    public static StageCache Forget(string outputDir)
+    {
+        var path = Path.Combine(outputDir, FileName);
+        var empty = new Dictionary<string, Entry>(StringComparer.Ordinal);
+        try
+        {
+            File.WriteAllText(path, JsonSerializer.Serialize(new Document(SchemaVersion, empty)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not clear {path}, so the stages it records could be reused after "
+                + $"merged_data is rebuilt; nothing was rebuilt. {ex.Message}", ex);
+        }
+        return new StageCache(path, outputDir, empty, disabled: true);
+    }
+
+    /// <summary>
     /// The outputs a recorded stage claimed, or nothing when this directory has no entry for it.
     /// </summary>
     /// <remarks>
