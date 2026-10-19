@@ -65,6 +65,10 @@ public class CliIntegrationTests
     private static int Run(string outDir)
         => Invoke("run", "-i", Input1, Input2, "-o", outDir, "-c", Config).Code;
 
+    /// <summary>The prism_run_*.log a run wrote into <paramref name="outDir"/>.</summary>
+    private static string RunLog(string outDir)
+        => File.ReadAllText(Assert.Single(Directory.GetFiles(outDir, "prism_run_*.log")));
+
     [Fact]
     public void Run_ProducesExpectedOutputs()
     {
@@ -1164,6 +1168,47 @@ public class CliIntegrationTests
             (_, output) = Invoke("run", "-i", Input1, Input2, "-o", Path.Combine(root, "out2"),
                 "--from-provenance", provenance, "-c", other);
             Assert.Contains(note, output, StringComparison.Ordinal);
+            // ... and the run log keeps it, which is the record once the console has scrolled away.
+            Assert.Contains(note, RunLog(Path.Combine(root, "out2")), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>
+    /// A config key PRISM ignores is recorded in the run log as well as on stderr, with a plain
+    /// <c>-c</c> and with one applied over a provenance.
+    /// </summary>
+    /// <remarks>
+    /// The warning is said while the config is read, before the log exists, and up to
+    /// dotnet-v26.29.0 it went to stderr only. A scripted run that discards stderr then left a log
+    /// that read as though every setting had been honored.
+    /// </remarks>
+    [Fact]
+    public void Run_RecordsConfigWarningsInTheRunLog()
+    {
+        var root = TempDir();
+        try
+        {
+            const string warning = "config key 'transition_rolup' is not recognized";
+            var config = Path.Combine(root, "config.yaml");
+            File.WriteAllText(config, File.ReadAllText(Config) + "\ntransition_rolup:\n  min_transitions: 2\n");
+            var first = Path.Combine(root, "first");
+
+            var (code, output) = Invoke("run", "-i", Input1, Input2, "-o", first, "-c", config);
+            Assert.Equal(0, code);
+            Assert.Contains(warning, output, StringComparison.Ordinal);
+            Assert.Contains(warning, RunLog(first), StringComparison.Ordinal);
+
+            var overrides = Path.Combine(root, "overrides.yaml");
+            File.WriteAllText(overrides, "transition_rolup:\n  min_transitions: 2\n");
+            var second = Path.Combine(root, "second");
+            (code, _) = Invoke("run", "-i", Input1, Input2, "-o", second,
+                "--from-provenance", Path.Combine(first, "parameters.json"), "-c", overrides);
+            Assert.Equal(0, code);
+            Assert.Contains(warning, RunLog(second), StringComparison.Ordinal);
         }
         finally
         {
