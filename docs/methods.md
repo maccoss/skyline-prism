@@ -903,6 +903,77 @@ Methods for identifying problematic samples:
 - **Missing rate:** Fraction of zero/missing values
 - **PCA coordinates:** First N principal components for visualization
 
+### Peak Quality by Acquisition Order
+
+A QC report section (`qc_report.peak_quality`, on by default) that asks which runs are degraded, or
+simply different, using Skyline's own peak-quality columns rather than the abundances. Every other
+plot in the report is per sample or per retention time; this one is in the order the runs were
+acquired, so drift and one-off failures read as what they are.
+
+**Inputs**, read from `merged_data/` each time the report is made:
+
+| Metric | Level in the export | A precursor's value in a run |
+|---|---|---|
+| Shape Correlation | transition | median over its fragment rows |
+| Retention Time | transition | median over its fragment rows |
+| Fwhm | transition | median over its fragment rows |
+| Isotope Dot Product | precursor | median over its rows (all carry one value) |
+
+MS1 rows are left out of the fragment medians, by the same rule Stage 2 uses. Non-finite values are
+dropped **before** the median: Skyline writes a missing shape correlation as NaN, and a median taken
+over NaNs sorts them above every number - on a 96-run cohort that read the worst run's median shape
+correlation as 0.81 instead of 0.66. Heavy and light forms of a peptide at one charge are one
+precursor here, as they are in the rollup.
+
+**The score.** For each precursor and each metric, every run's value becomes a robust z against that
+precursor's own median across runs:
+
+```
+center = median of the precursor's finite values      (needs >= 3 runs)
+scale  = MAD / 0.6745                                   (needs scale > 0)
+z      = max(0, (center - x) / scale)                   shape correlation, isotope dot product
+z      = |x - center| / scale                           retention time, FWHM
+score  = sqrt(mean of z^2 over the metrics with a z)
+```
+
+Comparing each precursor with itself is what makes the metrics comparable across precursors. The
+z is one-sided where only one direction is bad and two-sided where either is different. A metric with
+too few runs, or a zero MAD, is left out for that precursor rather than divided by: on the same
+cohort 40% of precursors had an identical isotope dot product in most runs (85% of those exactly 0,
+no MS1 isotope match). A missing value is left out of that run's score, not imputed as a bad one.
+
+**The plots.**
+
+1. Each run's median score and the 10-90% range of its precursors' scores, in acquisition order and
+   colored by sample type. Runs whose median exceeds **twice the cohort's median** (the median of the
+   runs' medians) are labeled and listed in a table beside the cohort's typical values. The y axis is
+   set by the medians, so a run whose worst precursors score far higher has its range run off the
+   top.
+2. The per-run median of each raw metric, stacked on one axis: shape correlation, isotope dot
+   product, retention time minus each precursor's median, and FWHM over each precursor's median. The
+   labeled runs are marked in every panel, so which metric moved is read straight down.
+
+Run order is each replicate's earliest `Acquired Time`, ties broken by sample id - the same rule that
+writes `run_order` into `sample_metadata.csv`. If any run lacks a time, the axis falls back to sample
+order and says so.
+
+**Why not MSstats+.** MSstats+ (Kohler et al., Nat Commun 2026) scores the same Skyline columns with
+an isolation forest, which is random, and PRISM pins every reported quantity to a golden. This score
+is written from its definition above, not translated from MSstats+'s code. On the 96-run Verapamil
+cohort it labels the same two runs MSstats+'s anomaly scores single out - the two Internal Control
+injections, at a median shape correlation of 0.66 against 0.82 for the cohort and eluting 0.12 min
+early. MSstats+ also fits cumulative sums (CUSUM) of each metric in run order; there it carried one
+outlying run's deviation into about ten following runs, so this section plots each run's own values
+only.
+
+**Precision and cost.** The per-run quantiles are read from fixed-width histograms (about 80 KB per
+run, whatever the number of precursors), which agree with the exact quantiles to within one bin:
+0.01 for the score, 0.001 for shape correlation, RT deviation (minutes) and the FWHM ratio, 0.0005
+for the dot product. The ranges cover where a working run's values fall (score up to 40, RT
+deviation within 4 min, FWHM ratio up to 4); a value outside them is kept exactly rather than
+counted at the edge, so a run far off the cohort is reported as far off as it is. Measuring a 30-million-row cohort takes about 20 s, most of it DuckDB's grouped
+median. Pinned by `dotnet/tests/fixtures/peak_quality/` (numpy and scipy).
+
 ## Ion Accounting
 
 Run separately from the pipeline, by `prism ion-accounting -d <output-dir> -r <raw-dir>`. It reads the

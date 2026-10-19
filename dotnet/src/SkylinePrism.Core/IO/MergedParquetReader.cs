@@ -132,6 +132,105 @@ public static class MergedParquetReader
     }
 
     /// <summary>
+    /// Stream each precursor's Skyline peak-quality metrics in every run: one
+    /// <see cref="PrecursorQualityBlock"/> per (peptide, precursor charge), its arrays indexed like
+    /// <paramref name="samples"/>.
+    /// <para>
+    /// A precursor's value in a run is the MEDIAN over its fragment rows for the transition-level
+    /// columns (shape correlation, retention time, FWHM), and over all its rows for the precursor-level
+    /// isotope dot product, whose rows all carry one value. MS1 rows are left out of the fragment
+    /// medians by the same predicate Stage 2 uses (<see cref="IsPrecursorSql"/>): an MS1 isotope
+    /// trace is a different measurement of the same peak.
+    /// </para>
+    /// <para>
+    /// <b>Non-finite values are filtered BEFORE the median, and that is not optional.</b> Skyline
+    /// writes a missing shape correlation as NaN rather than null, and DuckDB orders NaN above every
+    /// number, so an unfiltered median is pulled toward the top of the range by however many fragments
+    /// lacked one. Measured on a 96-run cohort: the typical run's median shape correlation read 0.89
+    /// instead of 0.82, and the worst run's 0.81 instead of 0.66. The degraded runs had the most NaNs,
+    /// so the bias all but hid exactly the runs the column exists to show.
+    /// </para>
+    /// <para>
+    /// <b>The cost, and the alternatives measured against it.</b> On 30 million transition rows in
+    /// 3.5 million precursor x run groups this query takes about 19 s. Sorting the rows by precursor
+    /// and run and taking the medians in C# as they stream past - the shape
+    /// <see cref="StreamPeptideBlocks"/> uses - took 36 s: the sort costs more than the grouped
+    /// median. <c>avg</c> in place of <c>median</c> took 9 s, but a mean over a precursor's fragments
+    /// is pulled by the one fragment with interference, which is not what a precursor's value in a
+    /// run should describe. Partitions are read one at a time: the merge hashes every row of a peptide
+    /// into one partition, so a precursor's runs are never split across two.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// Heavy and light forms of one peptide at one charge share a key and are scored together, as the
+    /// rollup treats them.
+    /// </remarks>
+    public static IEnumerable<PrecursorQualityBlock> StreamPrecursorQuality(
+        MergedDataset dataset, PrecursorQualityColumns cols, IReadOnlyList<string> samples,
+        int memoryBudgetMb = 0)
+    {
+        string Double(string? column) => column is null
+            ? "CAST(NULL AS DOUBLE)"
+            : $"TRY_CAST(p.\"{column}\" AS DOUBLE)";
+        var isPrecursor = cols.Transition is null
+            ? "false"
+            : $"COALESCE({IsPrecursorSql(cols.Transition, "p")}, false)";
+        const string Fragment = "NOT isprec AND ";
+        var sampleSql = SampleIndexSql(samples);
+
+        foreach (var partition in dataset.Partitions)
+        {
+            // A connection per partition, for the reason StreamPeptideBlocks gives.
+            using var conn = OpenBounded(dataset, memoryBudgetMb);
+            using var cmd = DuckDbTuning.StreamingCommand(conn,
+                "SELECT pep, pz, samp, "
+                + $"median(shape) FILTER (WHERE {Fragment}isfinite(shape)), "
+                + $"median(rt) FILTER (WHERE {Fragment}isfinite(rt)), "
+                + $"median(fwhm) FILTER (WHERE {Fragment}isfinite(fwhm)), "
+                + "median(dotp) FILTER (WHERE isfinite(dotp)) "
+                + "FROM (SELECT "
+                + $"p.\"{cols.Peptide}\" AS pep, "
+                + $"TRY_CAST(p.\"{cols.PrecursorCharge}\" AS INTEGER) AS pz, "
+                + "m.s_idx AS samp, "
+                + $"{isPrecursor} AS isprec, "
+                + $"{Double(cols.ShapeCorrelation)} AS shape, "
+                + $"{Double(cols.RetentionTime)} AS rt, "
+                + $"{Double(cols.Fwhm)} AS fwhm, "
+                + $"{Double(cols.IsotopeDotProduct)} AS dotp "
+                + $"FROM {Scan(partition)} p "
+                + $"JOIN {sampleSql} m ON m.s_name = p.\"{cols.Sample}\") "
+                + "GROUP BY pep, pz, samp "
+                // Consecutive rows of one precursor make one block; the run order within it does not
+                // matter, because each row is placed by its sample index.
+                + "ORDER BY pep, pz");
+            using var reader = cmd.ExecuteReader();
+
+            PrecursorQualityBlock? current = null;
+            while (reader.Read())
+            {
+                var pep = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                var charge = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                if (current is null || current.Charge != charge
+                    || !string.Equals(current.Peptide, pep, StringComparison.Ordinal))
+                {
+                    if (current is not null)
+                        yield return current;
+                    current = new PrecursorQualityBlock(pep, charge, samples.Count);
+                }
+
+                var s = reader.GetInt32(2);
+                current.ShapeCorrelation[s] = ToDouble(reader.GetValue(3));
+                current.RetentionTime[s] = ToDouble(reader.GetValue(4));
+                current.Fwhm[s] = ToDouble(reader.GetValue(5));
+                current.IsotopeDotProduct[s] = ToDouble(reader.GetValue(6));
+            }
+
+            if (current is not null)
+                yield return current;
+        }
+    }
+
+    /// <summary>
     /// SQL producing the transition id, <c>ion_z{precursor}_{product}</c>.
     /// <para>
     /// This string is written to <c>peptides_rollup_residuals.parquet</c>, so it is an output contract and has
@@ -325,4 +424,59 @@ public static class MergedParquetReader
         double.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out var r) ? r : double.NaN;
 
     private static string Esc(string path) => path.Replace("'", "''");
+}
+
+/// <summary>
+/// The merged-data columns <see cref="MergedParquetReader.StreamPrecursorQuality"/> reads. Every
+/// metric is optional: one the export lacks is read as missing, and a missing fragment-ion column
+/// makes every row a fragment.
+/// </summary>
+public sealed record PrecursorQualityColumns(
+    string Peptide, string PrecursorCharge, string Sample, string? Transition,
+    string? ShapeCorrelation, string? RetentionTime, string? Fwhm, string? IsotopeDotProduct)
+{
+    /// <summary>
+    /// From the detected columns, keeping only names the data really has.
+    /// <see cref="SkylineColumns.Detect"/> falls back to a default name for a column it requires,
+    /// so that the rollup fails on it by name - here a missing column must read as absent instead.
+    /// </summary>
+    public static PrecursorQualityColumns From(SkylineColumns cols, ICollection<string> available)
+    {
+        string? Present(string? name) => name is not null && available.Contains(name) ? name : null;
+        return new PrecursorQualityColumns(
+            cols.Peptide, cols.PrecursorCharge, cols.Sample, Present(cols.Transition),
+            Present(cols.ShapeCorrelation), Present(cols.RetentionTime), Present(cols.Fwhm),
+            Present(cols.IsotopeDotProduct));
+    }
+}
+
+/// <summary>
+/// One precursor's peak-quality metrics, one entry per run of the sample list it was read against.
+/// NaN where the run has no finite value.
+/// </summary>
+public sealed class PrecursorQualityBlock
+{
+    public PrecursorQualityBlock(string peptide, int charge, int runs)
+    {
+        Peptide = peptide;
+        Charge = charge;
+        ShapeCorrelation = Missing(runs);
+        RetentionTime = Missing(runs);
+        Fwhm = Missing(runs);
+        IsotopeDotProduct = Missing(runs);
+    }
+
+    public string Peptide { get; }
+    public int Charge { get; }
+    public double[] ShapeCorrelation { get; }
+    public double[] RetentionTime { get; }
+    public double[] Fwhm { get; }
+    public double[] IsotopeDotProduct { get; }
+
+    private static double[] Missing(int n)
+    {
+        var a = new double[n];
+        Array.Fill(a, double.NaN);
+        return a;
+    }
 }

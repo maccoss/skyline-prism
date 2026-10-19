@@ -230,7 +230,7 @@ parsimony:            # fasta_path; shared_peptide_handling; enzyme (default try
 protein_rollup:       # median_polish (default) | sum | topn | maxlfq | ibaq
 protein_normalization:# median
 marker_normalization: # off by default; PC1 of a named protein list, applied to both outputs
-qc_report:            # HTML report + plots
+qc_report:            # HTML report + plots, including peak quality per run in acquisition order
 ```
 
 See **[docs/parameters.md](docs/parameters.md)** for the full parameter reference — every key, what
