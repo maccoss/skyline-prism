@@ -166,6 +166,8 @@ public class CliIntegrationTests
             Assert.False(File.Exists(Path.Combine(outDir, "panorama.json"))); // a dry run remembers nothing
 
             var report = File.ReadAllText(Path.Combine(outDir, "qc_report.html"));
+            // The peak-quality section's table and notes are in what is checked below, not skipped.
+            Assert.Contains("Peak Quality by Acquisition Order", report, StringComparison.Ordinal);
             var wiki = SkylinePrism.Core.Panorama.WikiReport.FromReport(report, "qc");
             Assert.Empty(SkylinePrism.Core.Panorama.WikiReport.Refusals(wiki.BodyTemplate));
             Assert.NotEmpty(wiki.Images);

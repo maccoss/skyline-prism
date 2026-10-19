@@ -35,3 +35,4 @@ protein_normalization:
 qc_report:
   enabled: true
   save_plots: false
+  peak_quality: true

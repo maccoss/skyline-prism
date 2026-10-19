@@ -610,6 +610,20 @@ Key sections:
   > never one. Do not reintroduce any part of it; an output directory from dotnet-v26.24.x may still
   > hold `ms2_signal*.parquet`, which nothing reads.
 - `CvMetrics`: every median CV in the report (always computed on the LINEAR scale)
+- `PeakQuality` (+ `QcReport.PeakQuality`, `PlotRenderer.PeakQuality`): the "Peak Quality by
+  Acquisition Order" section - Skyline's shape correlation, isotope dot product, RT and FWHM per
+  precursor x run, scored as a robust z against each precursor's own median and summarized per run in
+  acquisition order (`AcquisitionOrder`, the same rule that writes `run_order` into
+  `sample_metadata.csv`). Read from `merged_data/` every time the report is made; pinned by
+  `tests/fixtures/peak_quality/`.
+
+  > [!CAUTION]
+  > **Skyline writes a missing Shape Correlation as NaN, not null, and DuckDB sorts NaN above every
+  > number** - so a `median()` over the raw column is biased upward by however many fragments lacked
+  > one. Unfiltered, the worst Verapamil run read 0.81 instead of 0.66 and nearly vanished, because
+  > the degraded runs are the ones with the most NaNs. Filter `isfinite()` before any median or
+  > quantile over a Skyline metric. (A numpy check of the same query is no safer: `fetchnumpy()`
+  > hands NULL back as a MASKED entry, and `np.asarray` turns it into a number.)
 - `ValidationStatus`: the dual-control pass/fail verdict, its warnings and its notes
 - `DynamicRange`, `PrecursorDensity`, `IsolationScheme`: the GUI's analysis tabs
 - `IsolationSchemeCatalog` / `IsolationSchemeResolver` / `RawData/IsolationWindowProbe`: the
