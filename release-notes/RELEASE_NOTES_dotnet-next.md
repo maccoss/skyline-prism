@@ -30,9 +30,11 @@ as the GitHub Release description and fails if it is missing.
   rows. A copy that adds and overwrites files but never deletes them keeps any `merged_data/` partition
   the newer run no longer wrote; a real cohort folder held three partitions where its merge had written
   two, putting 9.9 million duplicated rows (10,494 peptides) in front of every reader of `merged_data/` -
-  the Spectrum density view, detection and ion accounting - with nothing to say so. Each merge now writes `merged_data/_manifest.json` listing its partitions and
+  the Spectrum density view, detection, ion accounting and the QC report's peak-quality section - with
+  nothing to say so. Each merge now writes `merged_data/_manifest.json` listing its partitions and
   files, and a `merged_data/` that does not match it is not read: the error names every stray, missing
-  or changed file and says how to fix it. `prism run` rebuilds such a folder, and every stage below it,
+  or changed file and says how to fix it (the peak-quality section reports it as a failed section; the
+  rest of the report is unaffected). `prism run` rebuilds such a folder, and every stage below it,
   instead of stopping. A `merged_data/` written by an earlier release is checked against the row count
   in `merged_data.cache.json` instead, which catches the same case (39,789,408 rows on disk against
   29,910,240 recorded, in the folder that was found). See `docs/output_files.md`.
