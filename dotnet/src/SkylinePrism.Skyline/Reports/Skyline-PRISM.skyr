@@ -15,25 +15,27 @@
     <column name="ProductMz" />
     <column name="Results!*.Value.Area" />
     <!--
-      Background, so the MS2 signal accounting can total GROSS signal: Skyline's Area is
-      background-subtracted (its own ChromPeakTest asserts that integrating without background gives
-      Area + BackgroundArea) while an acquired total ion current is not, and dividing a net numerator
-      by a gross denominator understates the assigned fraction. Cheap - it is already on ChromInfo.
+      Background is exported but nothing in PRISM reads it. It was added so the MS2 signal accounting
+      (qc_report.ms2_signal) could total GROSS signal, since Skyline's Area is background-subtracted
+      and an acquired total ion current is not. That accounting was removed in dotnet-v26.25.1; its
+      replacement, prism ion-accounting, counts ions from the instrument files and needs no Skyline
+      column. The column stays only because dropping it changes every export, and the merged_data
+      columns that follow from it, for no gain. It is cheap - it is already on ChromInfo.
 
-      Skyline's ion-count columns are NOT here, and the reason is cost. They are the right measure -
-      see qc_report.ms2_signal.measure - but Skyline computes them per spectrum for every
-      transition. Measured on the 6.5 GB FLARE document (46M transition rows, 93 replicates), a
-      three-column report exported in 9.5 minutes; the same report plus five LC Peak ion-count
-      columns was 13% done after 63 minutes, writing at 4.5 MB/min against the baseline's 122 -
-      27x slower per byte, projecting to 9-13 HOURS, single-threaded and holding 15 GB resident.
-      Every PRISM run would pay that, for a QC section that is off by default. The per-transition
+      Skyline's per-transition ion-count columns (LC Peak Transition Ion Count and its relatives) are
+      NOT here, and the reason is cost. Skyline computes them per spectrum for every transition.
+      Measured on the 6.5 GB FLARE document (46M transition rows, 93 replicates), a three-column
+      report exported in 9.5 minutes; the same report plus five LC Peak ion-count columns was 13%
+      done after 63 minutes, writing at 4.5 MB/min against the baseline's 122 - 27x slower per
+      byte, projecting to 9-13 HOURS, single-threaded and holding 15 GB resident. The per-transition
       column ALONE is 29x slower per row (7.9M rows in 42 minutes; about 4 hours for the document),
       so the cost is Skyline reading each transition's chromatogram points, not the column count.
+      Do not add one back: prism ion-accounting gets ion counts from the instrument files in
+      single-digit minutes per file, and per-transition counts cannot be summed correctly anyway,
+      because co-isolated peptides sharing a fragment extract the same detector counts.
 
-      So the one column the accounting reads lives in Skyline-PRISM-Ions.skyr (view "PRISM-Ions"):
-      this report plus LC Peak Transition Ion Count, exported instead of this one only when the user
-      asks for ion counts. Keep the two column lists identical otherwise - PrismReportDefinitionTests
-      checks - so a document merges the same whichever was exported.
+      There used to be a second definition, Skyline-PRISM-Ions.skyr (view "PRISM-Ions"), which was this
+      report plus LC Peak Transition Ion Count. It was removed together with qc_report.ms2_signal.
     -->
     <column name="Results!*.Value.Background" />
     <column name="Results!*.Value.RetentionTime" />

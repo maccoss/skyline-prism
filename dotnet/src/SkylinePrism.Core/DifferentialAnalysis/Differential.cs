@@ -340,9 +340,14 @@ public static class Differential
     /// Run the moderated-t contrast on a LOG2 abundance matrix. <paramref name="groupAColumns"/> and
     /// <paramref name="groupBColumns"/> are disjoint column indices into
     /// <paramref name="exprLog2FeaturesBySamples"/>; only features observed (non-NaN) in every selected
-    /// sample are tested. Optional <paramref name="covariates"/> adjust the contrast; the intensity-trend
-    /// variance prior is not yet supported.
+    /// sample are tested. Optional <paramref name="covariates"/> adjust the contrast.
     /// </summary>
+    /// <remarks>
+    /// This overload offers only two variance priors: <see cref="VariancePrior.LimmaTrend"/> when
+    /// <paramref name="trend"/> is true and the global prior otherwise. The others, including the
+    /// deprecated <see cref="VariancePrior.IntensityTrend"/> and <see cref="VariancePrior.PeptideCount"/>,
+    /// are selected through <see cref="DifferentialOptions.Prior"/>, whose default is limma-trend.
+    /// </remarks>
     public static DifferentialResult Run(
         double[,] exprLog2FeaturesBySamples,
         IReadOnlyList<string> featureIds,
