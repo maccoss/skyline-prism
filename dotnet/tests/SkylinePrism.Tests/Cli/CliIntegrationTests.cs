@@ -1217,6 +1217,36 @@ public class CliIntegrationTests
     }
 
     /// <summary>
+    /// A run that fails records why in its log, and says where that log is.
+    /// </summary>
+    /// <remarks>
+    /// The error is printed by Main's catch, to stderr. Without this a failed run's log simply
+    /// stopped mid-stage, and a run whose stderr was discarded left no record of what went wrong.
+    /// </remarks>
+    [Fact]
+    public void Run_ThatFails_RecordsTheErrorInTheRunLog()
+    {
+        var root = TempDir();
+        try
+        {
+            var notAReport = Path.Combine(root, "not-a-report.csv");
+            File.WriteAllText(notAReport, "a,b\n1,2\n");
+            var outDir = Path.Combine(root, "out");
+
+            var (code, output) = Invoke("run", "-i", notAReport, "-o", outDir, "-c", Config);
+
+            Assert.Equal(1, code);
+            var error = Assert.Single(output.Split('\n'), l => l.StartsWith("Error: ", StringComparison.Ordinal));
+            Assert.Contains(error.TrimEnd('\r'), RunLog(outDir), StringComparison.Ordinal);
+            Assert.Contains("Run log: ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>
     /// A <c>-c</c> that sets nothing PRISM reads says so, rather than appearing to have been applied.
     /// </summary>
     [Fact]

@@ -138,22 +138,33 @@ public static partial class Program
         else if (overridden is not null)
             Log($"WARNING: {configPath} changes no setting PRISM reads; running the provenance settings unchanged.");
 
-        // Warned about, not refused. A CLI run is usually scripted, and something that stops a
-        // pipeline to ask a question is worse than the surprise it prevents - so this says what is
-        // about to go and carries on. It is silent when the previous run used the same version and
-        // the same settings, which is how a QC report gets regenerated and a partial ion accounting
-        // topped up; a warning that fires on the ordinary case stops being read.
-        // With the inputs, so the merge and the transition rollup are answered by the same
-        // CanReuse the pipeline will call rather than predicted - which is what catches an input
-        // file edited in place under settings that did not move.
-        if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
-            Log("WARNING: " + warning);
+        try
+        {
+            // Warned about, not refused. A CLI run is usually scripted, and something that stops a
+            // pipeline to ask a question is worse than the surprise it prevents - so this says what
+            // is about to go and carries on. It is silent when the previous run used the same
+            // version and the same settings, which is how a QC report gets regenerated and a partial
+            // ion accounting topped up; a warning that fires on the ordinary case stops being read.
+            // With the inputs, so the merge and the transition rollup are answered by the same
+            // CanReuse the pipeline will call rather than predicted - which is what catches an input
+            // file edited in place under settings that did not move.
+            if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
+                Log("WARNING: " + warning);
 
-        Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
-        var result = PrismPipeline.Run(
-            inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
-        Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
-            + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+            Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
+            var result = PrismPipeline.Run(
+                inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
+            Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
+                + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+        }
+        catch (Exception ex)
+        {
+            // Main prints the error, to stderr. The log is the run's record, so it says it too -
+            // otherwise a failed run's log just stops mid-stage - and the console says where it is.
+            logFile.WriteLine($"Error: {ex.Message}");
+            Console.WriteLine($"Run log: {logPath}");
+            throw;
+        }
         Console.WriteLine($"Run log: {logPath}");
         return 0;
     }

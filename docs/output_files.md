@@ -783,6 +783,8 @@ file name; the lines themselves are not stamped.
 - Sample counts and batch assignments
 - CV metrics before/after normalization and batch correction
 - Warnings and method parameters
+- For a run that failed, the `Error:` line that ended it, as the last line. The console prints the
+  log's path in that case too.
 
 **Example** (mini fixture, paths shortened):
 

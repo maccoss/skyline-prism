@@ -40,7 +40,9 @@ as the GitHub Release description and fails if it is missing.
   config key's `WARNING` and the `NOTE` that a moved FASTA had been replaced by its archived copy
   were printed before `prism_run_*.log` was opened, so they had gone to stderr only; a scripted run
   that discarded stderr left a log that read as though every setting had been honored. They were
-  written at the top of the log as well, in the order they were said. The log section of
+  written at the top of the log as well, in the order they were said. A run that failed had left a
+  log that stopped mid-stage with no reason; it ended with the `Error:` line, and the console said
+  where the log was. The log section of
   `docs/output_files.md`, which still showed the retired Python engine's time-stamped format, was
   rewritten from a real run.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
