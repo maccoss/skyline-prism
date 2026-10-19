@@ -324,12 +324,12 @@ keeps `_pep_bucket` out of the result, so the columns are exactly those listed b
 | `Product Charge` | int64 | Product ion charge state |
 | `Product Mz` | double | Product m/z |
 | `Area` | int64 | Peak area (raw abundance) |
+| `Background` | int64 | Background area Skyline subtracted from `Area`; exported, but nothing in PRISM reads it |
 | `Retention Time` | double | Apex retention time (minutes) |
 | `Start Time` | double | Peak start time (minutes) |
 | `End Time` | double | Peak end time (minutes) |
 | `Fwhm` | double | Full width at half maximum |
 | `Shape Correlation` | double | Peak shape quality score |
-| `Coeluting` | bool | Whether peak is co-eluting with interference |
 | `Truncated` | bool | Whether peak was truncated |
 | `Replicate Name` | string | Sample replicate name |
 | `File Name` | string | Raw data file name |

@@ -61,7 +61,8 @@ production actually takes (`read_parquet`, and `DESCRIBE` for the header) had no
 | `Area` | DuckDB infers - **Int64** for these slices, whose areas are all whole numbers | **Double** |
 
 `SkylineColumns.FindColumn` normalizes case, spaces and underscores, which covers every one of
-these except `TicArea` - and nothing in Core reads TIC or `Coeluting`. The type differences are
+these except `TicArea` - and nothing in Core reads TIC or `Coeluting` (the fixtures carry a
+`Coeluting` column, but the bundled `Skyline-PRISM` report has never exported one). The type differences are
 real though: the rollup sees integer columns on the CSV path and floating-point ones on the
 parquet path, which is exactly what the parity test pins down.
 

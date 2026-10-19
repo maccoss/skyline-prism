@@ -91,7 +91,6 @@ Export a **transition-level report** from Skyline (not pivoted by replicate). On
 | Skyline Field | Internal Name | Description |
 |---------------|---------------|-------------|
 | Shape Correlation | shape_correlation | Correlation with median transition profile (0-1). Low values indicate interference. |
-| Coeluting | coeluting | Boolean: apex within integration boundaries |
 | Detection Q Value | detection_qvalue | mProphet q-value (DIA) - for confidence filtering |
 
 #### Recommended Columns
@@ -145,7 +144,6 @@ Transition Results > Start Time
 Transition Results > End Time
 Transition Results > Fwhm
 Transition Results > Shape Correlation
-Transition Results > Coeluting
 Transition Results > Truncated
 Replicates > Replicate Name
 Replicates > File Name
@@ -962,7 +960,7 @@ This ensures:
 
 **Required Skyline columns:**
 - `Shape Correlation`: Correlation of each transition's elution profile with the median. Low values indicate interference from co-eluting analytes at that precursor→product transition.
-- `Coeluting`: Boolean indicating apex within integration boundaries
+- `Coeluting`: Boolean indicating apex within integration boundaries. The bundled `Skyline-PRISM` report has never exported it and no rollup that is implemented today reads it, so a quality-weighted aggregation that used it would have to add it to the report first.
 
 **Variance model (based on Finney 2012):**
 $$\text{var}(signal) = \alpha \cdot I + \beta \cdot I^2 + \gamma + \text{quality\_penalty}$$
