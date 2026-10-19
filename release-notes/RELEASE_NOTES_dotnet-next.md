@@ -47,3 +47,12 @@ as the GitHub Release description and fails if it is missing.
 ## Performance
 
 ## Breaking Changes
+
+- **A config with a blank method key produced different numbers.** Treating a blank key as left out
+  gave it its documented default instead of whatever the pipeline had made of a null:
+  `global_normalization.method:` left blank had run median normalization and ran `rt_lowess`, and
+  `batch_estimation.method:` left blank had estimated batches from acquisition-time gaps (`auto`) -
+  then ComBat-corrected across them - and estimated none. A blank `output.format:` had written
+  `corrected_peptides.` with no extension and wrote parquet. Every other blank method key already ran
+  its default. To keep a previous run's numbers, write the method it used explicitly
+  (`method: median`, `method: auto`).
