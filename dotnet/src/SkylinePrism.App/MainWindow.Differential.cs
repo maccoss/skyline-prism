@@ -257,17 +257,19 @@ public partial class MainWindow
             : FeatureLevel.Protein;
 
     /// <summary>
-    /// The variance prior the Prior combo is pointing at, defaulting to the lab's choice before the
+    /// The variance prior the Prior combo is pointing at, or null for the default - chosen by level
+    /// in Core (<see cref="DifferentialOptions.ResolvedPrior"/>) - which is also the answer before the
     /// combo has been populated (the first render happens during window construction).
     /// </summary>
-    private VariancePrior DiffSelectedPrior() =>
+    private VariancePrior? DiffSelectedPrior() =>
         ((DiffPriorCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
         {
             "Global" => VariancePrior.Global,
             "LimmaTrend" => VariancePrior.LimmaTrend,
+            "LimmaTrendIntensityNPeptides" => VariancePrior.LimmaTrendIntensityNPeptides,
             "PeptideCount" => VariancePrior.PeptideCount,
             "IntensityTrend" => VariancePrior.IntensityTrend,
-            _ => VariancePrior.LimmaTrend,
+            _ => null,
         };
 
     /// <summary>The design the Design combo is pointing at.</summary>
@@ -396,8 +398,9 @@ public partial class MainWindow
         + "shape they give is tilted: the prior is optimistic for bright features and conservative "
         + "for dim ones. How high the trend sits, and how much weight it gets, are fitted to the "
         + "contrast's own residuals either way, and the status line shows how far it was scaled. "
-        + "Untick to take the shape from the contrast groups instead. The default prior, Intensity "
-        + "trend (limma), fits its curve to the residuals themselves and needs neither.";
+        + "Untick to take the shape from the contrast groups instead. The default priors - limma's "
+        + "intensity trend, with peptide count at protein level - fit their curves to the residuals "
+        + "themselves and need neither.";
 
     /// <summary>
     /// Suppress the pane's selector handlers until the returned scope is disposed.
@@ -844,11 +847,17 @@ public partial class MainWindow
         // The count-based priors need n_peptides, which only the protein matrix carries.
         var hasCounts = _diffDataset?.PeptideCounts is not null;
         ShowTest(DiffPriorPeptideCountItem, hasCounts);
+        ShowTest(DiffPriorIntensityNPeptidesItem, hasCounts);
+        // The default item says which prior it resolves to for the loaded matrix. Text only: no
+        // selection changes, so no handler runs.
+        DiffPriorDefaultItem.Content = hasCounts
+            ? "Default: intensity and peptide count (limma)"
+            : "Default: intensity trend (limma)";
         if (DiffPriorCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
             {
-                DiffPriorCombo.SelectedIndex = 0; // the default (limma-trend), valid at either level
+                DiffPriorCombo.SelectedIndex = 0; // the default, chosen by level, valid at either level
             }
         }
 
@@ -1067,7 +1076,7 @@ public partial class MainWindow
                 DiffViewCombo.SelectedIndex = 0;
             if (DiffLevelCombo.SelectedItem is null)
                 DiffLevelCombo.SelectedIndex = 0;
-            // Index 0 is the default, limma-trend - deliberately NOT set in the XAML.
+            // Index 0 is the default, chosen by level - deliberately NOT set in the XAML.
             if (DiffPriorCombo.SelectedItem is null)
                 DiffPriorCombo.SelectedIndex = 0;
             if (DiffTestCombo.SelectedItem is null)

@@ -630,14 +630,16 @@ public static partial class Program
             "mann-whitney" or "mannwhitney" => DifferentialTest.MannWhitney,
             var other => throw new ArgumentException($"Unknown --test '{other}'"),
         };
-        var prior = (opts.GetSingleOrNull("--prior") ?? "limma-trend").ToLowerInvariant() switch
-        {
-            "intensity-trend" => VariancePrior.IntensityTrend,
-            "global" => VariancePrior.Global,
-            "limma-trend" => VariancePrior.LimmaTrend,
-            "peptide-count" => VariancePrior.PeptideCount,
-            var other => throw new ArgumentException($"Unknown --prior '{other}'"),
-        };
+        // Omitted, the prior is chosen by level (DifferentialOptions.ResolvedPrior): limma-trend with
+        // peptide count on a protein-level matrix, which carries n_peptides; limma-trend otherwise.
+        var priorToken = opts.GetSingleOrNull("--prior");
+        VariancePrior? requestedPrior = priorToken is null
+            ? null
+            : DifferentialTokens.ParsePrior(priorToken) ?? throw new ArgumentException(
+                $"Unknown --prior '{priorToken}': global, limma-trend, limma-trend-intensity-n-peptides, "
+                + "peptide-count or intensity-trend.");
+        var prior = new DifferentialOptions { Prior = requestedPrior, PeptideCounts = dataset.PeptideCounts }
+            .ResolvedPrior;
         var correction = (opts.GetSingleOrNull("--correction") ?? "bh").ToLowerInvariant() switch
         {
             "bh" or "benjamini-hochberg" => MultipleTesting.BenjaminiHochberg,
@@ -801,7 +803,7 @@ public static partial class Program
         {
             Design = design,
             Test = test,
-            Prior = prior,
+            Prior = requestedPrior,
             Correction = correction,
             SubjectLabels = subjects,
             TrendColumn = trendOver,
@@ -1304,12 +1306,18 @@ public static partial class Program
                                    contrast, -a and -b already choose the samples.
             --test TEST            moderated (default), welch, student, paired-t,
                                    wilcoxon, mann-whitney
-            --prior PRIOR          Variance prior for the moderated t: limma-trend (default; an
-                                   intensity-dependent prior whose curve is fitted to the contrast's
-                                   own residuals), global, peptide-count, or intensity-trend
+            --prior PRIOR          Variance prior for the moderated t. Omitted, it is chosen by
+                                   level: limma-trend-intensity-n-peptides for --level protein
+                                   (the protein matrix carries n_peptides), limma-trend for
+                                   --level peptide. limma-trend is an intensity-dependent prior
+                                   whose curve is fitted to the contrast's own residuals;
+                                   limma-trend-intensity-n-peptides adds the protein's peptide
+                                   count as a second covariate (protein level only). Also global,
+                                   peptide-count (DEqMS, protein level only), or intensity-trend
                                    (deprecated: proteomics-toolkit's estimator, whose shape from the
                                    QC/reference pools is optimistic for bright features and
-                                   conservative for dim ones - see docs/differential-analysis.md)
+                                   conservative for dim ones - see docs/differential-analysis.md).
+                                   The same names as proteomics-toolkit's moderation.
             --prior-from-controls  With --prior intensity-trend: take its SHAPE from the QC and
                                    reference replicates. That is its default whenever the run has
                                    two or more replicates of a control type; passing it makes that

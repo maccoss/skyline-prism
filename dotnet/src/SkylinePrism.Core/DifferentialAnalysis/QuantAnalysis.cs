@@ -429,7 +429,7 @@ public static class QuantAnalysis
             Contrast: contrast,
             Design: DifferentialTokens.Design(options.Design),
             Test: DifferentialTokens.Test(options.Test),
-            Prior: DifferentialTokens.Prior(options.Prior),
+            Prior: DifferentialTokens.Prior(options.ResolvedPrior),
             PriorUsed: res.VariancePrior,
             Correction: DifferentialTokens.Correction(options.Correction),
             Covariates: res.CovariatesUsed,

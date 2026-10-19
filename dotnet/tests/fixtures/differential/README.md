@@ -38,6 +38,27 @@ crashes whenever the prior df is infinite - the case it exists to pin:
 Rscript dotnet/tests/fixtures/differential/generate_ebayes.R
 ```
 
+`limma_trend_intensity_n_peptides.json` is written by an R script too, and is **shared with
+`proteomics-toolkit`**: its `tests/fixtures/generate_limma_trend_intensity_n_peptides.R` has the same
+cases and seeds and writes the same bytes. That one file is what holds the two tools to the same
+numbers for the protein-level default, so change a case in both generators or in neither, and
+confirm the two outputs are still identical:
+
+```bash
+# from the repository root; needs R with limma
+Rscript dotnet/tests/fixtures/differential/generate_limma_trend_intensity_n_peptides.R
+```
+
+limma's `fitFDist` takes one covariate, so no limma call computes this prior whole. The generator
+transcribes limma 3.66.0's `fitFDist` with the peptide-count columns added to its design matrix, and
+refuses to write a case unless the same transcription without them reproduces limma's own
+`eBayes(trend = TRUE)` to 1e-12. So the only thing the fixture adds to limma is the second column
+block. `DifferentialGoldenTests.LimmaTrendIntensityNPeptides_MatchesTheLimmaTranscription` holds
+PRISM to it at 1e-9 on the prior df, df total and p (1e-12 where the prior df is infinite), because
+the prior df comes out of a Newton solve stopped at a 1e-8 relative step, and at 1e-10 absolute plus
+1e-10 relative on logFC and t, because one case builds coefficients that are zero to within 1e-16,
+which no relative bound alone can hold.
+
 ## What is the reference for what
 
 | Fixture | PRISM type | Reference |
@@ -61,6 +82,7 @@ Rscript dotnet/tests/fixtures/differential/generate_ebayes.R
 | `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
 | `blocked.json` | `DuplicateCorrelation.Estimate`, `LinearModel.FitBlocked`, and `Differential.Run` under `BlockedBySubject` | R `limma::duplicateCorrelation` + `lmFit(block=, correlation=)` + `eBayes`, written by `generate_blocked.R` |
 | `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend; the two-arm designs with both an infinite and a finite d0) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
+| `limma_trend_intensity_n_peptides.json` | `EmpiricalBayes.SqueezeVarTrend` with log peptide counts, through `Differential.Run` / `.RunTrend` under `LimmaTrendIntensityNPeptides` (unpaired, paired, trend; a straight-line count term; an infinite prior df) | R `limma::lmFit` + limma 3.66.0's `fitFDist` transcribed with the count block added, checked against `eBayes(trend = TRUE)`; written by `generate_limma_trend_intensity_n_peptides.R`, byte-identical to `proteomics-toolkit`'s |
 
 **One reference is a sibling lab tool, deliberately.** `intensity_trend.json` (and with it
 `peptide_count_prior.json` and `toolkit_end_to_end.json`) is pinned to

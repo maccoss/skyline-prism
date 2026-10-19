@@ -838,7 +838,21 @@ public class CliIntegrationTests
             foreach (var c in Enum.GetValues<MultipleTesting>())
                 Accepted(With(twoArm, "--correction", DifferentialTokens.Correction(c)));
             foreach (var p in Enum.GetValues<VariancePrior>())
-                Accepted(With(twoArm, "--prior", DifferentialTokens.Prior(p)));
+            {
+                var args = With(twoArm, "--prior", DifferentialTokens.Prior(p));
+                if (!DifferentialTokens.UsesPeptideCounts(p))
+                {
+                    Accepted(args);
+                    continue;
+                }
+
+                // The count priors need more proteins than this 3-protein fixture has, and refuse rather
+                // than substitute another prior. What this test owns is that the WORD is understood.
+                var (code, output) = Invoke(args);
+                Assert.DoesNotContain("Unknown --prior", output);
+                Assert.True(code == 0 || output.Contains("oo few", StringComparison.Ordinal),
+                    $"refused for another reason: {string.Join(" ", args)}\n{output}");
+            }
             foreach (var l in Enum.GetValues<FeatureLevel>())
                 Accepted(With(twoArm, "--level", DifferentialTokens.Level(l)));
 
@@ -946,10 +960,12 @@ public class CliIntegrationTests
     }
 
     /// <summary>
-    /// The default prior is limma-trend. The deprecated intensity trend is still there to reproduce
-    /// earlier results: with <c>--prior intensity-trend</c> it takes its shape from the control
-    /// replicates by default, says so, and says it is deprecated - and --prior-from-groups takes the
-    /// shape from the contrast groups instead.
+    /// The default prior is chosen by level: at protein level, limma-trend with peptide count - but this
+    /// fixture has three proteins, too few to fit both covariates, so the default uses limma-trend and
+    /// says so rather than refusing or substituting in silence. The deprecated intensity trend is still
+    /// there to reproduce earlier results: with <c>--prior intensity-trend</c> it takes its shape from
+    /// the control replicates by default, says so, and says it is deprecated - and --prior-from-groups
+    /// takes the shape from the contrast groups instead.
     /// </summary>
     /// <remarks>
     /// The source sets the trend's shape and its level is fitted to the residuals either way, so the
@@ -958,7 +974,7 @@ public class CliIntegrationTests
     /// the default can carry one - but noted, not silently ignored.
     /// </remarks>
     [Fact]
-    public void Differential_DefaultsToLimmaTrend_AndTheIntensityTrendStillNamesItsSource()
+    public void Differential_DefaultIsChosenByLevel_AndTheIntensityTrendStillNamesItsSource()
     {
         var outDir = TempDir();
         try
@@ -972,7 +988,19 @@ public class CliIntegrationTests
 
             var byDefault = Invoke(Args()).Output;
             Assert.Contains("moderated t (limma-trend prior)", byDefault, StringComparison.Ordinal);
+            Assert.Contains("too few to fit the default limma-trend-intensity-n-peptides prior", byDefault,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("deprecated", byDefault, StringComparison.Ordinal);
+            // Named, the same prior refuses the three proteins rather than run something else.
+            var named = Invoke(Args("--prior", "limma-trend-intensity-n-peptides"));
+            Assert.NotEqual(0, named.Item1);
+            Assert.Contains("too few to fit a prior on intensity and peptide count", named.Output,
+                StringComparison.Ordinal);
+            // At peptide level there are no peptide counts: the default is limma-trend, with no note.
+            var peptides = Invoke(Args("--level", "peptide")).Output;
+            Assert.Contains("moderated t (limma-trend prior)", peptides, StringComparison.Ordinal);
+            Assert.DoesNotContain("too few", peptides, StringComparison.Ordinal);
+            Assert.NotEqual(0, Invoke(Args("--level", "peptide", "--prior", "limma-trend-intensity-n-peptides")).Item1);
 
             var stale = Invoke(Args("--prior-from-groups")).Output;
             Assert.Contains("--prior-from-groups applies only to --prior intensity-trend", stale, StringComparison.Ordinal);

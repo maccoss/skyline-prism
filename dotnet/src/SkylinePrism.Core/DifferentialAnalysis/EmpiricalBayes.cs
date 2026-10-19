@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using MathNet.Numerics;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.LinearAlgebra.Factorization;
@@ -208,8 +209,19 @@ public static class EmpiricalBayes
     /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
     /// degrees of freedom collapse below 2.
     /// </summary>
+    /// <param name="variances">Residual variance per feature.</param>
+    /// <param name="dfResidual">The residual df, shared by every feature.</param>
+    /// <param name="covariate">Mean log2 expression per feature (limma's Amean).</param>
+    /// <param name="logPeptideCounts">
+    /// Log peptide count per feature, for <see cref="VariancePrior.LimmaTrendIntensityNPeptides"/>: the
+    /// same regression with a second covariate block (<see cref="PeptideCountBasis"/>) beside the
+    /// intensity spline. limma's fitFDist takes one covariate; this is its algebra with the second
+    /// block, nothing else changed. With it, nothing falls back: a feature the fit cannot use, or too
+    /// few features for both covariates, is refused, because limma's global-prior fallback would drop
+    /// the counts without a word.
+    /// </param>
     public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, double dfResidual,
-        double[] covariate)
+        double[] covariate, double[]? logPeptideCounts = null)
     {
         var n = variances.Length;
         if (n == 0)
@@ -218,18 +230,28 @@ public static class EmpiricalBayes
             throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
         if (covariate.Length != n)
             throw new ArgumentException("covariate length must match variances", nameof(covariate));
+        var withCounts = logPeptideCounts is not null;
+        if (withCounts && logPeptideCounts!.Length != n)
+            throw new ArgumentException("logPeptideCounts length must match variances", nameof(logPeptideCounts));
 
         // The trend path needs every feature usable; otherwise defer to the global prior.
         for (var i = 0; i < n; i++)
             if (double.IsNaN(variances[i]) || double.IsInfinity(variances[i]) || variances[i] <= -1e-15
-                || !double.IsFinite(covariate[i]))
+                || !double.IsFinite(covariate[i]) || (withCounts && !double.IsFinite(logPeptideCounts![i])))
+            {
+                if (withCounts)
+                    throw new ArgumentException(
+                        "The limma-trend-intensity-n-peptides prior needs a finite residual variance, mean "
+                        + "expression and peptide count for every tested protein.");
                 return SqueezeVarGlobal(variances, dfResidual);
+            }
 
-        var distinctCovariate = new HashSet<double>();
-        foreach (var c in covariate)
-            distinctCovariate.Add(c);
-        var splineDf = 1 + (n >= 3 ? 1 : 0) + (n >= 6 ? 1 : 0) + (n >= 30 ? 1 : 0);
-        splineDf = Math.Min(splineDf, distinctCovariate.Count);
+        var splineDf = TrendSplineDf(covariate);
+        if (withCounts && !CanFitIntensityAndCounts(covariate, logPeptideCounts!))
+            throw new ArgumentException(
+                $"Only {n} proteins have a usable residual variance: too few to fit a prior on intensity "
+                + "and peptide count. Use --prior limma-trend or global.");
+        var countBlock = withCounts ? PeptideCountBasis(logPeptideCounts!) : null;
         if (splineDf < 2)
             return SqueezeVarGlobal(variances, dfResidual);
 
@@ -254,6 +276,8 @@ public static class EmpiricalBayes
         // Fit e on the natural-spline trend; the fitted values are the per-feature trend (emean) and the
         // residual mean square feeds the prior df.
         var design = NaturalSplineBasis.Build(covariate, splineDf, includeIntercept: true);
+        if (countBlock is not null)
+            design = WithColumns(design, countBlock);
         var d = DenseMatrix.OfArray(design);
         var beta = d.QR(QRMethod.Thin).Solve(DenseVector.OfArray(e));
         var fitted = d * beta;
@@ -264,7 +288,8 @@ public static class EmpiricalBayes
             rss += r * r;
         }
 
-        var evar = rss / (n - splineDf) - Trigamma(halfDf);
+        // lm.fit's mean(effects[-(1:rank)]^2): the residual mean square on n - (columns) df.
+        var evar = rss / (n - design.GetLength(1)) - Trigamma(halfDf);
 
         double df2;
         var varPrior = new double[n];
@@ -290,6 +315,73 @@ public static class EmpiricalBayes
                 : varPrior[i];
 
         return new SqueezeVarResult(varPost, varPrior, df2, Array.Empty<string>());
+    }
+
+    /// <summary>
+    /// limma's spline df for the intensity trend over these features:
+    /// <c>1 + (n &gt;= 3) + (n &gt;= 6) + (n &gt;= 30)</c>, capped at the number of distinct values.
+    /// </summary>
+    private static int TrendSplineDf(double[] covariate)
+    {
+        var n = covariate.Length;
+        var splineDf = 1 + (n >= 3 ? 1 : 0) + (n >= 6 ? 1 : 0) + (n >= 30 ? 1 : 0);
+        return Math.Min(splineDf, covariate.Distinct().Count());
+    }
+
+    /// <summary>
+    /// Whether these features can fit <see cref="VariancePrior.LimmaTrendIntensityNPeptides"/>: an
+    /// intensity spline of at least two columns, a peptide count that varies, and more features than
+    /// the two blocks have columns, so the spread around the curve - which sets the prior df - has a
+    /// degree of freedom to be measured on. <c>proteomics-toolkit</c>'s
+    /// <c>_can_fit_intensity_and_counts</c> is the same rule.
+    /// </summary>
+    internal static bool CanFitIntensityAndCounts(double[] covariate, double[] logPeptideCounts)
+    {
+        var splineDf = TrendSplineDf(covariate);
+        if (splineDf < 2 || logPeptideCounts.Distinct().Count() < 2)
+            return false;
+        return covariate.Length > splineDf + PeptideCountBasis(logPeptideCounts).GetLength(1);
+    }
+
+    /// <summary>
+    /// The peptide-count columns <see cref="VariancePrior.LimmaTrendIntensityNPeptides"/> adds to the
+    /// intensity spline: R's <c>splines::ns(log(n), df = 2)</c> - a natural cubic spline in log count
+    /// with one interior knot, at the median, and no constant column (the intensity spline carries
+    /// one). With only two distinct counts no spline can be placed, so the block is log count itself,
+    /// a straight line; the same holds when more than half the proteins share the smallest or largest
+    /// count, putting the median knot on the end of the range. This is <c>proteomics-toolkit</c>'s
+    /// <c>_peptide_count_basis</c>, which builds the same span in another basis.
+    /// </summary>
+    internal static double[,] PeptideCountBasis(double[] logCounts)
+    {
+        var distinct = logCounts.Distinct().Count();
+        if (distinct < 2)
+            throw new ArgumentException(
+                "Every protein has the same peptide count, so peptide count cannot inform the prior.");
+        var median = Stats.PercentileLinear(logCounts, 50.0);
+        if (distinct >= 3 && median > logCounts.Min() && median < logCounts.Max())
+            return NaturalSplineBasis.Build(logCounts, 2, includeIntercept: false);
+
+        var line = new double[logCounts.Length, 1];
+        for (var i = 0; i < logCounts.Length; i++)
+            line[i, 0] = logCounts[i];
+        return line;
+    }
+
+    /// <summary><paramref name="left"/> with <paramref name="right"/>'s columns appended.</summary>
+    private static double[,] WithColumns(double[,] left, double[,] right)
+    {
+        int n = left.GetLength(0), a = left.GetLength(1), b = right.GetLength(1);
+        var both = new double[n, a + b];
+        for (var i = 0; i < n; i++)
+        {
+            for (var j = 0; j < a; j++)
+                both[i, j] = left[i, j];
+            for (var j = 0; j < b; j++)
+                both[i, a + j] = right[i, j];
+        }
+
+        return both;
     }
 
     /// <summary>

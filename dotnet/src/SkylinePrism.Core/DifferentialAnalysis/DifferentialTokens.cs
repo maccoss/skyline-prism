@@ -39,8 +39,29 @@ public static class DifferentialTokens
         VariancePrior.Global => "global",
         VariancePrior.LimmaTrend => "limma-trend",
         VariancePrior.PeptideCount => "peptide-count",
+        VariancePrior.LimmaTrendIntensityNPeptides => "limma-trend-intensity-n-peptides",
         _ => "intensity-trend",
     };
+
+    /// <summary>
+    /// The prior a <c>--prior</c> value names, the inverse of <see cref="Prior(VariancePrior)"/>, or null
+    /// for an unknown one. Case is ignored and underscores are accepted for the hyphens, as
+    /// <c>proteomics-toolkit</c>'s <c>moderation</c> accepts them, so one spelling works in both tools.
+    /// </summary>
+    public static VariancePrior? ParsePrior(string token) =>
+        token.Trim().ToLowerInvariant().Replace('_', '-') switch
+        {
+            "global" => VariancePrior.Global,
+            "limma-trend" => VariancePrior.LimmaTrend,
+            "limma-trend-intensity-n-peptides" => VariancePrior.LimmaTrendIntensityNPeptides,
+            "peptide-count" => VariancePrior.PeptideCount,
+            "intensity-trend" => VariancePrior.IntensityTrend,
+            _ => null,
+        };
+
+    /// <summary>Whether a prior conditions on peptide count, and so is protein level only.</summary>
+    public static bool UsesPeptideCounts(VariancePrior prior) =>
+        prior is VariancePrior.PeptideCount or VariancePrior.LimmaTrendIntensityNPeptides;
 
     /// <summary><c>--correction</c>.</summary>
     public static string Correction(MultipleTesting correction) => correction switch

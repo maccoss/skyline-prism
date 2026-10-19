@@ -117,7 +117,7 @@ public enum VariancePrior
     /// level and the prior degrees of freedom are then fitted to the design's residuals around it.
     /// </summary>
     /// <remarks>
-    /// <para>This is <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and it is NOT the
+    /// <para>This is <c>proteomics-toolkit</c>'s <c>moderation="intensity-trend"</c>, and it is NOT the
     /// same estimator as <see cref="LimmaTrend"/> despite both being called an intensity trend: they
     /// differ in the smoother, the space and what contributes a point.</para>
     /// <para>It was the default until the release after dotnet-v26.28.0. With its shape taken from the
@@ -132,20 +132,41 @@ public enum VariancePrior
     IntensityTrend,
 
     /// <summary>
-    /// The default: limma's own <c>trend=TRUE</c>, a natural cubic spline of log(residual variance) on
-    /// mean LOG2 expression, re-estimating the prior degrees of freedom as well as the scale. An
+    /// limma's own <c>trend=TRUE</c>, a natural cubic spline of log(residual variance) on mean LOG2
+    /// expression, re-estimating the prior degrees of freedom as well as the scale. An
     /// intensity-dependent prior whose curve is fitted to the residuals the test uses, so it follows
     /// whatever mix of technical and biological variance the design leaves - calibrated by intensity
     /// in every design tested (unpaired, paired, within- and between-subject trend). Pinned to limma
-    /// by the inmoose and R goldens.
+    /// by the inmoose and R goldens. The default when there are no peptide counts - every
+    /// peptide-level analysis - see <see cref="DifferentialOptions.ResolvedPrior"/>.
     /// </summary>
     LimmaTrend,
 
     /// <summary>
     /// DEqMS (Zhu 2020): a LOWESS of log(residual variance) on log(peptide count). Needs a peptide
-    /// count per feature, so it is protein-level only.
+    /// count per feature, so it is protein-level only, and refuses anything else.
     /// </summary>
     PeptideCount,
+
+    /// <summary>
+    /// PROTEIN LEVEL ONLY, and the default there: <see cref="LimmaTrend"/> with the protein's log
+    /// peptide count as a second covariate. limma's fitFDist regression of the bias-corrected log
+    /// residual variance on the natural spline of mean LOG2 expression, plus a natural spline of
+    /// log(n_peptides) with one interior knot at the median (a straight line in log count when the
+    /// counts take two values, or the median falls on the end of their range), all fitted to the
+    /// residuals; then the same trigamma inversion for the prior df.
+    /// </summary>
+    /// <remarks>
+    /// At matched intensity a protein's residual variance falls with its peptide count - measurement
+    /// error averages over peptides - but less than 1/n, because biology does not. limma-trend cannot
+    /// see that, so on protein-level data it tilts by peptide count: on random-label nulls of a
+    /// 3,595-protein serum cohort, 6.9% of null p &lt; 0.05 for one-peptide proteins and 3.0% for ten
+    /// or more (unpaired 5 vs 5). This prior gave 4.4% and 4.2%, with 50-60% more prior df. It is the
+    /// same estimator as <c>proteomics-toolkit</c>'s <c>moderation="limma-trend-intensity-n-peptides"</c>,
+    /// pinned to the same R golden. Refuses input that is not protein-level
+    /// (<see cref="ProteinLevelCounts"/>).
+    /// </remarks>
+    LimmaTrendIntensityNPeptides,
 }
 
 /// <summary>How the raw p-values are corrected for multiple testing.</summary>
@@ -177,9 +198,10 @@ public enum MultipleTesting
 /// <see cref="Prior"/>. Kept as one record rather than a widening parameter list because the
 /// combinations are what a caller reasons about, and because a record can gain an axis without
 /// breaking every call site.</para>
-/// <para>The defaults are the lab's defaults: an unpaired moderated-t with the limma-trend prior, an
-/// intensity-dependent prior fitted to the contrast's own residuals. It replaced the deprecated
-/// <see cref="VariancePrior.IntensityTrend"/> as the default in the release after dotnet-v26.28.0;
+/// <para>The defaults are the lab's defaults: an unpaired moderated-t with a prior chosen by level
+/// (<see cref="ResolvedPrior"/>) - limma-trend with peptide count for protein-level data with peptide
+/// counts, limma-trend otherwise - both fitted to the contrast's own residuals. limma-trend replaced
+/// the deprecated <see cref="VariancePrior.IntensityTrend"/> as the default in dotnet-v26.29.0;
 /// see the release notes and <see cref="VariancePrior"/>.</para>
 /// </remarks>
 public sealed record DifferentialOptions
@@ -194,7 +216,21 @@ public sealed record DifferentialOptions
 
     public DifferentialTest Test { get; init; } = DifferentialTest.ModeratedT;
 
-    public VariancePrior Prior { get; init; } = VariancePrior.LimmaTrend;
+    /// <summary>
+    /// The prior asked for, or null - the default - for the one the level calls for
+    /// (<see cref="ResolvedPrior"/>). <c>proteomics-toolkit</c>'s <c>moderation=None</c>.
+    /// </summary>
+    public VariancePrior? Prior { get; init; }
+
+    /// <summary>
+    /// The prior a run uses: <see cref="Prior"/> when one was asked for; otherwise chosen by level, as
+    /// <c>proteomics-toolkit</c> chooses it - <see cref="VariancePrior.LimmaTrendIntensityNPeptides"/>
+    /// when <see cref="PeptideCounts"/> are supplied, which only the protein-level matrix carries, and
+    /// <see cref="VariancePrior.LimmaTrend"/> otherwise. A peptide has no peptide count, so every
+    /// peptide-level analysis gets limma-trend.
+    /// </summary>
+    public VariancePrior ResolvedPrior =>
+        Prior ?? (PeptideCounts is not null ? VariancePrior.LimmaTrendIntensityNPeptides : VariancePrior.LimmaTrend);
 
     public MultipleTesting Correction { get; init; } = MultipleTesting.BenjaminiHochberg;
 
@@ -266,12 +302,13 @@ public sealed record DifferentialOptions
     {
         var priorName = actualPrior switch
         {
-            null => Prior switch
+            null => ResolvedPrior switch
             {
                 VariancePrior.Global => "global prior",
                 VariancePrior.IntensityTrend => "intensity-trend prior",
                 VariancePrior.LimmaTrend => "limma-trend prior",
                 VariancePrior.PeptideCount => "peptide-count prior",
+                VariancePrior.LimmaTrendIntensityNPeptides => "limma-trend-intensity-n-peptides prior",
                 _ => "intensity-trend prior",
             },
             "global" => "global prior",
