@@ -40,8 +40,29 @@ public sealed class PrismConfig
             .IgnoreUnmatchedProperties()
             .Build();
         var config = deserializer.Deserialize<PrismConfig>(yaml) ?? new PrismConfig();
+        RestoreEmptySections(config);
         config.TransitionRollup.ResolveLibraryAssist();
         return config;
+    }
+
+    /// <summary>
+    /// A section header whose keys are all commented out (<c>qc_report:</c> alone) deserializes as
+    /// null, and every reader of the section would dereference it. It sets nothing, so it gets the
+    /// section's defaults. A section whose default is null - the nested library_assist block - stays
+    /// null.
+    /// </summary>
+    private static void RestoreEmptySections(object section)
+    {
+        var defaults = Activator.CreateInstance(section.GetType())!;
+        foreach (var property in YamlProperties(section.GetType()))
+        {
+            if (!IsSection(property.PropertyType))
+                continue;
+            var value = property.GetValue(section) ?? property.GetValue(defaults);
+            property.SetValue(section, value);
+            if (value is not null)
+                RestoreEmptySections(value);
+        }
     }
 
     /// <summary>
@@ -91,10 +112,15 @@ public sealed class PrismConfig
 
         // The nested library_assist block was folded onto the flat library_* keys when this config was
         // parsed, and nothing reads it after that, so its effect is already in the flat keys. Kept, the
-        // re-fold below would put its old values back over any flat key the YAML overrides.
+        // re-fold below would put its old values back over any flat key the YAML overrides. Put back
+        // when the YAML set nothing in the section, so a file that changes nothing changes nothing.
+        var nested = TransitionRollup.LibraryAssist;
         TransitionRollup.LibraryAssist = null;
         OverlaySection(root, parsed, this, "", applied);
-        TransitionRollup.ResolveLibraryAssist();
+        if (applied.Exists(k => k.StartsWith("transition_rollup.", StringComparison.Ordinal)))
+            TransitionRollup.ResolveLibraryAssist();
+        else
+            TransitionRollup.LibraryAssist = nested;
         return applied;
     }
 
@@ -105,14 +131,12 @@ public sealed class PrismConfig
         {
             var key = kv.Key?.ToString() ?? "";
             var property = Array.Find(
-                to.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance),
-                p => p.CanWrite && UnderscoredNamingConvention.Instance.Apply(p.Name) == key);
+                YamlProperties(to.GetType()), p => UnderscoredNamingConvention.Instance.Apply(p.Name) == key);
             if (property is null)
                 continue;
             var path = prefix.Length == 0 ? key : prefix + "." + key;
 
-            // Every section is a class nested in PrismConfig; everything else is a value or a list.
-            if (property.PropertyType.DeclaringType == typeof(PrismConfig))
+            if (IsSection(property.PropertyType))
             {
                 // A section header with nothing under it sets nothing.
                 if (kv.Value is not IDictionary<object, object> child)
@@ -132,6 +156,22 @@ public sealed class PrismConfig
             }
         }
     }
+
+    /// <summary>
+    /// The properties a YAML key can bind: public, with a public setter, as YamlDotNet requires. Going
+    /// by <c>CanWrite</c> would admit a private setter, and the overlay would then copy Parse's default
+    /// over a value the same key could never have set.
+    /// </summary>
+    private static PropertyInfo[] YamlProperties(Type type) =>
+        Array.FindAll(
+            type.GetProperties(BindingFlags.Public | BindingFlags.Instance),
+            p => p.GetSetMethod() is not null && p.GetGetMethod() is not null);
+
+    /// <summary>
+    /// Every config section is a class nested in PrismConfig. A nested enum or struct is a value, and
+    /// must be overridden like one rather than skipped for having no keys under it.
+    /// </summary>
+    private static bool IsSection(Type type) => type.IsClass && type.DeclaringType == typeof(PrismConfig);
 
     private static void WarnUnknownKeys(string yaml, Action<string>? warn)
     {

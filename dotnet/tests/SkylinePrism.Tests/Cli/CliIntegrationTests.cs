@@ -1107,7 +1107,7 @@ public class CliIntegrationTests
 
             // Said, not inferred: the log names the file and what it changed, and a key the YAML
             // misspelled is warned about exactly as a plain -c run warns about it.
-            Assert.Contains("transition_rollup.min_transitions", output, StringComparison.Ordinal);
+            Assert.Contains($"{overrides} overrides transition_rollup.min_transitions", output, StringComparison.Ordinal);
             Assert.Contains(
                 "config key 'transition_rollup.min_transition' is not recognized", output, StringComparison.Ordinal);
         }
@@ -1115,6 +1115,59 @@ public class CliIntegrationTests
         {
             Cleanup(first);
             Cleanup(second);
+        }
+    }
+
+    /// <summary>
+    /// A database the provenance had to substitute is still reported, unless the <c>-c</c> named a
+    /// database of its own - then nothing was substituted, and saying so would be wrong.
+    /// </summary>
+    [Fact]
+    public void Run_FromProvenance_ReportsASubstitutedDatabase_OnlyWhenTheConfigKeptIt()
+    {
+        var root = TempDir();
+        try
+        {
+            // A provenance whose run used a FASTA that has since been moved away, leaving the copy
+            // archived beside it - as FastaArchiveTests builds one.
+            var dbDir = Path.Combine(root, "databases");
+            Directory.CreateDirectory(dbDir);
+            var fasta = Path.Combine(dbDir, "search.fasta");
+            File.WriteAllText(fasta, ">sp|P1|A_HUMAN\nPEPTIDEK\n");
+            var provDir = Path.Combine(root, "prov");
+            Directory.CreateDirectory(provDir);
+            var config = SkylinePrism.Core.Config.PrismConfig.LoadValidated(Config);
+            config.Parsimony.FastaPath = fasta;
+            var entries = SkylinePrism.Core.Pipeline.FastaArchive.Archive(config, provDir);
+            var provenance = Path.Combine(provDir, "parameters.json");
+            SkylinePrism.Core.Pipeline.Provenance.Write(
+                provenance, config, new[] { Input1, Input2 },
+                new SkylinePrism.Core.Pipeline.Provenance.Stats(1, 1, 1, 1), DateTime.UtcNow.ToString("o"), entries);
+            Directory.Delete(dbDir, recursive: true);
+            const string note = "NOTE: parsimony.fasta_path no longer exists";
+
+            // The database is replaced: no substitution happened, so none is reported.
+            var replaced = Path.Combine(root, "replaced.yaml");
+            File.WriteAllText(replaced, "parsimony:\n  fasta_path: null\n");
+            var (code, output) = Invoke("run", "-i", Input1, Input2, "-o", Path.Combine(root, "out1"),
+                "--from-provenance", provenance, "-c", replaced);
+            Assert.Equal(0, code);
+            Assert.DoesNotContain(note, output, StringComparison.Ordinal);
+            Assert.Null(SkylinePrism.Core.Pipeline.Provenance.LoadConfig(
+                Path.Combine(root, "out1", "parameters.json")).Parsimony.FastaPath);
+
+            // Another key is overridden: the archived copy is still what runs, and the run says so.
+            // The stand-in database maps none of the fixture's peptides, so how this run ends is not
+            // what is being tested - only that the substitution was announced before it started.
+            var other = Path.Combine(root, "other.yaml");
+            File.WriteAllText(other, "transition_rollup:\n  min_transitions: 2\n");
+            (_, output) = Invoke("run", "-i", Input1, Input2, "-o", Path.Combine(root, "out2"),
+                "--from-provenance", provenance, "-c", other);
+            Assert.Contains(note, output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
         }
     }
 

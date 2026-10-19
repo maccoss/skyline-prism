@@ -191,23 +191,33 @@ public class ConfigOverlayTests
         Assert.Contains("transition_rollup.library_assist.library_path", applied);
     }
 
-    [Fact]
-    public void Overlay_ASectionHeaderWithNothingUnderIt_SetsNothing()
+    /// <summary>
+    /// What an override file looks like with its keys commented out. transition_rollup is the case
+    /// that used to throw: Parse dereferenced the section to fold library_assist.
+    /// </summary>
+    [Theory]
+    [InlineData("qc_report:\n")]
+    [InlineData("transition_rollup:\n  # min_transitions: 2\n")]
+    [InlineData("global_normalization:\n  rt_lowess:\n")]
+    public void Overlay_ASectionHeaderWithNothingUnderIt_SetsNothing(string yaml)
     {
-        var config = new PrismConfig();
-        config.QcReport.Enabled = false;
+        var config = Perturbed(withLibraryAssistBlock: false);
+        var before = Json(config);
 
-        var applied = config.Overlay("qc_report:\n");
+        var applied = config.Overlay(yaml);
 
         Assert.Empty(applied);
-        Assert.NotNull(config.QcReport);
-        Assert.False(config.QcReport.Enabled);
+        Assert.Equal(before, Json(config));
     }
 
+    /// <summary>
+    /// A file that touches nothing in the base changes nothing in it - not even the nested
+    /// library_assist block, which is cleared only when the YAML touches transition_rollup.
+    /// </summary>
     [Fact]
     public void Overlay_SkipsAKeyPrismDoesNotRead()
     {
-        var config = new PrismConfig();
+        var config = PrismConfig.Parse("transition_rollup:\n  library_assist:\n    library_path: a.blib\n");
         var before = Json(config);
 
         var applied = config.Overlay("transition_rollup:\n  min_transition: 5\nnot_a_section: 1\n");
