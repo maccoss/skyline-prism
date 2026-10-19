@@ -770,23 +770,37 @@ this file has the same effect for one run.
 
 ### prism_run_YYYYMMDD_HHMMSS.log
 
-**Purpose**: Detailed processing log with timestamps.
+**Purpose**: Everything `prism run` printed for this run, one file per run. The time stamp is in the
+file name; the lines themselves are not stamped.
 
 **Contents**:
 
+- Anything said while the config was read: an unrecognized key's `WARNING`, the `NOTE` that a moved
+  FASTA was replaced by the copy archived beside an earlier run, and with `--from-provenance -c`, the
+  keys the `-c` overrode. These are printed to stderr as well. Up to dotnet-v26.29.0 they went to
+  stderr only, so a run whose stderr was discarded left no trace of them here.
 - Processing stages and timing
 - Sample counts and batch assignments
-- CV metrics before/after normalization
-- Warnings and errors
-- Method parameters
+- CV metrics before/after normalization and batch correction
+- Warnings and method parameters
+- For a run that failed, the `Error:` line that ended it, as the last line. The console prints the
+  log's path in that case too.
 
-**Example**:
+**Example** (mini fixture, paths shortened):
 
 ```text
-2026-01-19 12:00:00 - skyline_prism.cli - INFO - Stage 1: Merge and Sort Input Data
-2026-01-19 12:00:00 - skyline_prism.cli - INFO - ------------------------------------------------------------
-2026-01-19 12:00:01 - skyline_prism.cli - INFO -   Merged 3 input files: 19,805,912 total rows
-...
+WARNING: config key 'transition_rolup' is not recognized by PRISM and will be ignored (a typo, or a key from the retired Python engine - see docs/parameters.md).
+PRISM: merging 2 input(s) -> out
+============================================================
+Stage 1: Merge / prepare input
+============================================================
+  Merged 2 report(s) -> 4,000 transition rows across 1 peptide partition(s).
+  ...
+Stage 2: Transition -> peptide rollup (sum)
+============================================================
+  Rolled up to 5 peptides (1 filtered below min_transitions).
+  ...
+Done: 5 peptides, 3 proteins, 166 samples, 2 batch(es). Outputs in out
 ```
 
 ---

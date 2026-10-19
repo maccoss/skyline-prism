@@ -68,6 +68,16 @@ public static partial class Program
         var provenancePath = opts.GetSingleOrNull("--from-provenance");
         var forceReprocess = opts.GetSingleOrNull("--force-reprocess") is not null;
 
+        // What is said while the config is read comes before the run log exists, so it is kept and
+        // written there once the log opens. On stderr alone it was lost to any scripted run that
+        // discards stderr, leaving a log with no trace that a key was ignored or a database swapped.
+        var notices = new List<string>();
+        void Notice(string m)
+        {
+            Console.Error.WriteLine(m);
+            notices.Add(m);
+        }
+
         PrismConfig config;
         var provenanceLoaded = false;
         IReadOnlyList<string>? overridden = null;
@@ -77,14 +87,13 @@ public static partial class Program
             // -c on top of a provenance changes the keys it names and keeps the rest of the earlier
             // run's settings. It was once dropped here without a word, re-running the old settings.
             if (configPath is not null)
-                overridden = config.ApplyOverrides(configPath, w => Console.Error.WriteLine($"WARNING: {w}"));
+                overridden = config.ApplyOverrides(configPath, w => Notice($"WARNING: {w}"));
             else
                 config.Validate();
             // A substituted database must never be silent: it changes protein grouping and iBAQ counts.
             // One the -c replaced was not substituted, so it is not reported as though it had been.
             foreach (var key in redirectedFasta.Except(overridden ?? Array.Empty<string>()))
-                Console.Error.WriteLine(
-                    $"NOTE: {key} no longer exists; using the copy this run archived beside its outputs.");
+                Notice($"NOTE: {key} no longer exists; using the copy this run archived beside its outputs.");
             if (inputs.Count == 0)
                 foreach (var s in Provenance.SourceFiles(provenancePath))
                     inputs.Add(s);
@@ -93,7 +102,7 @@ public static partial class Program
         else
         {
             config = configPath is not null
-                ? PrismConfig.LoadValidated(configPath, w => Console.Error.WriteLine($"WARNING: {w}"))
+                ? PrismConfig.LoadValidated(configPath, w => Notice($"WARNING: {w}"))
                 : new PrismConfig();
         }
 
@@ -119,6 +128,9 @@ public static partial class Program
             logFile.WriteLine(m);
         }
 
+        // Already on the console, so to the log only - in the order they were said.
+        foreach (var notice in notices)
+            logFile.WriteLine(notice);
         if (provenanceLoaded)
             Log($"PRISM: loaded settings from provenance {provenancePath}");
         if (overridden is { Count: > 0 })
@@ -126,22 +138,33 @@ public static partial class Program
         else if (overridden is not null)
             Log($"WARNING: {configPath} changes no setting PRISM reads; running the provenance settings unchanged.");
 
-        // Warned about, not refused. A CLI run is usually scripted, and something that stops a
-        // pipeline to ask a question is worse than the surprise it prevents - so this says what is
-        // about to go and carries on. It is silent when the previous run used the same version and
-        // the same settings, which is how a QC report gets regenerated and a partial ion accounting
-        // topped up; a warning that fires on the ordinary case stops being read.
-        // With the inputs, so the merge and the transition rollup are answered by the same
-        // CanReuse the pipeline will call rather than predicted - which is what catches an input
-        // file edited in place under settings that did not move.
-        if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
-            Log("WARNING: " + warning);
+        try
+        {
+            // Warned about, not refused. A CLI run is usually scripted, and something that stops a
+            // pipeline to ask a question is worse than the surprise it prevents - so this says what
+            // is about to go and carries on. It is silent when the previous run used the same
+            // version and the same settings, which is how a QC report gets regenerated and a partial
+            // ion accounting topped up; a warning that fires on the ordinary case stops being read.
+            // With the inputs, so the merge and the transition rollup are answered by the same
+            // CanReuse the pipeline will call rather than predicted - which is what catches an input
+            // file edited in place under settings that did not move.
+            if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
+                Log("WARNING: " + warning);
 
-        Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
-        var result = PrismPipeline.Run(
-            inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
-        Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
-            + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+            Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
+            var result = PrismPipeline.Run(
+                inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
+            Log($"Done: {result.NPeptides} peptides, {result.NProteins} proteins, {result.NSamples} samples, "
+                + $"{result.Batches.Count} batch(es). Outputs in {outputDir}");
+        }
+        catch (Exception ex)
+        {
+            // Main prints the error, to stderr. The log is the run's record, so it says it too -
+            // otherwise a failed run's log just stops mid-stage - and the console says where it is.
+            logFile.WriteLine($"Error: {ex.Message}");
+            Console.WriteLine($"Run log: {logPath}");
+            throw;
+        }
         Console.WriteLine($"Run log: {logPath}");
         return 0;
     }

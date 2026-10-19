@@ -40,6 +40,14 @@ as the GitHub Release description and fails if it is missing.
   instance of an object". A blank key was treated as left out and kept its default - or, with
   `--from-provenance`, the earlier run's value. An empty list is written `[]`, and `null` still
   cleared a key whose default is none, such as `parsimony.fasta_path`.
+- **The run log started recording what was said while the config was read.** An unrecognized
+  config key's `WARNING` and the `NOTE` that a moved FASTA had been replaced by its archived copy
+  were printed before `prism_run_*.log` was opened, so they had gone to stderr only; a scripted run
+  that discarded stderr left a log that read as though every setting had been honored. They were
+  written at the top of the log as well, in the order they were said. A run that failed had left a
+  log that stopped mid-stage with no reason; it ended with the `Error:` line, and the console said
+  where the log was. The log section of `docs/output_files.md`, which still showed the retired
+  Python engine's time-stamped format, was rewritten from a real run.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).
