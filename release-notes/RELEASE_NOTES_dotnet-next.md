@@ -36,7 +36,7 @@ as the GitHub Release description and fails if it is missing.
   refuse such a directory, with a message naming the leftover partitions; the QC report shows that
   message in place of the section and builds the rest. A re-run into it re-merges and recomputes every stage instead of
   reusing the cached merge. The check compares the parquet footers with `TotalRows` in
-  `merged_data.cache.json`. It reads no column data, and took under 0.1 s on that cohort.
+  `merged_data.cache.json`. It reads no column data, and took under a second on that cohort.
 
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
