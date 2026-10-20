@@ -1023,6 +1023,15 @@ public sealed class PrismPipeline
         }
     }
 
+    /// <summary>
+    /// The columns PRISM itself writes at the head of <c>sample_metadata.csv</c>, in order; every
+    /// report column follows them. A reader that treats these differently from the report's own
+    /// annotations - the GUI's default group-by, for one - takes them from here, so a column added
+    /// to the file cannot be missed there.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SampleMetadataColumns =
+        new[] { "sample_id", "sample", "sample_type", "batch", "acquired_time", "run_order" };
+
     internal static void WriteSampleMetadata(
         string path, IReadOnlyList<string> samples,
         IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType,
@@ -1032,11 +1041,10 @@ public sealed class PrismPipeline
         // adjusted, and by suffixing rather than dropping: two columns with the same header would
         // resolve to whichever a reader indexes first, silently, while dropping one would lose data the
         // run was asked to carry. (A replicate annotation really can be called "batch".)
-        var reserved = new[] { "sample_id", "sample", "sample_type", "batch", "acquired_time", "run_order" };
         var extraCols = new List<(string Header, string Column)>();
         foreach (var col in metadata?.ColumnNames ?? new List<string>())
         {
-            var header = reserved.Contains(col, StringComparer.OrdinalIgnoreCase)
+            var header = SampleMetadataColumns.Contains(col, StringComparer.OrdinalIgnoreCase)
                 ? col + " (report)"
                 : col;
             extraCols.Add((header, col));
@@ -1048,7 +1056,7 @@ public sealed class PrismPipeline
         // Blank for a sample with no time.
         var runOrder = AcquisitionOrder.Rank(acquired);
 
-        var sb = new StringBuilder("sample_id,sample,sample_type,batch,acquired_time,run_order");
+        var sb = new StringBuilder(string.Join(",", SampleMetadataColumns));
         foreach (var (header, _) in extraCols)
             sb.Append(',').Append(Csv(header));
         sb.Append('\n');

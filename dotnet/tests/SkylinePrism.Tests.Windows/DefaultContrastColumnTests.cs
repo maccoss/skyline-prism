@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using SkylinePrism.App;
+using SkylinePrism.Core.Pipeline;
 using Xunit;
 
 namespace SkylinePrism.Tests.Windows;
@@ -63,6 +66,37 @@ public class DefaultContrastColumnTests
             ("Visit", new[] { "V01", "V01", "V02", "V02", "V02" }));
 
         Assert.Equal("Visit", col);
+    }
+
+    /// <summary>
+    /// Every column PRISM writes itself is reserved, read from the writer's own list - the copy that
+    /// lived here missed the two acquisition columns when they were added.
+    /// </summary>
+    [Fact]
+    public void ReservesEveryColumnTheWriterPutsAtTheHead()
+    {
+        foreach (var col in PrismPipeline.SampleMetadataColumns)
+        {
+            var picked = Pick(
+                (col, new[] { "x", "x", "y", "y" }),
+                ("Visit", new[] { "V01", "V01", "V02", "V02" }));
+            Assert.Equal("Visit", picked);
+        }
+    }
+
+    /// <summary>
+    /// Both panes take their default from the one rule. Source checks, as in
+    /// <see cref="DifferentialReportWiringTests"/>: the call sites need a real window and a loaded run
+    /// to exercise, and the regression was only seen by launching the tool.
+    /// </summary>
+    [Theory]
+    [InlineData("MainWindow.Differential.cs", "DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);")]
+    [InlineData("MainWindow.Markers.cs", "MarkersGroupByCombo.SelectedItem = DefaultContrastColumn(ds);")]
+    public void BothPanes_DefaultThroughTheSharedRule(string file, string call)
+    {
+        var appDir = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "SkylinePrism.App"));
+        Assert.Contains(call, File.ReadAllText(Path.Combine(appDir, file)), StringComparison.Ordinal);
     }
 
     [Fact]

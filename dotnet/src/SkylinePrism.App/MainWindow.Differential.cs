@@ -11,6 +11,7 @@ using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
 using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Visualization;
 using SkylinePrism.Skyline;
@@ -31,12 +32,13 @@ public partial class MainWindow
     };
 
     /// <summary>
-    /// Columns PRISM writes into sample_metadata.csv itself, never a default to group by. The
-    /// acquisition columns are unique per run, and they come straight after the resolved ones, so
-    /// without them here every document with Skyline's Acquired Time defaulted to acquired_time.
+    /// Columns PRISM writes into sample_metadata.csv itself, never a default to group by. Taken from
+    /// the writer rather than listed here: acquired_time and run_order were added to the file, a
+    /// copy of the list here did not move, and every document with Skyline's Acquired Time then
+    /// defaulted to a column unique per run.
     /// </summary>
     private static readonly HashSet<string> ReservedMetaColumns =
-        new(StringComparer.Ordinal) { "sample", "sample_type", "batch", "acquired_time", "run_order" };
+        new(PrismPipeline.SampleMetadataColumns, StringComparer.Ordinal);
 
     /// <summary>
     /// Marker sizes for the scatter views (Volcano and the two Detection plots), the significant
