@@ -701,11 +701,11 @@ chosen by level.
 | limma-trend (the default at peptide level in both) | **one golden for both tools**: `limma_ebayes.json`, R limma 3.66.0's own `lmFit` + `eBayes(trend = TRUE)` called whole, written byte for byte the same by twin R scripts in the two repositories - unpaired, paired, trend and within-subject trend designs, the df cap, missing values and zero variances. PRISM holds to it at 1e-9 on the prior df and p and 1e-10 on logFC and t, the toolkit at the same or tighter. The golden above also requires its own transcription of limma to reproduce limma-trend to 1e-12 before it writes a case |
 | global (toolkit `moderation="global"`, formerly `"limma"`) | the same golden, `limma_ebayes.json`; **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma, except P.Value in toolkit 26.8.0 and earlier where limma's df cap binds (an infinite prior df, or a small feature set); see below |
 | peptide-count (DEqMS) | PRISM pinned to the toolkit's estimator by `peptide_count_prior.json`; the LOWESS inside it pinned in both to R's `lowess()` by `lowess.json` (below) |
-| intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and its LOWESS by `lowess.json`. P.Value differs from toolkit 26.8.0 and earlier wherever the df cap binds, as for the global prior |
+| intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` (toolkit v26.9.0) at 5e-8 on t, p and the prior - the allowance for the two tools' LOWESS algorithms (below) - and its LOWESS by `lowess.json`. P.Value differs from toolkit 26.8.0 and earlier wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
-**Four conventions used to separate a toolkit run from PRISM**, none of them changing a conclusion.
-From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools share all four:
+**Five conventions used to separate a toolkit run from PRISM**, none of them changing a conclusion.
+From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools share all five:
 
 - **No log pseudocount.** PRISM's matrix is log2 of a LINEAR parquet and adds nothing; a value of 0
   or less is missing. The toolkit's dispatcher added the smallest value / 100 before log2, which on
@@ -719,13 +719,22 @@ From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools sh
   algorithm at the same distance. Both are pinned to R's own `lowess()` by `lowess.json` (twin
   generators, byte-identical): the toolkit to 5e-14, PRISM's `Lowess.Fit` to 2.5e-10. statsmodels'
   `lowess` at the same distance is not a substitute - it advances differently once a run of
-  interpolated points reaches the end of the data, 2e-6 from R on the golden's crowded case.
+  interpolated points reaches the end of the data, 2e-6 from R on the golden's crowded case. The
+  remaining 2.5e-10 is in the weights: `Lowess.Fit` keeps statsmodels' pure tricube and bisquare,
+  which RT-LOWESS normalization also runs on, where R sets a weight to 1 inside 0.1% of
+  the bandwidth and to 0 beyond 99.9%. Carried through a prior it is at most 1.8e-8 relative on the
+  toolkit-parity goldens, which are compared at 5e-8 for that reason.
 - **Zero residual variances are floored,** at 1e-5 x the median with limma's warning, as limma's
   `fitFDist` floors them. PRISM always did; the toolkit dropped them from the prior fit until 26.9.0.
   The peptide-count prior's LOWESS, which cannot take the log of a zero, leaves out every variance at
   or below that floor, in both tools, so an exact 0 and the 1e-29 another least-squares solve leaves
   in its place are treated alike; counting the 1e-29, as PRISM did, moved p by 4e-3 between the
   tools on a cohort with three exactly constant proteins.
+- **Adjusted p-values over the features tested.** A feature with no p-value is not a comparison
+  made, so it is not counted: R's `p.adjust` leaves an `NA` out of `n`, as limma's `topTable` and
+  PRISM do. The toolkit counted it as p = 1 until 26.9.0, which made every adjusted p larger by up
+  to features / features tested (12/11 on `toolkit_end_to_end.json`'s case with one untested
+  feature).
 - **Missing values: each feature on its observed samples,** as limma's `lmFit` fits it (see "Missing
   values" above). The toolkit from 26.9.0, PRISM from the release after dotnet-v26.29.0; before, PRISM
   tested only complete features and the toolkit dropped a feature whose observed design was singular.
@@ -758,7 +767,8 @@ is. With an infinite prior df they always part, because the uncapped t is read o
 3,000 features at 8 residual df the capped p is higher by 0.1% at t = 3 and 4.5% at t = 8. On a
 small feature set they part by far more: 8 features at 4 residual df with an infinite prior give a t
 of 5.49 a p of 4.0e-8 uncapped and 4.8e-6 on limma's 32 df. `ebayes.json` pins PRISM to R limma's
-own `eBayes`, and `toolkit_end_to_end.json` records both p-values for the same t.
+own `eBayes`. `toolkit_end_to_end.json` holds PRISM to the toolkit's own p, which from 26.9.0 is
+on the same capped df; its generator checks that against limma's formula before writing.
 
 ## Cross-checking a PRISM result against the toolkit
 

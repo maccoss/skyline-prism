@@ -65,7 +65,11 @@ as the GitHub Release description and fails if it is missing.
   zero variances, `limma_trend_intensity_n_peptides.json` for the protein-level default, and the new
   `lowess.json` (R `lowess()`) for the LOWESS inside the peptide-count and intensity-trend priors,
   which PRISM's `Lowess.Fit` matches to 2.5e-10. On complete data a default run of either tool gives
-  the same p-values with no setting at all.
+  the same p-values with no setting at all. The toolkit-sourced goldens (`intensity_trend.json`,
+  `peptide_count_prior.json`, `toolkit_end_to_end.json`) were regenerated from the released 26.9.0,
+  run at its defaults. They move by at most 1.8e-8, all of it the two tools' LOWESS weights, and
+  are compared at a stated 5e-8 where a value passes through a prior's LOWESS. They also hold PRISM
+  to the toolkit's own p and adjusted p, now on limma's capped df and over the features tested.
 
 ## Bug Fixes
 

@@ -81,7 +81,7 @@ which no relative bound alone can hold.
 | `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
 | `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
 | `blocked.json` | `DuplicateCorrelation.Estimate`, `LinearModel.FitBlocked`, and `Differential.Run` under `BlockedBySubject` | R `limma::duplicateCorrelation` + `lmFit(block=, correlation=)` + `eBayes`, written by `generate_blocked.R` |
-| `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend; the two-arm designs with both an infinite and a finite d0; a feature too sparse to test whose pool replicates still shape the trend) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, `log_pseudocount=0`; the calibration also against `inmoose.limma.squeezeVar` |
+| `toolkit_end_to_end.json` | `Differential.Run` / `.RunTrend` with the intensity-trend prior shaped on control pools and calibrated to the design (unpaired, paired, within-subject and independent trend; the two-arm designs with both an infinite and a finite d0; a feature too sparse to test whose pool replicates still shape the trend) | `proteomics_toolkit.run_comprehensive_statistical_analysis` with `variance_prior_group_column`, at v26.9.0's defaults; the calibration also against `inmoose.limma.squeezeVar`, and the p-values against limma's capped df |
 | `limma_trend_intensity_n_peptides.json` | `EmpiricalBayes.SqueezeVarTrend` with log peptide counts, through `Differential.Run` / `.RunTrend` under `LimmaTrendIntensityNPeptides` (unpaired, paired, trend; a straight-line count term from two counts, and from a median count on the boundary, where R's `ns()` refuses; an infinite prior df) | R `limma::lmFit` + limma 3.66.0's `fitFDist` transcribed with the count block added, checked against `eBayes(trend = TRUE)`; written by `generate_limma_trend_intensity_n_peptides.R`, byte-identical to `proteomics-toolkit`'s |
 | `limma_ebayes.json` | `Differential.Run` / `.RunTrend` under the global and limma-trend priors: unpaired, paired, trend and within-subject trend designs, the df cap, features with missing values fitted on their observed samples (`LinearModel.FitObserved`; an arm missing, the reference subject missing, whole subjects missing from a trend), and zero residual variances floored | R `limma::lmFit` + `eBayes(trend = TRUE | FALSE)`, called whole (the missing-value cases with `legacy = TRUE`); written by `generate_limma_ebayes.R`, byte-identical to `proteomics-toolkit`'s |
 | `lowess.json` | `Lowess.Fit` at the variance priors' settings (span 0.5, three robustness iterations, delta 1% of the x range) on crowded and tied inputs, where the interpolation happens | R `stats::lowess` at its default delta; written by `generate_lowess.R`, byte-identical to `proteomics-toolkit`'s |
@@ -90,7 +90,7 @@ which no relative bound alone can hold.
 `peptide_count_prior.json` and `toolkit_end_to_end.json`) is pinned to
 `proteomics-toolkit`, not to a third-party library, because the estimator is not a published formula
 with an independent implementation to check against - it IS that tool's
-`moderation="intensity_trend"`, and reproducing it is the whole requirement. It stands to PRISM as
+`moderation="intensity-trend"`, and reproducing it is the whole requirement. It stands to PRISM as
 `inmoose` does for `squeezeVar`: the definition, not a second opinion. The rule below forbids
 consulting the code under test, which this does not. Regenerating it needs the toolkit installed (the
 PEP 723 header pulls it from git).
@@ -100,11 +100,17 @@ because what it pins is the composition: reference and QC pools outside the desi
 shape, and its level and degrees of freedom are fitted to the design's residuals. That calibration
 step is limma's `fitFDist` with the trend as a known offset, so the generator also hands the toolkit's
 residuals and trend to `inmoose.limma.squeezeVar` and refuses to write a case where the two disagree.
-Two conventions are aligned rather than tolerated, and the generator says how. The toolkit is run with `log_pseudocount=0`, because
-PRISM adds none. Its inputs keep every prior point more than 1% of the x range from the next, so
-PRISM's LOWESS `delta` interpolates nothing, and the generator refuses to write a case where that
-fails. On the Verapamil serum cohort the same comparison agreed to ~1e-11. Its cohort is synthetic,
+The toolkit runs at its defaults. Up to v26.8.0 two conventions had to be aligned by hand - a log
+pseudocount, and LOWESS at `delta=0` - and from v26.9.0 the toolkit shares PRISM's on both. Its
+p-values are checked against limma's capped df before a case is written. Its cohort is synthetic,
 because a clinical one cannot be committed.
+
+**The three toolkit-sourced fixtures are compared at 5e-8 where a value passes through a prior's
+LOWESS** (`ToolkitLowessTolerance` in `DifferentialGoldenTests`, which gives the reasoning). From
+v26.9.0 the toolkit's LOWESS is an exact port of R's `lowess()`; PRISM's `Lowess.Fit` keeps
+statsmodels' weights, which RT-LOWESS normalization also uses. The worst difference measured is
+1.8e-8, the amount the toolkit's own output moved when it switched. Everything else - logFC,
+AveExpr, the residual df - stays at 1e-9 or tighter.
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under
 test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.
