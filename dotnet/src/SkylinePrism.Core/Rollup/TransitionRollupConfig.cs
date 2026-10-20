@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using SkylinePrism.Core.Library;
+
 namespace SkylinePrism.Core.Rollup;
 
 /// <summary>Transition-&gt;peptide rollup method.</summary>
@@ -14,7 +17,7 @@ public enum TransitionRollupMethod
 /// Configuration for the transition-&gt;peptide rollup (Stage 2), mirroring the relevant
 /// fields of the Python ChunkedRollupConfig.
 /// </summary>
-public sealed class TransitionRollupConfig
+public sealed record TransitionRollupConfig
 {
     public TransitionRollupMethod Method { get; init; } = TransitionRollupMethod.Sum;
 
@@ -73,4 +76,35 @@ public sealed class TransitionRollupConfig
 
     /// <summary>Iteratively remove interference (high-residual) fragments before the final scale.</summary>
     public bool LibraryRemoveOutliers { get; init; } = true;
+
+    /// <summary>How a sample's scale is fitted (<c>transition_rollup.library_fitting_method</c>).</summary>
+    public LibraryFitting LibraryFitting { get; init; } = LibraryFitting.NoiseGatedRatio;
+
+    /// <summary>noise_gated_ratio: SDs of measured fragment noise an excess must also exceed; 0 = off.</summary>
+    public double LibraryNoiseSigma { get; init; } = 3.0;
+
+    /// <summary>
+    /// noise_gated_ratio: the cohort's measured fragment noise. Null, or a curve with no points, turns
+    /// the noise test off - the ratio test alone then decides.
+    /// </summary>
+    public FragmentNoiseCurve? LibraryNoise { get; init; }
+
+    /// <summary>
+    /// noise_gated_ratio: the replicate-pool groups to check each peptide's precision in, as indices
+    /// into the run's sample list. Null when the run has no pools with 3 injections.
+    /// </summary>
+    public IReadOnlyList<NoiseGroup>? PrecisionGroups { get; init; }
+
+    /// <summary>Where the per-peptide precision check is written; null = not written.</summary>
+    public string? PrecisionPath { get; init; }
+}
+
+/// <summary>How library-assisted rollup fits a sample's scale (see <see cref="LibraryRollup"/>).</summary>
+public enum LibraryFitting
+{
+    /// <summary>Ratio of kept fragment signal to library intensity, removal gated on measured noise.</summary>
+    NoiseGatedRatio,
+
+    /// <summary>The original median of log ratios with an ungated 2x removal.</summary>
+    MedianPolish,
 }

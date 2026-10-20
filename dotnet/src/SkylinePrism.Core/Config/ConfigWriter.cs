@@ -18,12 +18,12 @@ namespace SkylinePrism.Core.Config;
 ///   <item>everything else only when it differs from the built-in default.</item>
 /// </list>
 /// <para>
-/// Keys that NAME an algorithm are always written for an active section, even at their default and
-/// even where C# implements only one choice - the config is meant to be handed to the CLI, and the
-/// Python engine offers choices C# does not (<c>library_fitting_method</c> is median_polish-only
-/// here but median_polish OR least_squares there). Eliding them would leave the reader unable to
-/// tell which algorithm produced the numbers. Everything else still follows the rules above: a
-/// defaulted value is elided whether it is a number, a flag, a string, or a whole section.
+/// Keys that NAME an algorithm are always written for an active section, even at their default - the
+/// config is meant to be handed to the CLI, and a default can change between versions
+/// (<c>library_fitting_method</c> went from median_polish to noise_gated_ratio).
+/// Eliding them would leave the reader unable to tell which algorithm produced the numbers.
+/// Everything else still follows the rules above: a defaulted value is elided whether it is a
+/// number, a flag, a string, or a whole section.
 /// </para>
 /// <para>
 /// Omitted keys fall back to exactly these defaults when the config is re-read, so the emitted
@@ -135,9 +135,12 @@ public static class ConfigWriter
                 s["library_mz_tolerance"] = tr.LibraryMzTolerance;
                 s["library_outlier_threshold"] = tr.LibraryOutlierThreshold;
                 s["library_remove_outliers"] = tr.LibraryRemoveOutliers;
-                // Always written: C# implements only median_polish (least_squares aborts), but Python
-                // implements both, so the config has to say which fit produced the sample scale.
+                // Always written: it names the algorithm that produced the sample scale, and the
+                // default has changed once (median_polish -> noise_gated_ratio), so a config that left
+                // it out would mean different things to different versions.
                 s["library_fitting_method"] = tr.LibraryFittingMethod;
+                if (string.Equals(tr.LibraryFittingMethod, "noise_gated_ratio", System.StringComparison.OrdinalIgnoreCase))
+                    s["library_noise_sigma"] = tr.LibraryNoiseSigma;
                 break;
         }
         return s;

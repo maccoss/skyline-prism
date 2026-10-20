@@ -61,6 +61,11 @@ public static class StageDependencies
             [Merge] = new[] { "data" },
 
             // Transition -> peptide. Every transition_rollup key, plus whether residuals are written.
+            // library_fitting_method: noise_gated_ratio also depends on WHICH samples are reference
+            // and QC pools (the fragment noise is measured within them). That comes from the sample
+            // types, which have several sources besides config, so PrismPipeline adds the pool
+            // membership itself to this stage's fingerprint (NoisePlan.Key) rather than listing
+            // sample_annotations here - which would re-run every other method's rollup for nothing.
             [TransitionRollup] = new[]
             {
                 "transition_rollup.method", "transition_rollup.min_transitions",
@@ -69,7 +74,7 @@ public static class StageDependencies
                 "transition_rollup.use_ms1", "transition_rollup.library_path",
                 "transition_rollup.library_min_fragments", "transition_rollup.library_mz_tolerance",
                 "transition_rollup.library_outlier_threshold", "transition_rollup.library_remove_outliers",
-                "transition_rollup.library_fitting_method",
+                "transition_rollup.library_fitting_method", "transition_rollup.library_noise_sigma",
                 "output.include_residuals",
                 "data",
             },

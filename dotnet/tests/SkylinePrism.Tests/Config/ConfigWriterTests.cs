@@ -56,9 +56,11 @@ public class ConfigWriterTests
         Assert.Contains("library_mz_tolerance: 0.02", yaml);
         Assert.Contains("library_outlier_threshold: 1", yaml);
         Assert.Contains("library_remove_outliers: true", yaml);
-        // Named even at its default: C# fits median_polish only, but Python also offers
-        // least_squares, so a config carried to the CLI has to say which fit set the sample scale.
-        Assert.Contains("library_fitting_method: median_polish", yaml);
+        // Named even at its default: the default changed once (median_polish -> noise_gated_ratio),
+        // so a config carried to the CLI has to say which fit set the sample scale.
+        Assert.Contains("library_fitting_method: noise_gated_ratio", yaml);
+        // The selected fit's own tuning knob.
+        Assert.Contains("library_noise_sigma: 3", yaml);
 
         // Absent: other methods' parameters, and blocks that do not apply.
         Assert.DoesNotContain("topn_count", yaml);
@@ -70,6 +72,20 @@ public class ConfigWriterTests
     }
 
     [Fact]
+    public void LibraryAssist_MedianPolishFit_NamesItAndOmitsTheNoiseKnob()
+    {
+        // The earlier fit stays selectable so older results reproduce; its config must say so, and
+        // must not carry library_noise_sigma, which only the noise-gated fit reads.
+        var c = LibraryAssistConfig();
+        c.TransitionRollup.LibraryFittingMethod = "median_polish";
+        var yaml = ConfigWriter.ToYaml(c);
+
+        Assert.Contains("library_fitting_method: median_polish", yaml);
+        Assert.DoesNotContain("library_noise_sigma", yaml);
+        Assert.Equal("median_polish", PrismConfig.Parse(yaml).TransitionRollup.LibraryFittingMethod);
+    }
+
+    [Fact]
     public void AlgorithmNamingKeys_AreWrittenEvenAtTheirDefault()
     {
         // Which algorithm ran must be answerable from the file alone; only numeric/boolean tuning
@@ -77,7 +93,7 @@ public class ConfigWriterTests
         var yaml = ConfigWriter.ToYaml(LibraryAssistConfig());
 
         Assert.Contains("method: library_assist", yaml);
-        Assert.Contains("library_fitting_method: median_polish", yaml);
+        Assert.Contains("library_fitting_method: noise_gated_ratio", yaml);
         Assert.Contains("method: combat", yaml);          // batch_correction
         Assert.Contains("method: iqr", yaml);             // sample_outlier_detection
         Assert.Contains("method: median_polish", yaml);   // protein_rollup
@@ -278,11 +294,10 @@ public class ConfigWriterTests
     [Fact]
     public void EmittedYaml_MatchesTheCrossEngineFixture()
     {
-        // Golden file, checked from BOTH sides: this test pins that the fixture still reflects what
-        // ConfigWriter emits, and tests/test_cli.py pins that the Python engine loads that same file
-        // with no unrecognized keys. Neither side alone is enough - C#'s own FindUnknownKeys cannot
-        // notice a key that only the Python schema is missing, which is exactly the failure that
-        // made a tool-authored config unusable with the CLI in the first place.
+        // Golden file of what ConfigWriter emits for a tool-authored library-assist config. It was once
+        // also loaded by the Python engine's tests/test_cli.py, to catch a key only that schema lacked;
+        // that engine was retired after v26.4.4, and this file has since gained keys it never knew
+        // (library_fitting_method: noise_gated_ratio, library_noise_sigma). It pins the C# side only.
         var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "config", "emitted-library-assist.yaml");
         Assert.True(File.Exists(path), $"fixture missing: {path}");
 

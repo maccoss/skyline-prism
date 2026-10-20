@@ -394,8 +394,16 @@ public sealed record ExistingResults(
                     return (0, sameMergeSettings);
                 }
 
+                // The noise-gated library fit also fingerprints which samples were pools - known only
+                // from the metadata, which is not read here, so it is taken from the key the run
+                // stored beside its curve. No file: predicted to re-run, the safe direction.
+                var noiseKey = Library.FragmentNoise.AppliesTo(config)
+                    ? Library.FragmentNoiseCurve.Load(
+                        Path.Combine(outputDir, Library.FragmentNoiseCurve.FileName))?.PlanKey
+                    : null;
                 var rollupFp = StageCache.Fingerprint(
-                    StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
+                    StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp },
+                    extraInputs: noiseKey is null ? null : new[] { noiseKey });
                 if (!cache.IsEmpty && !cache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
                     return (1, false);
             }

@@ -225,11 +225,21 @@ public sealed class PrismConfig
                 $"transition_rollup.method '{TransitionRollup.Method}' is not recognized. "
                 + $"Valid: {string.Join(", ", validTr)}.");
 
-        if (TransitionRollup.LibraryFittingMethod?.ToLowerInvariant() == "least_squares")
+        var lfm = TransitionRollup.LibraryFittingMethod?.ToLowerInvariant();
+        if (lfm == "least_squares")
             throw new NotSupportedException(
                 "library_assist.fitting_method 'least_squares' is not implemented "
-                + "(only median_polish). It existed only in the retired Python engine - see "
-                + "dotnet/PORTING_STATUS.md.");
+                + "(use noise_gated_ratio or median_polish). It existed only in the retired Python "
+                + "engine - see dotnet/PORTING_STATUS.md.");
+        if (lfm is not null && lfm is not ("noise_gated_ratio" or "median_polish"))
+            throw new NotSupportedException(
+                $"library_assist.fitting_method '{TransitionRollup.LibraryFittingMethod}' is not "
+                + "recognized. Valid: noise_gated_ratio, median_polish.");
+        if (!double.IsFinite(TransitionRollup.LibraryNoiseSigma) || TransitionRollup.LibraryNoiseSigma < 0)
+            throw new NotSupportedException(
+                $"transition_rollup.library_noise_sigma must be 0 or more (got "
+                + $"{TransitionRollup.LibraryNoiseSigma.ToString(System.Globalization.CultureInfo.InvariantCulture)}); "
+                + "0 turns the noise test off.");
 
         var mnm = MarkerNormalization.Method?.ToLowerInvariant();
         if (MarkerNormalization.Enabled && mnm is not null && mnm is not ("pc1" or "mean"))
@@ -304,9 +314,9 @@ public sealed class PrismConfig
         var tr = Leaves("method", "min_transitions", "topn_count", "topn_selection", "topn_weighting",
             "consensus_regularization", "use_ms1", "library_path", "library_min_fragments",
             "library_mz_tolerance", "library_outlier_threshold", "library_remove_outliers",
-            "library_fitting_method");
+            "library_fitting_method", "library_noise_sigma");
         tr["library_assist"] = Leaves("library_path", "min_matched_fragments", "mz_tolerance",
-            "outlier_threshold", "remove_outliers", "fitting_method");
+            "outlier_threshold", "remove_outliers", "fitting_method", "noise_sigma");
 
         var gn = Leaves("method");
         gn["rt_lowess"] = Leaves("frac", "n_grid_points");
@@ -397,8 +407,20 @@ public sealed class PrismConfig
         /// <summary>Iteratively remove high-residual (interference) fragments before the final scale.</summary>
         public bool LibraryRemoveOutliers { get; set; } = true;
 
-        /// <summary>median_polish only in C#; least_squares is validated-out (not ported).</summary>
-        public string LibraryFittingMethod { get; set; } = "median_polish";
+        /// <summary>
+        /// How a sample's scale is fitted to the library: <c>noise_gated_ratio</c> (the default) or
+        /// <c>median_polish</c> (the original median of log ratios and the default before it, kept so
+        /// earlier results reproduce). <c>least_squares</c> existed only in the retired Python engine and aborts.
+        /// See <see cref="Library.LibraryRollup.NoiseGatedRatio"/>.
+        /// </summary>
+        public string LibraryFittingMethod { get; set; } = "noise_gated_ratio";
+
+        /// <summary>
+        /// noise_gated_ratio only: a fragment is removed as interference only when its excess over the
+        /// library prediction is also more than this many SDs of the cohort's measured fragment noise
+        /// at that predicted area. 0 turns the noise test off (the ratio test alone decides).
+        /// </summary>
+        public double LibraryNoiseSigma { get; set; } = 3.0;
 
         /// <summary>Nested Python-style library_assist block; resolved onto the flat fields above.</summary>
         public LibraryAssistSection? LibraryAssist { get; set; }
@@ -415,6 +437,7 @@ public sealed class PrismConfig
             if (la.OutlierThreshold is not null) LibraryOutlierThreshold = la.OutlierThreshold.Value;
             if (la.RemoveOutliers is not null) LibraryRemoveOutliers = la.RemoveOutliers.Value;
             if (la.FittingMethod is not null) LibraryFittingMethod = la.FittingMethod;
+            if (la.NoiseSigma is not null) LibraryNoiseSigma = la.NoiseSigma.Value;
         }
     }
 
@@ -427,6 +450,7 @@ public sealed class PrismConfig
         public double? OutlierThreshold { get; set; }
         public bool? RemoveOutliers { get; set; }
         public string? FittingMethod { get; set; }
+        public double? NoiseSigma { get; set; }
     }
 
     public sealed class GlobalNormalizationSection
