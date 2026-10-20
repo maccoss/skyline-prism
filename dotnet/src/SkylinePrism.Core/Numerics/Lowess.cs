@@ -9,7 +9,8 @@ namespace SkylinePrism.Core.Numerics;
 ///
 /// Supports the statsmodels <c>delta</c> speedup: local regressions are computed only at anchor
 /// points spaced &gt; delta apart on x, and the points between two anchors are filled by linear
-/// interpolation. statsmodels/PRISM use delta = 0.01 * range(x), which turns the cost from
+/// interpolation. PRISM uses delta = 0.01 * range(x) - R lowess()'s default, and what lowess.json
+/// pins the variance priors' LOWESS against (to 1e-9; measured 2.5e-10) - which turns the cost from
 /// O(n * frac*n * iters) into roughly O((range/delta) * frac*n * iters) - orders of magnitude faster
 /// on tens of thousands of points, with a visually identical curve. delta = 0 fits every point.
 /// </summary>

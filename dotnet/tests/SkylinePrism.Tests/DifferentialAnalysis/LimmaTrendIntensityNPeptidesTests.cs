@@ -148,19 +148,24 @@ public class LimmaTrendIntensityNPeptidesTests
     }
 
     /// <summary>
-    /// A non-finite mean expression leaves limma-trend nothing to fit, and it falls back to the global
-    /// prior. The default does the same and says so, rather than reach the count fit and refuse.
+    /// An infinite value is missing, as limma's lmFit takes it (<c>is.finite</c>), so it cannot make a
+    /// mean expression non-finite: the protein is fitted on its other samples and the default prior
+    /// runs as it would with that value blank. (Before PRISM fitted missing values, an infinity
+    /// reached the mean expression and the priors fell back to the global one.)
     /// </summary>
     [Fact]
-    public void TheDefaultWithANonFiniteMeanExpressionFallsBackAsLimmaTrendDoes()
+    public void AnInfiniteValueIsMissing_SoTheDefaultPriorStillRuns()
     {
         var (expr, counts, _, _) = ProteinNull(11, nF: 80);
+        var blank = (double[,])expr.Clone();
         expr[0, 0] = double.PositiveInfinity;
-        var byDefault = Run(expr, counts, null);
-        var limmaTrend = Run(expr, counts, VariancePrior.LimmaTrend);
-        Assert.Equal("global", byDefault.VariancePrior);
-        Assert.Equal(limmaTrend.VariancePrior, byDefault.VariancePrior);
-        Assert.Contains(byDefault.Messages, m => m.Contains("non-finite", StringComparison.Ordinal));
+        blank[0, 0] = double.NaN;
+        var withInfinity = Run(expr, counts, null);
+        var withBlank = Run(blank, counts, null);
+        Assert.Equal("limma-trend-intensity-n-peptides", withInfinity.VariancePrior);
+        Assert.Equal(
+            withBlank.Rows.Select(r => (r.FeatureId, r.T, r.PValue)),
+            withInfinity.Rows.Select(r => (r.FeatureId, r.T, r.PValue)));
     }
 
     /// <summary>

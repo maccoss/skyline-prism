@@ -263,15 +263,90 @@ public class DifferentialTests
             Differential.Run(BuildMatrix(false), Ids, new[] { 0 }, new[] { 3, 4, 5 }));
     }
 
+    /// <summary>
+    /// A feature with a missing value is fitted on the samples where it was observed, as limma's
+    /// lmFit fits it - not dropped, which is what PRISM did before the release after dotnet-v26.29.0.
+    /// On [1, group] its contrast is the difference of its observed arm means. Pinned against R limma
+    /// by the missing-value cases of limma_ebayes.json.
+    /// </summary>
     [Fact]
-    public void Run_DropsFeaturesWithMissingSelectedValues()
+    public void Run_FitsAFeatureWithAMissingValueOnItsObservedSamples()
     {
         var m = BuildMatrix(false);
         m[5, 4] = double.NaN; // f5 has a missing value in a selected column
         var res = Differential.Run(m, Ids, GroupA, GroupB);
+        Assert.Equal(8, res.NFeaturesTested);
+        Assert.Equal(0, res.NFeaturesDropped);
+
+        var f5 = Assert.Single(res.Rows, r => r.FeatureId == "f5");
+        var a = GroupA.Select(c => m[5, c]).Where(double.IsFinite).Average();
+        var b = GroupB.Select(c => m[5, c]).Where(double.IsFinite).Average();
+        Assert.Equal(b - a, f5.LogFc, 12);
+        Assert.Contains(res.Messages, msg => msg.Contains("fitted on the samples where they were observed",
+            StringComparison.Ordinal));
+        // Its residual df is one short of a complete feature's, and the pool counts exactly that.
+        Assert.Equal(8 * res.DfResidual - 1, res.DfPooled);
+    }
+
+    /// <summary>
+    /// With an arm entirely missing there is no contrast to test, but the feature's residual variance
+    /// is still an estimate of the noise: limma puts it in the prior and its df in the pool, and so does
+    /// PRISM.
+    /// </summary>
+    [Fact]
+    public void Run_AFeatureMissingAWholeArmIsNotTested_ButCountsTowardThePool()
+    {
+        var m = BuildMatrix(false);
+        foreach (var c in GroupA)
+            m[5, c] = double.NaN;
+        var res = Differential.Run(m, Ids, GroupA, GroupB);
         Assert.Equal(7, res.NFeaturesTested);
         Assert.Equal(1, res.NFeaturesDropped);
         Assert.DoesNotContain(res.Rows, r => r.FeatureId == "f5");
+        // Its df: the B samples less the one column (the intercept) they can estimate.
+        Assert.Equal(7 * res.DfResidual + (GroupB.Length - 1), res.DfPooled);
+        Assert.Contains(res.Messages, msg => msg.Contains("no estimable contrast", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Where a feature's missing values leave a covariate equal to the group on its observed samples,
+    /// the group effect cannot be told from the covariate's, so there is no contrast to report. This is
+    /// where PRISM (and the toolkit) deliberately part from limma: lmFit pivots left to right, keeps the
+    /// group column because it comes first, drops the covariate, and reports a coefficient that has
+    /// silently absorbed it. The feature's residual df still counts toward the pool.
+    /// </summary>
+    [Fact]
+    public void Run_ACovariateAliasedWithTheGroupOnAFeaturesObservedSamples_LeavesItUntested()
+    {
+        const int nFeatures = 6;
+        var rng = new Random(17);
+        var expr = new double[nFeatures, 6];
+        for (var f = 0; f < nFeatures; f++)
+            for (var j = 0; j < 6; j++)
+                expr[f, j] = 12 + f + (j >= 3 ? 0.5 : 0.0) + 0.2 * rng.NextDouble();
+
+        // Group is [0,0,0,1,1,1]; the covariate differs from it only at samples 2 and 5, which is
+        // exactly where f1 is missing.
+        var load = new double[] { 0, 0, 1, 1, 1, 0 };
+        expr[1, 2] = double.NaN;
+        expr[1, 5] = double.NaN;
+
+        var ids = Enumerable.Range(0, nFeatures).Select(f => $"f{f}").ToArray();
+        var res = Differential.Run(expr, ids, new[] { 0, 1, 2 }, new[] { 3, 4, 5 },
+            new DifferentialOptions
+            {
+                Prior = VariancePrior.Global,
+                Covariates = new Covariate[] { new NumericCovariate("load", load) },
+            });
+
+        Assert.Contains("load", res.CovariatesUsed);
+        Assert.Equal(nFeatures - 1, res.NFeaturesTested);
+        Assert.DoesNotContain(res.Rows, r => r.FeatureId == "f1");
+        Assert.Contains(res.Messages, msg => msg.Contains("no estimable contrast", StringComparison.Ordinal));
+        // Complete features: 6 samples less [1, group, load]. f1: 4 observed samples less the two
+        // columns they can estimate.
+        Assert.Equal(3, res.DfResidual);
+        Assert.Equal((nFeatures - 1) * 3 + 2, res.DfPooled);
     }
 
     /// <summary>

@@ -50,9 +50,10 @@ internal static class VariancePriors
     /// interpolated rather than individually fitted, which moved the fitted values by at most ~3e-5
     /// relative in the same measurement, far below anything that changes a conclusion. On a real
     /// cohort (3,595 serum proteins, prior fitted on 12 reference and QC injections) it is the only
-    /// thing left between PRISM and the toolkit: it moves the per-feature prior SCALE by at most
-    /// 1.4e-3 relative (median 2.5e-4) and p-values by at most 8e-4, and handing the toolkit the same
-    /// delta closes the gap to ~1e-12. On inputs the
+    /// thing that was left between PRISM and the toolkit: it moved the per-feature prior SCALE by at
+    /// most 1.4e-3 relative (median 2.5e-4) and p-values by at most 8e-4 against toolkit 26.8.0, which
+    /// fitted every point. From 26.9.0 the toolkit runs R's lowess at this same delta, and both are
+    /// pinned to R's own lowess() by lowess.json (this at 2.5e-10, the toolkit at 5e-14). On inputs the
     /// size of the goldens it makes NO difference at all - 1% of the x range there is narrower than
     /// the spacing between points, so nothing is interpolated and the fit is identical, which is why
     /// those still assert against the reference at 1e-9. The approximation only ever engages where
@@ -166,11 +167,22 @@ internal static class VariancePriors
         if (peptideCounts.Count != n)
             return null;
 
+        // A zero variance has no logarithm and is left out of the LOWESS. "Zero" is anything at or
+        // below limma's floor, 1e-5 x the median (as EmpiricalBayes floors it): replicates that agree
+        // exactly give 0 from one least-squares solve and 1e-29 from another, and an exact 0 test kept
+        // the second as a log variance of -66 that bent the whole curve - 4e-3 in p between this and
+        // proteomics-toolkit, whose _fit_count_dependent_prior uses the same rule.
+        var finite = new List<double>(n);
+        for (var i = 0; i < n; i++)
+            if (double.IsFinite(variances[i]) && variances[i] > -1e-15)
+                finite.Add(Math.Max(variances[i], 0.0));
+        var floor = finite.Count > 0 ? 1e-5 * Stats.NanMedian(finite.ToArray()) : 0.0;
+
         // counts >= 1, not > 0: the reference requires a whole peptide, and a fractional count
         // would otherwise be fitted as though it were real.
         var usable = new List<int>(n);
         for (var i = 0; i < n; i++)
-            if (double.IsFinite(variances[i]) && variances[i] > 0
+            if (double.IsFinite(variances[i]) && variances[i] > floor && variances[i] > 0
                 && double.IsFinite(peptideCounts[i]) && peptideCounts[i] >= 1)
                 usable.Add(i);
 
@@ -210,8 +222,11 @@ internal static class VariancePriors
     private const double Ln2 = 0.6931471805599453;
 
     /// <summary>
-    /// Per (feature, group) raw-scale mean, sd (ddof = 1) and count, from the log2 matrix. Groups with
-    /// fewer than two samples contribute nothing - an sd needs two.
+    /// Per (feature, group) raw-scale mean, sd (ddof = 1) and count of the observed values, from the
+    /// log2 matrix. A group with one observed value has a mean but no sd: it cannot place a point on
+    /// the trend, but the feature's prior still averages in the trend's value at its mean, as the
+    /// toolkit's <c>_per_feature_group_stats</c> does (weighted by its one sample). A group with none
+    /// contributes nothing.
     /// </summary>
     private static List<GroupStat> CollectGroupStats(
         double[,] exprLog2, IReadOnlyList<int> testedRows, IReadOnlyList<IReadOnlyList<int>> groups)
@@ -234,9 +249,9 @@ internal static class VariancePriors
                         buffer.Add(Math.Pow(2.0, v)); // back to the linear scale the parquet held
                 }
 
-                if (buffer.Count < 2)
+                if (buffer.Count == 0)
                 {
-                    stats.Add(new GroupStat(f, double.NaN, double.NaN, buffer.Count));
+                    stats.Add(new GroupStat(f, double.NaN, double.NaN, 0));
                     continue;
                 }
 
@@ -244,6 +259,11 @@ internal static class VariancePriors
                 foreach (var v in buffer)
                     mean += v;
                 mean /= buffer.Count;
+                if (buffer.Count < 2)
+                {
+                    stats.Add(new GroupStat(f, mean, double.NaN, 1));
+                    continue;
+                }
 
                 var ss = 0.0;
                 foreach (var v in buffer)

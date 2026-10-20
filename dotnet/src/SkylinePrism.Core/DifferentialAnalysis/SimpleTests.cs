@@ -47,8 +47,11 @@ internal static class SimpleTests
         var nA = groupAColumns.Count;
         var nB = groupBColumns.Count;
 
-        // Complete-case, exactly as the moderated path does: a feature is tested only where it is
-        // present in every selected sample, so every feature is tested on the same samples.
+        // Complete-case: a feature is tested only where it is present in every selected sample, so
+        // every feature is tested on the same samples. The moderated t no longer works this way - it
+        // fits a feature with missing values on its observed samples, as limma does - and
+        // proteomics-toolkit's simple tests drop a feature's missing values per feature, so with
+        // missing values these tests and the toolkit's can differ in which features they test.
         var tested = new List<int>(nFeatures);
         for (var f = 0; f < nFeatures; f++)
         {
