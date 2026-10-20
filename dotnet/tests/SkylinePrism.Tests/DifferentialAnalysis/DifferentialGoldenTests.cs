@@ -791,8 +791,11 @@ public class DifferentialGoldenTests
     /// The two tools' smoothers are not the same algorithm. PRISM's <c>Lowess.Fit</c> follows
     /// statsmodels' weights (a pure tricube and bisquare), and RT-LOWESS normalization runs on it too,
     /// so changing it would move normalized output. From v26.9.0 the toolkit carries an exact port of R's
-    /// <c>lowess()</c>, which sets a weight to 1 inside 0.1% of the bandwidth and to 0 beyond 99.9%.
-    /// On <c>lowess.json</c> the smoothers differ by at most 2.5e-10. Carried through the trend and
+    /// <c>lowess()</c>, which sets a weight to 1 below 0.1% of its scale and to 0 beyond 99.9%, for
+    /// the distance weights and the robustness weights alike. That is the whole difference, measured:
+    /// on <c>lowess.json</c> the smoothers differ by at most 2.8e-10, and the toolkit's port with
+    /// those four cutoffs removed agrees with <c>Lowess.Fit</c> to 2.4e-13; most of it is the
+    /// robustness pair. Carried through the trend and
     /// its calibrated level, the worst difference measured across these fixtures is 1.8e-8 (the
     /// intensity trend's <c>missing_values</c> case) - the same amount the toolkit's own output moved
     /// between v26.8.0 and v26.9.0, when it switched from statsmodels to R. 5e-8 is that measurement
@@ -807,7 +810,7 @@ public class DifferentialGoldenTests
     /// This is the one golden in the directory whose reference is another MacCoss Lab tool rather
     /// than a third-party library, and deliberately so: the estimator is not a published formula
     /// with an independent implementation to check against - it IS
-    /// <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and reproducing that is the
+    /// <c>proteomics-toolkit</c>'s <c>moderation="intensity-trend"</c>, and reproducing that is the
     /// whole requirement. It stands to PRISM as inmoose does for squeezeVar.
     /// <para>Note what is asserted: the trend's per-feature SHAPE only, before its level and the prior
     /// degrees of freedom are fitted to the design residuals. That calibration is pinned end to end

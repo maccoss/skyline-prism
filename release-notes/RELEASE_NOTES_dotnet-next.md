@@ -67,9 +67,11 @@ as the GitHub Release description and fails if it is missing.
   which PRISM's `Lowess.Fit` matches to 2.5e-10. On complete data a default run of either tool gives
   the same p-values with no setting at all. The toolkit-sourced goldens (`intensity_trend.json`,
   `peptide_count_prior.json`, `toolkit_end_to_end.json`) were regenerated from the released 26.9.0,
-  run at its defaults. They move by at most 1.8e-8, all of it the two tools' LOWESS weights, and
-  are compared at a stated 5e-8 where a value passes through a prior's LOWESS. They also hold PRISM
-  to the toolkit's own p and adjusted p, now on limma's capped df and over the features tested.
+  run at its defaults, and hold PRISM to the toolkit's own p and adjusted p. Where the df cap binds
+  the toolkit's p moved by up to 93%, to limma's (which PRISM already gave). Values that pass
+  through a prior's LOWESS moved by at most 1.8e-8, from the toolkit's switch to R's `lowess()`,
+  and are compared at a stated 5e-8. Re-pinning also found the toolkit's adjusted p counting
+  untested features, fixed in proteomics-toolkit 26.9.0 before its release.
 
 ## Bug Fixes
 
@@ -112,7 +114,7 @@ as the GitHub Release description and fails if it is missing.
   toolkit - the definition of that estimator - averages the trend's value at its mean into the
   feature's prior with weight 1, and PRISM had skipped it. With missing values that moved the prior
   and, on a 2,500-protein test set, p by up to 2e-2; `intensity_trend.json` gained a missing-value
-  case, from toolkit v26.8.0. The trend's shape was also fitted over every feature, as the toolkit
+  case, generated from the toolkit. The trend's shape was also fitted over every feature, as the toolkit
   fits it, not only the features tested: one too sparse in the contrast's samples to test still has
   pool replicates that trace noise against intensity. Leaving them out moved the prior df by 2.5% on
   `toolkit_end_to_end.json`'s new `unpaired_feature_only_in_pools` case. Complete data was

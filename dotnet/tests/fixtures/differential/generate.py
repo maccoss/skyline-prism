@@ -48,7 +48,7 @@ code under test, so a shared mistake cannot cancel out.
 `VariancePriors.IntensityTrend` is the one entry whose reference is another MacCoss Lab tool
 rather than a third-party library, and that is deliberate rather than a lapse. The estimator is
 not a published formula with an independent implementation to check against - it is specifically
-`proteomics-toolkit`'s `moderation="intensity_trend"`, and reproducing THAT is the whole
+`proteomics-toolkit`'s `moderation="intensity-trend"`, and reproducing THAT is the whole
 requirement. It stands in the same relation to PRISM as `inmoose` does for `squeezeVar`: the
 definition, not a second opinion. What the rule above forbids is consulting the C# code under
 test, and this does not.
@@ -1504,8 +1504,11 @@ def gen_toolkit_end_to_end() -> None:
         cfg_fn(cfg)
 
         with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
-            # The deprecation warning, on every case: the prior is chosen here on purpose.
-            warnings.simplefilter("ignore", FutureWarning)
+            # The intensity trend's deprecation warning only - the prior is chosen here on purpose.
+            # Any other FutureWarning (a pandas or numpy default changing under the numbers being
+            # pinned) still prints.
+            warnings.filterwarnings("ignore", message="moderation='intensity-trend' is deprecated",
+                                    category=FutureWarning)
             res = sa.run_comprehensive_statistical_analysis(
                 normalized_data=data, sample_metadata=meta, config=cfg, protein_annotations=ann)
         res = res.set_index("Protein").loc[features]
@@ -1521,34 +1524,44 @@ def gen_toolkit_end_to_end() -> None:
                 raise SystemExit(f"{name}: toolkit logFC is not B - A")
         df_resid = res["residual_df"].to_numpy(float)
         df_prior = res["posterior_df"].to_numpy(float) - df_resid
-        prior_level = float(res["intensity_trend_level"].iloc[0])
+        # The case's scalars - the design's residual df, d0, the level - are read at a feature the
+        # toolkit tested: an untested one has no posterior df.
+        tested = np.isfinite(res["t"].to_numpy(float))
+        if not tested.any():
+            raise SystemExit(f"{name}: the toolkit tested no feature")
+        ref = int(np.flatnonzero(tested)[0])
+        prior_level = float(res["intensity_trend_level"].iloc[ref])
 
         # The calibration, against limma: fitFDist on residual / trend gives the level as its scale.
         ratio = res["residual_s2"].to_numpy(float) / res["intensity_trend_shape"].to_numpy(float)
-        sq = squeezeVar(ratio[np.isfinite(ratio)], float(df_resid[0]))
+        sq = squeezeVar(ratio[np.isfinite(ratio)], float(df_resid[ref]))
         ref_level = float(np.atleast_1d(sq["var_prior"])[0])
         ref_d0 = float(np.atleast_1d(sq["df_prior"])[0])
         level_ok = abs(prior_level - ref_level) <= 1e-9 * abs(ref_level)
         # An infinite d0 agrees only with an infinite one. Folded into the relative check it passed
         # any finite toolkit d0 against an infinite reference: |finite - inf| <= 1e-9 * inf is
         # inf <= inf, which is true.
-        if np.isinf(ref_d0) or np.isinf(df_prior[0]):
-            d0_ok = bool(np.isinf(ref_d0) and np.isinf(df_prior[0]))
+        if np.isinf(ref_d0) or np.isinf(df_prior[ref]):
+            d0_ok = bool(np.isinf(ref_d0) and np.isinf(df_prior[ref]))
         else:
-            d0_ok = abs(df_prior[0] - ref_d0) <= 1e-9 * abs(ref_d0)
+            d0_ok = abs(df_prior[ref] - ref_d0) <= 1e-9 * abs(ref_d0)
         if not (level_ok and d0_ok):
-            raise SystemExit(f"{name}: toolkit level {prior_level!r} / d0 {df_prior[0]!r} disagree with "
+            raise SystemExit(f"{name}: toolkit level {prior_level!r} / d0 {df_prior[ref]!r} disagree with "
                              f"inmoose squeezeVar on the ratio ({ref_level!r} / {ref_d0!r})")
-        if finite_d0 and not np.isfinite(df_prior[0]):
+        if finite_d0 and not np.isfinite(df_prior[ref]):
             raise SystemExit(f"{name}: d0 came out infinite, so this case would not reach the finite-d0 "
                              "posterior it exists to pin")
         # From v26.9.0 the toolkit reads p on limma's capped df, pmin(df.residual + d0,
-        # sum(df.residual)), as PRISM does, so its p is checked against limma's on the same t: the
-        # golden then cannot record a p that limma would not give.
-        p_limma, _, _ = limma_p(res["t"].to_numpy(float), df_resid, float(df_prior[0]))
-        p_toolkit = res["P.Value"].to_numpy(float)
-        if not np.allclose(p_limma, p_toolkit, rtol=1e-12, atol=0.0, equal_nan=True):
-            raise SystemExit(f"{name}: the toolkit's p is not limma's capped-df p for the same t")
+        # sum(df.residual)), and adjusts over the features it tested, as limma and PRISM do. Both
+        # are checked against limma's formulas for the same t, so the golden cannot record a p or
+        # an adjusted p that limma would not give - the adjusted p is where re-pinning to 26.9.0
+        # found the toolkit counting untested features (proteomics-toolkit#10).
+        p_limma, adj_p_limma, _ = limma_p(res["t"].to_numpy(float), df_resid, float(df_prior[ref]))
+        checks = (("p", p_limma, "P.Value"), ("adjusted p", adj_p_limma, "adj.P.Val"))
+        for what, limma_value, column in checks:
+            if not np.allclose(limma_value, res[column].to_numpy(float), rtol=1e-12, atol=0.0,
+                               equal_nan=True):
+                raise SystemExit(f"{name}: the toolkit's {what} is not limma's for the same t")
         cases.append({
             "name": name,
             "design": design,
@@ -1567,8 +1580,8 @@ def gen_toolkit_end_to_end() -> None:
             "amean": vec(res["AveExpr"]),
             "prior_scale": vec(res["intensity_s0_sq"]),
             "prior_level": num(prior_level),
-            "df_residual": num(df_resid[0]),
-            "df_prior": num(df_prior[0]),
+            "df_residual": num(df_resid[ref]),
+            "df_prior": num(df_prior[ref]),
         })
 
     # --- unpaired: 5 vs 5 independent samples ----------------------------------------------------

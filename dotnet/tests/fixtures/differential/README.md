@@ -108,8 +108,11 @@ because a clinical one cannot be committed.
 **The three toolkit-sourced fixtures are compared at 5e-8 where a value passes through a prior's
 LOWESS** (`ToolkitLowessTolerance` in `DifferentialGoldenTests`, which gives the reasoning). From
 v26.9.0 the toolkit's LOWESS is an exact port of R's `lowess()`; PRISM's `Lowess.Fit` keeps
-statsmodels' weights, which RT-LOWESS normalization also uses. The worst difference measured is
-1.8e-8, the amount the toolkit's own output moved when it switched. Everything else - logFC,
+statsmodels' weights, which RT-LOWESS normalization also uses. R's weights differ only in their
+0.1%/99.9% cutoffs: removed from the toolkit's port, it agrees with `Lowess.Fit` to 2.4e-13 on
+`lowess.json`. The worst difference measured here is 1.8e-8, the amount the toolkit's own output
+moved when it switched. The generator also checks the toolkit's p and adjusted p against limma's
+formulas before writing a case. Everything else - logFC,
 AveExpr, the residual df - stays at 1e-9 or tighter.
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under

@@ -704,8 +704,10 @@ chosen by level.
 | intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` (toolkit v26.9.0) at 5e-8 on t, p and the prior - the allowance for the two tools' LOWESS algorithms (below) - and its LOWESS by `lowess.json`. P.Value differs from toolkit 26.8.0 and earlier wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
-**Five conventions used to separate a toolkit run from PRISM**, none of them changing a conclusion.
-From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools share all five:
+**Five conventions used to separate a toolkit run from PRISM.** From toolkit 26.9.0 and the PRISM
+release after dotnet-v26.29.0 the two tools share all five. Each bullet says how far it moved
+results before; the last two could change a call outright - at an FDR threshold, or for a feature
+one tool did not test:
 
 - **No log pseudocount.** PRISM's matrix is log2 of a LINEAR parquet and adds nothing; a value of 0
   or less is missing. The toolkit's dispatcher added the smallest value / 100 before log2, which on
@@ -720,10 +722,12 @@ From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools sh
   generators, byte-identical): the toolkit to 5e-14, PRISM's `Lowess.Fit` to 2.5e-10. statsmodels'
   `lowess` at the same distance is not a substitute - it advances differently once a run of
   interpolated points reaches the end of the data, 2e-6 from R on the golden's crowded case. The
-  remaining 2.5e-10 is in the weights: `Lowess.Fit` keeps statsmodels' pure tricube and bisquare,
-  which RT-LOWESS normalization also runs on, where R sets a weight to 1 inside 0.1% of
-  the bandwidth and to 0 beyond 99.9%. Carried through a prior it is at most 1.8e-8 relative on the
-  toolkit-parity goldens, which are compared at 5e-8 for that reason.
+  remaining gap is in the weights: `Lowess.Fit` keeps statsmodels' pure tricube and bisquare,
+  which RT-LOWESS normalization also runs on, where R sets a weight to 1 below 0.1% of its scale
+  and to 0 beyond 99.9%, in the distance and the robustness weights alike. With those cutoffs
+  removed, the toolkit's port agrees with `Lowess.Fit` to 2.4e-13 on `lowess.json`. Carried through
+  a prior the gap is at most 1.8e-8 relative on the toolkit-parity goldens, which are compared at
+  5e-8 for that reason.
 - **Zero residual variances are floored,** at 1e-5 x the median with limma's warning, as limma's
   `fitFDist` floors them. PRISM always did; the toolkit dropped them from the prior fit until 26.9.0.
   The peptide-count prior's LOWESS, which cannot take the log of a zero, leaves out every variance at
