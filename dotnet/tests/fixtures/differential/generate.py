@@ -6,7 +6,7 @@
 #     "scipy==1.18.1",
 #     "statsmodels==0.15.0",
 #     "inmoose==0.9.1",
-#     "proteomics-toolkit @ git+https://github.com/uw-maccosslab/proteomics-toolkit@v26.8.0",
+#     "proteomics-toolkit @ git+https://github.com/uw-maccosslab/proteomics-toolkit@v26.9.0",
 # ]
 # ///
 """Generate the differential-analysis golden fixtures from the reference implementations.
@@ -48,7 +48,7 @@ code under test, so a shared mistake cannot cancel out.
 `VariancePriors.IntensityTrend` is the one entry whose reference is another MacCoss Lab tool
 rather than a third-party library, and that is deliberate rather than a lapse. The estimator is
 not a published formula with an independent implementation to check against - it is specifically
-`proteomics-toolkit`'s `moderation="intensity_trend"`, and reproducing THAT is the whole
+`proteomics-toolkit`'s `moderation="intensity-trend"`, and reproducing THAT is the whole
 requirement. It stands in the same relation to PRISM as `inmoose` does for `squeezeVar`: the
 definition, not a second opinion. What the rule above forbids is consulting the C# code under
 test, and this does not.
@@ -1025,7 +1025,7 @@ def gen_intensity_trend() -> None:
         {
             "reference": (
                 "proteomics_toolkit.statistical_analysis._fit_intensity_trend_prior "
-                "(moderation='intensity_trend'), v26.8.0"
+                "(moderation='intensity-trend', deprecated in both tools), v26.9.0"
             ),
             "note": (
                 "Per-feature trend SHAPE, in log2 space: the prior before its level and degrees of "
@@ -1399,8 +1399,9 @@ def gen_toolkit_end_to_end() -> None:
 
     ``gen_intensity_trend`` pins the prior SCALE in isolation, fitted on the contrast's two arms,
     and ``gen_paired``/``gen_trend`` pin the designs under a global prior. Neither pins what a lab
-    analysis actually runs: ``run_comprehensive_statistical_analysis`` with
-    ``moderation="intensity_trend"`` and the prior fitted on DEDICATED control replicates
+    analysis ran before toolkit 26.9.0 made limma-trend the default:
+    ``run_comprehensive_statistical_analysis`` with ``moderation="intensity-trend"`` and the prior
+    fitted on DEDICATED control replicates
     (``variance_prior_group_column``), composed with a paired or within-subject design. That
     composition is where the two tools could disagree while every piece agreed - the prior's groups
     are not the contrast's, and the trend they give is only a SHAPE whose level and degrees of
@@ -1416,23 +1417,14 @@ def gen_toolkit_end_to_end() -> None:
 
     The cohort is synthetic, shaped like the Verapamil serum study this was checked against
     (subjects drawn at weeks 0, 2, 4, 6 and 12, plus reference and QC pools): a real clinical
-    cohort cannot be committed. On that cohort the two tools agreed to ~1e-11 once the two
-    conventions below were aligned; these cases pin the same agreement.
+    cohort cannot be committed.
 
-    Two places where PRISM and the toolkit deliberately differ, and how each is handled:
-
-    * **The log pseudocount.** The toolkit's dispatcher adds one before log2 - by default the
-      smallest value / 100 - because a matrix it is handed may hold zeros. PRISM's matrix is log2
-      of a LINEAR parquet, and a non-positive value is missing rather than shifted, so it adds
-      nothing. The reference is run with ``log_pseudocount = 0`` so it computes on the same numbers;
-      left at its default, it moves low-abundance log ratios by up to ~1e-3 on the real cohort.
-    * **The LOWESS interpolation distance.** PRISM's prior LOWESS passes ``delta`` = 1% of the x
-      range (see ``VariancePriors.SmoothTrend`` for why it cannot afford 0 on a peptide-level
-      contrast); the toolkit passes 0. These inputs are built so that no two trend points lie
-      within 1% of the range of each other - asserted below - so every point is fitted on both
-      sides and the two smoothers are the same computation. On the real cohort, where they are
-      not, the difference moved the prior scale by at most 1.4e-3 and p-values by at most 8e-4,
-      relative.
+    **Run at the toolkit's defaults.** Up to v26.8.0 two conventions had to be aligned by hand: the
+    toolkit added a log pseudocount (PRISM adds none) and smoothed with LOWESS at ``delta=0``
+    (PRISM interpolates within 1% of the x range, as R's ``lowess()`` does). From v26.9.0 the
+    toolkit does neither, so the reference runs with no pseudocount setting and the inputs need no
+    spacing rule. Both smoothers are pinned to R's ``lowess()`` by ``lowess.json``. The levels below
+    are still spaced as widely as that rule needed, because the earlier cases were drawn with them.
 
     ``logfc`` is in PRISM's convention: B - A for a two-arm design, and the slope times the span of
     x for a trend. ``slope`` keeps the toolkit's own trend coefficient beside it.
@@ -1444,15 +1436,15 @@ def gen_toolkit_end_to_end() -> None:
     """
     import contextlib
     import io
+    import warnings
 
     import proteomics_toolkit.statistical_analysis as sa
 
     rng = Rng(1931)
     n_feat = 12
     # Four decades of abundance, noisier at the bottom - the relationship the intensity trend
-    # exists to follow. The spacing is wide on purpose: a feature's two control points (reference
-    # and QC, 0.6 log2 apart) and its neighbor's must stay more than 1% of the range apart after
-    # the replicate noise moves their means (see assert_delta_inert).
+    # exists to follow. The spacing was chosen when the two tools' LOWESS deltas differed (see the
+    # docstring) and is kept so the cases keep their draws.
     level = [10.0 + 1.2 * f for f in range(n_feat)]
     noise = [0.36 - 0.02 * f for f in range(n_feat)]
     moves = 3  # features 0..2 carry a real effect; the rest are null
@@ -1460,24 +1452,12 @@ def gen_toolkit_end_to_end() -> None:
     def controls():
         """4 reference + 4 QC replicates: two materials at two levels, technical noise only.
 
-        Half the design samples' noise, as for real pooled injections - and what keeps the group
-        means from wandering into each other's LOWESS neighborhood.
+        Half the design samples' noise, as for real pooled injections.
         """
         ref = [[level[f] + 0.5 * noise[f] * rng.normal() for _ in range(4)] for f in range(n_feat)]
         qc = [[level[f] - 0.6 + 0.5 * noise[f] * rng.normal() for _ in range(4)]
               for f in range(n_feat)]
         return np.asarray(ref), np.asarray(qc)
-
-    def assert_delta_inert(expr_log2, prior_cols):
-        # The trend's x is log(raw group mean), one point per (feature, prior group).
-        xs = np.sort(np.concatenate([
-            np.log(np.mean(2.0 ** expr_log2[:, cols], axis=1)) for cols in prior_cols]))
-        gap = float(np.min(np.diff(xs)))
-        delta = 0.01 * float(xs[-1] - xs[0])
-        if not gap > delta:
-            raise SystemExit(
-                f"two prior points lie {gap:.4g} apart, inside PRISM's LOWESS delta {delta:.4g}: "
-                "the golden would pin the interpolation, not the estimator")
 
     cases = []
 
@@ -1489,7 +1469,6 @@ def gen_toolkit_end_to_end() -> None:
         n_design = design_block.shape[1]
         ref_cols = list(range(n_design, n_design + 4))
         qc_cols = list(range(n_design + 4, n_design + 8))
-        assert_delta_inert(expr, [ref_cols, qc_cols])
 
         samples = [f"S{j:02d}" for j in range(expr.shape[1])]
         features = [f"f{i}" for i in range(n_feat)]
@@ -1513,18 +1492,23 @@ def gen_toolkit_end_to_end() -> None:
 
         cfg = sa.StatisticalConfig()
         cfg.statistical_test_method = "moderated_linear_model"
-        cfg.moderation = "intensity_trend"
+        # Deprecated in both tools; this fixture pins it for as long as either still offers it.
+        cfg.moderation = "intensity-trend"
         cfg.variance_prior_group_column = "Category"
         cfg.variance_prior_groups = ["Reference", "QC"]
         cfg.log_transform_before_stats = "auto"
         cfg.log_base = "log2"
-        cfg.log_pseudocount = 0.0  # see the docstring: PRISM adds none
         cfg.normalization_method = "prism"
         cfg.correction_method = "fdr_bh"
         cfg.subject_column = None
         cfg_fn(cfg)
 
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+            # The intensity trend's deprecation warning only - the prior is chosen here on purpose.
+            # Any other FutureWarning (a pandas or numpy default changing under the numbers being
+            # pinned) still prints.
+            warnings.filterwarnings("ignore", message="moderation='intensity-trend' is deprecated",
+                                    category=FutureWarning)
             res = sa.run_comprehensive_statistical_analysis(
                 normalized_data=data, sample_metadata=meta, config=cfg, protein_annotations=ann)
         res = res.set_index("Protein").loc[features]
@@ -1540,37 +1524,44 @@ def gen_toolkit_end_to_end() -> None:
                 raise SystemExit(f"{name}: toolkit logFC is not B - A")
         df_resid = res["residual_df"].to_numpy(float)
         df_prior = res["posterior_df"].to_numpy(float) - df_resid
-        prior_level = float(res["intensity_trend_level"].iloc[0])
+        # The case's scalars - the design's residual df, d0, the level - are read at a feature the
+        # toolkit tested: an untested one has no posterior df.
+        tested = np.isfinite(res["t"].to_numpy(float))
+        if not tested.any():
+            raise SystemExit(f"{name}: the toolkit tested no feature")
+        ref = int(np.flatnonzero(tested)[0])
+        prior_level = float(res["intensity_trend_level"].iloc[ref])
 
         # The calibration, against limma: fitFDist on residual / trend gives the level as its scale.
         ratio = res["residual_s2"].to_numpy(float) / res["intensity_trend_shape"].to_numpy(float)
-        sq = squeezeVar(ratio[np.isfinite(ratio)], float(df_resid[0]))
+        sq = squeezeVar(ratio[np.isfinite(ratio)], float(df_resid[ref]))
         ref_level = float(np.atleast_1d(sq["var_prior"])[0])
         ref_d0 = float(np.atleast_1d(sq["df_prior"])[0])
         level_ok = abs(prior_level - ref_level) <= 1e-9 * abs(ref_level)
         # An infinite d0 agrees only with an infinite one. Folded into the relative check it passed
         # any finite toolkit d0 against an infinite reference: |finite - inf| <= 1e-9 * inf is
         # inf <= inf, which is true.
-        if np.isinf(ref_d0) or np.isinf(df_prior[0]):
-            d0_ok = bool(np.isinf(ref_d0) and np.isinf(df_prior[0]))
+        if np.isinf(ref_d0) or np.isinf(df_prior[ref]):
+            d0_ok = bool(np.isinf(ref_d0) and np.isinf(df_prior[ref]))
         else:
-            d0_ok = abs(df_prior[0] - ref_d0) <= 1e-9 * abs(ref_d0)
+            d0_ok = abs(df_prior[ref] - ref_d0) <= 1e-9 * abs(ref_d0)
         if not (level_ok and d0_ok):
-            raise SystemExit(f"{name}: toolkit level {prior_level!r} / d0 {df_prior[0]!r} disagree with "
+            raise SystemExit(f"{name}: toolkit level {prior_level!r} / d0 {df_prior[ref]!r} disagree with "
                              f"inmoose squeezeVar on the ratio ({ref_level!r} / {ref_d0!r})")
-        if finite_d0 and not np.isfinite(df_prior[0]):
+        if finite_d0 and not np.isfinite(df_prior[ref]):
             raise SystemExit(f"{name}: d0 came out infinite, so this case would not reach the finite-d0 "
                              "posterior it exists to pin")
-        # The toolkit computes p on df.residual + d0 with no cap; limma's eBayes, and PRISM, cap it at
-        # the pooled residual df. Same t, so both are kept: `p` is the toolkit's, `p_limma` limma's.
-        p_limma, adj_p_limma, df_total = limma_p(res["t"].to_numpy(float), df_resid, float(df_prior[0]))
-        # Where the cap does not bind, limma's p IS the toolkit's: check it, so the claim in the note
-        # stays true if a future toolkit changes its own p step. Where it binds, they must differ.
-        binds = bool(np.any(df_resid + df_prior[0] > df_total))
-        same = np.allclose(p_limma, res["P.Value"].to_numpy(float), rtol=1e-12, atol=0.0, equal_nan=True)
-        if same == binds:
-            raise SystemExit(f"{name}: the cap {'binds' if binds else 'does not bind'}, yet the "
-                             f"toolkit's p and limma's are {'equal' if same else 'different'}")
+        # From v26.9.0 the toolkit reads p on limma's capped df, pmin(df.residual + d0,
+        # sum(df.residual)), and adjusts over the features it tested, as limma and PRISM do. Both
+        # are checked against limma's formulas for the same t, so the golden cannot record a p or
+        # an adjusted p that limma would not give - the adjusted p is where re-pinning to 26.9.0
+        # found the toolkit counting untested features (proteomics-toolkit#10).
+        p_limma, adj_p_limma, _ = limma_p(res["t"].to_numpy(float), df_resid, float(df_prior[ref]))
+        checks = (("p", p_limma, "P.Value"), ("adjusted p", adj_p_limma, "adj.P.Val"))
+        for what, limma_value, column in checks:
+            if not np.allclose(limma_value, res[column].to_numpy(float), rtol=1e-12, atol=0.0,
+                               equal_nan=True):
+                raise SystemExit(f"{name}: the toolkit's {what} is not limma's for the same t")
         cases.append({
             "name": name,
             "design": design,
@@ -1586,13 +1577,11 @@ def gen_toolkit_end_to_end() -> None:
             "t": vec(res["t"]),
             "p": vec(res["P.Value"]),
             "adj_p": vec(res["adj.P.Val"]),
-            "p_limma": vec(p_limma),
-            "adj_p_limma": vec(adj_p_limma),
             "amean": vec(res["AveExpr"]),
             "prior_scale": vec(res["intensity_s0_sq"]),
             "prior_level": num(prior_level),
-            "df_residual": num(df_resid[0]),
-            "df_prior": num(df_prior[0]),
+            "df_residual": num(df_resid[ref]),
+            "df_prior": num(df_prior[ref]),
         })
 
     # --- unpaired: 5 vs 5 independent samples ----------------------------------------------------
@@ -1703,8 +1692,8 @@ def gen_toolkit_end_to_end() -> None:
         {
             "reference": (
                 "proteomics_toolkit.statistical_analysis.run_comprehensive_statistical_analysis "
-                "(statistical_test_method='moderated_linear_model', moderation='intensity_trend', "
-                "variance_prior_group_column, correction_method='fdr_bh', log_pseudocount=0), v26.8.0; "
+                "(statistical_test_method='moderated_linear_model', moderation='intensity-trend', "
+                "variance_prior_group_column, correction_method='fdr_bh'), v26.9.0; "
                 "its trend level and prior df cross-checked against inmoose.limma.squeezeVar on "
                 "residual_s2 / intensity_trend_shape"
             ),
@@ -1715,13 +1704,10 @@ def gen_toolkit_end_to_end() -> None:
                 "coefficient. The pools give the trend's SHAPE; `prior_level` is the factor it was "
                 "scaled by to fit the design residuals, `prior_scale` the result, and `df_prior` "
                 "(posterior_df - residual_df) the df fitted with it. `p`/`adj_p` are the toolkit's, "
-                "on residual_df + df_prior uncapped; `p_limma`/`adj_p_limma` are the same t on "
-                "limma's eBayes df.total = pmin(residual_df + df_prior, sum(residual_df)), which is "
-                "what PRISM computes. They differ only where that cap binds (an infinite df_prior "
-                "here). The toolkit was run with "
-                "log_pseudocount=0 because PRISM adds none, "
-                "and the inputs keep every prior point more than 1% of the x range from the next, "
-                "so PRISM's LOWESS delta interpolates nothing."
+                "on limma's eBayes df.total = pmin(residual_df + df_prior, sum(residual_df)), "
+                "which the generator checks against limma's own formula for the same t. The "
+                "toolkit ran at its defaults: no log pseudocount, and R's lowess() at its 1% "
+                "interpolation distance, as PRISM."
             ),
             "cases": cases,
         },
@@ -1774,7 +1760,7 @@ def gen_peptide_count_prior() -> None:
         {
             "reference": (
                 "proteomics_toolkit.statistical_analysis._fit_count_dependent_prior "
-                "(moderation='deqms'), v26.8.0"
+                "(moderation='peptide-count', formerly 'deqms'), v26.9.0"
             ),
             "note": (
                 "Per-feature prior SCALE, in the same log2 space the residual variances are already "

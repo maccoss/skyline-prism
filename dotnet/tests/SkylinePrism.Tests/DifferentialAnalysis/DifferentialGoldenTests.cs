@@ -784,13 +784,33 @@ public class DifferentialGoldenTests
             "prior scale is constant across features - the spline path did not run");
     }
     /// <summary>
+    /// Tolerance for a toolkit-sourced quantity that passes through a prior's LOWESS: the
+    /// intensity trend's shape, the peptide-count prior, and the end-to-end prior, t and p.
+    /// </summary>
+    /// <remarks>
+    /// The two tools' smoothers are not the same algorithm. PRISM's <c>Lowess.Fit</c> follows
+    /// statsmodels' weights (a pure tricube and bisquare), and RT-LOWESS normalization runs on it too,
+    /// so changing it would move normalized output. From v26.9.0 the toolkit carries an exact port of R's
+    /// <c>lowess()</c>, which sets a weight to 1 below 0.1% of its scale and to 0 beyond 99.9%, for
+    /// the distance weights and the robustness weights alike. That is the whole difference, measured:
+    /// on <c>lowess.json</c> the smoothers differ by at most 2.8e-10, and the toolkit's port with
+    /// those four cutoffs removed agrees with <c>Lowess.Fit</c> to 2.4e-13; most of it is the
+    /// robustness pair. Carried through the trend and
+    /// its calibrated level, the worst difference measured across these fixtures is 1.8e-8 (the
+    /// intensity trend's <c>missing_values</c> case) - the same amount the toolkit's own output moved
+    /// between v26.8.0 and v26.9.0, when it switched from statsmodels to R. 5e-8 is that measurement
+    /// with headroom; a disagreement in the estimator itself would be orders of magnitude larger.
+    /// </remarks>
+    private const double ToolkitLowessTolerance = 5e-8;
+
+    /// <summary>
     /// The lab's intensity-trend variance prior, against the toolkit that defines it.
     /// </summary>
     /// <remarks>
     /// This is the one golden in the directory whose reference is another MacCoss Lab tool rather
     /// than a third-party library, and deliberately so: the estimator is not a published formula
     /// with an independent implementation to check against - it IS
-    /// <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and reproducing that is the
+    /// <c>proteomics-toolkit</c>'s <c>moderation="intensity-trend"</c>, and reproducing that is the
     /// whole requirement. It stands to PRISM as inmoose does for squeezeVar.
     /// <para>Note what is asserted: the trend's per-feature SHAPE only, before its level and the prior
     /// degrees of freedom are fitted to the design residuals. That calibration is pinned end to end
@@ -818,10 +838,9 @@ public class DifferentialGoldenTests
         var actual = VariancePriors.IntensityTrend(exprLog2, allRows, groups);
 
         Assert.NotNull(actual);
-        // 1e-9: the chain is a LOWESS fit, an interpolation and a delta-method division, all in
-        // double precision with no iterative solve - so this is ordinary floating-point agreement,
-        // not the looser tolerance squeezeVar's Newton step forces elsewhere in this file.
-        Golden.CloseAll(expected, actual!, 1e-9, $"{name} prior scale");
+        // The chain is a LOWESS fit, an interpolation and a delta-method division, with no iterative
+        // solve, so the only allowance is for the two tools' LOWESS algorithms.
+        Golden.CloseAll(expected, actual!, ToolkitLowessTolerance, $"{name} prior scale");
     }
 
     public static IEnumerable<object[]> IntensityTrendCases() => Golden.CaseNames("intensity_trend.json");
@@ -1166,10 +1185,10 @@ public class DifferentialGoldenTests
     /// null feature gets below p = 0.7.</para>
     /// <para>Checked first on the Verapamil serum cohort (3,595 proteins, paired week 0 vs 12 and the
     /// within-subject trend over weeks 0-12), where every t, p and adjusted p agreed to ~1e-11 once
-    /// two conventions were aligned: the toolkit's log pseudocount (PRISM adds none) and PRISM's
-    /// LOWESS interpolation distance (the toolkit passes 0). The generator aligns the first and
-    /// builds its inputs so the second interpolates nothing, so 1e-9 here is the squeezeVar
-    /// tolerance used throughout this file, not an allowance for either.</para>
+    /// two conventions were aligned by hand: the toolkit's log pseudocount and its LOWESS
+    /// interpolation distance. From toolkit v26.9.0 it shares PRISM's on both, so the generator runs
+    /// it at its defaults. logFC and AveExpr are held to 1e-9; the prior, t and p, which pass through
+    /// the trend's LOWESS, to <see cref="ToolkitLowessTolerance"/>.</para>
     /// </remarks>
     [Theory]
     [MemberData(nameof(ToolkitEndToEndCases))]
@@ -1230,17 +1249,16 @@ public class DifferentialGoldenTests
         var t = Golden.Vec(c, "t");
         Assert.Equal(t.Count(double.IsFinite), res.NFeaturesTested);
         Golden.Close(Golden.Num(c, "df_residual"), res.DfResidual, 1e-12, $"{name} df residual");
-        Golden.Close(Golden.Num(c, "df_prior"), res.DfPrior, 1e-9, $"{name} df prior");
-        Golden.Close(Golden.Num(c, "prior_level"), res.PriorLevel, 1e-9, $"{name} trend level");
+        // The prior, t and p pass through the trend's LOWESS; logFC and AveExpr do not.
+        Golden.Close(Golden.Num(c, "df_prior"), res.DfPrior, ToolkitLowessTolerance, $"{name} df prior");
+        Golden.Close(Golden.Num(c, "prior_level"), res.PriorLevel, ToolkitLowessTolerance, $"{name} trend level");
 
         var byId = res.Rows.ToDictionary(r => r.FeatureId);
         var logfc = Golden.Vec(c, "logfc");
-        // The toolkit's own p is on df.residual + d0 with no cap; PRISM caps at the pooled residual
-        // df as limma's eBayes does, so it is held to the same t on limma's df (`p_limma`). The two
-        // differ only where the cap binds - unpaired and paired, whose d0 is infinite - and match
-        // exactly elsewhere, which the generator's note records.
-        var p = Golden.Vec(c, "p_limma");
-        var adj = Golden.Vec(c, "adj_p_limma");
+        // The toolkit's own p and adjusted p: from v26.9.0 it caps the df as limma's eBayes does
+        // (the generator checks its p against limma's formula) and adjusts over the features tested.
+        var p = Golden.Vec(c, "p");
+        var adj = Golden.Vec(c, "adj_p");
         var amean = Golden.Vec(c, "amean");
         for (var i = 0; i < ids.Length; i++)
         {
@@ -1252,9 +1270,9 @@ public class DifferentialGoldenTests
 
             var row = byId[ids[i]];
             Golden.Close(logfc[i], row.LogFc, 1e-9, $"{name} f{i} logFC");
-            Golden.Close(t[i], row.T, 1e-9, $"{name} f{i} t");
-            Golden.Close(p[i], row.PValue, 1e-9, $"{name} f{i} p");
-            Golden.Close(adj[i], row.AdjPValue, 1e-9, $"{name} f{i} adj p");
+            Golden.Close(t[i], row.T, ToolkitLowessTolerance, $"{name} f{i} t");
+            Golden.Close(p[i], row.PValue, ToolkitLowessTolerance, $"{name} f{i} p");
+            Golden.Close(adj[i], row.AdjPValue, ToolkitLowessTolerance, $"{name} f{i} adj p");
             Golden.Close(amean[i], row.AveExpr, 1e-9, $"{name} f{i} AveExpr");
         }
     }
@@ -1281,7 +1299,7 @@ public class DifferentialGoldenTests
         var actual = VariancePriors.PeptideCountTrend(variances, counts);
 
         Assert.NotNull(actual);
-        Golden.CloseAll(Golden.Vec(c, "expected"), actual!, 1e-9, $"{name} prior scale");
+        Golden.CloseAll(Golden.Vec(c, "expected"), actual!, ToolkitLowessTolerance, $"{name} prior scale");
     }
 
     public static IEnumerable<object[]> PeptideCountPriorCases()
