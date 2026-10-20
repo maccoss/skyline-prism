@@ -627,12 +627,17 @@ public static class Differential
         double[] variances, dfResidual, amean, coefficient, stdevUnscaled;
         var blockCorrelation = double.NaN;
         int subjectsA = 0, subjectsB = 0;
+        var withMissing = 0;
         if (block is null)
         {
             var fit = LinearModel.FitObserved(exprLog2FeaturesBySamples, cols, design, coefIdx);
             for (var f = 0; f < nFeatures; f++)
                 if (fit.DfResidual[f] > 0 && double.IsFinite(fit.Sigma[f]))
+                {
                     fitted.Add(f);
+                    if (fit.NObserved[f] < nSamples)
+                        withMissing++;
+                }
 
             variances = fitted.Select(f => fit.Sigma[f] * fit.Sigma[f]).ToArray();
             dfResidual = fitted.Select(f => fit.DfResidual[f]).ToArray();
@@ -642,12 +647,13 @@ public static class Differential
         }
         else
         {
-            // Complete-case filter: a feature is tested only if observed in every selected sample.
+            // Complete-case filter: a feature is tested only if observed in every selected sample. A
+            // value that is not finite is missing here too, as everywhere in the moderated t.
             for (var f = 0; f < nFeatures; f++)
             {
                 var complete = true;
                 for (var s = 0; s < nSamples; s++)
-                    if (double.IsNaN(exprLog2FeaturesBySamples[f, cols[s]]))
+                    if (!double.IsFinite(exprLog2FeaturesBySamples[f, cols[s]]))
                     {
                         complete = false;
                         break;
@@ -686,15 +692,6 @@ public static class Differential
         // all - is never a silent difference from a complete one.
         if (block is null)
         {
-            var withMissing = 0;
-            foreach (var f in fitted)
-                for (var s = 0; s < nSamples; s++)
-                    if (double.IsNaN(exprLog2FeaturesBySamples[f, cols[s]]))
-                    {
-                        withMissing++;
-                        break;
-                    }
-
             var noContrast = coefficient.Count(c => !double.IsFinite(c));
             if (withMissing > 0)
                 messages.Add($"{withMissing} feature(s) with missing values were fitted on the samples where "
@@ -750,10 +747,10 @@ public static class Differential
                 groupA.Clear();
                 groupB.Clear();
                 for (var s = 0; s < nA; s++)
-                    if (!double.IsNaN(exprLog2FeaturesBySamples[fitted[i], cols[s]]))
+                    if (double.IsFinite(exprLog2FeaturesBySamples[fitted[i], cols[s]]))
                         groupA.Add(exprLog2FeaturesBySamples[fitted[i], cols[s]]);
                 for (var s = 0; s < nB; s++)
-                    if (!double.IsNaN(exprLog2FeaturesBySamples[fitted[i], cols[nA + s]]))
+                    if (double.IsFinite(exprLog2FeaturesBySamples[fitted[i], cols[nA + s]]))
                         groupB.Add(exprLog2FeaturesBySamples[fitted[i], cols[nA + s]]);
                 meanA = groupA.Count > 0 ? NumpyMath.Mean(groupA.ToArray()) : double.NaN;
                 meanB = groupB.Count > 0 ? NumpyMath.Mean(groupB.ToArray()) : double.NaN;
@@ -1538,7 +1535,13 @@ public static class Differential
                     messages.Add($"{shared} sample(s) are both in the fit and in the variance "
                         + "prior's groups, so the prior is not independent of the data it moderates.");
 
-                var shape = VariancePriors.IntensityTrend(expr, tested, priorGroups);
+                // The shape is fitted over EVERY row of the matrix, as the toolkit's
+                // _fit_intensity_trend_prior fits it - including a feature too sparse in the contrast's
+                // samples to leave a residual df, whose control-pool replicates still trace noise
+                // against intensity - and then read at the features fitted here.
+                var allRows = Enumerable.Range(0, expr.GetLength(0)).ToList();
+                var shapeAll = VariancePriors.IntensityTrend(expr, allRows, priorGroups);
+                var shape = shapeAll is null ? null : tested.Select(f => shapeAll[f]).ToArray();
                 if (shape is not null)
                 {
                     // The groups give the trend its SHAPE. Its level and the prior df are fitted to

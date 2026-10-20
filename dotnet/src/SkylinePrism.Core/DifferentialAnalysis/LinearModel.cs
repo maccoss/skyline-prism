@@ -55,14 +55,21 @@ public sealed class LinearModelFit
 public sealed class ObservedLinearModelFit
 {
     internal ObservedLinearModelFit(double[] coefficient, double[] stdevUnscaled, double[] sigma,
-        double[] dfResidual, double[] amean)
+        double[] dfResidual, double[] amean, int[] nObserved)
     {
         Coefficient = coefficient;
         StdevUnscaled = stdevUnscaled;
         Sigma = sigma;
         DfResidual = dfResidual;
         Amean = amean;
+        NObserved = nObserved;
     }
+
+    /// <summary>
+    /// The samples each feature was observed in - those with a finite value - out of the columns
+    /// fitted. Fewer than the columns marks a feature fitted on a subset.
+    /// </summary>
+    public int[] NObserved { get; }
 
     /// <summary>
     /// The tested coefficient; NaN where it cannot be estimated from the feature's observed samples
@@ -125,6 +132,21 @@ public static class LinearModel
                 "Design matrix is rank-deficient (not full column rank).",
                 nameof(designSamplesByCoef));
 
+        return FitFullRank(dataFeaturesBySamples, designSamplesByCoef);
+    }
+
+    /// <summary>
+    /// <see cref="Fit"/> without its checks, for a design already known to have more rows than columns
+    /// and full column rank - <see cref="FitObserved"/>'s per-pattern designs, built by
+    /// <see cref="EstimableColumns"/>. Re-checking those with <see cref="LinAlg.MatrixRank"/> would cost
+    /// an SVD per missing-value pattern and judge rank by a different tolerance than the one that kept
+    /// the columns, refusing a design the fit itself can solve.
+    /// </summary>
+    private static LinearModelFit FitFullRank(double[,] dataFeaturesBySamples, double[,] designSamplesByCoef)
+    {
+        var nFeatures = dataFeaturesBySamples.GetLength(0);
+        var nSamples = dataFeaturesBySamples.GetLength(1);
+        var nCoef = designSamplesByCoef.GetLength(1);
         var x = DenseMatrix.OfArray(designSamplesByCoef);
         // Thin QR: X = Q R, Q is n_samples x n_coef, R is n_coef x n_coef upper-triangular.
         var qr = x.QR(QRMethod.Thin);
@@ -197,9 +219,10 @@ public static class LinearModel
     /// other column on those samples (<see cref="TestedIsEstimable"/>): an arm entirely missing makes
     /// the group column the intercept, and there is then no contrast. Such a feature still has a
     /// residual variance and df, which go into the prior and the pooled df, as in limma.</para>
-    /// <para>Features sharing a missing-value pattern share a design, and are fitted together through
-    /// <see cref="Fit"/> on that design - with complete data, every feature in one call, which is the
-    /// computation PRISM made before it fitted missing values at all.</para>
+    /// <para>Features sharing a missing-value pattern share a design, and are fitted together on it by
+    /// <see cref="Fit"/>'s computation - with complete data, every feature in one call, which is the
+    /// computation PRISM made before it fitted missing values at all. The kept columns are full rank
+    /// by construction, so the per-pattern fit skips <see cref="Fit"/>'s SVD rank check.</para>
     /// <para><c>proteomics-toolkit</c>'s <c>_fit_moderated_t</c> is the same rule, and both are pinned
     /// to R limma 3.66.0 by <c>limma_ebayes.json</c>.</para>
     /// </remarks>
@@ -223,19 +246,33 @@ public static class LinearModel
         var sigma = new double[nFeatures];
         var dfResidual = new double[nFeatures];
         var amean = new double[nFeatures];
+        var nObserved = new int[nFeatures];
         Array.Fill(coefficient, double.NaN);
         Array.Fill(stdevUnscaled, double.NaN);
         Array.Fill(sigma, double.NaN);
         Array.Fill(amean, double.NaN);
 
         // Group the features by which samples they were observed in. A value that is not finite is
-        // missing, as limma's lmFit takes it (is.finite): an infinity is not a measurement.
-        var byPattern = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        // missing, as limma's lmFit takes it (is.finite): an infinity is not a measurement. A complete
+        // feature - nearly every one, since Skyline integrates every replicate - goes straight into
+        // the all-observed group, so only an incomplete one pays for a pattern key.
+        var matrixColumn = columns.ToArray(); // indexed per cell below: no interface call each time
+        var complete = new string('1', nSamples);
+        var byPattern = new Dictionary<string, List<int>>(StringComparer.Ordinal) { [complete] = new() };
         var pattern = new char[nSamples];
         for (var f = 0; f < nFeatures; f++)
         {
-            for (var s = 0; s < nSamples; s++)
-                pattern[s] = double.IsFinite(exprLog2[f, columns[s]]) ? '1' : '0';
+            var s = 0;
+            while (s < nSamples && double.IsFinite(exprLog2[f, matrixColumn[s]]))
+                s++;
+            if (s == nSamples)
+            {
+                byPattern[complete].Add(f);
+                continue;
+            }
+
+            for (s = 0; s < nSamples; s++)
+                pattern[s] = double.IsFinite(exprLog2[f, matrixColumn[s]]) ? '1' : '0';
             var key = new string(pattern);
             if (!byPattern.TryGetValue(key, out var members))
                 byPattern[key] = members = new List<int>();
@@ -248,21 +285,18 @@ public static class LinearModel
             for (var s = 0; s < nSamples; s++)
                 if (key[s] == '1')
                     observed.Add(s);
-            if (observed.Count == 0)
+            foreach (var f in members)
+                nObserved[f] = observed.Count;
+            if (observed.Count == 0 || members.Count == 0)
                 continue;
 
+            var source = observed.Select(s => matrixColumn[s]).ToArray();
             var data = new double[members.Count, observed.Count];
             for (var i = 0; i < members.Count; i++)
-                for (var k = 0; k < observed.Count; k++)
-                    data[i, k] = exprLog2[members[i], columns[observed[k]]];
-
-            // limma's Amean: over every observed value, whether or not the feature can be fitted.
-            var row = new double[observed.Count];
-            for (var i = 0; i < members.Count; i++)
             {
-                for (var k = 0; k < observed.Count; k++)
-                    row[k] = data[i, k];
-                amean[members[i]] = NumpyMath.Mean(row);
+                var f = members[i];
+                for (var k = 0; k < source.Length; k++)
+                    data[i, k] = exprLog2[f, source[k]];
             }
 
             var observedDesign = new double[observed.Count, nCoef];
@@ -271,13 +305,25 @@ public static class LinearModel
                     observedDesign[k, c] = designSamplesByCoef[observed[k], c];
             var kept = EstimableColumns(observedDesign);
             if (observed.Count - kept.Count <= 0)
+            {
+                // limma's Amean is over every observed value, whether or not the feature can be
+                // fitted; a fitted one takes the same mean from the fit below.
+                var row = new double[observed.Count];
+                for (var i = 0; i < members.Count; i++)
+                {
+                    for (var k = 0; k < observed.Count; k++)
+                        row[k] = data[i, k];
+                    amean[members[i]] = NumpyMath.Mean(row);
+                }
+
                 continue;
+            }
 
             var keptDesign = new double[observed.Count, kept.Count];
             for (var k = 0; k < observed.Count; k++)
                 for (var c = 0; c < kept.Count; c++)
                     keptDesign[k, c] = observedDesign[k, kept[c]];
-            var fit = Fit(data, keptDesign);
+            var fit = FitFullRank(data, keptDesign);
 
             var at = kept.IndexOf(testedColumn);
             var estimable = at >= 0 && TestedIsEstimable(observedDesign, testedColumn);
@@ -286,6 +332,7 @@ public static class LinearModel
                 var f = members[i];
                 sigma[f] = fit.Sigma[i];
                 dfResidual[f] = fit.DfResidual;
+                amean[f] = fit.Amean[i];
                 if (estimable)
                 {
                     coefficient[f] = fit.Coefficients[i, at];
@@ -294,7 +341,7 @@ public static class LinearModel
             }
         }
 
-        return new ObservedLinearModelFit(coefficient, stdevUnscaled, sigma, dfResidual, amean);
+        return new ObservedLinearModelFit(coefficient, stdevUnscaled, sigma, dfResidual, amean, nObserved);
     }
 
     /// <summary>

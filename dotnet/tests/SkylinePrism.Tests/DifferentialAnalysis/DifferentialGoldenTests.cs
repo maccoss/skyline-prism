@@ -1225,14 +1225,16 @@ public class DifferentialGoldenTests
             res = Differential.Run(expr, ids, a, b, options);
         }
 
-        Assert.Equal(ids.Length, res.NFeaturesTested);
+        // A feature the toolkit could not test (t is NaN) has no row here, but its pool replicates
+        // still shape the trend in both tools - which unpaired_feature_only_in_pools exists to pin.
+        var t = Golden.Vec(c, "t");
+        Assert.Equal(t.Count(double.IsFinite), res.NFeaturesTested);
         Golden.Close(Golden.Num(c, "df_residual"), res.DfResidual, 1e-12, $"{name} df residual");
         Golden.Close(Golden.Num(c, "df_prior"), res.DfPrior, 1e-9, $"{name} df prior");
         Golden.Close(Golden.Num(c, "prior_level"), res.PriorLevel, 1e-9, $"{name} trend level");
 
         var byId = res.Rows.ToDictionary(r => r.FeatureId);
         var logfc = Golden.Vec(c, "logfc");
-        var t = Golden.Vec(c, "t");
         // The toolkit's own p is on df.residual + d0 with no cap; PRISM caps at the pooled residual
         // df as limma's eBayes does, so it is held to the same t on limma's df (`p_limma`). The two
         // differ only where the cap binds - unpaired and paired, whose d0 is infinite - and match
@@ -1242,6 +1244,12 @@ public class DifferentialGoldenTests
         var amean = Golden.Vec(c, "amean");
         for (var i = 0; i < ids.Length; i++)
         {
+            if (!double.IsFinite(t[i]))
+            {
+                Assert.False(byId.ContainsKey(ids[i]), $"{name} f{i} has no t in the toolkit but a row here");
+                continue;
+            }
+
             var row = byId[ids[i]];
             Golden.Close(logfc[i], row.LogFc, 1e-9, $"{name} f{i} logFC");
             Golden.Close(t[i], row.T, 1e-9, $"{name} f{i} t");

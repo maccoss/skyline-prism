@@ -309,6 +309,47 @@ public class DifferentialTests
     }
 
     /// <summary>
+    /// Where a feature's missing values leave a covariate equal to the group on its observed samples,
+    /// the group effect cannot be told from the covariate's, so there is no contrast to report. This is
+    /// where PRISM (and the toolkit) deliberately part from limma: lmFit pivots left to right, keeps the
+    /// group column because it comes first, drops the covariate, and reports a coefficient that has
+    /// silently absorbed it. The feature's residual df still counts toward the pool.
+    /// </summary>
+    [Fact]
+    public void Run_ACovariateAliasedWithTheGroupOnAFeaturesObservedSamples_LeavesItUntested()
+    {
+        const int nFeatures = 6;
+        var rng = new Random(17);
+        var expr = new double[nFeatures, 6];
+        for (var f = 0; f < nFeatures; f++)
+            for (var j = 0; j < 6; j++)
+                expr[f, j] = 12 + f + (j >= 3 ? 0.5 : 0.0) + 0.2 * rng.NextDouble();
+
+        // Group is [0,0,0,1,1,1]; the covariate differs from it only at samples 2 and 5, which is
+        // exactly where f1 is missing.
+        var load = new double[] { 0, 0, 1, 1, 1, 0 };
+        expr[1, 2] = double.NaN;
+        expr[1, 5] = double.NaN;
+
+        var ids = Enumerable.Range(0, nFeatures).Select(f => $"f{f}").ToArray();
+        var res = Differential.Run(expr, ids, new[] { 0, 1, 2 }, new[] { 3, 4, 5 },
+            new DifferentialOptions
+            {
+                Prior = VariancePrior.Global,
+                Covariates = new Covariate[] { new NumericCovariate("load", load) },
+            });
+
+        Assert.Contains("load", res.CovariatesUsed);
+        Assert.Equal(nFeatures - 1, res.NFeaturesTested);
+        Assert.DoesNotContain(res.Rows, r => r.FeatureId == "f1");
+        Assert.Contains(res.Messages, msg => msg.Contains("no estimable contrast", StringComparison.Ordinal));
+        // Complete features: 6 samples less [1, group, load]. f1: 4 observed samples less the two
+        // columns they can estimate.
+        Assert.Equal(3, res.DfResidual);
+        Assert.Equal((nFeatures - 1) * 3 + 2, res.DfPooled);
+    }
+
+    /// <summary>
     /// A covariate constant within each subject - sex, age, genotype, diagnosis: the most natural
     /// things to tick in a paired design - is exactly collinear with the subject block, so it is
     /// dropped and named rather than killing the run on a rank check that mentions neither it nor a

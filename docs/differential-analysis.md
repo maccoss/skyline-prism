@@ -506,7 +506,10 @@ The deprecated intensity trend's group statistics count the observed values too.
 one has a mean but no sd, so it places no point on the trend, but its trend value is averaged into
 the feature's prior with weight 1, as the toolkit - the definition of that estimator - does; PRISM
 skipped such a group until the release after dotnet-v26.29.0 (`intensity_trend.json` now has a
-missing-value case).
+missing-value case). The trend's shape is fitted over every feature in the matrix, again as the
+toolkit fits it: a feature too sparse in the contrast's samples to be tested still has pool
+replicates that trace noise against intensity, and its points stay on the curve
+(`toolkit_end_to_end.json`'s `unpaired_feature_only_in_pools` case).
 
 Two things still test only complete features: the **blocked design** (limma refits a feature with
 missing values on the correlation matrix of its observed samples, which the blocked fit here does not

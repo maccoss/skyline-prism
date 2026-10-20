@@ -489,9 +489,15 @@ def limma_p(t, df_residual, df_prior: float) -> tuple[np.ndarray, np.ndarray, np
     """
     t = np.asarray(t, dtype=float)
     df_res = np.broadcast_to(np.asarray(df_residual, dtype=float), t.shape)
-    df_total = np.minimum(df_res + df_prior, df_res.sum())
+    # nansum: a feature too sparse to fit has no residual df (limma records 0), and statsmodels'
+    # multipletests returns all-NaN if any p is NaN, so BH runs over the features that have one.
+    df_total = np.minimum(df_res + df_prior, np.nansum(df_res))
     p = 2.0 * scipy.stats.t.sf(np.abs(t), df=df_total)
-    return p, multipletests(p, method="fdr_bh")[1], df_total
+    adj = np.full(p.shape, np.nan)
+    ok = np.isfinite(p)
+    if ok.any():
+        adj[ok] = multipletests(p[ok], method="fdr_bh")[1]
+    return p, adj, df_total
 
 
 def moderated_t(expr: np.ndarray, design: np.ndarray, coef_idx: int, trend: bool):
@@ -1537,8 +1543,8 @@ def gen_toolkit_end_to_end() -> None:
         prior_level = float(res["intensity_trend_level"].iloc[0])
 
         # The calibration, against limma: fitFDist on residual / trend gives the level as its scale.
-        sq = squeezeVar(res["residual_s2"].to_numpy(float) / res["intensity_trend_shape"].to_numpy(float),
-                        float(df_resid[0]))
+        ratio = res["residual_s2"].to_numpy(float) / res["intensity_trend_shape"].to_numpy(float)
+        sq = squeezeVar(ratio[np.isfinite(ratio)], float(df_resid[0]))
         ref_level = float(np.atleast_1d(sq["var_prior"])[0])
         ref_d0 = float(np.atleast_1d(sq["df_prior"])[0])
         level_ok = abs(prior_level - ref_level) <= 1e-9 * abs(ref_level)
@@ -1561,7 +1567,7 @@ def gen_toolkit_end_to_end() -> None:
         # Where the cap does not bind, limma's p IS the toolkit's: check it, so the claim in the note
         # stays true if a future toolkit changes its own p step. Where it binds, they must differ.
         binds = bool(np.any(df_resid + df_prior[0] > df_total))
-        same = np.allclose(p_limma, res["P.Value"].to_numpy(float), rtol=1e-12, atol=0.0)
+        same = np.allclose(p_limma, res["P.Value"].to_numpy(float), rtol=1e-12, atol=0.0, equal_nan=True)
         if same == binds:
             raise SystemExit(f"{name}: the cap {'binds' if binds else 'does not bind'}, yet the "
                              f"toolkit's p and limma's are {'equal' if same else 'different'}")
@@ -1672,6 +1678,25 @@ def gen_toolkit_end_to_end() -> None:
                    setattr(c, "paired_label2", "Post"), setattr(c, "group_column", "Timepoint"),
                    setattr(c, "group_labels", ["Pre", "Post"])),
         list(range(6)), list(range(6, 12)), None, [f"P{j % 6}" for j in range(12)], finite_d0=True)
+
+    # --- a feature only the pools can fit ----------------------------------------------------------
+    # The top feature is observed in one sample per arm, so [1, group] leaves it no residual df and
+    # neither tool tests it - but its eight pool injections are complete, and the toolkit takes the
+    # trend's SHAPE from every feature's pool points, this one included. PRISM, fitting the shape over
+    # the features it tested only, left them out until the release after dotnet-v26.29.0. Appended
+    # after the cases above, so those keep the draws they were generated with.
+    spread = [float(np.exp(0.7 * rng.normal())) for _ in range(n_feat)]
+    block = np.asarray([
+        [level[f] + (0.8 if (f < moves and j >= 5) else 0.0) + (noise[f] + 0.15) * spread[f] * rng.normal()
+         for j in range(10)] for f in range(n_feat)])
+    block[n_feat - 1, [1, 2, 3, 4, 6, 7, 8, 9]] = np.nan
+    run("unpaired_feature_only_in_pools", "unpaired",
+        "the finite-d0 unpaired design with its top feature observed in one sample per arm: no residual "
+        "df, so it is not tested, but its complete pool replicates still shape the trend",
+        block, [{"Group": "Control" if j < 5 else "Treated"} for j in range(10)],
+        lambda c: (setattr(c, "analysis_type", "unpaired"), setattr(c, "group_column", "Group"),
+                   setattr(c, "group_labels", ["Control", "Treated"])),
+        list(range(5)), list(range(5, 10)), None, None, finite_d0=True)
 
     write(
         "toolkit_end_to_end.json",

@@ -96,7 +96,11 @@ as the GitHub Release description and fails if it is missing.
   toolkit - the definition of that estimator - averages the trend's value at its mean into the
   feature's prior with weight 1, and PRISM had skipped it. With missing values that moved the prior
   and, on a 2,500-protein test set, p by up to 2e-2; `intensity_trend.json` gained a missing-value
-  case, from toolkit v26.8.0. Complete data was unaffected.
+  case, from toolkit v26.8.0. The trend's shape was also fitted over every feature, as the toolkit
+  fits it, not only the features tested: one too sparse in the contrast's samples to test still has
+  pool replicates that trace noise against intensity. Leaving them out moved the prior df by 2.5% on
+  `toolkit_end_to_end.json`'s new `unpaired_feature_only_in_pools` case. Complete data was
+  unaffected.
 - **The peptide-count prior left out every residual variance at or below limma's floor**
   (1e-5 x the median), not just exact zeros, from its LOWESS on log peptide count. Replicates that
   agree exactly give 0 from one least-squares solve and 1e-29 from another; PRISM's QR left the 1e-29,
