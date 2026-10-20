@@ -486,6 +486,123 @@ public class DifferentialGoldenTests
         }
     }
 
+    public static IEnumerable<object[]> LimmaEBayesCases() => Golden.CaseNames("limma_ebayes.json");
+
+    /// <summary>
+    /// The moderated t against R limma 3.66.0's own <c>lmFit</c> + <c>eBayes</c>, called whole, on every
+    /// design both tools share, both limma priors, and the rules for missing values and zero variances.
+    /// <c>limma_ebayes.json</c> is written byte for byte by twin generators here and in
+    /// proteomics-toolkit, which tests its <c>run_moderated_linear_model</c> against the same file - so
+    /// passing in both is how the two tools are held to the same numbers.
+    /// </summary>
+    /// <remarks>
+    /// <para>The <c>*_missing_*</c> cases fit each feature on its observed samples
+    /// (<see cref="LinearModel.FitObserved"/>): a feature missing a whole arm has no contrast and no
+    /// row, limma's NA, but its df counts toward <see cref="DifferentialResult.DfPooled"/>; a subject
+    /// missing from a feature drops out of that feature's comparison. limma runs them with
+    /// <c>legacy = TRUE</c>, the <c>fitFDist</c> moments PRISM uses whatever the df. The
+    /// <c>*_zero_variance</c> cases have features whose replicates agree exactly, which fitFDist
+    /// floors at 1e-5 x the median rather than drops.</para>
+    /// <para>Tolerances as in <see cref="LimmaTrendIntensityNPeptides_MatchesTheLimmaTranscription"/>:
+    /// 1e-9 on the prior df and p where the prior df is finite (a Newton solve stopped at a 1e-8
+    /// relative step), 1e-12 where it is infinite, and 1e-10 absolute plus relative on logFC and t.</para>
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(LimmaEBayesCases))]
+    public void Differential_MatchesLimma_OnEveryDesignPriorAndMissingValue(string name)
+    {
+        var c = Golden.Case("limma_ebayes.json", name);
+        var expr = Golden.Mat(c, "expr");
+        var nFeatures = expr.GetLength(0);
+        var nSamples = expr.GetLength(1);
+        var featureIds = Enumerable.Range(0, nFeatures).Select(i => $"F{i}").ToArray();
+        var options = new DifferentialOptions
+        {
+            Prior = c.GetProperty("trend").GetBoolean() ? VariancePrior.LimmaTrend : VariancePrior.Global,
+            Correction = MultipleTesting.None,
+        };
+
+        string[] Labels(string prop) => c.GetProperty(prop).EnumerateArray().Select(e => e.GetString()!).ToArray();
+        int[] Where(string[] labels, string value) =>
+            Enumerable.Range(0, labels.Length).Where(j => labels[j] == value).ToArray();
+
+        var analysis = c.GetProperty("analysis_type").GetString();
+        var withinSubject = c.TryGetProperty("subject", out _) && analysis == "linear_trend";
+        DifferentialResult res = analysis switch
+        {
+            "unpaired" => Differential.Run(expr, featureIds, Where(Labels("group"), "A"),
+                Where(Labels("group"), "B"), options),
+            "paired" => Differential.Run(expr, featureIds, Where(Labels("time"), "Pre"),
+                Where(Labels("time"), "Post"),
+                options with { Design = DifferentialDesign.Paired, SubjectLabels = Labels("subject") }),
+            _ => Differential.RunTrend(expr, featureIds, Enumerable.Range(0, nSamples).ToArray(),
+                Golden.Vec(c, "time"), withinSubject
+                    ? options with { Design = DifferentialDesign.LinearTrendWithinSubject, SubjectLabels = Labels("subject") }
+                    : options with { Design = DifferentialDesign.LinearTrend }),
+        };
+
+        var dfPrior = Golden.Num(c, "df_prior");
+        var tol = double.IsPositiveInfinity(dfPrior) ? 1e-12 : 1e-9;
+        if (double.IsPositiveInfinity(dfPrior))
+            Assert.True(double.IsPositiveInfinity(res.DfPrior), $"{name}: df_prior {res.DfPrior:R}, limma inf");
+        else
+            Golden.Close(dfPrior, res.DfPrior, 1e-9, $"{name}/df_prior");
+        Golden.Close(Golden.Num(c, "df_pooled"), res.DfPooled, 1e-15, $"{name}/df_pooled");
+        Golden.Close(Golden.Vec(c, "df_residual").Max(), res.DfResidual, 1e-15, $"{name}/df_residual");
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId, StringComparer.Ordinal);
+        var scale = analysis == "linear_trend" ? res.TrendRange : 1.0;
+        var logfc = Golden.Vec(c, "logfc");
+        var t = Golden.Vec(c, "t");
+        var p = Golden.Vec(c, "p");
+        static void Near(double expected, double actual, string what) =>
+            Assert.True(Math.Abs(actual - expected) <= 1e-10 + 1e-10 * Math.Abs(expected),
+                $"{what}: expected {expected:R}, actual {actual:R}");
+        Assert.Equal(t.Count(double.IsFinite), res.NFeaturesTested);
+        for (var i = 0; i < nFeatures; i++)
+        {
+            if (!double.IsFinite(t[i]))
+            {
+                // limma's NA: no estimable contrast, so no row.
+                Assert.False(byId.ContainsKey($"F{i}"), $"{name}/F{i}: limma has no contrast, PRISM reported one");
+                continue;
+            }
+
+            var row = byId[$"F{i}"];
+            Near(logfc[i] * scale, row.LogFc, $"{name}/F{i}/logFC");
+            Near(t[i], row.T, $"{name}/F{i}/t");
+            Golden.Close(p[i], row.PValue, tol, $"{name}/F{i}/p");
+        }
+    }
+
+    public static IEnumerable<object[]> LowessCases() => Golden.CaseNames("lowess.json");
+
+    /// <summary>
+    /// The LOWESS behind the peptide-count and intensity-trend priors (<c>VariancePriors.SmoothTrend</c>:
+    /// span 0.5, three robustness iterations, delta 1% of the x range) against R's <c>lowess()</c> at its
+    /// default delta, on inputs where the interpolation happens - crowded intensities, tied peptide
+    /// counts. proteomics-toolkit's <c>_prior_lowess</c> is pinned to the same file (twin generators),
+    /// and agrees with it to 5e-14; this agrees to 2.5e-10, held at 1e-9.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LowessCases))]
+    public void Lowess_MatchesRLowess(string name)
+    {
+        var c = Golden.Case("lowess.json", name);
+        var x = Golden.Vec(c, "x");
+        var y = Golden.Vec(c, "y");
+        var order = Enumerable.Range(0, x.Length).OrderBy(i => x[i]).ToArray(); // stable, as R's order()
+        var xs = order.Select(i => x[i]).ToArray();
+        var ys = order.Select(i => y[i]).ToArray();
+        Assert.Equal(Golden.Vec(c, "fitted_x"), xs);
+        var span = xs[^1] - xs[0];
+        var fitted = Lowess.Fit(xs, ys, frac: 0.5, iterations: 3, delta: span * 0.01);
+        var expected = Golden.Vec(c, "fitted_y");
+        for (var i = 0; i < xs.Length; i++)
+            Assert.True(Math.Abs(fitted[i] - expected[i]) <= 1e-9,
+                $"{name}[{i}]: expected {expected[i]:R}, actual {fitted[i]:R}");
+    }
+
     // ------------------------------------------------------------------------------------
     // Fisher exact  vs  scipy.stats.fisher_exact
     // ------------------------------------------------------------------------------------
@@ -1161,6 +1278,31 @@ public class DifferentialGoldenTests
 
     public static IEnumerable<object[]> PeptideCountPriorCases()
         => Golden.CaseNames("peptide_count_prior.json");
+
+    /// <summary>
+    /// A residual variance at or below limma's floor (1e-5 x the median) counts as zero and stays out
+    /// of the count trend - an exact 0 and the 1e-29 a QR solve can leave in its place alike - so the
+    /// prior does not depend on rounding. Included, the 1e-29 is a log variance of -66 that bends the
+    /// whole curve: on a cohort with three exactly constant proteins it moved p by 4e-3 between PRISM
+    /// and proteomics-toolkit, which uses the same rule.
+    /// </summary>
+    [Fact]
+    public void PeptideCountPrior_TreatsAVarianceAtLimmasFloorAsZero()
+    {
+        var c = Golden.Case("peptide_count_prior.json", "falling_with_count");
+        var variances = Golden.Vec(c, "variances");
+        var counts = Golden.Vec(c, "counts");
+        var withZeros = variances.Concat(new[] { 0.0, 1.6829032644714918E-29 }).ToArray();
+        var withCounts = counts.Concat(new[] { counts[0], counts[1] }).ToArray();
+
+        var expected = VariancePriors.PeptideCountTrend(variances, counts)!;
+        var actual = VariancePriors.PeptideCountTrend(withZeros, withCounts)!;
+
+        Assert.Equal(expected, actual.Take(variances.Length).ToArray());
+        // The two left out of the fit still get the curve's value at their counts.
+        Assert.Equal(expected[0], actual[variances.Length]);
+        Assert.Equal(expected[1], actual[variances.Length + 1]);
+    }
 
     /// <summary>
     /// McNemar's exact test, against statsmodels. Only the discordant pairs enter it: a subject that

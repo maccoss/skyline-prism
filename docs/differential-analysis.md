@@ -11,8 +11,8 @@ count as a second covariate. On the peptide-level matrix, which has no peptide c
 **limma-trend**: limma's `trend=TRUE` alone, an intensity-dependent prior. Both curves are fitted to
 the contrast's own residuals. The run names the prior it used. `proteomics-toolkit` uses the same
 names and chooses its default the same way, and both tools are pinned to one R limma golden. On
-the same matrix a default run gives the same p-values in either tool, once the toolkit's log
-pseudocount is off (see "PRISM, `proteomics-toolkit` and limma").
+the same matrix a default run gives the same p-values in either tool - from toolkit 26.9.0 with no
+setting at all (see "PRISM, `proteomics-toolkit` and limma").
 
 Up to dotnet-v26.28.0 the default was the lab's intensity trend, `VariancePriors.IntensityTrend`,
 the same estimator as `proteomics-toolkit`'s `moderation="intensity-trend"` and pinned to it by
@@ -472,6 +472,47 @@ and not a mixed model; those are a different estimator and are not implemented. 
 that each subject's overall level leaves the residual, so a within-subject shift is tested against
 within-subject noise instead of against the spread between people.
 
+### Missing values: each feature on the samples where it was observed
+
+PRISM's matrices are normally complete - Skyline integrates every replicate - but merging documents
+with different target lists, or filtering, leaves features with missing values. The moderated t fits
+such a feature the way limma's `lmFit` does (`LinearModel.FitObserved`): on the samples where it was
+observed, keeping the design columns those samples can estimate, left to right as R's `lm.fit` keeps
+them, and dropping the rest. A value that is not finite - an infinity as well as a blank - is missing,
+as limma takes it.
+
+- **A subject with no value for a feature**, in a paired or within-subject design, drops out of that
+  feature's comparison, which is made on the remaining subjects with fewer residual df. When it is
+  the subject the intercept stands for, the other subjects' columns sum to the intercept and the last
+  of them is the one dropped; the coefficient tested is the same either way.
+- **A subject missing one timepoint** keeps the design full rank and costs the feature one residual df.
+- **A feature missing a whole arm** has no contrast: it is not tested and has no row (limma's NA), but
+  its residual variance is still an estimate of the noise, so it goes into the prior and its df into
+  the pool behind the df cap (`DifferentialResult.DfPooled`). So does a feature whose tested column,
+  on its observed samples, lies in the span of the others - a covariate that equals the group there,
+  say - which limma would report with the covariate silently absorbed.
+
+The run says how many features were fitted on fewer samples and how many had no estimable contrast.
+Up to dotnet-v26.29.0 PRISM tested only features observed in every selected sample, so a protein
+absent from one plate's document was dropped from any contrast that touched that plate.
+
+Each feature then has its own residual df, and the prior is fitted with `fitFDist`'s moments over
+unequal df: each log variance centered by its own df, the mean trigamma subtracted. limma 3.58 and
+later switch to `fitFDistUnequalDF1` when the df differ; PRISM and the toolkit keep `fitFDist`, as
+limma did before (`eBayes(legacy = TRUE)`), and the missing-value cases of `limma_ebayes.json` pin
+exactly that. With complete data the two are the same, and the fit is the one PRISM always made.
+
+The deprecated intensity trend's group statistics count the observed values too. A group left with
+one has a mean but no sd, so it places no point on the trend, but its trend value is averaged into
+the feature's prior with weight 1, as the toolkit - the definition of that estimator - does; PRISM
+skipped such a group until the release after dotnet-v26.29.0 (`intensity_trend.json` now has a
+missing-value case).
+
+Two things still test only complete features: the **blocked design** (limma refits a feature with
+missing values on the correlation matrix of its observed samples, which the blocked fit here does not
+do), and the **simple tests** - Welch, Student, Mann-Whitney, paired t and Wilcoxon - where the
+toolkit drops a feature's missing values per feature.
+
 ## From the command line
 
 The same analysis, against the same output directory, without Skyline or Windows:
@@ -654,23 +695,37 @@ chosen by level.
 | prior | agreement |
 |---|---|
 | limma-trend-intensity-n-peptides (the default at protein level in both) | **one golden for both tools**: `limma_trend_intensity_n_peptides.json` is written byte for byte the same by twin R scripts in the two repositories, from limma 3.66.0's own pieces, and pins each tool to it (PRISM at 1e-9 on the prior df and p, 1e-10 on logFC and t). On the Verapamil serum cohort, paired week 0 vs 12, a default `prism differential --level protein` and the toolkit's default `run_moderated_linear_model` on the same matrix and `n_peptides` both chose this prior and agreed on all 3,595 proteins to **1.1e-12** relative on P.Value and 1e-14 on logFC |
-| limma-trend (the default at peptide level in both) | each tool pinned to limma: PRISM by `moderated_t.json` (inmoose `squeezeVar`) and `ebayes.json` (R `eBayes(trend = TRUE)`), the toolkit by its `limma_ebayes.json` (R); the golden above also requires its own transcription of limma to reproduce limma-trend to 1e-12 before it writes a case |
-| global (toolkit `moderation="global"`, formerly `"limma"`) | **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma (inmoose) - three implementations of Smyth (2004) on the same numbers - except P.Value in toolkit 26.8.0 and earlier where limma's df cap binds (an infinite prior df, or a small feature set); see below |
-| intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and ~1e-11 on a 3,595-protein serum cohort once the two conventions below are aligned. P.Value differs wherever the df cap binds, as for the global prior |
+| limma-trend (the default at peptide level in both) | **one golden for both tools**: `limma_ebayes.json`, R limma 3.66.0's own `lmFit` + `eBayes(trend = TRUE)` called whole, written byte for byte the same by twin R scripts in the two repositories - unpaired, paired, trend and within-subject trend designs, the df cap, missing values and zero variances. PRISM holds to it at 1e-9 on the prior df and p and 1e-10 on logFC and t, the toolkit at the same or tighter. The golden above also requires its own transcription of limma to reproduce limma-trend to 1e-12 before it writes a case |
+| global (toolkit `moderation="global"`, formerly `"limma"`) | the same golden, `limma_ebayes.json`; **~1e-13** on logFC, t and P.Value between PRISM, the toolkit and limma, except P.Value in toolkit 26.8.0 and earlier where limma's df cap binds (an infinite prior df, or a small feature set); see below |
+| peptide-count (DEqMS) | PRISM pinned to the toolkit's estimator by `peptide_count_prior.json`; the LOWESS inside it pinned in both to R's `lowess()` by `lowess.json` (below) |
+| intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` at 1e-9 on t and the prior, and its LOWESS by `lowess.json`. P.Value differs from toolkit 26.8.0 and earlier wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
-**Two conventions can separate a toolkit run from PRISM**, and neither changes a conclusion. The
-first applies to every prior when the toolkit is called through its top-level dispatcher; the
-second to the intensity trend only:
+**Four conventions used to separate a toolkit run from PRISM**, none of them changing a conclusion.
+From toolkit 26.9.0 and the PRISM release after dotnet-v26.29.0 the two tools share all four:
 
-- **The log pseudocount.** The toolkit's dispatcher adds the smallest value / 100 before log2,
-  because a matrix it is handed may hold zeros. PRISM's matrix is log2 of a LINEAR parquet and adds
-  nothing. On the serum cohort this moved low-abundance log ratios by up to 1.4e-3. Set
-  `config.log_pseudocount = 0` to remove it.
-- **The LOWESS interpolation distance.** PRISM's prior LOWESS interpolates between points closer
-  than 1% of the x range, which a peptide-level contrast needs in order to return in under a second
-  (`VariancePriors.SmoothTrend`). The toolkit fits every point. On the serum cohort this moved the
-  prior by up to 1.4e-3 relative and p-values by up to 8e-4.
+- **No log pseudocount.** PRISM's matrix is log2 of a LINEAR parquet and adds nothing; a value of 0
+  or less is missing. The toolkit's dispatcher added the smallest value / 100 before log2, which on
+  the serum cohort moved low-abundance log ratios by up to 1.4e-3; from 26.9.0 it adds nothing either
+  (an explicit `config.log_pseudocount` still adds one).
+- **R's LOWESS, at its default interpolation distance.** The peptide-count and intensity-trend priors
+  smooth with LOWESS. PRISM interpolates between points closer than 1% of the x range, R
+  `lowess()`'s default and what a peptide-level contrast needs to return in under a second
+  (`VariancePriors.SmoothTrend`). The toolkit fitted every point, which on the serum cohort moved the
+  intensity trend by up to 1.4e-3 relative and p-values by up to 8e-4; from 26.9.0 it runs R's
+  algorithm at the same distance. Both are pinned to R's own `lowess()` by `lowess.json` (twin
+  generators, byte-identical): the toolkit to 5e-14, PRISM's `Lowess.Fit` to 2.5e-10. statsmodels'
+  `lowess` at the same distance is not a substitute - it advances differently once a run of
+  interpolated points reaches the end of the data, 2e-6 from R on the golden's crowded case.
+- **Zero residual variances are floored,** at 1e-5 x the median with limma's warning, as limma's
+  `fitFDist` floors them. PRISM always did; the toolkit dropped them from the prior fit until 26.9.0.
+  The peptide-count prior's LOWESS, which cannot take the log of a zero, leaves out every variance at
+  or below that floor, in both tools, so an exact 0 and the 1e-29 another least-squares solve leaves
+  in its place are treated alike; counting the 1e-29, as PRISM did, moved p by 4e-3 between the
+  tools on a cohort with three exactly constant proteins.
+- **Missing values: each feature on its observed samples,** as limma's `lmFit` fits it (see "Missing
+  values" above). The toolkit from 26.9.0, PRISM from the release after dotnet-v26.29.0; before, PRISM
+  tested only complete features and the toolkit dropped a feature whose observed design was singular.
 
 **The intensity trend and limma's `trend=TRUE` are still different estimators** that happen to share
 a name. limma fits a natural cubic spline of `log(s^2)` on mean **log2** expression, one point per
@@ -686,14 +741,13 @@ differs more (median 5-13%), which is the point of a trend prior.
 So: quote which tool, which prior and which version produced a hit list. To compare across tools,
 leave the prior at its default in both (from toolkit 26.9.0), or name the same one in both.
 
-The toolkit's own global prior differs from limma's `fitFDist` in two small ways that do not matter
-on dense proteomics data and could on sparse: it drops zero and negative residual variances from
-the prior fit where limma floors them at `1e-5 * median` and keeps them, and it has no
-single-feature branch (limma returns `df_prior = 0` there).
+One small difference from limma's `fitFDist` remains in the toolkit: it has no single-feature branch
+(limma returns `df_prior = 0` there; the toolkit refuses fewer than two usable features).
 
 **The moderated t's degrees of freedom are capped, as limma caps them.** limma's `eBayes` - and
 PRISM from dotnet-v26.29.0, and the toolkit from 26.9.0 - never gives the t more degrees of freedom
-than the residuals pooled over every feature tested:
+than the residuals pooled over every feature fitted, including one with missing values (its reduced
+df) and one with no estimable contrast (whose variance went into the prior):
 `df.total = pmin(df.residual + df.prior, sum(df.residual))`. Toolkit 26.8.0 and earlier, and the
 PRISM Differential Explorer, use `df.residual + df.prior` uncapped. The two agree whenever `df.prior` is finite and below
 `(features tested - 1) x df.residual`, which on a real cohort of hundreds or thousands of features it
@@ -707,21 +761,21 @@ own `eBayes`, and `toolkit_end_to_end.json` records both p-values for the same t
 
 A default PRISM run and a default toolkit run (26.9.0 or later) choose the same prior: on the
 protein matrix both take limma-trend-intensity-n-peptides from its `n_peptides` column, and on the
-peptide matrix both take limma-trend. So a cross-check of a default run needs no prior setting at
-all - only the pseudocount, and the peptide counts in the data the toolkit is given:
+peptide matrix both take limma-trend. From toolkit 26.9.0 they also share the log, LOWESS,
+zero-variance and missing-value conventions, so a cross-check of a default run needs no setting at
+all - only the peptide counts in the data the toolkit is given:
 
 ```python
 cfg.moderation = None                # the default: chosen by level, as PRISM chooses it
-cfg.log_pseudocount = 0              # PRISM adds none
 # Protein level: include corrected_proteins.parquet's n_peptides column in the data, or the
 # toolkit has no counts and chooses limma-trend. config.peptide_count_column defaults to it.
+# Toolkit 26.8.0 or earlier only: cfg.log_pseudocount = 0 (PRISM adds none).
 ```
 
 For a run of PRISM's deprecated `--prior intensity-trend`:
 
 ```python
 cfg.moderation = "intensity-trend"   # warns: deprecated in the toolkit too
-cfg.log_pseudocount = 0
 # For a prior on the QC/reference injections, as PRISM's intensity trend takes when the run has them:
 cfg.variance_prior_group_column = "sample_type"
 cfg.variance_prior_groups = ["reference", "qc"]

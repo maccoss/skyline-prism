@@ -999,6 +999,21 @@ def gen_intensity_trend() -> None:
         [arm(b, 6, 0.2) + arm(b, 3, 0.2, 1.3) for b in base], 6,
         "6 vs 3: distinguishes the sample-size-weighted combination from an unweighted one")
 
+    # Missing values. A group left with ONE observed value has a mean but no sd, so it places no
+    # point on the trend - but the toolkit still averages the trend's value at that mean into the
+    # feature's prior, with weight 1. A group with none contributes nothing. PRISM skipped the
+    # one-value group until the release after dotnet-v26.29.0, which moved the deprecated prior by
+    # up to 2e-2 in p on data with missing values; this case is what pins it. Appended after the
+    # cases above, so they keep the draws they were generated with.
+    rows = [arm(b, 4, 0.2) + arm(b, 4, 0.2, 1.3) for b in base]
+    nan = float("nan")
+    rows[1][0] = rows[1][1] = rows[1][2] = nan  # feature 1: arm A left with one value
+    rows[3][4:8] = [nan] * 4                    # feature 3: arm B empty
+    rows[5][2] = nan                            # feature 5: one value missing
+    add("missing_values", rows, 4,
+        "4 + 4 with missing values: a group left with one value (averaged in, weight 1), an empty "
+        "group (ignored), and one value missing")
+
     write(
         "intensity_trend.json",
         {

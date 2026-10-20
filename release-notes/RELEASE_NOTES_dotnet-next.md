@@ -43,6 +43,29 @@ as the GitHub Release description and fails if it is missing.
   `docs/differential-analysis.md`.
 - `--prior` now also accepts underscores for the hyphens (`limma_trend`), as the toolkit
   does.
+- **The moderated t fitted proteins with missing values on the samples where they were observed,
+  as limma's `lmFit` fits them, instead of testing only complete proteins.** Skyline exports are
+  complete, but merging documents with different target lists leaves proteins absent from a plate,
+  and every contrast that touched that plate used to drop them. A subject with no value for a protein
+  now drops out of that protein's comparison, which is made on the remaining subjects with fewer
+  residual df; a protein missing a whole arm is not tested but its residual variance still informs the
+  prior, and its df the cap on the t's df (`DifferentialResult.DfPooled`), as in limma. A value that
+  is not finite counts as missing. The run said how many proteins were fitted on fewer samples and
+  how many had no estimable contrast. This applied to the unpaired, paired and trend designs; the
+  blocked design, and the Welch, Student, Mann-Whitney, paired t and Wilcoxon tests, still test only
+  complete proteins. Pinned to R limma 3.66.0 by `limma_ebayes.json` - an arm missing, the reference
+  subject missing from a paired design, whole subjects missing from a within-subject trend - which
+  twin generators write byte for byte the same here and in `proteomics-toolkit`, whose 26.9.0 fits
+  missing values the same way. See "Missing values" in `docs/differential-analysis.md`.
+- **PRISM and `proteomics-toolkit` 26.9.0 shared every convention of the moderated t.** Besides the
+  missing-value fit above, the toolkit dropped its log pseudocount, adopted R's `lowess()` at its
+  default interpolation distance for the peptide-count and intensity-trend priors, and floored zero
+  residual variances as limma does - what PRISM already did. Both tools are now pinned to the same R
+  references: `limma_ebayes.json` for the global and limma-trend priors, the df cap, missing values and
+  zero variances, `limma_trend_intensity_n_peptides.json` for the protein-level default, and the new
+  `lowess.json` (R `lowess()`) for the LOWESS inside the peptide-count and intensity-trend priors,
+  which PRISM's `Lowess.Fit` matches to 2.5e-10. On complete data a default run of either tool gives
+  the same p-values with no setting at all.
 
 ## Bug Fixes
 
@@ -68,6 +91,18 @@ as the GitHub Release description and fails if it is missing.
   log that stopped mid-stage with no reason; it ended with the `Error:` line, and the console said
   where the log was. The log section of `docs/output_files.md`, which still showed the retired
   Python engine's time-stamped format, was rewritten from a real run.
+- **The deprecated intensity-trend prior averaged in a group with one observed value, as
+  `proteomics-toolkit` does.** Such a group places no point on the trend (it has no sd), but the
+  toolkit - the definition of that estimator - averages the trend's value at its mean into the
+  feature's prior with weight 1, and PRISM had skipped it. With missing values that moved the prior
+  and, on a 2,500-protein test set, p by up to 2e-2; `intensity_trend.json` gained a missing-value
+  case, from toolkit v26.8.0. Complete data was unaffected.
+- **The peptide-count prior left out every residual variance at or below limma's floor**
+  (1e-5 x the median), not just exact zeros, from its LOWESS on log peptide count. Replicates that
+  agree exactly give 0 from one least-squares solve and 1e-29 from another; PRISM's QR left the 1e-29,
+  which entered the fit as a log variance of -66 and bent the whole curve, moving p by 4e-3 against
+  `proteomics-toolkit` on a test set with three exactly constant proteins. Both tools now use the
+  same rule.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).
@@ -82,6 +117,11 @@ as the GitHub Release description and fails if it is missing.
   "Show Command Line" names its prior, so one recorded under dotnet-v26.29.0 still reproduces as it
   ran; pass `--prior limma-trend` to get the earlier protein-level default. With too few proteins to
   fit peptide count, the default uses limma-trend and says so; named, the new prior refuses.
+- **Moderated results changed wherever the compared samples had missing values.** Proteins with a
+  missing value were tested (on their observed samples) rather than dropped, so more proteins
+  appeared, the prior was fitted over more of them, and the cap on the t's df counted their reduced df.
+  On complete data nothing changed: the fit is the same computation, and every earlier golden passed
+  unchanged.
 - **The peptide-count priors refuse input that is not protein level instead of running another
   prior.** `--prior peptide-count` without peptide counts, or with too few usable ones, used to run the
   global prior with a message; it now stops with an error, as does the new prior. Both also refuse a

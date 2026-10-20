@@ -263,15 +263,49 @@ public class DifferentialTests
             Differential.Run(BuildMatrix(false), Ids, new[] { 0 }, new[] { 3, 4, 5 }));
     }
 
+    /// <summary>
+    /// A feature with a missing value is fitted on the samples where it was observed, as limma's
+    /// lmFit fits it - not dropped, which is what PRISM did before the release after dotnet-v26.29.0.
+    /// On [1, group] its contrast is the difference of its observed arm means. Pinned against R limma
+    /// by the missing-value cases of limma_ebayes.json.
+    /// </summary>
     [Fact]
-    public void Run_DropsFeaturesWithMissingSelectedValues()
+    public void Run_FitsAFeatureWithAMissingValueOnItsObservedSamples()
     {
         var m = BuildMatrix(false);
         m[5, 4] = double.NaN; // f5 has a missing value in a selected column
         var res = Differential.Run(m, Ids, GroupA, GroupB);
+        Assert.Equal(8, res.NFeaturesTested);
+        Assert.Equal(0, res.NFeaturesDropped);
+
+        var f5 = Assert.Single(res.Rows, r => r.FeatureId == "f5");
+        var a = GroupA.Select(c => m[5, c]).Where(double.IsFinite).Average();
+        var b = GroupB.Select(c => m[5, c]).Where(double.IsFinite).Average();
+        Assert.Equal(b - a, f5.LogFc, 12);
+        Assert.Contains(res.Messages, msg => msg.Contains("fitted on the samples where they were observed",
+            StringComparison.Ordinal));
+        // Its residual df is one short of a complete feature's, and the pool counts exactly that.
+        Assert.Equal(8 * res.DfResidual - 1, res.DfPooled);
+    }
+
+    /// <summary>
+    /// With an arm entirely missing there is no contrast to test, but the feature's residual variance
+    /// is still an estimate of the noise: limma puts it in the prior and its df in the pool, and so does
+    /// PRISM.
+    /// </summary>
+    [Fact]
+    public void Run_AFeatureMissingAWholeArmIsNotTested_ButCountsTowardThePool()
+    {
+        var m = BuildMatrix(false);
+        foreach (var c in GroupA)
+            m[5, c] = double.NaN;
+        var res = Differential.Run(m, Ids, GroupA, GroupB);
         Assert.Equal(7, res.NFeaturesTested);
         Assert.Equal(1, res.NFeaturesDropped);
         Assert.DoesNotContain(res.Rows, r => r.FeatureId == "f5");
+        // Its df: the B samples less the one column (the intercept) they can estimate.
+        Assert.Equal(7 * res.DfResidual + (GroupB.Length - 1), res.DfPooled);
+        Assert.Contains(res.Messages, msg => msg.Contains("no estimable contrast", StringComparison.Ordinal));
     }
 
     /// <summary>

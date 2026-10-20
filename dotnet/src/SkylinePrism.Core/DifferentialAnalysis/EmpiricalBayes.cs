@@ -68,23 +68,50 @@ public static class EmpiricalBayes
     /// </summary>
     public static SqueezeVarResult SqueezeVarGlobal(ReadOnlySpan<double> variances, double dfResidual)
     {
+        if (!(dfResidual > 1e-15) || double.IsInfinity(dfResidual))
+            throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
+        var df = new double[variances.Length];
+        Array.Fill(df, dfResidual);
+        return SqueezeVarGlobal(variances, df);
+    }
+
+    /// <summary>
+    /// <see cref="SqueezeVarGlobal(ReadOnlySpan{double}, double)"/> with a residual df per feature, as
+    /// features with missing values have (<see cref="LinearModel.FitObserved"/>).
+    /// </summary>
+    /// <remarks>
+    /// This is <c>fitFDist</c>'s moment fit over unequal df: each log variance is centered by its own
+    /// <c>digamma(df/2) - log(df/2)</c>, and the sampling variance subtracted is the MEAN of
+    /// <c>trigamma(df/2)</c>. limma 3.58 and later switch to <c>fitFDistUnequalDF1</c> when the df
+    /// differ; this keeps <c>fitFDist</c>, as limma did before 3.58 (<c>eBayes(legacy = TRUE)</c>), as
+    /// <c>proteomics-toolkit</c> does, and as <c>limma_ebayes.json</c>'s missing-value cases pin. With
+    /// every df equal it is the scalar computation exactly. A feature whose df is not positive (one
+    /// that could not be fitted) takes no part in the fit, and its posterior is the prior's when
+    /// <c>d0</c> is infinite and NaN otherwise, as limma's <c>squeezeVar</c> gives it.
+    /// </remarks>
+    public static SqueezeVarResult SqueezeVarGlobal(ReadOnlySpan<double> variances, ReadOnlySpan<double> dfResidual)
+    {
         var n = variances.Length;
         if (n == 0)
             throw new ArgumentException("variances is empty", nameof(variances));
-        if (!(dfResidual > 1e-15) || double.IsInfinity(dfResidual))
-            throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
+        if (dfResidual.Length != n)
+            throw new ArgumentException("dfResidual length must match variances", nameof(dfResidual));
 
         var warnings = new List<string>();
 
-        // fitFDist: keep finite, non-negative variances (x > -1e-15). df is a positive scalar, so its
-        // own ok-check passes for every feature.
+        // fitFDist: keep finite, non-negative variances (x > -1e-15) with a finite df > 1e-15.
         var kept = new double[n];
+        var keptDf = new double[n];
         var nok = 0;
         for (var i = 0; i < n; i++)
         {
             var v = variances[i];
-            if (!double.IsNaN(v) && !double.IsInfinity(v) && v > -1e-15)
-                kept[nok++] = v;
+            var d = dfResidual[i];
+            if (!double.IsNaN(v) && !double.IsInfinity(v) && v > -1e-15 && d > 1e-15 && double.IsFinite(d))
+            {
+                kept[nok] = v;
+                keptDf[nok++] = d;
+            }
         }
 
         double s20, df2;
@@ -128,12 +155,10 @@ public static class EmpiricalBayes
                 if (x[i] < floor)
                     x[i] = floor;
 
-            // Work on log(F). df is a scalar so digamma/trigamma(df/2) are constants.
-            var halfDf = dfResidual / 2.0;
-            var offset = SpecialFunctions.DiGamma(halfDf) - Math.Log(halfDf);
+            // Work on log(F), each value centered by its own df (one constant when the df are shared).
             var e = new double[nok];
             for (var i = 0; i < nok; i++)
-                e[i] = Math.Log(x[i]) - offset;
+                e[i] = Math.Log(x[i]) - LogChiSquareOffset(keptDf[i]);
 
             var emean = NumpyMath.Mean(e);
             var dev2 = new double[nok];
@@ -143,7 +168,7 @@ public static class EmpiricalBayes
                 dev2[i] = d * d;
             }
             var evar = NumpyMath.PairwiseSum(dev2) / (nok - 1);
-            evar -= Trigamma(halfDf);
+            evar -= MeanTrigamma(keptDf.AsSpan(0, nok));
 
             if (evar > 0.0)
             {
@@ -164,11 +189,43 @@ public static class EmpiricalBayes
         for (var i = 0; i < n; i++)
         {
             varPost[i] = dfFinite
-                ? (dfResidual * variances[i] + df2 * s20) / (dfResidual + df2)
+                ? (dfResidual[i] * variances[i] + df2 * s20) / (dfResidual[i] + df2)
                 : s20;
         }
 
         return new SqueezeVarResult(varPost, new[] { s20 }, df2, warnings);
+    }
+
+    /// <summary>
+    /// The expected log of a chi-square variance at <paramref name="df"/> degrees of freedom, relative to
+    /// its log mean: <c>digamma(df/2) - log(df/2)</c>, which fitFDist subtracts from each log variance.
+    /// </summary>
+    private static double LogChiSquareOffset(double df)
+    {
+        var half = df / 2.0;
+        return SpecialFunctions.DiGamma(half) - Math.Log(half);
+    }
+
+    /// <summary>
+    /// fitFDist's sampling variance of a log chi-square, <c>mean(trigamma(df/2))</c>: one trigamma when
+    /// every df is the same, so a shared-design fit is the scalar computation to the bit.
+    /// </summary>
+    private static double MeanTrigamma(ReadOnlySpan<double> df)
+    {
+        var shared = true;
+        for (var i = 1; i < df.Length; i++)
+            if (df[i] != df[0])
+            {
+                shared = false;
+                break;
+            }
+
+        if (shared)
+            return Trigamma(df[0] / 2.0);
+        var values = new double[df.Length];
+        for (var i = 0; i < df.Length; i++)
+            values[i] = Trigamma(df[i] / 2.0);
+        return NumpyMath.Mean(values);
     }
 
     /// <summary>
@@ -189,15 +246,30 @@ public static class EmpiricalBayes
         ReadOnlySpan<double> variances, double dfResidual, double[] varPrior, double dfPrior,
         IReadOnlyList<string>? warnings = null)
     {
+        var df = new double[variances.Length];
+        Array.Fill(df, dfResidual);
+        return SqueezeVarWithScale(variances, df, varPrior, dfPrior, warnings);
+    }
+
+    /// <summary>
+    /// <see cref="SqueezeVarWithScale(ReadOnlySpan{double}, double, double[], double, IReadOnlyList{string})"/>
+    /// with a residual df per feature.
+    /// </summary>
+    public static SqueezeVarResult SqueezeVarWithScale(
+        ReadOnlySpan<double> variances, ReadOnlySpan<double> dfResidual, double[] varPrior, double dfPrior,
+        IReadOnlyList<string>? warnings = null)
+    {
         var n = variances.Length;
         if (varPrior.Length != n)
             throw new ArgumentException("varPrior length must match variances", nameof(varPrior));
+        if (dfResidual.Length != n)
+            throw new ArgumentException("dfResidual length must match variances", nameof(dfResidual));
 
         var varPost = new double[n];
         for (var i = 0; i < n; i++)
             varPost[i] = double.IsInfinity(dfPrior)
                 ? varPrior[i]
-                : (dfPrior * varPrior[i] + dfResidual * variances[i]) / (dfPrior + dfResidual);
+                : (dfPrior * varPrior[i] + dfResidual[i] * variances[i]) / (dfPrior + dfResidual[i]);
 
         return new SqueezeVarResult(varPost, varPrior, dfPrior, warnings ?? Array.Empty<string>());
     }
@@ -225,11 +297,28 @@ public static class EmpiricalBayes
     public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, double dfResidual,
         double[] covariate, double[]? logPeptideCounts = null)
     {
+        if (!(dfResidual > 1e-15) || double.IsInfinity(dfResidual))
+            throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
+        var df = new double[variances.Length];
+        Array.Fill(df, dfResidual);
+        return SqueezeVarTrend(variances, df, covariate, logPeptideCounts);
+    }
+
+    /// <summary>
+    /// <see cref="SqueezeVarTrend(ReadOnlySpan{double}, double, double[], double[])"/> with a residual
+    /// df per feature, as features with missing values have. Each log variance is centered by its own
+    /// df and the sampling variance subtracted is the mean trigamma, as in
+    /// <see cref="SqueezeVarGlobal(ReadOnlySpan{double}, ReadOnlySpan{double})"/>; with every df equal it
+    /// is the scalar computation exactly.
+    /// </summary>
+    public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, ReadOnlySpan<double> dfResidual,
+        double[] covariate, double[]? logPeptideCounts = null)
+    {
         var n = variances.Length;
         if (n == 0)
             throw new ArgumentException("variances is empty", nameof(variances));
-        if (!(dfResidual > 1e-15) || double.IsInfinity(dfResidual))
-            throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
+        if (dfResidual.Length != n)
+            throw new ArgumentException("dfResidual length must match variances", nameof(dfResidual));
         if (covariate.Length != n)
             throw new ArgumentException("covariate length must match variances", nameof(covariate));
         var withCounts = logPeptideCounts is not null;
@@ -240,6 +329,7 @@ public static class EmpiricalBayes
         // counts, refuse, since the global prior would drop them without a word.
         for (var i = 0; i < n; i++)
             if (double.IsNaN(variances[i]) || double.IsInfinity(variances[i]) || variances[i] <= -1e-15
+                || !(dfResidual[i] > 1e-15) || !double.IsFinite(dfResidual[i])
                 || !double.IsFinite(covariate[i]) || (withCounts && !double.IsFinite(logPeptideCounts![i])))
             {
                 if (withCounts)
@@ -271,11 +361,9 @@ public static class EmpiricalBayes
             if (x[i] < floor)
                 x[i] = floor;
 
-        var halfDf = dfResidual / 2.0;
-        var offset = SpecialFunctions.DiGamma(halfDf) - Math.Log(halfDf);
         var e = new double[n];
         for (var i = 0; i < n; i++)
-            e[i] = Math.Log(x[i]) - offset;
+            e[i] = Math.Log(x[i]) - LogChiSquareOffset(dfResidual[i]);
 
         // Fit e on the natural-spline trend; the fitted values are the per-feature trend (emean) and the
         // residual mean square feeds the prior df.
@@ -305,7 +393,7 @@ public static class EmpiricalBayes
 
         // lm.fit's mean(effects[-(1:rank)]^2): the residual mean square on n - rank df, and the design
         // is full rank here (checked above), so the rank is its column count.
-        var evar = rss / (n - d.ColumnCount) - Trigamma(halfDf);
+        var evar = rss / (n - d.ColumnCount) - MeanTrigamma(dfResidual);
 
         double df2;
         var varPrior = new double[n];
@@ -327,7 +415,7 @@ public static class EmpiricalBayes
         var varPost = new double[n];
         for (var i = 0; i < n; i++)
             varPost[i] = dfFinite
-                ? (dfResidual * variances[i] + df2 * varPrior[i]) / (dfResidual + df2)
+                ? (dfResidual[i] * variances[i] + df2 * varPrior[i]) / (dfResidual[i] + df2)
                 : varPrior[i];
 
         return new SqueezeVarResult(varPost, varPrior, df2, Array.Empty<string>());

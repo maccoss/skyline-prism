@@ -148,8 +148,9 @@ public sealed class DifferentialResult
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
         IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0,
         double priorLevel = double.NaN, double blockCorrelation = double.NaN, int subjectsA = 0,
-        int subjectsB = 0, IReadOnlyList<string>? covariatesAdjusted = null)
+        int subjectsB = 0, IReadOnlyList<string>? covariatesAdjusted = null, double dfPooled = double.NaN)
     {
+        DfPooled = double.IsNaN(dfPooled) ? nFeaturesTested * dfResidual : dfPooled;
         CovariatesAdjusted = covariatesAdjusted ?? Array.Empty<string>();
         BlockCorrelation = blockCorrelation;
         SubjectsA = subjectsA;
@@ -182,27 +183,47 @@ public sealed class DifferentialResult
     /// <summary>Total features supplied.</summary>
     public int NFeaturesTotal { get; }
 
-    /// <summary>Features tested (complete across every selected sample).</summary>
+    /// <summary>
+    /// Features tested: those with a contrast estimable from the samples where they were observed. A
+    /// feature with missing values is fitted on its observed samples (<see cref="LinearModel.FitObserved"/>),
+    /// except under the blocked design, which tests only features observed in every selected sample.
+    /// </summary>
     public int NFeaturesTested { get; }
 
-    /// <summary>Features dropped for having a missing value in a selected sample.</summary>
+    /// <summary>
+    /// Features not tested: observed in too few of the selected samples to leave a residual degree of
+    /// freedom, or with no estimable contrast on them (an arm entirely missing) - or, under the blocked
+    /// design, with any missing value.
+    /// </summary>
     public int NFeaturesDropped => NFeaturesTotal - NFeaturesTested;
 
-    /// <summary>Residual degrees of freedom, <c>n_samples - n_coef</c>.</summary>
+    /// <summary>
+    /// Residual degrees of freedom of a feature observed in every selected sample, <c>n_samples - n_coef</c>.
+    /// A feature with missing values has fewer: the observed samples less the design columns they can
+    /// estimate.
+    /// </summary>
     public double DfResidual { get; }
+
+    /// <summary>
+    /// The residual df summed over every feature fitted - limma's <c>sum(df.residual)</c>, the cap on
+    /// <see cref="DfTotal"/>. It counts a feature with no estimable contrast too, since its variance
+    /// went into the prior.
+    /// </summary>
+    public double DfPooled { get; }
 
     /// <summary>Empirical-Bayes prior degrees of freedom. May be <see cref="double.PositiveInfinity"/>.</summary>
     public double DfPrior { get; }
 
     /// <summary>
-    /// The degrees of freedom the moderated t's p-values were computed on:
-    /// <see cref="DfResidual"/> + <see cref="DfPrior"/>, capped at the residual df pooled over the
-    /// features tested, as limma's <c>eBayes</c> caps it - so never infinite, even when
-    /// <see cref="DfPrior"/> is. NaN for the tests that are not moderated.
+    /// The degrees of freedom the moderated t's p-values were computed on, for a feature observed in
+    /// every selected sample: <see cref="DfResidual"/> + <see cref="DfPrior"/>, capped at
+    /// <see cref="DfPooled"/>, as limma's <c>eBayes</c> caps it - so never infinite, even when
+    /// <see cref="DfPrior"/> is. A feature with missing values has its own, from its own residual df.
+    /// NaN for the tests that are not moderated.
     /// </summary>
     public double DfTotal => double.IsNaN(DfResidual)
         ? double.NaN
-        : Differential.CappedDfTotal(DfResidual, DfPrior, NFeaturesTested);
+        : Differential.CappedDfTotal(DfResidual, DfPrior, DfPooled);
 
     /// <summary>Which variance prior was fitted (<c>limma-trend-intensity-n-peptides</c>, <c>limma-trend</c>, <c>global</c>, ...).</summary>
     public string VariancePrior { get; }
@@ -339,8 +360,10 @@ public static class Differential
     /// <summary>
     /// Run the moderated-t contrast on a LOG2 abundance matrix. <paramref name="groupAColumns"/> and
     /// <paramref name="groupBColumns"/> are disjoint column indices into
-    /// <paramref name="exprLog2FeaturesBySamples"/>; only features observed (non-NaN) in every selected
-    /// sample are tested. Optional <paramref name="covariates"/> adjust the contrast.
+    /// <paramref name="exprLog2FeaturesBySamples"/>. A feature with missing values is fitted on the
+    /// samples where it was observed, as limma's lmFit fits it (<see cref="LinearModel.FitObserved"/>),
+    /// and tested if its contrast is estimable there. Optional <paramref name="covariates"/> adjust the
+    /// contrast.
     /// </summary>
     /// <remarks>
     /// This overload offers only two variance priors: <see cref="VariancePrior.LimmaTrend"/> when
@@ -409,7 +432,7 @@ public static class Differential
                     + "matched. " + string.Join(" ", resolved.Messages));
 
             // From here the arms ARE the matched pairs, in a common subject order. Everything
-            // downstream - the design's subject block, the complete-case filter, the per-group means
+            // downstream - the design's subject block, the per-feature fit, the per-group means
             // - then lines up by position, and an unmatched sample cannot leak into one arm only.
             groupAColumns = pairs.Select(pair => pair.AColumn).ToList();
             groupBColumns = pairs.Select(pair => pair.BColumn).ToList();
@@ -594,50 +617,92 @@ public static class Differential
             throw new ArgumentException(
                 "Design matrix is rank-deficient (covariates collinear with each other or with group).");
 
-        // Complete-case filter: a feature is tested only if observed in every selected sample.
-        var tested = new List<int>(nFeatures);
-        for (var f = 0; f < nFeatures; f++)
-        {
-            var complete = true;
-            for (var s = 0; s < nSamples; s++)
-                if (double.IsNaN(exprLog2FeaturesBySamples[f, cols[s]]))
-                {
-                    complete = false;
-                    break;
-                }
-
-            if (complete)
-                tested.Add(f);
-        }
-
-        if (tested.Count == 0)
-            throw new InvalidOperationException("No feature is observed across every selected sample.");
-
-        var nTested = tested.Count;
-        var mk = new double[nTested, nSamples];
-        for (var i = 0; i < nTested; i++)
-        for (var s = 0; s < nSamples; s++)
-            mk[i, s] = exprLog2FeaturesBySamples[tested[i], cols[s]];
-
+        // Fit every feature. Unblocked designs fit a feature with missing values on its observed
+        // samples, as limma's lmFit does (LinearModel.FitObserved): a subject with no value drops out
+        // of that feature's comparison, and a feature with no estimable contrast - an arm entirely
+        // missing - is not tested but still informs the prior and the pooled df. The blocked design
+        // keeps the complete-case filter: limma refits such a feature on the correlation matrix of its
+        // observed samples, which the blocked fit here does not do.
+        var fitted = new List<int>(nFeatures);
+        double[] variances, dfResidual, amean, coefficient, stdevUnscaled;
         var blockCorrelation = double.NaN;
         int subjectsA = 0, subjectsB = 0;
-        LinearModelFit fit;
         if (block is null)
         {
-            fit = LinearModel.Fit(mk, design);
+            var fit = LinearModel.FitObserved(exprLog2FeaturesBySamples, cols, design, coefIdx);
+            for (var f = 0; f < nFeatures; f++)
+                if (fit.DfResidual[f] > 0 && double.IsFinite(fit.Sigma[f]))
+                    fitted.Add(f);
+
+            variances = fitted.Select(f => fit.Sigma[f] * fit.Sigma[f]).ToArray();
+            dfResidual = fitted.Select(f => fit.DfResidual[f]).ToArray();
+            amean = fitted.Select(f => fit.Amean[f]).ToArray();
+            coefficient = fitted.Select(f => fit.Coefficient[f]).ToArray();
+            stdevUnscaled = fitted.Select(f => fit.StdevUnscaled[f]).ToArray();
         }
         else
         {
+            // Complete-case filter: a feature is tested only if observed in every selected sample.
+            for (var f = 0; f < nFeatures; f++)
+            {
+                var complete = true;
+                for (var s = 0; s < nSamples; s++)
+                    if (double.IsNaN(exprLog2FeaturesBySamples[f, cols[s]]))
+                    {
+                        complete = false;
+                        break;
+                    }
+
+                if (complete)
+                    fitted.Add(f);
+            }
+
+            if (fitted.Count == 0)
+                throw new InvalidOperationException("No feature is observed across every selected sample.");
+
+            var mk = new double[fitted.Count, nSamples];
+            for (var i = 0; i < fitted.Count; i++)
+            for (var s = 0; s < nSamples; s++)
+                mk[i, s] = exprLog2FeaturesBySamples[fitted[i], cols[s]];
+
             blockCorrelation = BlockCorrelation(mk, design, block, messages);
-            fit = LinearModel.FitBlocked(mk, design, block, blockCorrelation);
+            var fit = LinearModel.FitBlocked(mk, design, block, blockCorrelation);
             nSubjects = block.Distinct(StringComparer.Ordinal).Count();
             subjectsA = block.Take(nA).Distinct(StringComparer.Ordinal).Count();
             subjectsB = block.Skip(nA).Distinct(StringComparer.Ordinal).Count();
+
+            variances = fit.Sigma.Select(s => s * s).ToArray();
+            dfResidual = Enumerable.Repeat(fit.DfResidual, fitted.Count).ToArray();
+            amean = fit.Amean;
+            coefficient = Enumerable.Range(0, fitted.Count).Select(i => fit.Coefficients[i, coefIdx]).ToArray();
+            stdevUnscaled = Enumerable.Repeat(fit.StdevUnscaled[coefIdx], fitted.Count).ToArray();
         }
 
-        var variances = new double[nTested];
-        for (var i = 0; i < nTested; i++)
-            variances[i] = fit.Sigma[i] * fit.Sigma[i];
+        if (fitted.Count == 0)
+            throw new InvalidOperationException(
+                "No feature is observed in enough of the selected samples to leave a residual degree of freedom.");
+
+        // Say what the missing values did, so a feature fitted on fewer samples - or not tested at
+        // all - is never a silent difference from a complete one.
+        if (block is null)
+        {
+            var withMissing = 0;
+            foreach (var f in fitted)
+                for (var s = 0; s < nSamples; s++)
+                    if (double.IsNaN(exprLog2FeaturesBySamples[f, cols[s]]))
+                    {
+                        withMissing++;
+                        break;
+                    }
+
+            var noContrast = coefficient.Count(c => !double.IsFinite(c));
+            if (withMissing > 0)
+                messages.Add($"{withMissing} feature(s) with missing values were fitted on the samples where "
+                    + "they were observed, as limma's lmFit fits them.");
+            if (noContrast > 0)
+                messages.Add($"{noContrast} feature(s) have no estimable contrast on their observed samples (for "
+                    + "example a whole arm missing): not tested, but their residual variance informs the prior.");
+        }
 
         // A prior that conditions on peptide count is protein level only: refuse anything else, as
         // proteomics-toolkit does, before fitting it (ProteinLevelCounts).
@@ -645,21 +710,25 @@ public static class Differential
             ProteinLevelCounts.Check(options.PeptideCounts, featureIds, options.ResolvedPrior);
 
         var (squeezed, variancePrior, priorLevel) = FitPrior(
-            options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
+            options, exprLog2FeaturesBySamples, priorGroups, variances, dfResidual, amean, fitted, messages,
+            cols);
 
-        var dfTotal = CappedDfTotal(fit.DfResidual, squeezed.DfPrior, nTested);
-        var stdevUnscaled = fit.StdevUnscaled[coefIdx];
+        // limma's sum(df.residual): every feature fitted, including one with no estimable contrast.
+        var dfPooled = NumpyMath.PairwiseSum(dfResidual);
 
-        var pValues = new double[nTested];
-        var rows = new DifferentialRow[nTested];
-        var groupB = new double[nB];
-        var groupA = new double[isTrend ? 0 : nA];
-        for (var i = 0; i < nTested; i++)
+        var rowList = new List<DifferentialRow>(fitted.Count);
+        var pList = new List<double>(fitted.Count);
+        var groupA = new List<double>(nA);
+        var groupB = new List<double>(nB);
+        for (var i = 0; i < fitted.Count; i++)
         {
-            var coef = fit.Coefficients[i, coefIdx];
-            var t = coef / (stdevUnscaled * Math.Sqrt(squeezed.VarPost[i]));
+            var coef = coefficient[i];
+            if (!double.IsFinite(coef))
+                continue;
+
+            var dfTotal = CappedDfTotal(dfResidual[i], squeezed.DfPrior, dfPooled);
+            var t = coef / (stdevUnscaled[i] * Math.Sqrt(squeezed.VarPost[i]));
             var p = ModeratedPValue(t, dfTotal);
-            pValues[i] = p;
 
             // The reported effect. On a trend the coefficient is log2 per unit of x, so it is
             // scaled to the span actually measured; on a two-arm contrast the span is 1 by
@@ -672,34 +741,42 @@ public static class Differential
                 // The fitted line's two ends, centered on the feature's own mean - so their
                 // difference is exactly the reported effect. An intercept-based pair would be the
                 // REFERENCE subject's trajectory under a within-subject design, not the average one.
-                meanA = fit.Amean[i] - effect / 2.0;
-                meanB = fit.Amean[i] + effect / 2.0;
+                meanA = amean[i] - effect / 2.0;
+                meanB = amean[i] + effect / 2.0;
             }
             else
             {
+                // Each arm's mean over the samples where the feature was observed.
+                groupA.Clear();
+                groupB.Clear();
                 for (var s = 0; s < nA; s++)
-                    groupA[s] = mk[i, s];
+                    if (!double.IsNaN(exprLog2FeaturesBySamples[fitted[i], cols[s]]))
+                        groupA.Add(exprLog2FeaturesBySamples[fitted[i], cols[s]]);
                 for (var s = 0; s < nB; s++)
-                    groupB[s] = mk[i, nA + s];
-                meanA = NumpyMath.Mean(groupA);
-                meanB = NumpyMath.Mean(groupB);
+                    if (!double.IsNaN(exprLog2FeaturesBySamples[fitted[i], cols[nA + s]]))
+                        groupB.Add(exprLog2FeaturesBySamples[fitted[i], cols[nA + s]]);
+                meanA = groupA.Count > 0 ? NumpyMath.Mean(groupA.ToArray()) : double.NaN;
+                meanB = groupB.Count > 0 ? NumpyMath.Mean(groupB.ToArray()) : double.NaN;
             }
 
-            rows[i] = new DifferentialRow(
-                featureIds[tested[i]], effect, Math.Pow(2.0, effect), fit.Amean[i], t, p,
-                double.NaN, meanA, meanB);
+            pList.Add(p);
+            rowList.Add(new DifferentialRow(
+                featureIds[fitted[i]], effect, Math.Pow(2.0, effect), amean[i], t, p,
+                double.NaN, meanA, meanB));
         }
 
-        var adj = Fdr.Adjust(pValues, options.Correction);
+        var nTested = rowList.Count;
+        var adj = Fdr.Adjust(pList.ToArray(), options.Correction);
+        var rows = new DifferentialRow[nTested];
         for (var i = 0; i < nTested; i++)
-            rows[i] = rows[i] with { AdjPValue = adj[i] };
+            rows[i] = rowList[i] with { AdjPValue = adj[i] };
 
         var ordered = OrderByPValue(rows);
 
-        return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
+        return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, nSamples - nParams,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
             trendRange, nSubjects, priorLevel, blockCorrelation, subjectsA, subjectsB,
-            DescribeAdjusted(options.Covariates, covariatesUsed));
+            DescribeAdjusted(options.Covariates, covariatesUsed), dfPooled);
     }
 
     /// <summary>
@@ -1367,12 +1444,12 @@ public static class Differential
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name, double Level) FitPrior(
         DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
-        double[] variances, LinearModelFit fit, List<int> tested, List<string> messages,
+        double[] variances, double[] dfResidual, double[] amean, List<int> tested, List<string> messages,
         IReadOnlyCollection<int> fitColumns)
     {
-        // Peptide counts arrive per FEATURE of the input matrix; the fit is over the tested subset,
+        // Peptide counts arrive per FEATURE of the input matrix; the fit is over the fitted subset,
         // so they have to be gathered in the same order or the trend would pair each variance with
-        // another feature's count.
+        // another feature's count. dfResidual is per feature: a feature with missing values has fewer.
         double[]? counts = null;
         if (options.PeptideCounts is { } supplied)
         {
@@ -1400,28 +1477,28 @@ public static class Differential
                 // still run, so it gives way to what limma-trend does with the same data - said here,
                 // so it is not a silent substitution. proteomics-toolkit does the same for a handful of
                 // proteins.
-                if (options.Prior is null && !fit.Amean.All(double.IsFinite))
+                if (options.Prior is null && !amean.All(double.IsFinite))
                 {
                     messages.Add("Mean expression has non-finite values - the default "
                         + "limma-trend-intensity-n-peptides prior is unavailable, so the global prior was used.");
-                    return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
+                    return (EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual), "global", double.NaN);
                 }
 
-                if (options.Prior is null && !EmpiricalBayes.CanFitIntensityAndCounts(fit.Amean, logCounts))
+                if (options.Prior is null && !EmpiricalBayes.CanFitIntensityAndCounts(amean, logCounts))
                 {
                     messages.Add($"Only {tested.Count} proteins have a usable residual variance: too few to "
                         + "fit the default limma-trend-intensity-n-peptides prior, so the default used "
                         + "limma-trend.");
-                    return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
+                    return (EmpiricalBayes.SqueezeVarTrend(variances, dfResidual, amean),
                         "limma-trend", double.NaN);
                 }
 
-                return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean, logCounts),
+                return (EmpiricalBayes.SqueezeVarTrend(variances, dfResidual, amean, logCounts),
                     "limma-trend-intensity-n-peptides", double.NaN);
             }
 
-            case VariancePrior.LimmaTrend when fit.Amean.All(double.IsFinite):
-                return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
+            case VariancePrior.LimmaTrend when amean.All(double.IsFinite):
+                return (EmpiricalBayes.SqueezeVarTrend(variances, dfResidual, amean),
                     "limma-trend", double.NaN);
 
             case VariancePrior.LimmaTrend:
@@ -1468,7 +1545,7 @@ public static class Differential
                     // this design's residuals, because neither source measures the noise the
                     // design is tested against - see WithCalibratedLevel. The source is still named:
                     // it decides the shape, and two results are comparable only on the same one.
-                    var squeezed = WithCalibratedLevel(variances, fit.DfResidual, shape, out var level);
+                    var squeezed = WithCalibratedLevel(variances, dfResidual, shape, out var level);
                     return (squeezed,
                         options.PriorGroupColumns is not null
                             ? "intensity-trend from controls"
@@ -1485,14 +1562,14 @@ public static class Differential
             {
                 var countPrior = VariancePriors.PeptideCountTrend(variances, counts!);
                 if (countPrior is not null)
-                    return (WithGlobalDf(variances, fit.DfResidual, countPrior), "peptide-count", double.NaN);
+                    return (WithGlobalDf(variances, dfResidual, countPrior), "peptide-count", double.NaN);
                 // As proteomics-toolkit refuses: a substituted prior would be a different p-value.
                 throw new ArgumentException(
                     "Too few features carry a usable peptide count to fit the peptide-count prior.");
             }
         }
 
-        return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
+        return (EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual), "global", double.NaN);
     }
 
     /// <summary>
@@ -1536,7 +1613,7 @@ public static class Differential
     /// (<c>peptide_count_prior.json</c>), and a calibrated variant would be a different method under
     /// DEqMS's name.
     /// </remarks>
-    private static SqueezeVarResult WithGlobalDf(double[] variances, double dfResidual, double[] prior)
+    private static SqueezeVarResult WithGlobalDf(double[] variances, double[] dfResidual, double[] prior)
     {
         var global = EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual);
         return EmpiricalBayes.SqueezeVarWithScale(
@@ -1568,7 +1645,7 @@ public static class Differential
     /// </remarks>
     /// <param name="level">The factor the trend was multiplied by.</param>
     private static SqueezeVarResult WithCalibratedLevel(
-        double[] variances, double dfResidual, double[] shape, out double level)
+        double[] variances, double[] dfResidual, double[] shape, out double level)
     {
         var ratio = new double[variances.Length];
         for (var i = 0; i < ratio.Length; i++)
@@ -1590,14 +1667,12 @@ public static class Differential
     /// <remarks>
     /// It binds whenever the prior df is infinite - uncapped, the t would be read off a normal,
     /// claiming more certainty than the residuals hold - and otherwise only when few features are
-    /// tested and the prior df is large. Every tested feature shares one design and the complete-case
-    /// filter, so the pooled df is <paramref name="nTested"/> x <paramref name="dfResidual"/>. limma
-    /// also pools the reduced df of features it fits with missing values; PRISM does not fit those at
-    /// all, so on a matrix with NaNs its cap is the lower of the two - pooled over the features
-    /// actually tested.
+    /// tested and the prior df is large. <paramref name="dfPooled"/> is limma's: the residual df summed
+    /// over every feature fitted, including the reduced df of a feature with missing values and the df
+    /// of one with no estimable contrast, whose variance went into the prior too.
     /// </remarks>
-    internal static double CappedDfTotal(double dfResidual, double dfPrior, int nTested) =>
-        Math.Min(dfResidual + dfPrior, nTested * dfResidual);
+    internal static double CappedDfTotal(double dfResidual, double dfPrior, double dfPooled) =>
+        Math.Min(dfResidual + dfPrior, dfPooled);
 
     private static double ModeratedPValue(double t, double dfTotal)
     {
