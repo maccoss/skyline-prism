@@ -71,7 +71,7 @@ internal static class VariancePriors
     private readonly record struct GroupStat(int Feature, double Mean, double Sd, int N);
 
     /// <summary>
-    /// The toolkit's <c>intensity_trend</c> prior: per-feature prior variance in LOG2 space, or null
+    /// The toolkit's <c>intensity-trend</c> prior: per-feature prior variance in LOG2 space, or null
     /// when there are too few usable points to fit a trend (the caller then falls back to the global
     /// prior and says so).
     /// </summary>

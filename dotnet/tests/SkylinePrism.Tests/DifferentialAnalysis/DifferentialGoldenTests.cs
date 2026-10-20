@@ -405,6 +405,87 @@ public class DifferentialGoldenTests
         }
     }
 
+    public static IEnumerable<object[]> IntensityNPeptidesCases() =>
+        Golden.CaseNames("limma_trend_intensity_n_peptides.json");
+
+    /// <summary>
+    /// <see cref="VariancePrior.LimmaTrendIntensityNPeptides"/> against R limma 3.66.0, built from
+    /// limma's own pieces: lmFit, and fitFDist transcribed with log peptide count as a second
+    /// covariate block (<c>generate_limma_trend_intensity_n_peptides.R</c>), which reproduces limma's
+    /// own <c>eBayes(trend = TRUE)</c> to 1e-12 with the block removed before any case is written.
+    /// proteomics-toolkit's <c>moderation="limma-trend-intensity-n-peptides"</c> is pinned to the same
+    /// file - the two generators write it byte for byte - so passing here and there is how the two tools
+    /// are held to the same numbers.
+    /// </summary>
+    /// <remarks>
+    /// The tolerance is <see cref="Differential_MatchesLimmaEBayes_IncludingItsDfTotalCap"/>'s: 1e-9 on
+    /// the prior df, t and p wherever the prior df is finite, because d0 comes out of a Newton solve
+    /// stopped at a 1e-8 relative step, and 1e-12 where it is infinite and nothing iterative remains.
+    /// The count block enters the same least-squares fit, so it changes neither. On a trend the
+    /// reported effect is the slope scaled to the span (<see cref="DifferentialResult.TrendRange"/>),
+    /// so the fixture's per-unit slope is scaled before it is compared.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(IntensityNPeptidesCases))]
+    public void LimmaTrendIntensityNPeptides_MatchesTheLimmaTranscription(string name)
+    {
+        var c = Golden.Case("limma_trend_intensity_n_peptides.json", name);
+        var expr = Golden.Mat(c, "expr");
+        var nFeatures = expr.GetLength(0);
+        var nSamples = expr.GetLength(1);
+        var featureIds = Enumerable.Range(0, nFeatures).Select(i => $"F{i}").ToArray();
+        var counts = c.GetProperty("n_peptides").EnumerateArray().Select(e => (double)e.GetInt32()).ToArray();
+        var options = new DifferentialOptions
+        {
+            Prior = VariancePrior.LimmaTrendIntensityNPeptides,
+            PeptideCounts = counts,
+            Correction = MultipleTesting.None,
+        };
+
+        string[] Labels(string prop) => c.GetProperty(prop).EnumerateArray().Select(e => e.GetString()!).ToArray();
+        int[] Where(string[] labels, string value) =>
+            Enumerable.Range(0, labels.Length).Where(j => labels[j] == value).ToArray();
+
+        var analysis = c.GetProperty("analysis_type").GetString();
+        DifferentialResult res = analysis switch
+        {
+            "unpaired" => Differential.Run(expr, featureIds, Where(Labels("group"), "A"),
+                Where(Labels("group"), "B"), options),
+            "paired" => Differential.Run(expr, featureIds, Where(Labels("time"), "Pre"),
+                Where(Labels("time"), "Post"),
+                options with { Design = DifferentialDesign.Paired, SubjectLabels = Labels("subject") }),
+            _ => Differential.RunTrend(expr, featureIds, Enumerable.Range(0, nSamples).ToArray(),
+                Golden.Vec(c, "time"), options with { Design = DifferentialDesign.LinearTrend }),
+        };
+
+        Assert.Equal("limma-trend-intensity-n-peptides", res.VariancePrior);
+        var dfPrior = Golden.Num(c, "df_prior");
+        var tol = double.IsPositiveInfinity(dfPrior) ? 1e-12 : 1e-9;
+        Golden.Close(Golden.Vec(c, "df_residual")[0], res.DfResidual, 1e-15, $"{name}/df_residual");
+        Golden.Close(dfPrior, res.DfPrior, 1e-9, $"{name}/df_prior");
+        Golden.Close(Golden.Vec(c, "df_total")[0], res.DfTotal, tol, $"{name}/df_total");
+        var byId = res.Rows.ToDictionary(r => r.FeatureId, StringComparer.Ordinal);
+        var scale = analysis == "linear_trend" ? res.TrendRange : 1.0;
+        var logfc = Golden.Vec(c, "logfc");
+        var t = Golden.Vec(c, "t");
+        var p = Golden.Vec(c, "p");
+        // logFC and t come out of the least-squares fit, which R solves by QR and both tools by QR or
+        // a normal-equations solve: a few ulps of the data. A coefficient near zero (one case builds
+        // exact zeros) is a difference of two values near 20, so these are held to 1e-10 absolute plus
+        // 1e-10 relative, as the toolkit's test holds them, rather than to a relative bound an effect
+        // of 1e-16 could never meet.
+        static void Near(double expected, double actual, string what) =>
+            Assert.True(Math.Abs(actual - expected) <= 1e-10 + 1e-10 * Math.Abs(expected),
+                $"{what}: expected {expected:R}, actual {actual:R}");
+        for (var i = 0; i < nFeatures; i++)
+        {
+            var row = byId[$"F{i}"];
+            Near(logfc[i] * scale, row.LogFc, $"{name}/F{i}/logFC");
+            Near(t[i], row.T, $"{name}/F{i}/t");
+            Golden.Close(p[i], row.PValue, tol, $"{name}/F{i}/p");
+        }
+    }
+
     // ------------------------------------------------------------------------------------
     // Fisher exact  vs  scipy.stats.fisher_exact
     // ------------------------------------------------------------------------------------

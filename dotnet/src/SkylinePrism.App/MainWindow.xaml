@@ -852,13 +852,20 @@
                                         <TextBlock x:Name="DiffPriorLabel" Text="Prior:" Margin="0,10,0,3" Foreground="#555" />
                                         <ComboBox x:Name="DiffPriorCombo"
                                         SelectionChanged="OnDiffPriorChanged"
-                                        ToolTip="Variance prior for the moderated-t (Volcano and Enrichment). 'Intensity trend (limma)' is the default: limma's trend=TRUE, a curve of each feature's residual variance against its mean log2 intensity, fitted to this contrast's own residuals - so it follows whatever mix of technical and biological variance the design leaves, and is calibrated at every intensity. The status line, results CSV and report call it limma-trend. 'Global' is one prior for every feature. 'Intensity trend, toolkit (deprecated)' is proteomics-toolkit's moderation='intensity_trend', kept to reproduce earlier results: its shape comes from the QC/reference pools, which carry technical variance only, so it is optimistic for bright features and conservative for dim ones. Quote which prior produced a hit list.">
-                                        <!-- Index 0 is the default (LoadDifferentialAsync selects it). -->
+                                        ToolTip="Variance prior for the moderated-t (Volcano and Enrichment). 'Default' chooses by level, as the CLI and proteomics-toolkit do: 'Intensity and peptide count (limma)' for the protein matrix, which carries each protein's peptide count, and 'Intensity trend (limma)' for peptides. 'Intensity trend (limma)' is limma's trend=TRUE, a curve of each feature's residual variance against its mean log2 intensity, fitted to this contrast's own residuals - so it follows whatever mix of technical and biological variance the design leaves, and is calibrated at every intensity. 'Intensity and peptide count (limma)' adds the protein's log peptide count as a second covariate, because at the same intensity a protein measured by more peptides varies less; protein level only. The status line, results CSV and report call them limma-trend and limma-trend-intensity-n-peptides. 'Global' is one prior for every feature. 'Intensity trend, toolkit (deprecated)' is proteomics-toolkit's moderation='intensity-trend', kept to reproduce earlier results: its shape comes from the QC/reference pools, which carry technical variance only, so it is optimistic for bright features and conservative for dim ones. Quote which prior produced a hit list.">
+                                        <!-- Index 0 is the default (LoadDifferentialAsync selects it): no
+                                        prior named, so Core chooses by level exactly as the CLI and
+                                        proteomics-toolkit do. UpdateDiffControls rewrites its text to
+                                        say which prior that is for the loaded matrix. -->
+                                        <ComboBoxItem x:Name="DiffPriorDefaultItem" Tag="Default">Default (by level)</ComboBoxItem>
+                                        <!-- Needs n_peptides, so collapsed at peptide level like the
+                                        peptide-count prior below. -->
+                                        <ComboBoxItem x:Name="DiffPriorIntensityNPeptidesItem" Tag="LimmaTrendIntensityNPeptides">Intensity and peptide count (limma)</ComboBoxItem>
                                         <ComboBoxItem Tag="LimmaTrend">Intensity trend (limma)</ComboBoxItem>
                                         <ComboBoxItem Tag="Global">Global</ComboBoxItem>
-                                        <!-- Both need n_peptides, which only the protein matrix has, so
-                                        UpdateDiffControls collapses and disables them at peptide
-                                        level rather than offering a prior that cannot be fitted. -->
+                                        <!-- Both count priors need n_peptides, which only the protein
+                                        matrix has, so UpdateDiffControls collapses and disables them at
+                                        peptide level rather than offering a prior that cannot be fitted. -->
                                         <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount">Peptide count</ComboBoxItem>
                                         <!-- Last, and labeled deprecated: kept so earlier results can be
                                         reproduced, and the only prior "from controls" applies to. -->
