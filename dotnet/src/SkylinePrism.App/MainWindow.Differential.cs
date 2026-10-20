@@ -849,9 +849,10 @@ public partial class MainWindow
         ShowTest(DiffPriorPeptideCountItem, hasCounts);
         ShowTest(DiffPriorIntensityNPeptidesItem, hasCounts);
         // The default item says which prior it resolves to for the loaded matrix. Text only: no
-        // selection changes, so no handler runs.
+        // selection changes, so no handler runs. Short enough for the closed combo: "Default:
+        // intensity and peptide count (limma)" was cut off at "(limi" in the launched pane.
         DiffPriorDefaultItem.Content = hasCounts
-            ? "Default: intensity and peptide count (limma)"
+            ? "Default: intensity + peptide count"
             : "Default: intensity trend (limma)";
         if (DiffPriorCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {

@@ -488,8 +488,8 @@ it, grouped in the order you decide them: **Compare** (the design: Unpaired, Pai
 subject), **Level**, **Comparison** (the samples: Group by and the arms, or the trend axis and
 restriction), **Hits** (the significance rule), and **Method** (test, prior, covariates, correction).
 **Method** is folded away by default because its defaults are the right ones for most analyses, but its
-current state is always shown underneath in one line - `Moderated t; default: intensity and peptide
-count (limma); Benjamini-Hochberg` - so you can see what ran without opening it. The button at the top right of the
+current state is always shown underneath in one line - `Moderated t; default: intensity + peptide
+count; Benjamini-Hochberg` - so you can see what ran without opening it. The button at the top right of the
 settings column hides the whole column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
 Detection, Enrichment) is a set of tabs above the plot, beside **Quant report...**. Every setting reruns
 the contrast as you change it; there is no Run button.
@@ -559,7 +559,7 @@ are strongly correlated — the dependence BH's assumptions do not cover.
 
 | Prior | What it fits |
 |---|---|
-| **Default** | Chooses by level, as `prism differential` and `proteomics-toolkit` do, and says which: **Default: intensity and peptide count (limma)** on the protein matrix, which carries each protein's peptide count, and **Default: intensity trend (limma)** at peptide level. With too few proteins to fit peptide count, the protein default uses the intensity trend and the status line says so. |
+| **Default** | Chooses by level, as `prism differential` and `proteomics-toolkit` do, and says which: **Default: intensity + peptide count** on the protein matrix, which carries each protein's peptide count, and **Default: intensity trend (limma)** at peptide level. With too few proteins to fit peptide count, the protein default uses the intensity trend and the status line says so. |
 | **Intensity and peptide count (limma)** | limma-trend with the protein's log peptide count as a second covariate: each protein's residual variance is fitted against a spline of its mean **log2** intensity plus a spline of log peptide count, all on the contrast's own residuals. At the same intensity a protein measured by more peptides varies less, and limma's intensity trend alone, blind to that, is optimistic for few-peptide proteins and conservative for many. This prior is calibrated in both directions and fits the largest prior *degrees of freedom*, which matters most in small designs. Protein level only, so it is hidden at peptide level. The CLI and the toolkit call it `limma-trend-intensity-n-peptides`; see "At protein level: intensity and peptide count" in [`differential-analysis.md`](differential-analysis.md). |
 | **Intensity trend (limma)** | limma's `trend=TRUE` (`limma-trend`): a natural cubic spline of each feature's residual variance against its mean **log2** intensity, fitted to the contrast's own residuals, which also re-estimates the prior *degrees of freedom*. It follows whatever mix of technical and biological variance the design leaves, so it is calibrated at every intensity. The default at peptide level. |
 | **Global** | One prior for every feature - Smyth (2004). |
