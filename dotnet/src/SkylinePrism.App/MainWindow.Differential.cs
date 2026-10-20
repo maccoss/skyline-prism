@@ -30,8 +30,13 @@ public partial class MainWindow
         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
     };
 
+    /// <summary>
+    /// Columns PRISM writes into sample_metadata.csv itself, never a default to group by. The
+    /// acquisition columns are unique per run, and they come straight after the resolved ones, so
+    /// without them here every document with Skyline's Acquired Time defaulted to acquired_time.
+    /// </summary>
     private static readonly HashSet<string> ReservedMetaColumns =
-        new(StringComparer.Ordinal) { "sample", "sample_type", "batch" };
+        new(StringComparer.Ordinal) { "sample", "sample_type", "batch", "acquired_time", "run_order" };
 
     /// <summary>
     /// Marker sizes for the scatter views (Volcano and the two Detection plots), the significant
@@ -1178,20 +1183,36 @@ public partial class MainWindow
             $"{ds.SampleIds.Length} samples. Pick the arms to contrast; it runs as you choose.";
     }
 
-    /// <summary>Prefer the first non-reserved metadata column with at least two values; else sample_type.</summary>
-    private static string? DefaultContrastColumn(DifferentialDataset ds)
+    /// <summary>
+    /// The column the Differential and Markers panes group by when they open a run: the first
+    /// non-reserved column with at least two values, one of them shared by two samples; else
+    /// sample_type.
+    /// </summary>
+    /// <remarks>
+    /// A column with no value shared by two samples - a well, a barcode, a time - cannot form an arm
+    /// of two, so as a default it only opens the pane on an error. Blanks are not a shared value.
+    /// </remarks>
+    private static string? DefaultContrastColumn(DifferentialDataset ds) =>
+        DefaultContrastColumn(ds.MetadataColumns, ds.MetadataValues);
+
+    /// <inheritdoc cref="DefaultContrastColumn(DifferentialDataset)"/>
+    internal static string? DefaultContrastColumn(IReadOnlyList<string> columns, Func<string, string?[]> valuesOf)
     {
-        foreach (var col in ds.MetadataColumns)
+        foreach (var col in columns)
         {
             if (ReservedMetaColumns.Contains(col))
                 continue;
-            var distinct = ds.MetadataValues(col).Where(v => !string.IsNullOrEmpty(v)).Distinct().Count();
-            if (distinct >= 2)
+            var counts = valuesOf(col)
+                .Where(v => !string.IsNullOrEmpty(v))
+                .GroupBy(v => v, StringComparer.Ordinal)
+                .Select(g => g.Count())
+                .ToList();
+            if (counts.Count >= 2 && counts.Any(n => n >= 2))
                 return col;
         }
 
-        return ds.MetadataColumns.FirstOrDefault(c => c == "sample_type")
-            ?? ds.MetadataColumns.FirstOrDefault();
+        return columns.FirstOrDefault(c => c == "sample_type")
+            ?? columns.FirstOrDefault();
     }
 
     private void PopulateDiffGroupValues()
