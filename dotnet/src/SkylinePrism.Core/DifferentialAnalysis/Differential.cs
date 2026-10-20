@@ -204,7 +204,7 @@ public sealed class DifferentialResult
         ? double.NaN
         : Differential.CappedDfTotal(DfResidual, DfPrior, NFeaturesTested);
 
-    /// <summary>Which variance prior was fitted (<c>global</c>, <c>intensity_trend</c>, ...).</summary>
+    /// <summary>Which variance prior was fitted (<c>limma-trend-intensity-n-peptides</c>, <c>limma-trend</c>, <c>global</c>, ...).</summary>
     public string VariancePrior { get; }
 
     /// <summary>
@@ -346,7 +346,8 @@ public static class Differential
     /// This overload offers only two variance priors: <see cref="VariancePrior.LimmaTrend"/> when
     /// <paramref name="trend"/> is true and the global prior otherwise. The others, including the
     /// deprecated <see cref="VariancePrior.IntensityTrend"/> and <see cref="VariancePrior.PeptideCount"/>,
-    /// are selected through <see cref="DifferentialOptions.Prior"/>, whose default is limma-trend.
+    /// are selected through <see cref="DifferentialOptions.Prior"/>, whose default is chosen by level
+    /// (<see cref="DifferentialOptions.ResolvedPrior"/>).
     /// </remarks>
     public static DifferentialResult Run(
         double[,] exprLog2FeaturesBySamples,
@@ -637,6 +638,11 @@ public static class Differential
         var variances = new double[nTested];
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
+
+        // A prior that conditions on peptide count is protein level only: refuse anything else, as
+        // proteomics-toolkit does, before fitting it (ProteinLevelCounts).
+        if (DifferentialTokens.UsesPeptideCounts(options.ResolvedPrior))
+            ProteinLevelCounts.Check(options.PeptideCounts, featureIds, options.ResolvedPrior);
 
         var (squeezed, variancePrior, priorLevel) = FitPrior(
             options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
@@ -1352,9 +1358,12 @@ public static class Differential
     }
 
     /// <summary>
-    /// The variance prior the options asked for, with the name to report it under. Falls back to the
-    /// global prior - saying so in <paramref name="messages"/> - whenever the requested one cannot be
-    /// fitted, because a silently substituted prior is a silently different p-value.
+    /// The variance prior the options asked for - or, with none named, the one the level calls for
+    /// (<see cref="DifferentialOptions.ResolvedPrior"/>) - with the name to report it under. Where it
+    /// cannot be fitted, limma-trend and the deprecated intensity trend fall back to the global prior
+    /// and the default falls back as limma-trend would, each saying so in <paramref name="messages"/>,
+    /// because a silently substituted prior is a silently different p-value. A peptide-count prior
+    /// that was named refuses instead: its substitute would be a different p-value under its name.
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name, double Level) FitPrior(
         DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
@@ -1372,16 +1381,45 @@ public static class Differential
                 counts[i] = tested[i] < supplied.Count ? supplied[tested[i]] : double.NaN;
         }
 
-        var needsCounts = options.Prior is VariancePrior.PeptideCount;
-        if (needsCounts && counts is null)
-        {
-            messages.Add("This prior needs a peptide count per feature, which only the protein-level "
-                + "matrix carries - the global prior was used instead.");
-            return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
-        }
+        // Chosen by level when none was asked for (DifferentialOptions.ResolvedPrior). The count priors'
+        // input was checked before the fit (ProteinLevelCounts); they refuse rather than fall back.
+        var prior = options.ResolvedPrior;
+        if (DifferentialTokens.UsesPeptideCounts(prior) && counts is null)
+            throw new ArgumentException(
+                $"The {DifferentialTokens.Prior(prior)} prior needs a peptide count per feature, which only "
+                + "the protein-level matrix carries.");
 
-        switch (options.Prior)
+        switch (prior)
         {
+            case VariancePrior.LimmaTrendIntensityNPeptides:
+            {
+                var logCounts = new double[counts!.Length];
+                for (var i = 0; i < logCounts.Length; i++)
+                    logCounts[i] = Math.Log(counts[i]);
+                // Named, it refuses what it cannot fit (SqueezeVarTrend throws). As the DEFAULT it must
+                // still run, so it gives way to what limma-trend does with the same data - said here,
+                // so it is not a silent substitution. proteomics-toolkit does the same for a handful of
+                // proteins.
+                if (options.Prior is null && !fit.Amean.All(double.IsFinite))
+                {
+                    messages.Add("Mean expression has non-finite values - the default "
+                        + "limma-trend-intensity-n-peptides prior is unavailable, so the global prior was used.");
+                    return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global", double.NaN);
+                }
+
+                if (options.Prior is null && !EmpiricalBayes.CanFitIntensityAndCounts(fit.Amean, logCounts))
+                {
+                    messages.Add($"Only {tested.Count} proteins have a usable residual variance: too few to "
+                        + "fit the default limma-trend-intensity-n-peptides prior, so the default used "
+                        + "limma-trend.");
+                    return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
+                        "limma-trend", double.NaN);
+                }
+
+                return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean, logCounts),
+                    "limma-trend-intensity-n-peptides", double.NaN);
+            }
+
             case VariancePrior.LimmaTrend when fit.Amean.All(double.IsFinite):
                 return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
                     "limma-trend", double.NaN);
@@ -1399,7 +1437,7 @@ public static class Differential
                 // them. So it degrades to the global prior and says how to get a real one back.
                 messages.Add("The intensity-trend prior (deprecated) needs sample groups to take a "
                     + "within-group variance from, and a trend design has none - the global prior was used. "
-                    + "limma-trend, the default, needs no groups.");
+                    + "The default priors need no groups.");
                 break;
 
             case VariancePrior.IntensityTrend:
@@ -1409,7 +1447,7 @@ public static class Differential
                 messages.Add("The intensity-trend prior is deprecated: its shape comes from other samples "
                     + "than this contrast's residuals, which tilts it by intensity - shaped on the "
                     + "QC/reference pools it is optimistic for bright features and conservative for dim "
-                    + "ones. limma-trend, the default, fits its curve to the residuals themselves. See "
+                    + "ones. The default priors fit their curves to the residuals themselves. See "
                     + "docs/differential-analysis.md.");
                 // The prior is cleanest when its samples take no part in the fit - the usual case,
                 // since control injections carry no timepoint and no study condition. They CAN
@@ -1445,12 +1483,12 @@ public static class Differential
 
             case VariancePrior.PeptideCount:
             {
-                var prior = VariancePriors.PeptideCountTrend(variances, counts!);
-                if (prior is not null)
-                    return (WithGlobalDf(variances, fit.DfResidual, prior), "peptide-count", double.NaN);
-                messages.Add("Too few features carry a usable peptide count to fit the trend - the "
-                    + "global prior was used instead.");
-                break;
+                var countPrior = VariancePriors.PeptideCountTrend(variances, counts!);
+                if (countPrior is not null)
+                    return (WithGlobalDf(variances, fit.DfResidual, countPrior), "peptide-count", double.NaN);
+                // As proteomics-toolkit refuses: a substituted prior would be a different p-value.
+                throw new ArgumentException(
+                    "Too few features carry a usable peptide count to fit the peptide-count prior.");
             }
         }
 

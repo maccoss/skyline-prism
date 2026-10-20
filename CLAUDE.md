@@ -1176,8 +1176,9 @@ amounts, so their CVs need not improve together). It caught both reversions abov
   `--prior-from-controls` / `--prior-from-groups`, the pane's "from controls" box and
   `ControlSampleTypes.PriorGroups`' role in the differential. Do **not** reopen "a more general source
   for the prior's shape" (the toolkit's free-text `variance_prior_group_column`): the measurements in
-  `docs/differential-analysis.md` ("Why limma-trend is the default") show the source itself is the
-  problem - no set of OTHER samples has the residuals' mix of technical and biological variance.
+  `docs/differential-analysis.md` ("Why limma-trend replaced the intensity trend") show the source
+  itself is the problem - no set of OTHER samples has the residuals' mix of technical and biological
+  variance.
 - Per-batch RT models with cross-validation
 - Quality-weighted protein rollup
 - directLFQ (see below)
@@ -1254,14 +1255,25 @@ directLFQ is a protein quantification algorithm that offers linear O(n) runtime 
    > of 10,494 peptides, duplicated, in front of every reader of the glob. `Open` checks the directory
    > against the `_manifest.json` every merge writes (or, for an older merge, the row count in
    > `merged_data.cache.json`) and refuses one that does not match.
-7. **The default moderated-t prior is limma-trend** (measured). An intensity-dependent prior is wanted,
-   and limma-trend is the one whose curve comes from the residuals the test uses. The lab's intensity
-   trend took its shape from the QC/reference pools, and was calibrated on average but tilted by
-   intensity - optimistic for bright features, conservative for dim - because the pools carry
-   technical variance only. Its design-group variant tilts the other way in paired designs.
-   `docs/differential-analysis.md` ("Why limma-trend is the default") has the real and simulated
-   nulls. **Check a prior's calibration BY INTENSITY, not overall**: the overall rate was 5% the whole
-   time, and every earlier calibration check measured only that.
+7. **The default moderated-t prior is chosen by level, exactly as `proteomics-toolkit` chooses it**
+   (measured). On the protein matrix, which carries `n_peptides`, it is
+   `limma-trend-intensity-n-peptides`; on the peptide matrix, `limma-trend`. Both fit their curves to
+   the residuals the test uses. The lab's intensity trend took its shape from the QC/reference pools,
+   and was calibrated on average but tilted by intensity - optimistic for bright features,
+   conservative for dim - because the pools carry technical variance only. Its design-group variant
+   tilts the other way in paired designs. At protein level limma-trend alone tilts by peptide count
+   (a protein's measurement noise averages down over its peptides; its biology does not), and DEqMS
+   tilts by intensity; the two-covariate prior is flat both ways. `docs/differential-analysis.md`
+   ("Why limma-trend replaced the intensity trend", "At protein level: intensity and peptide count")
+   has the real and simulated nulls. **Check a prior's calibration BY INTENSITY and, at protein level,
+   BY PEPTIDE COUNT - not overall**: the overall rate was 5% the whole time, and every earlier
+   calibration check measured only that.
+
+   The two tools share the prior names (`DifferentialTokens.Prior` gives the toolkit's `MODERATIONS`,
+   less its deprecated, toolkit-only `intensity-peptide-trend`) and one golden, `limma_trend_intensity_n_peptides.json`, written byte for byte the same by twin R
+   generators in the two repositories. Change a case in both or in neither. The count priors refuse
+   anything that is not protein level (`ProteinLevelCounts`) rather than fall back; only the DEFAULT,
+   with too few proteins to fit peptide count, uses limma-trend - and says so.
 
 > [!CAUTION]
 > **DuckDB.NET has three defaults that will silently cost you memory or correctness.** All three were

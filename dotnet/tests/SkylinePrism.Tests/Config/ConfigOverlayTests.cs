@@ -211,6 +211,45 @@ public class ConfigOverlayTests
     }
 
     /// <summary>
+    /// A key with no value is the same as leaving it out, so over a provenance it keeps the earlier
+    /// run's value - not the built-in default, and not the false or 0 YamlDotNet would bind a blank
+    /// to. A null where null is the key's own default still sets it, which is how an override drops a
+    /// database.
+    /// </summary>
+    [Fact]
+    public void Overlay_AKeyWithNoValue_KeepsTheBasesValue()
+    {
+        var config = PrismConfig.Parse("""
+            sample_annotations:
+              reference_pattern: [Ref]
+            batch_correction:
+              enabled: false
+            transition_rollup:
+              min_transitions: 1
+            parsimony:
+              fasta_path: a.fasta
+            """);
+
+        var applied = config.Overlay("""
+            sample_annotations:
+              reference_pattern:
+              #  - Pool
+            batch_correction:
+              enabled:
+            transition_rollup:
+              min_transitions:
+            parsimony:
+              fasta_path: null
+            """);
+
+        Assert.Equal(new[] { "parsimony.fasta_path" }, applied);
+        Assert.Equal(new[] { "Ref" }, config.SampleAnnotations.ReferencePattern);
+        Assert.False(config.BatchCorrection.Enabled);
+        Assert.Equal(1, config.TransitionRollup.MinTransitions);
+        Assert.Null(config.Parsimony.FastaPath);
+    }
+
+    /// <summary>
     /// A file that touches nothing in the base changes nothing in it - not even the nested
     /// library_assist block, which is cleared only when the YAML touches transition_rollup.
     /// </summary>

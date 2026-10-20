@@ -65,6 +65,10 @@ public class CliIntegrationTests
     private static int Run(string outDir)
         => Invoke("run", "-i", Input1, Input2, "-o", outDir, "-c", Config).Code;
 
+    /// <summary>The prism_run_*.log a run wrote into <paramref name="outDir"/>.</summary>
+    private static string RunLog(string outDir)
+        => File.ReadAllText(Assert.Single(Directory.GetFiles(outDir, "prism_run_*.log")));
+
     [Fact]
     public void Run_ProducesExpectedOutputs()
     {
@@ -605,6 +609,9 @@ public class CliIntegrationTests
     /// since the CLI refuses --adjust-for without the moderated t.</item>
     /// <item><c>two-clinical</c>: a second clinical CSV attached on top of the first; the recorded
     /// command must carry both.</item>
+    /// <item><c>default-prior</c>: no prior named. On this fixture's three proteins the protein-level
+    /// default cannot fit peptide count and runs limma-trend instead, so the command must record
+    /// limma-trend - naming the default's first choice would refuse on replay.</item>
     /// </list>
     /// <para>Enrichment is off on both sides: g:Profiler answers from its current database, so its
     /// output is not something a byte comparison could hold still.</para>
@@ -614,6 +621,7 @@ public class CliIntegrationTests
     [InlineData("paired")]
     [InlineData("welch-stale-covariate")]
     [InlineData("two-clinical")]
+    [InlineData("default-prior")]
     public void Differential_Report_FromTheButtonsRequest_IsReproducedByItsRecordedCommand(string scenario)
     {
         var outDir = TempDir();
@@ -647,16 +655,17 @@ public class CliIntegrationTests
             var arms = ContrastArms.Resolve(ds.MetadataValues("Diagnosis"), new[] { "Control" }, new[] { "AD" });
             Assert.True(arms.Ok);
             var age = new[] { Covariate.FromMetadata("Age", ds.MetadataValues("Age")) };
+            var byDefault = scenario == "default-prior";
             var options = new DifferentialOptions
             {
                 Design = paired ? DifferentialDesign.Paired : DifferentialDesign.Unpaired,
                 Test = scenario == "welch-stale-covariate" ? DifferentialTest.WelchT : DifferentialTest.ModeratedT,
-                Prior = VariancePrior.IntensityTrend,
+                Prior = byDefault ? null : VariancePrior.IntensityTrend,
                 Correction = paired ? MultipleTesting.Holm : MultipleTesting.BenjaminiHochberg,
                 SubjectLabels = paired ? ds.MetadataValues("Subject") : null,
                 Covariates = paired ? null : age,
                 PeptideCounts = ds.PeptideCounts,
-                PriorGroupColumns = ControlSampleTypes.PriorGroups(ds.MetadataValues("sample_type")),
+                PriorGroupColumns = byDefault ? null : ControlSampleTypes.PriorGroups(ds.MetadataValues("sample_type")),
                 MinPerGroup = 2,
             };
             var panel = SkylinePrism.Core.Qc.ProteinListSet.Load().WithBuiltIns()
@@ -691,6 +700,13 @@ public class CliIntegrationTests
             }
             if (scenario == "two-clinical")
                 Assert.Equal(2, recorded.Count(a => a == "--clinical"));
+            if (byDefault)
+            {
+                Assert.Equal("limma-trend", guiReport.Differential.VariancePrior);
+                Assert.Contains(guiReport.Differential.Messages,
+                    m => m.Contains("so the default used limma-trend", StringComparison.Ordinal));
+                Assert.Equal("limma-trend", recorded[Array.IndexOf(recorded, "--prior") + 1]);
+            }
 
             var (code, output) = Invoke(recorded);
             Assert.True(code == 0, output);
@@ -703,12 +719,26 @@ public class CliIntegrationTests
 
             static string Untimed(string html) =>
                 Regex.Replace(html, @"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", "<time>");
+            // The one difference allowed: the button's report says why its default ran limma-trend,
+            // and the replay, which names limma-trend, has nothing to explain. Nothing else may differ.
+            string WithoutFallbackNote(string html)
+            {
+                if (!byDefault)
+                    return html;
+                var note = "<li>" + guiReport.Differential.Messages.Single(m =>
+                    m.Contains("so the default used limma-trend", StringComparison.Ordinal)) + "</li>";
+                Assert.Contains(note, html, StringComparison.Ordinal);
+                return html.Replace(note, string.Empty, StringComparison.Ordinal)
+                    .Replace("<div class=\"notes\"><strong>Notes</strong><ul></ul></div>", string.Empty,
+                        StringComparison.Ordinal);
+            }
+
             foreach (var file in guiFiles)
             {
                 var gui = Path.Combine(guiDir, file!);
                 var cli = Path.Combine(cliDir, file!);
                 if (file!.EndsWith(".html", StringComparison.Ordinal))
-                    Assert.True(Untimed(File.ReadAllText(gui)) == Untimed(File.ReadAllText(cli)),
+                    Assert.True(Untimed(WithoutFallbackNote(File.ReadAllText(gui))) == Untimed(File.ReadAllText(cli)),
                         $"{file} differs between the button's report and its recorded command's");
                 else
                     Assert.True(File.ReadAllBytes(gui).AsSpan().SequenceEqual(File.ReadAllBytes(cli)),
@@ -838,7 +868,21 @@ public class CliIntegrationTests
             foreach (var c in Enum.GetValues<MultipleTesting>())
                 Accepted(With(twoArm, "--correction", DifferentialTokens.Correction(c)));
             foreach (var p in Enum.GetValues<VariancePrior>())
-                Accepted(With(twoArm, "--prior", DifferentialTokens.Prior(p)));
+            {
+                var args = With(twoArm, "--prior", DifferentialTokens.Prior(p));
+                if (!DifferentialTokens.UsesPeptideCounts(p))
+                {
+                    Accepted(args);
+                    continue;
+                }
+
+                // The count priors need more proteins than this 3-protein fixture has, and refuse rather
+                // than substitute another prior. What this test owns is that the WORD is understood.
+                var (code, output) = Invoke(args);
+                Assert.DoesNotContain("Unknown --prior", output);
+                Assert.True(code == 0 || output.Contains("oo few", StringComparison.Ordinal),
+                    $"refused for another reason: {string.Join(" ", args)}\n{output}");
+            }
             foreach (var l in Enum.GetValues<FeatureLevel>())
                 Accepted(With(twoArm, "--level", DifferentialTokens.Level(l)));
 
@@ -946,10 +990,12 @@ public class CliIntegrationTests
     }
 
     /// <summary>
-    /// The default prior is limma-trend. The deprecated intensity trend is still there to reproduce
-    /// earlier results: with <c>--prior intensity-trend</c> it takes its shape from the control
-    /// replicates by default, says so, and says it is deprecated - and --prior-from-groups takes the
-    /// shape from the contrast groups instead.
+    /// The default prior is chosen by level: at protein level, limma-trend with peptide count - but this
+    /// fixture has three proteins, too few to fit both covariates, so the default uses limma-trend and
+    /// says so rather than refusing or substituting in silence. The deprecated intensity trend is still
+    /// there to reproduce earlier results: with <c>--prior intensity-trend</c> it takes its shape from
+    /// the control replicates by default, says so, and says it is deprecated - and --prior-from-groups
+    /// takes the shape from the contrast groups instead.
     /// </summary>
     /// <remarks>
     /// The source sets the trend's shape and its level is fitted to the residuals either way, so the
@@ -958,7 +1004,7 @@ public class CliIntegrationTests
     /// the default can carry one - but noted, not silently ignored.
     /// </remarks>
     [Fact]
-    public void Differential_DefaultsToLimmaTrend_AndTheIntensityTrendStillNamesItsSource()
+    public void Differential_DefaultIsChosenByLevel_AndTheIntensityTrendStillNamesItsSource()
     {
         var outDir = TempDir();
         try
@@ -972,7 +1018,19 @@ public class CliIntegrationTests
 
             var byDefault = Invoke(Args()).Output;
             Assert.Contains("moderated t (limma-trend prior)", byDefault, StringComparison.Ordinal);
+            Assert.Contains("too few to fit the default limma-trend-intensity-n-peptides prior", byDefault,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("deprecated", byDefault, StringComparison.Ordinal);
+            // Named, the same prior refuses the three proteins rather than run something else.
+            var named = Invoke(Args("--prior", "limma-trend-intensity-n-peptides"));
+            Assert.NotEqual(0, named.Item1);
+            Assert.Contains("too few to fit a prior on intensity and peptide count", named.Output,
+                StringComparison.Ordinal);
+            // At peptide level there are no peptide counts: the default is limma-trend, with no note.
+            var peptides = Invoke(Args("--level", "peptide")).Output;
+            Assert.Contains("moderated t (limma-trend prior)", peptides, StringComparison.Ordinal);
+            Assert.DoesNotContain("too few", peptides, StringComparison.Ordinal);
+            Assert.NotEqual(0, Invoke(Args("--level", "peptide", "--prior", "limma-trend-intensity-n-peptides")).Item1);
 
             var stale = Invoke(Args("--prior-from-groups")).Output;
             Assert.Contains("--prior-from-groups applies only to --prior intensity-trend", stale, StringComparison.Ordinal);
@@ -1164,6 +1222,77 @@ public class CliIntegrationTests
             (_, output) = Invoke("run", "-i", Input1, Input2, "-o", Path.Combine(root, "out2"),
                 "--from-provenance", provenance, "-c", other);
             Assert.Contains(note, output, StringComparison.Ordinal);
+            // ... and the run log keeps it, which is the record once the console has scrolled away.
+            Assert.Contains(note, RunLog(Path.Combine(root, "out2")), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>
+    /// A config key PRISM ignores is recorded in the run log as well as on stderr, with a plain
+    /// <c>-c</c> and with one applied over a provenance.
+    /// </summary>
+    /// <remarks>
+    /// The warning is said while the config is read, before the log exists, and up to
+    /// dotnet-v26.29.0 it went to stderr only. A scripted run that discards stderr then left a log
+    /// that read as though every setting had been honored.
+    /// </remarks>
+    [Fact]
+    public void Run_RecordsConfigWarningsInTheRunLog()
+    {
+        var root = TempDir();
+        try
+        {
+            const string warning = "config key 'transition_rolup' is not recognized";
+            var config = Path.Combine(root, "config.yaml");
+            File.WriteAllText(config, File.ReadAllText(Config) + "\ntransition_rolup:\n  min_transitions: 2\n");
+            var first = Path.Combine(root, "first");
+
+            var (code, output) = Invoke("run", "-i", Input1, Input2, "-o", first, "-c", config);
+            Assert.Equal(0, code);
+            Assert.Contains(warning, output, StringComparison.Ordinal);
+            Assert.Contains(warning, RunLog(first), StringComparison.Ordinal);
+
+            var overrides = Path.Combine(root, "overrides.yaml");
+            File.WriteAllText(overrides, "transition_rolup:\n  min_transitions: 2\n");
+            var second = Path.Combine(root, "second");
+            (code, _) = Invoke("run", "-i", Input1, Input2, "-o", second,
+                "--from-provenance", Path.Combine(first, "parameters.json"), "-c", overrides);
+            Assert.Equal(0, code);
+            Assert.Contains(warning, RunLog(second), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>
+    /// A run that fails records why in its log, and says where that log is.
+    /// </summary>
+    /// <remarks>
+    /// The error is printed by Main's catch, to stderr. Without this a failed run's log simply
+    /// stopped mid-stage, and a run whose stderr was discarded left no record of what went wrong.
+    /// </remarks>
+    [Fact]
+    public void Run_ThatFails_RecordsTheErrorInTheRunLog()
+    {
+        var root = TempDir();
+        try
+        {
+            var notAReport = Path.Combine(root, "not-a-report.csv");
+            File.WriteAllText(notAReport, "a,b\n1,2\n");
+            var outDir = Path.Combine(root, "out");
+
+            var (code, output) = Invoke("run", "-i", notAReport, "-o", outDir, "-c", Config);
+
+            Assert.Equal(1, code);
+            var error = Assert.Single(output.Split('\n'), l => l.StartsWith("Error: ", StringComparison.Ordinal));
+            Assert.Contains(error.TrimEnd('\r'), RunLog(outDir), StringComparison.Ordinal);
+            Assert.Contains("Run log: ", output, StringComparison.Ordinal);
         }
         finally
         {

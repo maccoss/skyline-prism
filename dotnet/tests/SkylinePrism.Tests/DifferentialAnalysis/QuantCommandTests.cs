@@ -135,9 +135,17 @@ public class QuantCommandTests
         Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }),
             out var byDefault, out _));
         var list = byDefault.ToList();
-        Assert.Equal(VariancePrior.LimmaTrend, new DifferentialOptions().Prior);
+        // The default names no prior; the command names the one it resolves to, so a re-run reproduces
+        // it even if the default moves. Without peptide counts that is limma-trend...
+        Assert.Null(new DifferentialOptions().Prior);
         Assert.Equal("limma-trend", list[list.IndexOf("--prior") + 1]);
         Assert.DoesNotContain("--prior-from-groups", list);
+        // ...and with them - the protein-level matrix - limma-trend with peptide count.
+        var withCounts = new DifferentialOptions { PeptideCounts = new double[] { 1, 2, 3 } };
+        Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }, withCounts),
+            out var proteinDefault, out _));
+        var proteinList = proteinDefault.ToList();
+        Assert.Equal("limma-trend-intensity-n-peptides", proteinList[proteinList.IndexOf("--prior") + 1]);
 
         var fromGroups = new DifferentialOptions { Prior = VariancePrior.IntensityTrend };
         Assert.True(QuantCommand.TryArguments(Request("out", new[] { "qc" }, new[] { "experimental" }, fromGroups),

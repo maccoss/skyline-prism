@@ -154,6 +154,21 @@ public static class QuantAnalysis
     }
 
     /// <summary>
+    /// <paramref name="options"/> with the default prior pinned to the one that actually ran, for the
+    /// recorded command.
+    /// </summary>
+    /// <remarks>
+    /// A default whose first choice cannot be fitted runs another prior and says so: on a handful of
+    /// proteins limma-trend-intensity-n-peptides gives way to limma-trend. Named, that first choice
+    /// refuses the same data, so a command recording <see cref="DifferentialOptions.ResolvedPrior"/>
+    /// would fail on replay. A prior the caller named is left alone - it reproduces its own fallback.
+    /// </remarks>
+    internal static DifferentialOptions AsRun(DifferentialOptions options, DifferentialResult res) =>
+        options.Prior is null && DifferentialTokens.ParsePrior(res.VariancePrior) is { } ran
+            ? options with { Prior = ran }
+            : options;
+
+    /// <summary>
     /// Refuse a restriction that names a column the run does not have, or a value that column never
     /// holds.
     /// </summary>
@@ -412,7 +427,10 @@ public static class QuantAnalysis
         // quietly run something else.
         IReadOnlyList<string>? commandArgs = null;
         string? commandLine = null;
-        if (QuantCommand.TryArguments(request, options, out var args, out var noCommand))
+        // The default's prior pinned to the one that ran, here and in quant_parameters' prior: what a
+        // re-run has to pass to get these numbers.
+        var asRun = AsRun(options, res);
+        if (QuantCommand.TryArguments(request, asRun, out var args, out var noCommand))
         {
             commandArgs = args;
             // Rendered from the arguments just resolved, not by resolving the request again, so the
@@ -429,7 +447,7 @@ public static class QuantAnalysis
             Contrast: contrast,
             Design: DifferentialTokens.Design(options.Design),
             Test: DifferentialTokens.Test(options.Test),
-            Prior: DifferentialTokens.Prior(options.Prior),
+            Prior: DifferentialTokens.Prior(asRun.ResolvedPrior),
             PriorUsed: res.VariancePrior,
             Correction: DifferentialTokens.Correction(options.Correction),
             Covariates: res.CovariatesUsed,
