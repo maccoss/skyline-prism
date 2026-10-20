@@ -52,14 +52,18 @@ transition_rollup:
   topn_selection: "correlation"  # correlation | intensity (correlation needs Shape Correlation)
   topn_weighting: "sqrt"         # sqrt | sum
   use_ms1: false
-  # For method: library_assist (Skyline .blib). A nested `library_assist:` block with the same
-  # keys (library_path, min_matched_fragments, mz_tolerance, outlier_threshold, remove_outliers)
-  # is also accepted. fitting_method is median_polish only (least_squares is not ported).
+  # For method: library_assist (Skyline .blib, or a Carafe/DIA-NN .tsv). A nested `library_assist:`
+  # block with the same keys (library_path, min_matched_fragments, mz_tolerance, outlier_threshold,
+  # remove_outliers, fitting_method, noise_sigma) is also accepted.
   # library_path: null
   # library_min_fragments: 3
   # library_mz_tolerance: 0.02
-  # library_outlier_threshold: 1.0
-  # library_remove_outliers: true   # iteratively drop interference fragments before scaling
+  # library_outlier_threshold: 1.0      # a fragment above (1 + this) x its library prediction may be interference
+  # library_remove_outliers: true       # iteratively drop interference fragments before scaling
+  # library_fitting_method: "noise_gated_ratio"   # noise_gated_ratio | median_polish (the earlier default)
+  # library_noise_sigma: 3.0            # noise_gated_ratio: drop a fragment only when its excess is also
+  #                                     # more than this many SDs of the cohort's measured fragment noise
+  #                                     # (from the reference/QC pools); 0 = ratio test alone
 
 # Peptide normalization: "rt_lowess" (default), "median", "quantile", "vsn", or "none".
 global_normalization:

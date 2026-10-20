@@ -38,7 +38,8 @@ public sealed class TransitionRollup
     public sealed record Result(int NPeptides, int NFiltered, IReadOnlyList<string> Samples);
 
     private sealed record PeptideResult(
-        string Pep, long Nt, double Rt, double[] Vals, List<(string Tid, double[] Res)>? Residuals);
+        string Pep, long Nt, double Rt, double[] Vals, List<(string Tid, double[] Res)>? Residuals,
+        List<PrecisionRow>? Precision = null, int Matched = 0);
 
     public static Result Run(
         MergedDataset dataset,
@@ -120,6 +121,8 @@ public sealed class TransitionRollup
             }
 
             sink.FlushAll();
+            if (isLibrary && cfg.PrecisionPath is not null)
+                LibraryAssistPrecision.Write(cfg.PrecisionPath, sink.Precision);
             return new Result((int)sink.NPeptides, nFiltered, samples);
         }
         finally
@@ -426,8 +429,9 @@ public sealed class TransitionRollup
 
     /// <summary>
     /// Library-assisted per-peptide rollup: impute to LINEAR, group transitions by precursor
-    /// charge, match each to the library by product m/z, median-polish fit per charge, sum charge
-    /// abundances (LINEAR), then log2.
+    /// charge, match each to the library by product m/z, fit each charge (noise-gated ratio, or the
+    /// original median of log ratios), sum charge abundances (LINEAR), then log2. With the
+    /// noise-gated fit and replicate pools, also the peptide's precision check in each pool.
     /// </summary>
     private static PeptideResult? ProcessPeptideLibrary(
         PeptideBlock block,
@@ -490,6 +494,12 @@ public sealed class TransitionRollup
 
         var final = new double[nSamples];
         var hasValue = new bool[nSamples];
+        var retained = new double[nSamples];
+        var kept = new double[nSamples];
+        var matched = 0;
+        var precisionCheck = cfg.LibraryFitting == LibraryFitting.NoiseGatedRatio
+            && cfg.PrecisionGroups is { Count: > 0 }
+            && cfg.LibraryNoise is { HasExpectedCv: true };
         foreach (var charge in charges)
         {
             var idxs = new List<int>();
@@ -508,26 +518,114 @@ public sealed class TransitionRollup
                     obs[r, b] = linear[idxs[r], b];
             }
 
-            var abund = LibraryRollup.RollupCharge(
-                library, block.Peptide, charge, mz, obs,
-                cfg.LibraryMinFragments, cfg.LibraryMzTolerance, cfg.LibraryOutlierThreshold,
-                cfg.LibraryRemoveOutliers);
+            if (cfg.LibraryFitting == LibraryFitting.MedianPolish)
+            {
+                var abund = LibraryRollup.RollupCharge(
+                    library, block.Peptide, charge, mz, obs,
+                    cfg.LibraryMinFragments, cfg.LibraryMzTolerance, cfg.LibraryOutlierThreshold,
+                    cfg.LibraryRemoveOutliers);
+                for (var b = 0; b < nSamples; b++)
+                {
+                    var val = abund[b];
+                    if (!double.IsNaN(val) && val > 0)
+                    {
+                        final[b] += val;
+                        hasValue[b] = true;
+                    }
+                }
+                continue;
+            }
+
+            // noise_gated_ratio. The fit sees the same floored values SumRollup sums; the RAW areas
+            // (zeros as 0) are what the retained signal is counted from - only the precision check
+            // reads it, so it is built only when there is one.
+            double[,]? raw = null;
+            if (precisionCheck)
+            {
+                raw = new double[idxs.Count, nSamples];
+                for (var r = 0; r < idxs.Count; r++)
+                    for (var b = 0; b < nSamples; b++)
+                        raw[r, b] = CleanArea(matrix[idxs[r], b]);
+            }
+            var lib = LibraryRollup.MatchFragments(
+                library, block.Peptide, charge, mz, cfg.LibraryMzTolerance, out var nMatched);
+            if (lib is null)
+            {
+                // Not in the library: a plain sum, as the median fit does, with every fragment kept.
+                for (var b = 0; b < nSamples; b++)
+                {
+                    double acc = 0, rawAcc = 0;
+                    var any = false;
+                    for (var r = 0; r < idxs.Count; r++)
+                    {
+                        var v = obs[r, b];
+                        if (!double.IsNaN(v) && v > 0)
+                        {
+                            acc += v;
+                            any = true;
+                        }
+                        if (raw is not null)
+                            rawAcc += raw[r, b];
+                    }
+                    if (any)
+                    {
+                        final[b] += acc;
+                        hasValue[b] = true;
+                    }
+                    retained[b] += rawAcc;
+                    kept[b] += idxs.Count;
+                }
+                matched += idxs.Count;
+                continue;
+            }
+            if (nMatched < cfg.LibraryMinFragments)
+                continue;
+            matched += nMatched;
+
+            var fit = LibraryRollup.NoiseGatedRatio(
+                obs, lib, cfg.LibraryMinFragments, cfg.LibraryOutlierThreshold, cfg.LibraryNoiseSigma,
+                cfg.LibraryNoise is { HasNoise: true } noise ? noise.SdAt : null,
+                cfg.LibraryRemoveOutliers, retainedSource: raw);
             for (var b = 0; b < nSamples; b++)
             {
-                var val = abund[b];
-                if (!double.IsNaN(val) && val > 0)
+                var val = fit.Abundance[b];
+                if (!double.IsFinite(val))
+                    continue;
+                if (val > 0)
                 {
                     final[b] += val;
                     hasValue[b] = true;
                 }
+                retained[b] += fit.Retained[b];
+                kept[b] += fit.Kept[b];
             }
         }
 
         var vals = new double[nSamples];
         for (var b = 0; b < nSamples; b++)
             vals[b] = hasValue[b] ? Math.Log2(final[b]) : double.NaN;
-        return new PeptideResult(block.Peptide, nt, meanRt, vals, null);
+
+        List<PrecisionRow>? precision = null;
+        if (precisionCheck
+            && cfg.PrecisionGroups is { } groups
+            && cfg.LibraryNoise is { } curve)
+        {
+            var abundance = new double[nSamples];
+            var signal = new double[nSamples];
+            for (var b = 0; b < nSamples; b++)
+            {
+                abundance[b] = hasValue[b] ? final[b] : double.NaN;
+                for (var a = 0; a < nt; a++)
+                    signal[b] += CleanArea(matrix[a, b]);
+            }
+            precision = groups
+                .Select(g => LibraryAssistPrecision.Row(g.Name, g.SampleIndices, abundance, retained, kept, signal, curve))
+                .ToList();
+        }
+        return new PeptideResult(block.Peptide, nt, meanRt, vals, null, precision, matched);
     }
+
+    private static double CleanArea(double v) => double.IsNaN(v) ? 0.0 : Math.Max(v, 0.0);
 
     // ParseChargeOrDefault and TransitionId used to live here, composing the id and parsing the charge
     // from three string columns on every transition row. Both moved into the reader's SQL, where they
@@ -556,6 +654,9 @@ public sealed class TransitionRollup
 
         public long NPeptides { get; private set; }
 
+        /// <summary>The precision check's rows, in output (peptide) order. Small: peptides x pools.</summary>
+        public List<(string Peptide, int Matched, PrecisionRow Row)> Precision { get; } = new();
+
         public PeptideStreamSink(StreamingWideWriter pep, StreamingWideWriter? res, int nSamples, int flush)
         {
             _pep = pep;
@@ -579,6 +680,9 @@ public sealed class TransitionRollup
             for (var s = 0; s < _nSamples; s++)
                 _bSamp[s].Add(r.Vals[s]);
             NPeptides++;
+            if (r.Precision is not null)
+                foreach (var row in r.Precision)
+                    Precision.Add((r.Pep, r.Matched, row));
 
             if (_res is not null && r.Residuals is not null)
             {

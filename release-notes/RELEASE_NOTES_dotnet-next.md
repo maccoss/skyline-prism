@@ -6,6 +6,28 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **Library assist kept its resistance to interference and lost most of its noise: its default fit
+  removes a fragment as interference only when the excess is beyond the cohort's measured fragment
+  noise, and every peptide's precision is checked against the signal the fit kept.** On
+  FLARE-Extended (93 runs, 7 reference + 7 QC pool injections) protein within-subject SD fell from
+  0.965 to 0.556 (sum: 0.502) and protein QC CV from 30.2% to 20.8% (sum: 19.3%). Under synthetic
+  interference on one fragment of 30% of peptides, proteins with most of their peptides hit kept 88% of
+  their fold change against sum's 79%, and the interfered peptides 91% against sum's 75% - while
+  sum's CVs *improved*, because an interferent that is the same in every pool injection reads as
+  signal. The new `library_fitting_method: noise_gated_ratio`, the default for `method:
+  library_assist`, fits each sample's scale as kept fragment signal over library intensity and removes
+  a fragment only when it is above twice its prediction and more than `library_noise_sigma` (default 3)
+  SDs of fragment noise at that predicted area. The noise is measured within the reference and QC
+  pools before the fit - across all samples when no pool has 3 injections - and saved as
+  `library_assist_noise.json` and in `parameters.json`; it took 5 s on FLARE. The earlier fit was 43%
+  noisier than the signal it kept allowed: at low intensity noise alone pushed fragments past twice
+  their prediction, so it removed fragments that were not interfered. The new
+  `library_assist_precision.csv` and the QC report's "Library-Assist Precision" section compare each
+  peptide's pool CV with what a sum of fragments achieves at the signal the fit kept: the median was
+  1.02 (reference) and 0.96 (QC) on FLARE, and about 1.0 in every intensity fifth, but peptides whose
+  fit kept 4 or fewer fragments ran at 1.1-1.5. Pinned to a first-principles golden,
+  `library_assist/noise_gated.json`, and a new cohort digest. See "Library-Assisted Rollup" in
+  `docs/methods.md`.
 - **The QC report shows peak quality in acquisition order, so a degraded or different run stands
   out across a cohort.** The new "Peak Quality by Acquisition Order" section scores Skyline's own
   shape correlation, isotope dot product, retention time and FWHM for every precursor in every run, as
@@ -119,6 +141,11 @@ as the GitHub Release description and fails if it is missing.
   which entered the fit as a log variance of -66 and bent the whole curve, moving p by 4e-3 against
   `proteomics-toolkit` on a test set with three exactly constant proteins. Both tools now use the
   same rule.
+- Corrected documentation that contradicted the code, with no change to any output. `docs/methods.md`
+  described the retired Python engine's library-assist fit (least squares with MAD z-scores, an R²
+  and output fields C# never had, and matching by ion type); it now describes the two fits PRISM has.
+  `README.md` and `docs/parameters.md` called median polish the default transition rollup, which has
+  been `sum`.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/output_files.md`
   and `SPECIFICATION.md` listed a `Coeluting` column the bundled `Skyline-PRISM` report has never exported,
   and `docs/output_files.md` omitted the `Background` column it does export (nothing reads it).
@@ -127,6 +154,12 @@ as the GitHub Release description and fails if it is missing.
 
 ## Breaking Changes
 
+- **`method: library_assist` gave different numbers by default.** `library_fitting_method` now
+  defaults to `noise_gated_ratio` (above), in the CLI and in the Skyline tool alike. Set
+  `library_fitting_method: median_polish` to reproduce an earlier library-assist run. An earlier run's
+  `parameters.json` names the fit it used, so `--from-provenance` on it still reproduces it as it ran.
+  A noise-gated run's transition rollup also depends on which samples are reference and QC pools, so
+  re-typing a pool injection re-runs it.
 - **Default protein-level moderated p-values changed.** A `prism differential` or Differential pane run
   at protein level with no prior named now uses `limma-trend-intensity-n-peptides` instead of
   `limma-trend`. Peptide-level results are unchanged. A command recorded by the quant report or

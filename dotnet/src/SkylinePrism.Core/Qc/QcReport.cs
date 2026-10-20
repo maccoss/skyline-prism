@@ -95,11 +95,13 @@ public static partial class QcReport
             ? RenderPeakQualitySection(outputDir, runConfig, sampleTypes, savePlots, plotsDir, log)
             : null;
 
+        var libraryAssist = RenderLibraryAssistSection(outputDir, runConfig);
+
         var html = BuildHtml(
             outputDir, sampleCols.Count, sampleTypes,
             pepRaw.RowCount, protRaw.RowCount,
             pepRef, pepQc, protRef, protQc, peptidePlots, proteinPlots, signalPlots, peakQuality,
-            validation, runConfig, runInfo);
+            libraryAssist, validation, runConfig, runInfo);
 
         var htmlPath = Path.Combine(outputDir, "qc_report.html");
         File.WriteAllText(htmlPath, html);
@@ -251,6 +253,7 @@ public static partial class QcReport
         CvMetrics.BeforeAfter? protRef, CvMetrics.BeforeAfter? protQc,
         List<PlotSection> peptidePlots, List<PlotSection> proteinPlots,
         List<PlotSection> signalPlots, PeakQualitySection? peakQuality,
+        LibraryAssistSection? libraryAssist,
         ValidationStatus? validation, PrismConfig config, Provenance.RunInfo? runInfo)
     {
         // One reading for the whole page: rendering a large cohort's plots takes seconds, and a header
@@ -329,6 +332,8 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         AppendSections(sb, peptidePlots);
         sb.Append("<div class=\"section-header\">Protein-Level QC</div>");
         AppendSections(sb, proteinPlots);
+        if (libraryAssist is not null)
+            AppendLibraryAssist(sb, libraryAssist);
         // Beside ion accounting: both describe the runs as acquired, before any processing.
         if (peakQuality is not null)
             AppendPeakQuality(sb, peakQuality, sampleTypes);

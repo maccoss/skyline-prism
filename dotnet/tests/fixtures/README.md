@@ -37,6 +37,18 @@ per-quantity reference and tolerance table.
 regeneration, and regenerate only the case in question - running a whole generator can silently
 rewrite its other fixtures from nothing more than a library version difference.
 
+## `library_assist/` - the noise-gated ratio fit
+
+`noise_gated.json`, from `library_assist/generate.py`, pins library assist's noise-gated ratio fit
+(`LibraryRollup.NoiseGatedRatio`), the fragment-noise and expected-CV curves (`FragmentNoise.Estimate`),
+their lookups, and the per-peptide precision row (`LibraryAssistPrecision.Row`). There is no outside
+implementation of this method, so it is a **first-principles construction** (option 3 in CLAUDE.md):
+the generator's docstring writes the definitions out, and they are computed with plain Python loops and
+`math` - numpy only for seeded draws and `numpy.median`. Tolerance 1e-12 relative: everything is
+closed-form arithmetic summed in the same order. Fine-bin membership is discrete, so the generator
+refuses any cell within 1e-9 of a bin edge rather than let a 1-ulp difference move it.
+`uv run dotnet/tests/fixtures/library_assist/generate.py` rewrites it (only numpy is pinned).
+
 ## `mini/merge/`
 Tiny byte-faithful slices of two real plate exports (`mini_plate1.csv`, `mini_plate2.csv`
 = header + first 2000 data rows of the corresponding
@@ -154,7 +166,11 @@ sample identifiers.
 
 2.5 MB, subset from the cohort's own 572 MB BiblioSpec library to the 385 reference spectra that match
 the 327 fixture peptides, with `RefSpectraPeaks`, `Modifications` and `RetentionTimes` cut to those
-spectra and the file `VACUUM`ed. It drives the `library-assist` case.
+spectra and the file `VACUUM`ed. It drives the `library-assist` case (the earlier `median_polish` fit,
+named explicitly so it keeps pinning that path) and the `library-assist-noise-gated` case (the default
+`noise_gated_ratio` fit, with the fragment noise measured within the fixture's 16 reference and 16 QC
+injections). The two differ only in the fit, and 1344 of their 1379 digest columns differ - every
+quantity column; the 35 that match are identifiers and metadata.
 
 Anonymized like the parquet: `SpectrumSourceFiles.fileName` carried the same `.raw` replicate
 identifiers and is rewritten to `S###.raw`, and `LibInfo.libLSID` named the study so it is replaced with
@@ -174,7 +190,7 @@ still looks valid:
   really ran. Comparing against the production default instead would have proved nothing, since that
   case also changes the normalizer.
 - **Read the `#` header line.** Every digest records `peptides=`/`proteins=`/`samples=`/`batches=`, so a
-  method that silently dropped most peptides shows up in the diff. All eleven cases report 327 peptides
+  method that silently dropped most peptides shows up in the diff. All twelve cases report 327 peptides
   and 51 proteins.
 
 ## `mini/*/quantities.sha256` - the bit-exact regression gate

@@ -79,7 +79,123 @@ public class CohortRegressionTests
         new object[] { "norm-quantile" },
         new object[] { "no-combat" },
         new object[] { "library-assist" },
+        new object[] { "library-assist-noise-gated" },
     };
+
+    /// <summary>
+    /// The noise-gated library fit on a real cohort: it measures fragment noise within the reference
+    /// and QC pools, writes the precision check, records the curve in parameters.json, and the QC report
+    /// shows the section in a form Panorama accepts. The quantities themselves are pinned bit-exactly by
+    /// the <c>library-assist-noise-gated</c> case above; this checks everything around them.
+    /// </summary>
+    [Fact]
+    public void NoiseGatedLibraryAssist_MeasuresPoolNoise_WritesPrecisionCheck_AndRecordsIt()
+    {
+        var cohort = Fixtures.Path2("cohort");
+        var config = PrismConfig.Load(Path.Combine(cohort, "library-assist-noise-gated", "config.yaml"));
+        config.TransitionRollup.LibraryPath = Path.Combine(cohort, config.TransitionRollup.LibraryPath!);
+        config.QcReport.Enabled = true;
+        config.QcReport.PeakQuality = false;
+
+        var tempOut = Path.Combine(Path.GetTempPath(), "prism_cohort_noise_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var inputs = SeedMergedData(cohort, tempOut, config);
+            var metadata = new[]
+            {
+                Path.Combine(cohort, "Batch1.metadata.csv"),
+                Path.Combine(cohort, "Batch2.metadata.csv"),
+            };
+            var log = new List<string>();
+            var result = PrismPipeline.Run(inputs, tempOut, config, metadata, log.Add);
+
+            var curve = Core.Library.FragmentNoiseCurve.Load(
+                Path.Combine(tempOut, Core.Library.FragmentNoiseCurve.FileName));
+            Assert.NotNull(curve);
+            Assert.Equal(Core.Library.FragmentNoiseCurve.PoolReplicates, curve!.Source);
+            Assert.Equal(
+                new[] { ("reference", 16), ("qc", 16) },
+                curve.Groups.Select(g => (g.Name, g.Injections)));
+            Assert.True(curve.HasNoise && curve.HasExpectedCv);
+            Assert.Contains(log, l => l.Contains("Fragment noise: measured within 16 reference + 16 qc pool injections"));
+
+            var rows = Core.Library.LibraryAssistPrecision.Read(
+                Path.Combine(tempOut, Core.Library.LibraryAssistPrecision.FileName));
+            var byGroup = rows.GroupBy(r => r.Row.Group).ToDictionary(g => g.Key, g => g.ToList());
+            Assert.Equal(new[] { "qc", "reference" }, byGroup.Keys.OrderBy(k => k, StringComparer.Ordinal));
+            Assert.Equal(result.NPeptides, byGroup["reference"].Count);
+            Assert.Equal(result.NPeptides, byGroup["qc"].Count);
+            // Not a calibration claim on 327 peptides - a sanity check that the comparison is on the
+            // right scale: the median peptide is neither ten times better nor ten times worse than its
+            // kept signal allows.
+            var ratios = rows.Select(r => r.Row.Ratio).Where(double.IsFinite).ToArray();
+            Assert.NotEmpty(ratios);
+            var median = Core.Numerics.Stats.Median(ratios);
+            Assert.InRange(median, 0.3, 3.0);
+            Assert.All(rows, r => Assert.InRange(r.Row.RetainedMean, 0.0, r.Row.SignalMean * (1 + 1e-12)));
+
+            using var provenance = JsonDocument.Parse(File.ReadAllText(Path.Combine(tempOut, "parameters.json")));
+            var recorded = provenance.RootElement.GetProperty("library_assist_noise");
+            Assert.Equal("pool_replicates", recorded.GetProperty("source").GetString());
+            Assert.Equal(curve.NoiseSd.Length, recorded.GetProperty("noise_curve").GetProperty("sd").GetArrayLength());
+
+            var report = File.ReadAllText(Path.Combine(tempOut, "qc_report.html"));
+            Assert.Contains("Library-Assist Precision", report, StringComparison.Ordinal);
+            var wiki = Core.Panorama.WikiReport.FromReport(report, "qc");
+            Assert.Empty(Core.Panorama.WikiReport.Refusals(wiki.BodyTemplate));
+        }
+        finally
+        {
+            TryDelete(tempOut);
+        }
+    }
+
+    /// <summary>
+    /// A re-run with nothing changed reuses the rollup together with the files it claimed; re-typing a
+    /// pool injection changes which samples the noise is measured within, so the rollup re-runs.
+    /// </summary>
+    [Fact]
+    public void NoiseGatedLibraryAssist_ReRunsWhenPoolMembershipChanges()
+    {
+        var cohort = Fixtures.Path2("cohort");
+        var config = PrismConfig.Load(Path.Combine(cohort, "library-assist-noise-gated", "config.yaml"));
+        config.TransitionRollup.LibraryPath = Path.Combine(cohort, config.TransitionRollup.LibraryPath!);
+
+        var tempOut = Path.Combine(Path.GetTempPath(), "prism_cohort_noise_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var inputs = SeedMergedData(cohort, tempOut, config);
+            var metadata = new[]
+            {
+                Path.Combine(cohort, "Batch1.metadata.csv"),
+                Path.Combine(cohort, "Batch2.metadata.csv"),
+            };
+            PrismPipeline.Run(inputs, tempOut, config, metadata);
+
+            // Nothing changed, so nothing will be replaced - the warning a re-run prints must agree
+            // with the stage cache, which includes the pool membership.
+            Assert.Null(ExistingResults.Inspect(tempOut, config, inputs).Warning());
+
+            var again = new List<string>();
+            PrismPipeline.Run(inputs, tempOut, config, metadata, again.Add);
+            Assert.Contains(again, l => l.Contains("Reusing peptides_rollup.parquet"));
+
+            // One QC injection becomes experimental: the QC pool's membership changes.
+            var edited = Path.Combine(tempOut, "Batch1.edited.metadata.csv");
+            var lines = File.ReadAllLines(metadata[0]);
+            var qcLine = Array.FindIndex(lines, l => l.Contains(",Quality Control", StringComparison.Ordinal));
+            lines[qcLine] = lines[qcLine].Replace(",Quality Control", ",Unknown", StringComparison.Ordinal);
+            File.WriteAllLines(edited, lines);
+            var third = new List<string>();
+            PrismPipeline.Run(inputs, tempOut, config, new[] { edited, metadata[1] }, third.Add);
+            Assert.DoesNotContain(third, l => l.Contains("Reusing peptides_rollup.parquet"));
+            Assert.Contains(third, l => l.Contains("16 reference + 15 qc pool injections"));
+        }
+        finally
+        {
+            TryDelete(tempOut);
+        }
+    }
 
     [ReferencePlatformTheory]
     [MemberData(nameof(Cases))]

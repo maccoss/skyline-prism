@@ -44,9 +44,15 @@ public static class Provenance
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
     };
 
+    /// <param name="libraryAssistNoise">
+    /// The fragment noise library assist's noise-gated fit was measured with
+    /// (<see cref="Library.FragmentNoiseCurve.ToProvenance"/>): its source, the pool groups and both
+    /// curves. Recorded under <c>library_assist_noise</c>; omitted for every other method.
+    /// </param>
     public static void Write(
         string path, PrismConfig config, IReadOnlyList<string> sourceFiles, Stats stats,
-        string processingDateUtc, IReadOnlyList<FastaArchive.Entry>? archivedFasta = null)
+        string processingDateUtc, IReadOnlyList<FastaArchive.Entry>? archivedFasta = null,
+        object? libraryAssistNoise = null)
     {
         var doc = new Dictionary<string, object?>
         {
@@ -70,6 +76,8 @@ public static class Provenance
                 ["n_protein_groups"] = stats.NProteinGroups,
             },
         };
+        if (libraryAssistNoise is not null)
+            doc["library_assist_noise"] = libraryAssistNoise;
         File.WriteAllText(path, JsonSerializer.Serialize(doc, Options()));
     }
 

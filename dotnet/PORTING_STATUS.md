@@ -351,7 +351,8 @@ schema sync).
 **Deliberate non-ports (documented; surfaced at runtime):**
 - [-] `transition_rollup.method: adaptive` + `adaptive_rollup.*` + `learn_adaptive_weights` — adaptive/QuantUMS
       rollup not ported; `method: adaptive` aborts, the keys warn as unrecognized
-- [-] `library_assist.fitting_method: least_squares` — only median_polish ported; `least_squares` aborts
+- [-] `library_assist.fitting_method: least_squares` — not ported; `least_squares` aborts. median_polish
+      was ported, and C# has since added `noise_gated_ratio`, now the default (see docs/methods.md)
 - [-] `batch_correction.method` non-combat — ComBat is the only algorithm; other values abort
 - [-] `global_normalization.vsn_params.optimize_params` — VSN runs unoptimized (Python default = false)
 - [-] `qc_report.plots.*` per-plot toggles, `qc_report.filename`, `embed_plots` link-mode — C# emits a

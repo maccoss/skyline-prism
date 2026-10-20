@@ -166,200 +166,150 @@ Selects the N best transitions for each peptide and uses only those.
 
 ### Library-Assisted Rollup
 
-Uses a spectral library to inform transition weighting and detect interference. The core idea is that DIA spectra contain signal from 10-30 co-fragmenting peptides, so interference is the norm rather than the exception. Library knowledge of expected fragment ratios can help identify and correct for interfered transitions.
+Uses a spectral library's relative fragment intensities to recognize interfered transitions and keep
+them out of a peptide's abundance. In DIA a fragment's extracted signal can include other peptides
+co-isolated in the same window, and interference only ever **adds** signal - so a fragment reading
+far above its library share is the signature. Removing that signal has a price: less measured signal
+is left, so values near the limit of detection get noisier. What it buys is less ratio compression -
+signal from another molecule does not follow the peptide's abundance, and leaving it in shrinks every
+fold change toward 1.
 
 **Inputs:**
-- Observed transition intensities (linear scale)
-- Library spectrum with expected relative fragment intensities (normalized to base peak = 1.0)
+- Observed fragment areas (LINEAR), floored exactly as for `sum` (a zero or missing area becomes a
+  small positive value; see `RollupPreprocess`)
+- The library spectrum for the peptide and precursor charge, relative intensities with base peak = 1.0
 
-**Library Matching:**
-Transitions from Skyline are matched to library fragments by:
-1. Product m/z (within tolerance, default 0.02 Da)
-2. Fragment ion type (e.g., `y6`, `b3`, `precursor [M+1]`) when available
+**Library matching:** each transition is matched to a library fragment by product m/z, within
+`library_mz_tolerance` (default 0.02 Da). The spectrum is looked up by exact modified sequence and
+charge, then by a key with all modification notation stripped, so `C(unimod:4)` and `C[+57.02146]`
+match each other (I and L are deliberately not collapsed). A precursor charge the library does not
+have is summed plainly; one with fewer than `library_min_fragments` matched fragments contributes
+nothing.
 
-**Supported Library Formats:**
-- **BLIB (Skyline):** SQLite-based format with zlib-compressed peak arrays
-- **Carafe TSV (DIA-NN):** Tab-separated format with fragment annotations
+**Supported library formats:** BLIB (Skyline; SQLite with zlib-compressed peak arrays) and Carafe/DIA-NN
+TSV, auto-detected by extension.
 
-#### Fitting Methods
+#### The model
 
-Two fitting methods are available, controlled by the `fitting_method` configuration option:
+For fragment $k$ of a precursor in sample $s$, with library intensity $L_k$:
 
-##### Library Median Polish (Default, Recommended)
+$$O_{k,s} \approx c_s L_k \;(+\ \text{interference} \ge 0), \qquad I_s = c_s \sum_{k\,\in\,\text{matched}} L_k$$
 
-Uses the spectral library as a **prior** for transition row effects (fragmentation differences) and estimates sample scale factors using the **median**, which is inherently robust to interference outliers.
+A fragment left out of the scale is still counted - filled in at $c_s L_k$, its library-predicted
+area. What it no longer contributes is its *measurement*: the scale rests on the fragments that were
+kept. That is why removing a fragment costs precision, and why the precision check below compares each
+peptide against the signal the fit kept.
 
-**Model:**
-$$\log(O_{t,s}) = \log(L_t) + \beta_s + \epsilon_{t,s}$$
+Charge states are fitted separately (each has its own fragmentation pattern and library spectrum) and
+summed on the linear scale: $I_{peptide,s} = \sum_z I_{z,s}$.
 
-Where:
-- $O_{t,s}$ = observed intensity for transition $t$ in sample $s$
-- $L_t$ = library intensity for transition $t$ (provides the row effect)
-- $\beta_s$ = sample-specific scale factor (log-scale)
-- $\epsilon_{t,s}$ = residual (noise + interference)
+#### Noise-gated ratio (default: `library_fitting_method: noise_gated_ratio`)
 
-**Algorithm:**
+Per sample, starting with every matched fragment kept:
 
-1. **Estimate scale via median:** For each sample $s$:
+1. **Scale:** $c_s = \sum_{\text{kept}} O_{k,s} \,/\, \sum_{\text{kept}} L_k$ - the measured signal over the share
+   of the spectrum it represents (the least-squares fit when a fragment's variance grows with its
+   intensity).
+2. **Prediction:** $\hat O_{k,s} = c_s L_k$, and the relative excess $r_{k,s} = (O_{k,s} - \hat O_{k,s}) / \hat O_{k,s}$.
+3. **Interference test** - a fragment is flagged only when **both** hold:
+   - $r_{k,s} >$ `library_outlier_threshold` (default 1.0: above twice its prediction), and
+   - $O_{k,s} - \hat O_{k,s} >$ `library_noise_sigma` $\times\ \sigma(\hat O_{k,s})$ (default 3), where
+     $\sigma$ is the cohort's measured fragment noise at that predicted area.
+4. **Drop and refit:** remove the flagged fragment with the largest $r$ and go back to step 1, at most
+   5 times, never below `library_min_fragments`.
+5. **Abundance:** $I_s = c_s \sum_{\text{matched}} L_k$.
 
-   $$\hat\beta_s = \mathrm{median_t}\left(\log(O_{t,s}) - \log(L_t)\right)$$
-   
-   The median automatically ignores up to 50% outliers, making this robust to 1-2 interfered transitions out of 4-6 total.
+Equivalently, $I_s$ = the observed areas of the kept fragments plus $c_s L_k$ for each dropped one, so
+**with nothing dropped it is exactly the sum of the matched fragments** - on clean data it behaves like
+`sum`, and its precision stays close to sum's.
 
-2. **Compute predicted values:** $\hat O_{t,s} = L_t \times e^{\hat\beta_s}$
+The noise test is what keeps noise from being taken for interference. At high intensity it never
+binds and the ratio test alone decides; at low intensity, noise by itself routinely pushes a fragment
+past twice its prediction, and the gate keeps it. On FLARE-Extended's curve:
 
-3. **Identify outliers:** Compute normalized residuals:
-   $$r_{t,s} = \frac{O_{t,s} - \hat O_{t,s}}{\hat O_{t,s}}$$
-   
-   Only HIGH positive residuals indicate interference (signal > expected). Interference can only **add** signal, never remove it.
+| Expected fragment area | Fragment SD | A fragment is removed only above |
+|---|---|---|
+| 100 | 195 (195%) | 6.9x its prediction |
+| 300 | 361 (120%) | 4.6x |
+| 1,000 | 733 (73%) | 3.2x |
+| 3,000 | 1,419 (47%) | 2.4x |
+| 10,000 and up | 29% or less | 2.0x (the ratio test) |
 
-4. **Iterative removal:** Remove the worst outlier (highest $r_{t,s}$) if it exceeds threshold (default 1.0 = observed > 2x predicted). Repeat until convergence.
+On that cohort the noise test decided every removal: in the measurements that chose the method, ratio
+thresholds of 2x, 1.5x and 1.25x gave the same results to three decimals.
 
-5. **Calculate final abundance:**
-   $$I_{peptide,s} = e^{\hat\beta_s} \times \sum_{t} L_t$$
-   
-   Uses the **full library sum** so all samples quantify the same total signal.
+**The fragment-noise curve** is measured on the cohort itself, before the fit, from the transition
+rows of the chosen injections. Per precursor charge with $m \ge 2$ fragments and a group of $n \ge 3$
+injections, $f_j = T_j / \bar T$ (each injection's fragment total over the mean) removes the factor
+every fragment of a precursor shares in an injection (loading, ionization); each cell's residual
+$X_{k,j} - \mu_k f_j$, squared and scaled by the rank-1 fit's degrees of freedom
+$nm / ((n-1)(m-1))$, is binned by its expected area $\mu_k f_j$. Each point of the curve is the
+geometric-mean area and the root of the mean scaled square of at least $\max(200, N/40)$ cells. It is
+used as measured, interpolated log-log: a parametric "additive plus counting noise, clipped at zero"
+model was tried and could not reproduce the zero areas, which rise far more steeply at low intensity
+than Gaussian noise allows. Where it comes from:
 
-**Key advantages of median polish:**
-- **Inherent robustness:** Median ignores outliers without needing to detect them first
-- **Cross-sample consistency:** Same transitions tend to be interfered across samples
-- **Faster convergence:** Often converges in 1-2 iterations vs. 3-5 for least squares
+| Source | When | Effect |
+|---|---|---|
+| Reference and QC pools, kept apart | at least one of them has 3 or more injections | the intended case: replicate material, so the residual is noise |
+| All samples | no pool has 3 injections | biological differences in how a precursor's fragments vary count as noise too, so the curve is wider and fewer fragments are removed |
+| None | fewer than 3 usable samples | the noise test is off; the ratio test alone decides |
 
-##### Least Squares Fitting
+The curve is saved as `library_assist_noise.json` and recorded in `parameters.json` under
+`library_assist_noise`. Re-typing a sample re-measures it (the pool membership is part of the stage's
+fingerprint).
 
-Classic least squares fitting, more sensitive to outliers but may perform better on very clean data.
+#### Median of log ratios (`library_fitting_method: median_polish`, the earlier default)
 
-**Closed-form solution:**
-$$s^* = \frac{\vec{L} \cdot \vec{O}}{\vec{L} \cdot \vec{L}}$$
+$$\hat\beta_s = \operatorname{median}_k\left(\log O_{k,s} - \log L_k\right), \qquad I_s = e^{\hat\beta_s} \sum_{k} L_k$$
 
-Where $\vec{L}$ is the library intensity vector and $\vec{O}$ is the observed intensity vector.
+with the same one-sided removal (above twice the prediction, at most 5 times) and **no** noise test.
+Kept so results from earlier versions reproduce; not recommended. Measured on FLARE-Extended (93 runs,
+7 reference + 7 QC pool injections), it was 43% noisier than the signal it kept allows, and the cause
+was the fit, not the data: at low intensity its 2x removal fired on fragments that were only
+noise-high, the fragments left behind read low by chance, and the median of log ratios then landed on
+floored zero areas (in 35% of pool fits) - a scale biased low by an amount that changed from injection
+to injection: against the noise-gated fit, its injection-to-injection SD was 1.2-1.6 log2 units in the
+three dimmest intensity fifths.
 
-#### Handling Multiple Charge States
+#### Choosing, with numbers
 
-Peptides are often detected in multiple precursor charge states (e.g., +2 and +3). Each charge state produces a **different fragmentation pattern**, so the library stores separate spectra for each peptide+charge combination.
+FLARE-Extended. Precision on the real data; compression from a known-truth test - synthetic
+interference on one fragment of 30% of peptides (2x a typical fragment's area, varying between people,
+constant within each pool material), run through the whole pipeline. The slope is each method's
+interfered result against its own result on the real data across the 70 subject samples, so 1.0 means
+the interference did not shrink the fold changes:
 
-**Processing workflow:**
+| Rollup | Protein within-subject SD (log2) | Protein QC CV | Slope, proteins with >50% of peptides interfered | Slope, interfered peptides |
+|---|---|---|---|---|
+| `sum` | 0.502 | 19.3% | 0.785 | 0.752 |
+| `library_assist`, `median_polish` | 0.965 | 30.2% | 0.857 | 0.861 |
+| `library_assist`, `noise_gated_ratio` | 0.556 | 20.8% | 0.876 | 0.910 |
+| `noise_gated_ratio`, `library_noise_sigma: 2` | 0.610 | 23.1% | 0.898 | 0.933 |
 
-1. **Identify charge states:** For each peptide, identify all unique precursor charge states present in the data.
+`sum` is the most precise and the most compressed; under interference its CVs even *improve*, because
+an interferent that is the same in every injection of a pool reads as signal. The noise-gated fit costs
+11% in within-subject SD against `sum` and halves its compression. Whether that trade is worth
+it depends on how much interference a cohort has, which is why `sum` stays the default rollup.
+Pool-replicate CVs alone cannot settle it: they measure precision, not accuracy.
 
-2. **Process independently:** Each charge state is processed separately using its own library spectrum:
-   - +2 ions are matched to library spectrum `PEPTIDEK_2`
-   - +3 ions are matched to library spectrum `PEPTIDEK_3`
-   - Each gets its own library-assisted rollup to estimate abundance
+#### The precision check
 
-3. **Sum on linear scale:** The final peptide abundance is the sum of abundances from all charge states:
-   $$I_{peptide,s} = \sum_{z} I_{peptide,z,s}$$
-   
-   Where $z$ indexes the charge states.
+With the noise-gated fit and a pool of at least 3 injections, every peptide's precision is checked in
+each pool: the **observed** CV of its library-assisted values across the pool's injections, against
+the **expected** CV - what a plain sum of fragments achieves in those injections at the same total area
+as the fragments the fit kept (from the same measurement as the noise curve: the median CV of
+peptides' fragment sums, binned by their mean). Near 1, the peptide is as precise as its kept signal
+allows: a high CV near the limit of detection is then the honest price of removing interference. Well
+above 1, the fit added variation of its own. On FLARE-Extended the median was 1.02 in the reference
+pool and 0.96 in the QC pool, and between 0.90 and 1.04 in every intensity fifth of both; the same
+comparison gave 1.43 for `median_polish` in the measurements that chose the method. It is not
+uniform: peptides whose fit kept 4 fragments on average ran at 1.20-1.27, and those that kept 3 or
+fewer at 1.12-1.48 - where removal changes from injection to injection, the kept set does too, and
+that adds variation the kept signal alone does not explain.
 
-**Example:**
-
-For peptide `SAMPLE(unimod:21)PK` detected in +2 and +3 charge states:
-
-| Charge | Library Key | Estimated Abundance |
-|--------|-------------|---------------------|
-| +2 | `SAMPLE(unimod:21)PK_2` | 1000 |
-| +3 | `SAMPLE(unimod:21)PK_3` | 500 |
-| **Total** | — | **1500** |
-
-**Rationale:**
-
-- Each precursor charge state ionizes independently in the electrospray source
-- Fragmentation patterns differ between charge states (different y/b ion intensity ratios)
-- The library provides expected fragment ratios **per charge state**
-- Total peptide signal is the sum of all ionized precursor forms
-
-**Implementation:** See `chunked_processing.py` -> `_process_single_peptide()`, lines 363-436.
-
-**Key Design Principles:**
-
-| Principle | Rationale |
-|-----------|-----------|
-| **Zeros are valid** | A low-abundance peptide may only have signal in the top 1-2 most intense library fragments. Zeros in minor fragments confirm absence of interference. |
-| **Only HIGH residuals are outliers** | Interference adds signal (observed > expected). Low/zero signal is not interference, it's low abundance or noise. |
-| **Iterative outlier removal** | Fragments with large positive residuals are removed and the model is refit to get a cleaner scale estimate. |
-| **Abundance from scaled library** | Final abundance is the scale factor times the library sum, ensuring consistent quantification across samples. |
-| **Flag poor fits** | Peptides with R² < 0.5 across all replicates may indicate false positive identifications. |
-
-**Detailed Algorithm:**
-
-1. **Match fragments:** Map observed transitions to library m/z values (tolerance: 0.02 Da)
-
-2. **Initial fit:** Compute closed-form least squares scale factor:
-   $$s = \frac{\sum_i L_i \cdot O_i}{\sum_i L_i^2}$$
-
-3. **Compute residuals:** $r_i = O_i - s \times L_i$
-
-4. **Identify outliers:** Fragments with large positive residuals (signal > expected) indicate interference:
-   - Compute MAD of positive residuals
-   - Flag fragments with z-score > 3.0 (MAD-scaled)
-
-5. **Refit:** Exclude outlier fragments and recalculate scale factor
-
-6. **Iterate:** Repeat steps 3-5 until no new outliers (max 5 iterations)
-
-7. **Calculate abundance:**
-   $$I_{peptide} = s \times \sum_{t} L_t$$
-
-   This imputes what the total signal *should* have been based on the library pattern.
-
-8. **Quality assessment:**
-   - R² of final fit (goodness of fit)
-   - Number of fragments used vs. total
-   - List of outlier fragments (potential interference)
-
-**Output Structure:**
-
-| Field | Description |
-|-------|-------------|
-| `scale` | Fitted scaling factor |
-| `abundance` | Peptide abundance (scale * sum of library) |
-| `r_squared` | Goodness of fit (0-1) |
-| `n_matched` | Number of fragments used in final fit |
-| `outlier_indices` | Indices of fragments flagged as interfered |
-| `is_reliable` | True if R-squared >= 0.5 |
-| `quality_warning` | "poor_fit" or "many_outliers" if applicable |
-
-**Performance Optimizations:**
-
-The library-assisted rollup uses vectorized least squares to process all samples in parallel:
-
-- **Vectorized matrix operations**: Uses BLAS matrix operations via NumPy for O(T * S) complexity where T=transitions, S=samples
-- **Single-pass fitting**: All samples fitted simultaneously rather than per-sample loops
-- **Speedup**: ~10x faster than per-sample iteration on large datasets (500+ samples)
-
-**Implementation:** `spectral_library.py` -> `least_squares_rollup_vectorized()`
-
-**Performance Characteristics:**
-
-From validation on 238 samples across 3 batches:
-
-| Metric | Library-Assisted | Sum |
-|--------|------------------|-----|
-| Reference CV (median) | 38.1% | 35.8% |
-| QC CV (median) | 41.9% | 39.1% |
-| Peptides with lower CV | 29% | 71% |
-
-The library-assisted method shows:
-- **Dramatic improvement** (up to 111% CV reduction) for ~29% of peptides with real interference
-- **Slightly worse CV** for peptides where library pattern doesn't match data (false discovery, very low signal)
-
-**When Library-Assisted Helps:**
-- Peptides with variable interference across replicates
-- Cases where 1-2 fragments have consistent co-eluting interference
-- High-intensity peptides where interference is detectable above noise
-
-**When Library-Assisted May Hurt:**
-- Library not fine-tuned to a specific instrument/collision energy
-- Suspect peptide detections (library pattern doesn't match)
-- Very low-abundance peptides (noise dominates)
-
-**Diagnostic Applications:**
-
-Peptides with consistently poor R-squared across all replicates should be flagged as suspect identifications. If the observed fragmentation pattern never matches the library, the peptide may be:
-1. A false positive identification from DIA-NN/search engine
-2. Correctly identified but with systematic fragmentation differences
-3. Subject to overwhelming interference in all samples
+The QC report summarizes it by intensity fifth and by fragments kept ("Library-Assist Precision");
+per peptide and pool it is in `library_assist_precision.csv`.
 
 ---
 

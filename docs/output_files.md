@@ -29,6 +29,8 @@ output_dir/
 ├── merged_data.cache.json          # Fingerprints, for detecting when a re-merge is needed
 ├── stage_cache.json                # Per-stage fingerprints, for reusing unchanged stages
 ├── peptides_rollup_residuals.parquet  # Per-TRANSITION median-polish residuals (if include_residuals)
+├── library_assist_noise.json       # Fragment noise the library fit was gated on (library_assist, noise_gated_ratio)
+├── library_assist_precision.csv    # ...each peptide's observed vs expected CV in each pool (needs a pool)
 ├── proteins_raw_residuals.parquet  # Per-PEPTIDE median-polish residuals (if include_residuals)
 ├── corrected_peptides_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
 ├── corrected_proteins_residuals.parquet   # ...the above, batch-corrected (if include_residuals)
@@ -366,6 +368,41 @@ nothing to check against, and it is read as it is.
 **Scale**: LOG2
 
 **Columns**: Same structure as `corrected_peptides.parquet`, but values are log2-transformed.
+
+---
+
+### library_assist_noise.json
+
+**Written by**: `transition_rollup.method: library_assist` with `library_fitting_method:
+noise_gated_ratio` (the default fit). Removed when the rollup re-runs with any other setting.
+
+The fragment noise library assist's interference removal was gated on, measured on this cohort before
+the fit (see [methods](methods.md#library-assisted-rollup)): `source` (`pool_replicates`, `all_samples`
+or `none`), the `groups` it was measured within with their injection counts, the number of fragment
+`cells`, `noise_curve` (`expected_area` -> `sd`, LINEAR areas) and, from pools, `expected_cv_curve`
+(`signal` -> `cv_percent`: the median CV of a plain sum of fragments at that total). The same object is
+recorded in `parameters.json` under `library_assist_noise`.
+
+### library_assist_precision.csv
+
+**Written by**: the noise-gated library fit, when a reference or QC pool has at least 3 injections.
+
+One row per peptide and pool: whether the peptide's library-assisted values are as precise as the
+fragment signal the fit kept allows. Summarized in the QC report's "Library-Assist Precision" section.
+
+| Column | Meaning |
+|---|---|
+| `peptide`, `group` | The peptide, and the pool (`reference` or `qc`) |
+| `injections` | Pool injections |
+| `matched_fragments` | Fragments matched to the library, summed over charge states |
+| `kept_fragments_mean` | Fragments the fit kept, mean over the pool's injections |
+| `signal_mean` | Total area of all the peptide's fragments, mean over the pool (LINEAR) |
+| `retained_signal_mean` | Area of the kept fragments, mean over the pool (LINEAR) |
+| `observed_cv` | CV (%) of the peptide's library-assisted values across the pool (LINEAR) |
+| `expected_cv` | CV (%) a sum of fragments achieves in this pool at `retained_signal_mean` |
+| `observed_over_expected` | Near 1: as precise as the kept signal allows. Well above 1: the fit added variation |
+
+`NaN` where a CV could not be computed (fewer than 3 usable injections).
 
 ---
 

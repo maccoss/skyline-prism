@@ -28,7 +28,7 @@ such as `parsimony.fasta_path: null` for no database.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `method` | `median_polish`¹ | `sum`, `median_polish`, `topn`, `consensus`, `library_assist` |
+| `method` | `sum`¹ | `sum`, `median_polish`, `topn`, `consensus`, `library_assist` |
 | `min_transitions` | `3` | Drop peptides with fewer observed MS2 transitions |
 | `use_ms1` | `false` | Include MS1 precursor transitions in the rollup |
 | `topn_count` | `3` | Transitions kept for `method: topn` |
@@ -38,10 +38,11 @@ such as `parsimony.fasta_path: null` for no database.
 | `library_path` | `null` | Spectral library for `method: library_assist`: **`.blib`** (Skyline) or **`.tsv`** (Carafe/DIA-NN), auto-detected by extension |
 | `library_min_fragments` | `3` | Min matched library fragments for a fit |
 | `library_mz_tolerance` | `0.02` | m/z tolerance (Da) matching transitions to library |
-| `library_outlier_threshold` | `1.0` | Normalized-residual threshold for interference |
+| `library_outlier_threshold` | `1.0` | A fragment can be interference when it reads above (1 + this) x its library prediction (1.0 = twice) |
 | `library_remove_outliers` | `true` | Iteratively drop interference fragments before scaling |
-| `library_fitting_method` | `median_polish` | `median_polish` or `least_squares`. `least_squares` **aborts** in C#. |
-| `library_assist:` *(nested)* | — | `library_path`, `min_matched_fragments`, `mz_tolerance`, `outlier_threshold`, `remove_outliers`, `fitting_method`. Folded onto the flat `library_*` keys (nested wins).² |
+| `library_fitting_method` | `noise_gated_ratio` | `noise_gated_ratio`: the scale is kept fragment signal over library intensity, and a fragment is removed only when it also exceeds the cohort's measured fragment noise. `median_polish`: the median of log ratios with an ungated 2x removal - the default before this release, kept so earlier results reproduce. `least_squares` **aborts**. See [methods](methods.md#library-assisted-rollup). |
+| `library_noise_sigma` | `3.0` | `noise_gated_ratio` only: SDs of measured fragment noise an excess must also exceed. The noise is measured within the reference and QC pools (at least 3 injections each), else across all samples. `0` turns the noise test off. |
+| `library_assist:` *(nested)* | — | `library_path`, `min_matched_fragments`, `mz_tolerance`, `outlier_threshold`, `remove_outliers`, `fitting_method`, `noise_sigma`. Folded onto the flat `library_*` keys (nested wins).² |
 
 ¹ The default is **`sum`**, with no config block and in the generated templates alike. It used to differ between the two — a run started from the GUI summed, a run started from `prism config-template` median-polished, and nothing said so — which is why this footnote once told you to set `method` explicitly. You no longer have to.
 ² Precedence when a setting is given more than once: nested `library_assist:` > flat `library_*`. An empty `library_assist:` block is treated as absent.

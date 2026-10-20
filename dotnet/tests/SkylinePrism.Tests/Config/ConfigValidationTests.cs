@@ -173,6 +173,57 @@ public class ConfigValidationTests
     }
 
     [Fact]
+    public void LibraryFitting_DefaultsToNoiseGatedRatio_AndMedianPolishStaysSelectable()
+    {
+        Assert.Equal("noise_gated_ratio", new PrismConfig().TransitionRollup.LibraryFittingMethod);
+        Assert.Equal(3.0, new PrismConfig().TransitionRollup.LibraryNoiseSigma);
+
+        var old = PrismConfig.Parse(
+            "transition_rollup:\n  method: library_assist\n  library_fitting_method: median_polish\n");
+        old.Validate();
+        Assert.Equal("median_polish", old.TransitionRollup.LibraryFittingMethod);
+    }
+
+    [Fact]
+    public void LibraryNoiseSigma_NestedBlockFoldsOntoTheFlatKey()
+    {
+        var config = PrismConfig.Parse(
+            "transition_rollup:\n  method: library_assist\n  library_noise_sigma: 4\n"
+            + "  library_assist:\n    noise_sigma: 2.5\n");
+        Assert.Equal(2.5, config.TransitionRollup.LibraryNoiseSigma);
+        Assert.Empty(PrismConfig.FindUnknownKeys(
+            "transition_rollup:\n  library_noise_sigma: 4\n  library_assist:\n    noise_sigma: 2.5\n"));
+    }
+
+    [Theory]
+    [InlineData("fitting_method: least_square", "least_square")]
+    [InlineData("fitting_method: robust", "robust")]
+    public void Validate_ThrowsOnUnknownLibraryFittingMethod(string line, string named)
+    {
+        var config = PrismConfig.Parse(
+            $"transition_rollup:\n  method: library_assist\n  library_assist:\n    {line}\n");
+        var ex = Assert.Throws<System.NotSupportedException>(() => config.Validate());
+        Assert.Contains(named, ex.Message);
+        Assert.Contains("noise_gated_ratio", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData(".nan")]
+    public void Validate_ThrowsOnNegativeOrNonFiniteNoiseSigma(string value)
+    {
+        var config = PrismConfig.Parse($"transition_rollup:\n  library_noise_sigma: {value}\n");
+        var ex = Assert.Throws<System.NotSupportedException>(() => config.Validate());
+        Assert.Contains("library_noise_sigma", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_AcceptsZeroNoiseSigma_WhichTurnsTheNoiseTestOff()
+    {
+        PrismConfig.Parse("transition_rollup:\n  library_noise_sigma: 0\n").Validate();
+    }
+
+    [Fact]
     public void Validate_ThrowsOnNonCombatBatchMethod()
     {
         var config = PrismConfig.Parse("batch_correction:\n  method: harmony\n");

@@ -12,7 +12,8 @@ transition_rollup:
   library_mz_tolerance: 0.02
   library_outlier_threshold: 1
   library_remove_outliers: true
-  library_fitting_method: median_polish
+  library_fitting_method: noise_gated_ratio
+  library_noise_sigma: 3
 global_normalization:
   method: rt_lowess
 sample_outlier_detection:

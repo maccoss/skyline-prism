@@ -8,11 +8,14 @@ using System.Text;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Library;
 using SkylinePrism.Core.Normalization;
+using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Parsimony;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Rollup;
 using System.Threading;
+using static System.FormattableString;
 
 namespace SkylinePrism.Core.Pipeline;
 
@@ -271,6 +274,11 @@ public sealed class PrismPipeline
             LibraryMzTolerance = config.TransitionRollup.LibraryMzTolerance,
             LibraryOutlierThreshold = config.TransitionRollup.LibraryOutlierThreshold,
             LibraryRemoveOutliers = config.TransitionRollup.LibraryRemoveOutliers,
+            LibraryFitting = string.Equals(
+                config.TransitionRollup.LibraryFittingMethod, "median_polish", StringComparison.OrdinalIgnoreCase)
+                ? LibraryFitting.MedianPolish
+                : LibraryFitting.NoiseGatedRatio,
+            LibraryNoiseSigma = config.TransitionRollup.LibraryNoiseSigma,
             // Residual files are named for the value file they explain and sit beside, matching
             // the Python engine: peptides_rollup.parquet -> peptides_rollup_residuals.parquet.
             // (Through dotnet-v26.13.0 this was "peptide_residuals.parquet", which collided with
@@ -283,13 +291,23 @@ public sealed class PrismPipeline
             MemoryBudgetMb = config.Processing.MergeMemoryMb,
         };
         if (transitionCfg.Method == TransitionRollupMethod.LibraryAssist)
-            report($"  Library-assisted rollup using spectral library: {config.TransitionRollup.LibraryPath}");
+            report($"  Library-assisted rollup ({config.TransitionRollup.LibraryFittingMethod}) using "
+                + $"spectral library: {config.TransitionRollup.LibraryPath}");
+        // The noise-gated fit measures fragment noise within the reference/QC pools, so which samples
+        // ARE pools is an input of this stage - added to its fingerprint here because sample types
+        // come from metadata files and name patterns as well as config (see StageDependencies).
+        var noiseGated = transitionCfg.Method == TransitionRollupMethod.LibraryAssist
+            && transitionCfg.LibraryFitting == LibraryFitting.NoiseGatedRatio;
+        var noisePlan = noiseGated ? FragmentNoise.Plan(samples, resolvedType) : null;
+        var noisePath = Path.Combine(outputDir, FragmentNoiseCurve.FileName);
+        var precisionPath = Path.Combine(outputDir, LibraryAssistPrecision.FileName);
         // The merge's own fingerprint anchors the chain: everything downstream is invalid when the
         // inputs change, without each stage having to re-examine them.
         var mergeFp = StageCache.Fingerprint(
             StageDependencies.Merge, config, extraInputs: new[] { fingerprint });
         var rollupFp = StageCache.Fingerprint(
-            StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp });
+            StageDependencies.TransitionRollup, config, upstream: new[] { mergeFp },
+            extraInputs: noisePlan is null ? null : new[] { noisePlan.Key });
 
         if (stageCache.CanReuse(StageDependencies.TransitionRollup, rollupFp))
         {
@@ -304,14 +322,24 @@ public sealed class PrismPipeline
             report($"  Rollup workers: {dop} thread(s) (streamed to parquet in row-group batches of "
                 + $"{Math.Max(1, config.Processing.PeptideBatchSize):N0}).");
             stageCache.Invalidate(StageDependencies.TransitionRollup);
+            // Only the noise-gated fit writes these. Left from an earlier run with it, they would be
+            // read - by the QC report, by provenance - as describing this one.
+            RemoveStale(noisePath, report);
+            RemoveStale(precisionPath, report);
+            if (noisePlan is not null)
+                transitionCfg = WithFragmentNoise(
+                    transitionCfg, noisePlan, dataset, cols, samples, config, noisePath, precisionPath, report);
             var t2 = TransitionRollup.Run(
                 dataset, cols, transitionCfg, peptidesRollupPath, samples, cancellationToken);
             report($"  Rolled up to {t2.NPeptides:N0} peptides ({t2.NFiltered:N0} filtered below min_transitions).");
             if (transitionCfg.ResidualsPath is not null && transitionCfg.Method == TransitionRollupMethod.MedianPolish)
                 report("  Wrote peptides_rollup_residuals.parquet (per-transition median-polish residuals).");
+            if (transitionCfg.PrecisionPath is not null)
+                ReportPrecision(transitionCfg.PrecisionPath, report);
             stageCache.Record(
                 StageDependencies.TransitionRollup, rollupFp,
-                peptidesRollupPath, transitionCfg.ResidualsPath);
+                peptidesRollupPath, transitionCfg.ResidualsPath,
+                noisePlan is null ? null : noisePath, transitionCfg.PrecisionPath);
         }
 
         // Stage 2a: peptide-matrix density diagnostic + optional sample outlier detection.
@@ -722,10 +750,14 @@ public sealed class PrismPipeline
         // it does not let anyone repeat it once the database has been reorganized or the output
         // directory handed to someone else.
         var archivedFasta = FastaArchive.Archive(config, outputDir, report);
+        // The fragment noise the library fit was gated on: measured, not configured, so a re-run on
+        // other data would not reproduce it from the settings alone. Read from the file Stage 2 wrote,
+        // which is still this run's when that stage was reused.
+        var libraryNoise = noisePlan is not null ? FragmentNoiseCurve.Load(noisePath) : null;
         Provenance.Write(
             Path.Combine(outputDir, "parameters.json"), config, inputs,
             new Provenance.Stats(samples.Count, nPeptides, nProteins, groups.Count),
-            DateTime.UtcNow.ToString("o"), archivedFasta);
+            DateTime.UtcNow.ToString("o"), archivedFasta, libraryNoise?.ToProvenance());
         var nRef = resolvedType.Values.Count(t => t == "reference");
         var nQc = resolvedType.Values.Count(t => t == "qc");
         var nExp = resolvedType.Values.Count(t => t == "experimental");
@@ -828,6 +860,101 @@ public sealed class PrismPipeline
                 : Convert.ToString(reader.GetValue(1), CultureInfo.InvariantCulture) ?? "batch1";
         }
         return map;
+    }
+
+    /// <summary>
+    /// Measure the cohort's fragment noise for the noise-gated library fit - and, from replicate
+    /// pools, the expected-CV curve the precision check compares against - save it beside the outputs,
+    /// and hand both to the rollup. One extra read of the pool injections' rows: it cannot share the
+    /// rollup's reader, which needs the curve before its first peptide, and two DuckDB readers must
+    /// never run at once (see TransitionRollup.RunParallel).
+    /// </summary>
+    private static TransitionRollupConfig WithFragmentNoise(
+        TransitionRollupConfig cfg, NoisePlan plan, MergedDataset dataset, SkylineColumns cols,
+        IReadOnlyList<string> samples, PrismConfig config, string noisePath, string precisionPath,
+        Action<string> report)
+    {
+        if (plan.Source == FragmentNoiseCurve.None)
+        {
+            report("  Fragment noise: fewer than 3 usable samples, so it cannot be measured. The noise "
+                + "test is off and the ratio test alone decides which fragments are interference.");
+            // Written anyway: it records that the gate was off, and carries the plan key a later
+            // inspection rebuilds this stage's fingerprint from.
+            var none = new FragmentNoiseCurve { Source = FragmentNoiseCurve.None, PlanKey = plan.Key };
+            none.Save(noisePath);
+            return cfg with { LibraryNoise = none };
+        }
+
+        var timer = Stopwatch.StartNew();
+        var members = new HashSet<string>(plan.Groups.SelectMany(g => g.Samples), StringComparer.Ordinal);
+        var sub = samples.Where(members.Contains).ToList();
+        var pos = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < sub.Count; i++)
+            pos[sub[i]] = i;
+        var groups = plan.Groups
+            .Select(g => new NoiseGroup(g.Name, g.Samples.Select(s => pos[s]).ToArray()))
+            .ToList();
+        var curve = FragmentNoise.Estimate(
+            MergedParquetReader.StreamPeptideBlocks(
+                dataset, cols, sub, includeProductMz: false, includeShapeCorr: false,
+                memoryBudgetMb: config.Processing.MergeMemoryMb),
+            sub.Count, groups, plan.Source, excludePrecursor: !config.TransitionRollup.UseMs1);
+        curve.PlanKey = plan.Key;
+        curve.Save(noisePath);
+
+        var where = plan.Source == FragmentNoiseCurve.PoolReplicates
+            ? string.Join(" + ", curve.Groups.Select(g => $"{g.Injections} {g.Name}")) + " pool injections"
+            : $"all {sub.Count} samples, because no reference or QC pool has 3 injections (biological "
+              + "variation then counts as noise, so fewer fragments are removed as interference)";
+        report($"  Fragment noise: measured within {where}; {curve.Cells:N0} fragment cells "
+            + Invariant($"({timer.Elapsed.TotalSeconds:0.0} s), saved as {FragmentNoiseCurve.FileName}."));
+        report(curve.HasNoise
+            ? Invariant($"    Fragment SD at expected area 1,000: {curve.SdAt(1_000):N0}; at 10,000: {curve.SdAt(10_000):N0}.")
+            : "    Too few fragment cells for a noise curve; the noise test is off.");
+
+        var runIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < samples.Count; i++)
+            runIndex[samples[i]] = i;
+        var precisionGroups = plan.Source == FragmentNoiseCurve.PoolReplicates && curve.HasExpectedCv
+            ? plan.Groups
+                .Select(g => new NoiseGroup(g.Name, g.Samples.Select(s => runIndex[s]).ToArray()))
+                .ToList()
+            : null;
+        return cfg with
+        {
+            LibraryNoise = curve,
+            PrecisionGroups = precisionGroups,
+            PrecisionPath = precisionGroups is null ? null : precisionPath,
+        };
+    }
+
+    /// <summary>One line per pool material: how the fit's precision compares with its kept signal's.</summary>
+    private static void ReportPrecision(string path, Action<string> report)
+    {
+        foreach (var group in LibraryAssistPrecision.Read(path).GroupBy(r => r.Row.Group))
+        {
+            var ratios = group.Select(r => r.Row.Ratio).Where(double.IsFinite).ToArray();
+            if (ratios.Length == 0)
+                continue;
+            report(Invariant($"  Precision check, {group.Key} pool: median observed/expected CV {Stats.Median(ratios):0.00} ")
+                + Invariant($"over {ratios.Length:N0} peptides (1.00 = as precise as the fragment signal the fit kept ")
+                + $"allows; per peptide in {LibraryAssistPrecision.FileName}).");
+        }
+    }
+
+    /// <summary>Remove an output only some settings write, so a later run cannot inherit it.</summary>
+    private static void RemoveStale(string path, Action<string> report)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            report($"  WARNING: could not remove {Path.GetFileName(path)} left by an earlier run "
+                + $"({ex.Message}). It does not describe these results.");
+        }
     }
 
     private static string SampleContextKey(

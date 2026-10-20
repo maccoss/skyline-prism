@@ -40,9 +40,11 @@ PRISM ships two ways to run the same pipeline:
 
 ## What it does
 
-- **Robust rollups** — Tukey median polish (default) for transition→peptide and peptide→protein
-  aggregation; automatically down-weights outliers without pre-filtering. Also sum, top-N, consensus,
-  library-assisted (transition) and sum / top-N / maxLFQ / iBAQ (protein).
+- **Robust rollups** — sum (default), Tukey median polish, top-N, consensus or library-assisted for
+  transition→peptide; Tukey median polish (default), sum, top-N, maxLFQ or iBAQ for peptide→protein.
+  Library assist uses a spectral library to leave interfered fragments out of a peptide's scale,
+  removing one only when its excess is beyond the cohort's measured fragment noise, and checks each
+  peptide's precision against the signal it kept.
 - **RT-aware normalization** — retention-time LOWESS normalization (default), plus median, quantile,
   VSN, or none.
 - **Batch correction** — full empirical-Bayes ComBat, applied at the peptide and protein level; an

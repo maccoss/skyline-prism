@@ -244,7 +244,8 @@ skyline-prism/
 │   │   │   ├── BatchCorrection/     # ComBat, ComBatCore, ReferenceAnchoredComBat, StreamingComBat
 │   │   │   ├── Normalization/       # Normalizer (median/rt_lowess/quantile/vsn), OutlierDetector
 │   │   │   ├── Parsimony/           # ParsimonyEngine, FastaParser, ProteinGroup
-│   │   │   ├── Library/             # SpectralLibrary (.blib), LibraryRollup
+│   │   │   ├── Library/             # SpectralLibrary (.blib), LibraryRollup (noise-gated ratio +
+│   │   │   │                        #   median fits), FragmentNoise, LibraryAssistPrecision
 │   │   │   ├── Qc/                  # QcReport, CvMetrics, ValidationStatus, DynamicRange,
 │   │   │   │                        #   PrecursorDensity, IsolationScheme
 │   │   │   ├── IO/                  # DuckDbMerge, parquet readers/writers, SkylineColumns
@@ -310,6 +311,32 @@ Full empirical Bayes implementation (Johnson et al. 2007):
 **Implementation**: `Core/BatchCorrection/ComBat.cs` (+ `ComBatCore` for the estimator,
 `ReferenceAnchoredComBat` for the opt-in anchored variant, `StreamingComBat` for the bounded-memory
 path). `Core/Qc/BatchCorrectionEvaluator.cs` decides the opt-in `auto_revert`.
+
+### Library-Assisted Rollup
+
+A sample's abundance is one scale times the library's total; a fragment reading far above its library
+share is interference and is left out of the scale (filled in at scale x library, so its share counts
+but its measurement does not). Default fit `noise_gated_ratio`: scale = kept signal / kept library
+intensity, and a fragment is removed only when it is above twice its prediction AND beyond
+`library_noise_sigma` SDs of the cohort's fragment noise, measured within the reference/QC pools
+before the fit. `median_polish` (median of log ratios, ungated 2x removal) is the earlier default,
+kept so earlier results reproduce.
+
+> [!CAUTION]
+> **Judge a change here on accuracy as well as precision - pool CVs alone reward the wrong method.**
+> An interferent that is the same in every injection of a pool reads as signal, so `sum` looks MORE
+> precise under interference while compressing every fold change. What settled the method choice
+> (FLARE-Extended, see `docs/methods.md`) was a known-truth test: synthetic interference of known size
+> added to real fragment data, scored by the slope of each method's profile against its own clean
+> profile across subjects. MS1 is not a usable yardstick on these ion-trap DIA data (more variance and
+> interference than MS2, often absent). And do not "fix" noise by discarding zero areas or the
+> interference removal: zeros are ~23% of fragment cells and are real near-zero signal, and removal
+> is the method's purpose. The shipped median fit's noise came from removing fragments that were only
+> noise-high - which the noise gate prevents - not from removal as such.
+
+**Implementation**: `Core/Library/LibraryRollup.cs` (both fits), `FragmentNoise.cs` (the noise and
+expected-CV curves, `library_assist_noise.json`), `LibraryAssistPrecision.cs` (the per-peptide
+precision check, `library_assist_precision.csv`); golden `dotnet/tests/fixtures/library_assist/`.
 
 ## Development Guidelines
 
