@@ -23,6 +23,7 @@ output_dir/
 ├── peptides_log2_internal.parquet  # Peptide quantities after normalization, BEFORE ComBat (LOG2, internal)
 ├── proteins_raw.parquet            # Protein quantities before normalization (LOG2 scale)
 ├── merged_data/                    # Merged transition-level data, partitioned by peptide bucket
+│   ├── _manifest.json              #   the partitions and files this merge wrote, checked on every read
 │   ├── _pep_bucket=0/*.parquet     #   one directory per bucket; count scales with cohort size
 │   └── ...
 ├── merged_data.cache.json          # Fingerprints, for detecting when a re-merge is needed
@@ -307,6 +308,22 @@ keeps `_pep_bucket` out of the result, so the columns are exactly those listed b
 > Output directories written by releases before dotnet-v26.12.0 hold a single sorted
 > `merged_data.parquet`. These are still read (the QC report and the Spectrum density tab open either
 > layout); only a re-run rebuilds them as partitions.
+
+**`_manifest.json`** lists every partition and parquet file the merge wrote, with each file's rows
+and bytes. PRISM checks `merged_data/` against it every time it reads the directory: a partition or
+file that is not listed, one that is listed but missing, or a file whose size changed, and the
+directory is **not read** - the error names each one and says how to fix it. A plain glob cannot tell
+a stray partition from a real one, so without this every reader would count the extra rows. PRISM's
+own merge never leaves one behind, but an output folder copied between machines can: a copy that adds
+and overwrites files but never deletes them keeps any partition the newer run no longer wrote. Copy
+output folders with a mirroring copy (for example `robocopy /MIR`).
+
+`prism run` rebuilds a `merged_data/` that fails the check, and recomputes every stage below it,
+rather than stopping. It clears `stage_cache.json` before it starts, so a run stopped part-way through
+the repair cannot leave the stages computed from the bad folder to be reused by the next one; if the
+file cannot be cleared, the run stops. A `merged_data/` written before the manifest existed is
+checked instead against the row count recorded in `merged_data.cache.json`; with neither there is
+nothing to check against, and it is read as it is.
 
 **Columns**:
 
@@ -703,7 +720,8 @@ are all reused, and `corrected_peptides.parquet` is byte-identical to the previo
 `transition_rollup.method` and everything downstream of it rebuilds.
 
 `prism run --force-reprocess` reuses nothing (but still records, so the next run benefits). Deleting
-this file has the same effect for one run.
+this file has the same effect for one run. A run that finds `merged_data/` no longer matching what its
+merge wrote empties this file itself before rebuilding (see `merged_data/` above).
 
 > [!IMPORTANT]
 > **Stage reuse applies to closed `.sky` documents and pre-exported reports.** A closed document also
@@ -721,9 +739,12 @@ this file has the same effect for one run.
 
 ### merged_data.cache.json
 
-**Purpose**: Stores fingerprints (file sizes, modification times, row counts) of input files to detect when re-merging is needed.
+**Purpose**: Records what the merge was made from and what it wrote, to detect when re-merging is
+needed. `Fingerprint` stamps the input files (path, size, last-write time) and the merge's own
+settings. `TotalRows` is the number of rows the merge wrote to `merged_data/`. `SortColumn` is the
+peptide column the rows were partitioned on (the name is left over from when the merge sorted).
 
-**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged.
+**Usage**: When running PRISM with `--force-reprocess`, this file is ignored. Otherwise, PRISM compares current input files against these fingerprints to skip merging if unchanged. Its recorded total row count is also what a `merged_data/` written before `_manifest.json` existed is checked against (see [merged_data/](#merged_data)).
 
 > [!NOTE]
 > A C# output directory from before dotnet-v26.12.0 has a `merged_data.parquet.cache.json` beside its

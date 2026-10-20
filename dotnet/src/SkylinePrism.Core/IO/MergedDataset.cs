@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace SkylinePrism.Core.IO;
 
@@ -137,6 +139,14 @@ public sealed class MergedDataset
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"No merged data at {root}.");
 
+        // Refused rather than read: a stray partition's rows would otherwise be counted as real ones by
+        // every reader, with nothing downstream to show it. See ManifestFileName.
+        var problems = Inconsistencies(root);
+        if (problems.Count > 0)
+            throw new MergedDatasetMismatchException(root, problems);
+
+        // Checked above to be exactly the manifest's partitions when there is one, so listing them from
+        // disk reads the same set without parsing the manifest a second time.
         var partitions = Directory
             .GetDirectories(root, BucketColumn + "=*")
             .OrderBy(d => d, StringComparer.Ordinal)
@@ -219,4 +229,293 @@ public sealed class MergedDataset
 
     private static string Glob(string dir, bool recursive = false) =>
         Path.Combine(dir, recursive ? "**" : "", "*.parquet").Replace('\\', '/');
+
+    // ---- The manifest ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The record a merge leaves inside merged_data/ of every partition and file it wrote. JSON, not
+    /// parquet, so no <c>**/*.parquet</c> read can pick it up as data.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why it exists.</b> A merged_data directory is read by globbing whatever
+    /// <c>_pep_bucket=*</c> partitions it holds, which is right only while the directory holds exactly
+    /// what one merge wrote. PRISM's own merge guarantees that (it builds in a staging directory and
+    /// renames it into place), but an output folder copied between machines does not: a copy that adds
+    /// and overwrites files but never deletes them leaves behind any partition the newer run no longer
+    /// wrote. Verapamil's merged_data was found holding three partitions where its merge had written
+    /// two, and every peptide in the third was also in the other two - 9.9 million duplicated rows that
+    /// every reader of the glob took for real ones. What each made of them varies (ion accounting
+    /// merges claims before counting and may have absorbed them; that was not measured), but none of
+    /// them could tell a stray partition from a real one.</para>
+    ///
+    /// <para>The manifest is that missing record. It travels with the folder, so a copy that brings a
+    /// newer merge brings its manifest too, and whatever the copy failed to remove shows up as not
+    /// listed.</para>
+    /// </remarks>
+    public const string ManifestFileName = "_manifest.json";
+
+    /// <summary>One parquet file of a partition: its name, the rows in its footer, its size on disk.</summary>
+    public sealed record ManifestFile(string Name, long Rows, long Bytes);
+
+    /// <summary>One <c>_pep_bucket=N</c> directory and the files the merge wrote into it.</summary>
+    public sealed record ManifestPartition(string Name, IReadOnlyList<ManifestFile> Files);
+
+    /// <summary>Everything one merge wrote.</summary>
+    public sealed record Manifest(int Version, long TotalRows, IReadOnlyList<ManifestPartition> Partitions);
+
+    private const int ManifestVersion = 1;
+
+    private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
+
+    /// <summary>
+    /// Record what is in <paramref name="root"/> now. Called by the merge on its staging directory,
+    /// after the COPY has closed its files and before the directory is renamed into place - so the
+    /// manifest describes exactly that merge, and arrives with it.
+    /// </summary>
+    internal static Manifest WriteManifest(string root)
+    {
+        var partitions = new List<ManifestPartition>();
+        foreach (var dir in Directory.GetDirectories(root, BucketColumn + "=*").OrderBy(d => d, StringComparer.Ordinal))
+        {
+            var files = Directory.GetFiles(dir, "*.parquet")
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .Select(f => new ManifestFile(Path.GetFileName(f), ParquetColumnReader.RowCountOf(f), new FileInfo(f).Length))
+                .ToList();
+            partitions.Add(new ManifestPartition(Path.GetFileName(dir), files));
+        }
+        var manifest = new Manifest(ManifestVersion, partitions.SelectMany(p => p.Files).Sum(f => f.Rows), partitions);
+        File.WriteAllText(Path.Combine(root, ManifestFileName), JsonSerializer.Serialize(manifest, ManifestJson));
+        return manifest;
+    }
+
+    /// <summary>
+    /// The manifest in <paramref name="root"/>, or null when there is none (a merge written before
+    /// manifests existed, or the legacy single file).
+    /// </summary>
+    /// <exception cref="InvalidDataException">The manifest is there but cannot be read.</exception>
+    public static Manifest? ReadManifest(string root)
+    {
+        var path = Path.Combine(root, ManifestFileName);
+        if (!File.Exists(path))
+            return null;
+        try
+        {
+            // Shared for write and delete, not File.ReadAllText: the GUI reads this while a run in
+            // another window may be publishing a re-merge, and Publish renames the whole directory -
+            // refused while ANY handle in it denies sharing (CLAUDE.md, "A reader must never take a
+            // file hostage").
+            using var fs = ParquetColumnIo.OpenRead(path);
+            using var sr = new StreamReader(fs);
+            var m = JsonSerializer.Deserialize<Manifest>(sr.ReadToEnd());
+            if (m?.Partitions is null)
+                throw new InvalidDataException($"{ManifestFileName} lists no partitions.");
+            // Names are joined onto the merged_data path, so anything but a bare partition or file
+            // name - a separator, "..", an absolute path - would point the check outside it. A null
+            // entry or a name listed twice is refused here too: the check keys partitions and files by
+            // name, and either would otherwise surface as a crash instead of a reason not to read.
+            var partitionNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in m.Partitions)
+            {
+                if (p is null || !IsBareName(p.Name) || !p.Name.StartsWith(BucketColumn + "=", StringComparison.Ordinal)
+                    || p.Files is null || p.Files.Any(f => f is null || !IsBareName(f.Name)))
+                    throw new InvalidDataException(
+                        $"{ManifestFileName} lists an entry that is not a partition or file inside merged_data: {p?.Name ?? "(null)"}");
+                if (!partitionNames.Add(p.Name))
+                    throw new InvalidDataException($"{ManifestFileName} lists {p.Name} more than once.");
+                var fileNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var f in p.Files)
+                    if (!fileNames.Add(f.Name))
+                        throw new InvalidDataException($"{ManifestFileName} lists {p.Name}/{f.Name} more than once.");
+            }
+            return m;
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"{ManifestFileName} cannot be read: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Everything about <paramref name="root"/> that does not match what its merge wrote, as sentences
+    /// a person can act on; empty when it matches, or when there is nothing to compare against.
+    /// </summary>
+    /// <remarks>
+    /// <para>With a manifest, the directory must hold exactly the listed partitions and files, each at
+    /// its recorded size. Size rather than rows because it costs a stat rather than a read - and a file
+    /// overwritten by another run's, or cut short by an interrupted copy, will not keep its size.</para>
+    ///
+    /// <para>Without one - a merge written before this release - the only record is the row count the
+    /// pipeline stores beside it in <c>merged_data.cache.json</c>, so the partitions' footers are
+    /// summed against that. It would have caught Verapamil: 39,789,408 rows on disk against 29,910,240
+    /// recorded. With neither there is nothing to check, and the directory is read as it is; refusing
+    /// it would break every older output directory that has done nothing wrong.</para>
+    /// </remarks>
+    public static IReadOnlyList<string> Inconsistencies(string root)
+    {
+        if (!Directory.Exists(root))
+            return Array.Empty<string>(); // absent, or the legacy single file: one file cannot hold a stray partition
+
+        Manifest? manifest;
+        try
+        {
+            manifest = ReadManifest(root);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return new[] { ex.Message };
+        }
+        return manifest is null ? AgainstCache(root) : AgainstManifest(root, manifest);
+    }
+
+    private static List<string> AgainstManifest(string root, Manifest manifest)
+    {
+        var problems = new List<string>();
+        var listed = manifest.Partitions.ToDictionary(p => p.Name, StringComparer.Ordinal);
+
+        foreach (var dir in Directory.GetDirectories(root, BucketColumn + "=*").OrderBy(d => d, StringComparer.Ordinal))
+        {
+            var name = Path.GetFileName(dir);
+            if (listed.ContainsKey(name))
+                continue;
+            var files = Directory.GetFiles(dir, "*.parquet", SearchOption.AllDirectories);
+            problems.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{name}: not written by this merge ({files.Length} file(s), {files.Sum(f => new FileInfo(f).Length):N0} bytes, last written {LastWritten(files)})"));
+        }
+
+        foreach (var partition in manifest.Partitions)
+        {
+            var dir = Path.Combine(root, partition.Name);
+            if (!Directory.Exists(dir))
+            {
+                problems.Add($"{partition.Name}: written by this merge but missing");
+                continue;
+            }
+            var expected = partition.Files.ToDictionary(f => f.Name, StringComparer.Ordinal);
+            foreach (var file in Directory.GetFiles(dir, "*.parquet", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
+                if (!expected.TryGetValue(rel, out var want))
+                {
+                    problems.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"{partition.Name}/{rel}: not written by this merge (last written {LastWritten(new[] { file })})"));
+                    continue;
+                }
+                var bytes = new FileInfo(file).Length;
+                if (bytes != want.Bytes)
+                    problems.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"{partition.Name}/{rel}: {bytes:N0} bytes, but the merge wrote {want.Bytes:N0}"));
+            }
+            foreach (var want in partition.Files)
+                if (!File.Exists(Path.Combine(dir, want.Name)))
+                    problems.Add($"{partition.Name}/{want.Name}: written by this merge but missing");
+        }
+
+        foreach (var file in OutsidePartitions(root))
+            problems.Add($"{Path.GetRelativePath(root, file).Replace('\\', '/')}: not written by this merge");
+        return problems;
+    }
+
+    /// <summary>
+    /// Parquet files the recursive <see cref="ScanTarget"/> glob would read that sit in no partition
+    /// directory - at the top of merged_data, or in some other folder inside it.
+    /// </summary>
+    private static IEnumerable<string> OutsidePartitions(string root) =>
+        Directory.GetFiles(root, "*.parquet", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.GetDirectories(root)
+                .Where(d => !Path.GetFileName(d).StartsWith(BucketColumn + "=", StringComparison.Ordinal))
+                .SelectMany(d => Directory.GetFiles(d, "*.parquet", SearchOption.AllDirectories)))
+            .OrderBy(f => f, StringComparer.Ordinal);
+
+    private static List<string> AgainstCache(string root)
+    {
+        var problems = new List<string>();
+        var cache = SourceFingerprint.TryRead(CachePathFor(root));
+        if (cache is null || cache.TotalRows <= 0)
+            return problems;
+
+        // Everything the recursive glob reads: each partition, plus anything outside them as one group.
+        var groups = Directory.GetDirectories(root, BucketColumn + "=*")
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .Select(d => (Name: Path.GetFileName(d), Files: Directory.GetFiles(d, "*.parquet", SearchOption.AllDirectories)))
+            .ToList();
+        var outside = OutsidePartitions(root).ToArray();
+        if (outside.Length > 0)
+            groups.Add(("outside any partition", outside));
+
+        var perPartition = new List<(string Name, long Rows, string[] Files)>();
+        long total = 0;
+        foreach (var (name, files) in groups)
+        {
+            long rows = 0;
+            foreach (var f in files)
+            {
+                try
+                {
+                    rows += ParquetColumnReader.RowCountOf(f);
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException
+                                               or NotSupportedException or Parquet.ParquetException)
+                {
+                    problems.Add($"{name}/{Path.GetFileName(f)}: cannot be read as parquet ({ex.Message})");
+                }
+            }
+            perPartition.Add((name, rows, files));
+            total += rows;
+        }
+
+        if (problems.Count == 0 && total == cache.TotalRows)
+            return problems;
+
+        problems.Insert(0, string.Create(CultureInfo.InvariantCulture,
+            $"the partitions hold {total:N0} rows, but {Path.GetFileName(CachePathFor(root))} records {cache.TotalRows:N0} for this merge"));
+        // Every partition with its rows and date: a stray one usually stands out as the odd date.
+        foreach (var (name, rows, files) in perPartition)
+            problems.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{name}: {rows:N0} rows in {files.Length} file(s), last written {LastWritten(files)}"));
+        return problems;
+    }
+
+    private static bool IsBareName(string? name) =>
+        !string.IsNullOrEmpty(name) && name != "." && name != ".."
+        && name.IndexOfAny(new[] { '/', '\\', ':' }) < 0 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
+    /// <summary>The <c>merged_data.cache.json</c> the pipeline writes beside a merge.</summary>
+    internal static string CachePathFor(string root) =>
+        Path.TrimEndingDirectorySeparator(root) + ".cache.json";
+
+    private static string LastWritten(IEnumerable<string> files)
+    {
+        var latest = files.Select(File.GetLastWriteTime).DefaultIfEmpty().Max();
+        return latest == default ? "never" : latest.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+    }
+}
+
+/// <summary>
+/// A merged_data directory that no longer holds what its merge wrote. Thrown by
+/// <see cref="MergedDataset.Open"/> rather than reading it, because every reader would otherwise
+/// count whatever is extra as real rows - with nothing in any output to say so.
+/// </summary>
+public sealed class MergedDatasetMismatchException : InvalidOperationException
+{
+    public MergedDatasetMismatchException(string root, IReadOnlyList<string> problems)
+        : base(Describe(root, problems))
+    {
+        Root = root;
+        Problems = problems;
+    }
+
+    /// <summary>The merged_data directory that was refused.</summary>
+    public string Root { get; }
+
+    /// <summary>What does not match, one sentence each.</summary>
+    public IReadOnlyList<string> Problems { get; }
+
+    private static string Describe(string root, IReadOnlyList<string> problems) =>
+        $"{root} does not match what its merge wrote, so it was not read:"
+        + string.Concat(problems.Select(p => Environment.NewLine + "  - " + p))
+        + Environment.NewLine
+        + "This usually means the output folder was copied over an older copy of itself by a copy that adds "
+        + "and overwrites files but never deletes them. Copy it again with a mirroring copy (for example "
+        + "robocopy /MIR), or rebuild merged_data by running prism run on this folder again: a run that "
+        + "finds this rebuilds it, and --force-reprocess rebuilds everything.";
 }
