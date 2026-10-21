@@ -505,7 +505,7 @@ exactly that. With complete data the two are the same, and the fit is the one PR
 The deprecated intensity trend's group statistics count the observed values too. A group left with
 one has a mean but no sd, so it places no point on the trend, but its trend value is averaged into
 the feature's prior with weight 1, as the toolkit - the definition of that estimator - does; PRISM
-skipped such a group until the release after dotnet-v26.29.0 (`intensity_trend.json` now has a
+skipped such a group until dotnet-v26.30.0 (`intensity_trend.json` now has a
 missing-value case). The trend's shape is fitted over every feature in the matrix, again as the
 toolkit fits it: a feature too sparse in the contrast's samples to be tested still has pool
 replicates that trace noise against intensity, and its points stay on the curve
@@ -704,8 +704,8 @@ chosen by level.
 | intensity trend (**deprecated** in both, `--prior intensity-trend`) | **PRISM and the toolkit are the same estimator**, pinned end to end by `toolkit_end_to_end.json` (toolkit v26.9.0) at 5e-8 on t, p and the prior - the allowance for the two tools' LOWESS algorithms (below) - and its LOWESS by `lowess.json`. P.Value differs from toolkit 26.8.0 and earlier wherever the df cap binds, as for the global prior |
 | intensity trend vs limma `trend=TRUE` | **median 0.9% on P.Value, at most 18%**, identical hit lists at p < 0.05 (the `moderated_t.json` trend case) |
 
-**Five conventions used to separate a toolkit run from PRISM.** From toolkit 26.9.0 and the PRISM
-release after dotnet-v26.29.0 the two tools share all five. Each bullet says how far it moved
+**Five conventions used to separate a toolkit run from PRISM.** From toolkit 26.9.0 and PRISM
+dotnet-v26.30.0 the two tools share all five. Each bullet says how far it moved
 results before; the last two could change a call outright - at an FDR threshold, or for a feature
 one tool did not test:
 
@@ -740,7 +740,7 @@ one tool did not test:
   to features / features tested (12/11 on `toolkit_end_to_end.json`'s case with one untested
   feature).
 - **Missing values: each feature on its observed samples,** as limma's `lmFit` fits it (see "Missing
-  values" above). The toolkit from 26.9.0, PRISM from the release after dotnet-v26.29.0; before, PRISM
+  values" above). The toolkit from 26.9.0, PRISM from dotnet-v26.30.0; before, PRISM
   tested only complete features and the toolkit dropped a feature whose observed design was singular.
 
 **The intensity trend and limma's `trend=TRUE` are still different estimators** that happen to share
