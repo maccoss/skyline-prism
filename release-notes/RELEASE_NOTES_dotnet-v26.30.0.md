@@ -7,13 +7,17 @@ cut protein QC CV from 30.2% to 20.8%. Protein-level differential analysis defau
 on intensity and peptide count, and gave the same p-values as `proteomics-toolkit` 26.9.0. And the
 moderated t fitted proteins with missing values on the samples where they were observed, as limma's
 `lmFit` does, instead of dropping them; on complete data nothing changed (see Breaking Changes).
+Separately, a config key left blank took its documented default, so a config with a blank
+`global_normalization.method:` ran `rt_lowess` instead of median normalization, and a blank
+`batch_estimation.method:` estimated no batches instead of `auto`.
 
 To reproduce a result from dotnet-v26.29.0, set `transition_rollup.library_fitting_method:
 median_polish` (an earlier run's `parameters.json` already names its fit, so `--from-provenance`
 reproduced it as it ran), and pass `--prior limma-trend` at protein level - in the Differential pane,
 choose **Intensity trend (limma)** under Prior. The Skyline tool had no control for the library-assist
 fit and did not keep one from a loaded `parameters.json`, so an earlier library-assist run could be
-reproduced only from the command line. The missing-value fit had no switch.
+reproduced only from the command line. Write a blank method key out as the method it ran
+(`method: median`, `method: auto`). The missing-value fit had no switch.
 
 This release also added a peak-quality-by-acquisition-order section to the QC report, and stopped
 reading a `merged_data/` folder that no longer matched what its merge had written.
@@ -161,7 +165,7 @@ reading a `merged_data/` folder that no longer matched what its merge had writte
   `proteomics-toolkit` on a test set with three exactly constant proteins. Both tools used the same
   rule.
 - Corrected documentation that contradicted the code, with no change to any output. `docs/methods.md`
-  described the retired Python engine's library-assist fit (least squares with MAD z-scores, an R²
+  described the retired Python engine's library-assist fit (least squares with MAD z-scores, an R^2
   and output fields C# never had, and matching by ion type); it was rewritten to describe the two fits
   PRISM has. `README.md` and `docs/parameters.md` called median polish the default transition rollup,
   which has been `sum`.
