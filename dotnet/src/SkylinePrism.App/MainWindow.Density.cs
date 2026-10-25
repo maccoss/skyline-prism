@@ -224,15 +224,34 @@ public partial class MainWindow
     /// </remarks>
     private async Task EnsureQcLoadedAsync()
     {
+        // Settle any load in flight first, so the directory compared below is the one it left behind.
+        while (!_qcLoading.IsCompleted)
+            await _qcLoading;
+
         var outputDir = OutputDirBox.Text?.Trim();
         if (string.IsNullOrEmpty(outputDir) || !Directory.Exists(outputDir))
+        {
+            // No directory has nothing to show. Keeping the previous one's plots under it is what made
+            // a changed directory look ignored. Safe to clear here: no load is in flight.
+            if (_qcData.Count > 0)
+            {
+                _qcData.Clear();
+                _qcOutputDir = null;
+                // The grouping goes with the data, or the Group-by lists keep the old run's batches.
+                _qcTypes = new();
+                _qcAnnotations = ReplicateAnnotations.Empty;
+                _qcExtraAnnotations = SampleAnnotationTable.Empty;
+                PopulateGroupCombos();
+                RenderQc();
+            }
             return;
+        }
         if (string.Equals(_qcOutputDir, outputDir, StringComparison.OrdinalIgnoreCase))
             return;
 
         // Off the UI thread: the same reads the run path already backgrounds, for the same reason -
         // an output directory on OneDrive or scanned by Defender can block for a long time.
-        await Task.Run(() => LoadQcMatrices(outputDir));
+        await LoadQcAsync(outputDir);
         PopulateGroupCombos();
         RenderQc();
     }
