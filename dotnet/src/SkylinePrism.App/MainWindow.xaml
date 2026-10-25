@@ -121,11 +121,11 @@
             <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
                      TextChanged="OnBatchColumnChanged"
                      ToolTip="The batch/plate column name within the metadata report." />
-            <TextBlock Grid.Column="4" Text="Clinical CSV:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBlock Grid.Column="4" Text="Additional metadata:" VerticalAlignment="Center" Margin="16,0,8,0" />
             <TextBox Grid.Column="5" x:Name="ClinicalCsvBox" VerticalAlignment="Center" IsReadOnly="True"
-                     ToolTip="Optional external clinical metadata CSV, joined to the samples by an auto-detected key column. Its columns become available in the Differential pane's Group by and Adjust for." />
+                     ToolTip="Optional CSV of extra per-sample annotations - clinical data, demographics, anything not in the Skyline document - joined to the samples by an auto-detected key column. Its columns become available to group, color and adjust by, in the QC, Differential and Markers panes. The CLI takes the same file as --additional-metadata." />
             <Button Grid.Column="6" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowseClinical"
-                    ToolTip="Choose a clinical metadata CSV to join to the samples." />
+                    ToolTip="Choose a CSV of additional per-sample metadata to join to the samples." />
         </Grid>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
@@ -404,7 +404,7 @@
                                      its label while the Differential kept one it should not have. -->
                                 <TextBlock x:Name="QcGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
-                                          ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any clinical CSV attached in the Differential pane. Defaults to Sample Type." />
+                                          ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any additional metadata CSV attached at the top of the window. Defaults to Sample Type." />
                                 <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
                                 <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
                                           ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
@@ -909,7 +909,8 @@
                                 <ListBoxItem>Volcano</ListBoxItem>
                                 <!-- Collapsed and disabled under a trend design: Detection
                                 compares two GROUPS, and a trend has none. -->
-                                <ListBoxItem x:Name="DiffViewDetectionItem">Detection</ListBoxItem>
+                                <ListBoxItem x:Name="DiffViewDetectionItem"
+                                             ToolTip="Is each peptide seen more often in one group than the other? Skyline integrates a peak for every peptide in every run, so the abundances have no gaps and the Volcano cannot tell low from absent. This counts the runs where the precursor passed the detection q-value cut (DetectionQValue &lt; 0.01) in each group and tests whether the rates differ. Plotted as the rate difference (B - A) against -log10 p. Peptide level.">Detection</ListBoxItem>
                                 <!-- Also collapsed under a trend: RunEnrichmentAsync resolves
                                 A/B arms, which a trend does not have. -->
                                 <ListBoxItem x:Name="DiffViewEnrichmentItem">Enrichment</ListBoxItem>
@@ -922,8 +923,15 @@
                                 Click="OnGenerateQuantReport"
                                 ToolTip="Run the current contrast across every view and write a self-contained quant_report.html plus result tables (CSV) to a quant/ folder in the output directory. Includes differential, detection, GO/pathway enrichment (needs internet), and the ticked Markers-pane panels." Margin="12,0,0,0" DockPanel.Dock="Right" />
                             </DockPanel>
-                            <TextBlock x:Name="DiffStatusText"
-                            Foreground="#888" TextWrapping="Wrap" Margin="8,2,8,4" DockPanel.Dock="Top" />
+                            <DockPanel DockPanel.Dock="Top" Margin="8,2,8,4">
+                                <!-- Shown only once work has run past a second (BeginDiffBusy). -->
+                                <ProgressBar x:Name="DiffProgress" DockPanel.Dock="Left" Width="120" Height="12"
+                                             Margin="0,0,10,0" VerticalAlignment="Center" IsIndeterminate="True"
+                                             Visibility="Collapsed"
+                                             AutomationProperties.Name="Differential analysis running" />
+                                <TextBlock x:Name="DiffStatusText" Foreground="#888" TextWrapping="Wrap"
+                                           VerticalAlignment="Center" />
+                            </DockPanel>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using ScottPlot;
 using SkylinePrism.Core.Config;
+using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Parsimony;
@@ -63,21 +64,28 @@ public partial class MainWindow
 
     // ---------------------------------------------------------------- follow Skyline's selection
     //
-    // The other direction: picking a protein or peptide in Skyline highlights it here. Skyline's RPC
-    // is request/response and cannot push events, so this polls - one lightweight call, and only
-    // while this tab is actually on screen.
+    // The other direction: picking a protein or peptide in Skyline highlights it here, and on the
+    // Volcano (PollSkylineSelectionForVolcano). Skyline's RPC is request/response and cannot push
+    // events, so this polls - one lightweight call, and only while one of those panes is on screen.
     private System.Windows.Threading.DispatcherTimer? _rangeFollowTimer;
     private string? _rangeFollowedLocator;
     private bool _rangeFollowBusy;
     private Dictionary<string, AbundanceEntry>? _rangeEntryByLocator;
     private AbundanceLevel _rangeEntryByLocatorLevel = AbundanceLevel.Protein;
 
+    /// <summary>The pane the timer is following Skyline for, or null when it is stopped.</summary>
+    private VizPane? _followPane;
+
     private static readonly TimeSpan RangeFollowInterval = TimeSpan.FromMilliseconds(750);
 
-    /// <summary>Start/stop following Skyline's selection as the tab comes into and out of view.</summary>
-    private void SetRangeFollowActive(bool active)
+    /// <summary>
+    /// Start/stop following Skyline's selection as a pane comes into and out of view. One timer
+    /// serves both panes that follow it, since only one is ever on screen.
+    /// </summary>
+    private void SetSkylineFollow(VizPane? pane)
     {
-        if (!active)
+        _followPane = VizNavigation.ShouldFollowSkylineSelection(pane) ? pane : null;
+        if (_followPane is null)
         {
             _rangeFollowTimer?.Stop();
             return;
@@ -92,7 +100,13 @@ public partial class MainWindow
             {
                 Interval = RangeFollowInterval,
             };
-            _rangeFollowTimer.Tick += (_, _) => PollSkylineSelection();
+            _rangeFollowTimer.Tick += (_, _) =>
+            {
+                if (_followPane == VizPane.Differential)
+                    PollSkylineSelectionForVolcano();
+                else
+                    PollSkylineSelection();
+            };
         }
         _rangeFollowTimer.Start();
     }
@@ -153,26 +167,35 @@ public partial class MainWindow
             RangeStatusText.Text =
                 $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
                 + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
+            // Redraws the detail window if it is open; never opens or raises it from here.
+            ShowRangeFeatureDetail(entry, activate: false);
             _rangeFollowFailures = 0;
         }
         catch (Exception ex)
         {
-            // This method is `async void` on a timer: an escaping exception becomes an unhandled
-            // application exception, and the timer keeps firing - so one fault produces an error
-            // dialog every 750 ms until the tool is killed. Nothing here is worth interrupting the
-            // user for; following the selection is a convenience, and the plot is unaffected.
-            App.WriteLog("Following Skyline's selection failed: " + ex);
-            if (++_rangeFollowFailures >= MaxRangeFollowFailures)
-            {
-                _rangeFollowTimer?.Stop();
-                Log("Stopped following Skyline's selection after "
-                    + $"{MaxRangeFollowFailures} consecutive failures ({ex.Message}). "
-                    + "Clicking a point still works; switch away from this tab and back to retry.");
-            }
+            NoteFollowFailure(ex);
         }
         finally
         {
             _rangeFollowBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// A poll that threw. Both polls are <c>async void</c> on a timer: an escaping exception becomes
+    /// an unhandled application exception, and the timer keeps firing - so one fault produces an
+    /// error dialog every 750 ms until the tool is killed. Nothing here is worth interrupting the
+    /// user for; following the selection is a convenience, and the plots are unaffected.
+    /// </summary>
+    private void NoteFollowFailure(Exception ex)
+    {
+        App.WriteLog("Following Skyline's selection failed: " + ex);
+        if (++_rangeFollowFailures >= MaxRangeFollowFailures)
+        {
+            _rangeFollowTimer?.Stop();
+            Log("Stopped following Skyline's selection after "
+                + $"{MaxRangeFollowFailures} consecutive failures ({ex.Message}). "
+                + "Clicking a point still works; switch away from this pane and back to retry.");
         }
     }
 
@@ -758,12 +781,11 @@ public partial class MainWindow
         // On the y axis, not just the status line: the axis travels with the image when the plot is
         // copied into a slide or a paper, and "log10 abundance" alone does not say abundance OF WHAT.
         var rollup = _rangeRollupShown;
-        // Sized as Skyline sizes its Relative Abundance points: by the pane being drawn on, in the
-        // pixels it renders at. It is the pane's size at render time; a window resize keeps it until
-        // the next render, which any control change triggers.
-        var scale = RangePlot.DisplayScale;
-        var pointSize = PlotRenderer.SkylinePointPixels(
-            RangePlot.ActualWidth * scale, RangePlot.ActualHeight * scale);
+        // Sized as Skyline sizes its Relative Abundance points, by the pane being drawn on - in
+        // device-independent pixels and capped, because nothing else on a ScottPlot WPF plot scales
+        // with the display (see InteractivePointPixels). It is the pane's size at render time; a
+        // window resize keeps it until the next render, which any control change triggers.
+        var pointSize = PlotRenderer.InteractivePointPixels(RangePlot.ActualWidth, RangePlot.ActualHeight);
         PlotRenderer.DrawDynamicRange(
             plt, background, highlights,
             yLabel: RangeYLabel(rollup, SelectedReplicateCount()),
@@ -945,6 +967,102 @@ public partial class MainWindow
         // a click that did nothing at all.
         RenderDynamicRange();
         SelectInSkyline(best);
+        ShowRangeFeatureDetail(best, activate: true);
+    }
+
+    /// <summary>
+    /// Open (or redraw) the per-feature window for a Dynamic Range point: its log2 abundance in each
+    /// replicate the plot averages, a box per sample type - the window a Volcano click opens.
+    /// </summary>
+    /// <remarks>
+    /// <para>The values come from the same corrected matrix, read through the Differential pane's
+    /// dataset (shared with the Markers pane, so a run already open in either is not read again).
+    /// That matrix is the run's own; under a rollup override the plotted protein abundance is a
+    /// recomputation and the window says the values are the run's rollup.</para>
+    /// <para><paramref name="activate"/> is false when the selection came from Skyline: bringing a
+    /// window forward while the user is clicking through Skyline's tree would take the focus away
+    /// from the window they are working in. An unopened window is not opened then either.</para>
+    /// </remarks>
+    private async void ShowRangeFeatureDetail(AbundanceEntry entry, bool activate)
+    {
+        try
+        {
+            if (!activate && _featureDetailWindow is null)
+                return;
+            var dir = _rangeOutputDir;
+            if (dir is null)
+                return;
+            var level = RangeLevel == AbundanceLevel.Protein ? FeatureLevel.Protein : FeatureLevel.Peptide;
+            var recomputed = RangeRollupOverride is not null;
+            var ticked = Enumerable.Range(0, _rangeSampleValues.Count)
+                .Where(i => _rangeSampleValues[i].IsSelected)
+                .Select(i => _rangeSampleColumns[i])
+                .ToHashSet(StringComparer.Ordinal);
+
+            DifferentialDataset ds;
+            try
+            {
+                ds = await GetMarkersDatasetAsync(dir, level);
+            }
+            catch (Exception ex)
+            {
+                RangeStatusText.Text += $" (could not read the per-replicate values: {ex.Message})";
+                return;
+            }
+
+            // The pane may have moved on while the matrix was read.
+            if (!ReferenceEquals(entry, _rangeSelected))
+                return;
+
+            // A protein point is keyed by its leading name, the matrix row by its protein group.
+            var featureId = level == FeatureLevel.Protein
+                ? entry.ProteinGroups.FirstOrDefault(g => ds.IdentityOf(g) is not null) ?? entry.Key
+                : entry.Key;
+            var row = Array.IndexOf(ds.FeatureIds, featureId);
+            if (row < 0)
+                return;
+
+            var byType = ds.MetadataColumns.Contains("sample_type") ? ds.MetadataValues("sample_type") : null;
+            var groups = new SortedDictionary<string, (List<double> Values, List<string> Replicates)>(
+                StringComparer.Ordinal);
+            for (var s = 0; s < ds.SampleIds.Length; s++)
+            {
+                if (ticked.Count > 0 && !ticked.Contains(ds.SampleIds[s]))
+                    continue;
+                var v = ds.ExprLog2[row, s];
+                if (!double.IsFinite(v))
+                    continue;
+                var name = byType?[s] is { Length: > 0 } t ? t : "all replicates";
+                if (!groups.TryGetValue(name, out var g))
+                    groups[name] = g = (new List<double>(), new List<string>());
+                g.Values.Add(v);
+                g.Replicates.Add(ds.SampleIds[s]);
+            }
+
+            var n = groups.Values.Sum(g => g.Values.Count);
+            var subtitle =
+                $"Rank {entry.Rank:N0}, log10 mean {entry.Log10Abundance:0.00}   -   n={n} "
+                + "(non-missing values" + (byType is null ? ")" : ", by sample_type)")
+                + (recomputed ? "   -   values are the run's own rollup, not the recomputed one" : "");
+
+            if (_featureDetailWindow is null)
+            {
+                _featureDetailWindow = new FeatureDetailWindow { Owner = this };
+                _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
+            }
+
+            _featureDetailWindow.ShowGroups(entry.Label, featureId, subtitle,
+                groups.Select(kv => new FeatureDetailWindow.DetailGroup(kv.Key, kv.Value.Values, kv.Value.Replicates))
+                    .ToList());
+            _featureDetailWindow.Show();
+            if (activate)
+                _featureDetailWindow.Activate();
+        }
+        catch (Exception ex)
+        {
+            // async void: nothing can catch what escapes this, so it catches its own.
+            ReportHandlerFailure(nameof(ShowRangeFeatureDetail), ex);
+        }
     }
 
     private void SelectInSkyline(AbundanceEntry entry)
@@ -1046,18 +1164,30 @@ public partial class MainWindow
 
         if (level == AbundanceLevel.Peptide)
         {
+            // The exact sequence first, then its notation-free signature: PRISM's peptides carry the
+            // report's Unimod form and the tree names them by mass delta, so every modified peptide
+            // reaches here only through the signature (see SkylineReportDriver.ModificationSignature).
+            var signature = SkylineReportDriver.ModificationSignature(entry.Key);
+            var forms = string.Equals(signature, entry.Key, StringComparison.Ordinal)
+                ? new[] { entry.Key }
+                : new[] { entry.Key, signature };
+
             // "<protein>/<peptide>" per group, in PRISM's group order.
-            foreach (var protein in entry.ProteinNames)
-                if (_rangeLocatorMap.TryGetValue($"{protein}/{entry.Key}", out var byProtein))
-                    return byProtein;
+            foreach (var form in forms)
+                foreach (var protein in entry.ProteinNames)
+                    if (_rangeLocatorMap.TryGetValue($"{protein}/{form}", out var byProtein))
+                        return byProtein;
 
             // Nothing matched a PRISM group, so take the sequence's first occurrence in the tree - the
             // map keeps the FIRST element for an ambiguous bare key, and GetLocations returns them in
             // document order.
-            if (_rangeLocatorMap.TryGetValue(entry.Key, out var firstInTree))
+            foreach (var form in forms)
             {
-                viaFallback = entry.ProteinNames.Count > 0;
-                return firstInTree;
+                if (_rangeLocatorMap.TryGetValue(form, out var firstInTree))
+                {
+                    viaFallback = entry.ProteinNames.Count > 0;
+                    return firstInTree;
+                }
             }
             return null;
         }

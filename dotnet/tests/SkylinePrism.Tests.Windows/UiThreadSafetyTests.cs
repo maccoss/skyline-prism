@@ -49,6 +49,8 @@ public class UiThreadSafetyTests
     private static readonly string[] WorkerThreadMethods =
     {
         "FindEntryByLocator",
+        "FindFeatureByLocator",
+        "AsLocatorEntry",
         "ResolveLocator",
         "RunPipeline",
         "RunIonAccounting",

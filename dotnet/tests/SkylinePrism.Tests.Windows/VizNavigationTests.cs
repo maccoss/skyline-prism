@@ -81,13 +81,14 @@ public class VizNavigationTests
     /// nothing else - including "no pane", which is the case a null check is easiest to forget.
     /// </summary>
     [Fact]
-    public void OnlyTheDynamicRangePaneFollowsSkylinesSelection()
+    public void OnlyThePanesThatSelectInSkylineFollowItsSelection()
     {
         Assert.True(VizNavigation.ShouldFollowSkylineSelection(VizPane.DynamicRange));
+        Assert.True(VizNavigation.ShouldFollowSkylineSelection(VizPane.Differential));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Qc));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Density));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.IonAccounting));
-        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Differential));
+        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Markers));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(null));
     }
 

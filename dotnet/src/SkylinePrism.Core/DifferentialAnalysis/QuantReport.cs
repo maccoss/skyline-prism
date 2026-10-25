@@ -236,8 +236,8 @@ public static class QuantReport
         sb.Append("<div class=\"box\"><h2>Quantification Parameters</h2><table class=\"kv\">");
         Kv(sb, "Contrast", quant.Contrast.Describe());
         Kv(sb, "Level", quant.Level);
-        if (quant.ClinicalCsvs is { Count: > 0 })
-            Kv(sb, "Clinical CSV", string.Join("; ", quant.ClinicalCsvs));
+        if (quant.AdditionalMetadataCsvs is { Count: > 0 })
+            Kv(sb, "Additional metadata", string.Join("; ", quant.AdditionalMetadataCsvs));
         // The same words the CLI prints and differential.csv's "# method:" line records, naming the
         // prior that actually RAN - which is the thing a reader comparing two results needs.
         Kv(sb, "Method", options.Describe(res.VariancePrior));

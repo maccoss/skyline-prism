@@ -51,6 +51,27 @@ public class DynamicRangePointSizeTests
         Assert.InRange(PlotRenderer.SkylinePointPixels(1240, 600), 18.5, 19.0);
     }
 
+    /// <summary>
+    /// The tool's size: Skyline's rule inside its bounds, held at them outside. Before, the tool
+    /// passed RENDERED pixels, so the same window drew 37 px points on a 200%-scaled display and 19 px
+    /// at 100%, beside text that is a fixed 24 rendered pixels on both.
+    /// </summary>
+    [Fact]
+    public void InteractivePoints_FollowThePaneWithinBounds()
+    {
+        // Inside the bounds it is exactly Skyline's size.
+        Assert.Equal(PlotRenderer.SkylinePointPixels(800, 600),
+            PlotRenderer.InteractivePointPixels(800, 600), 9);
+        // A 1240 x 600 window at 200% is 2480 x 1200 rendered; its device-independent size is what
+        // is passed, and either way a large pane stops at the cap.
+        Assert.Equal(PlotRenderer.MaxInteractivePointPixels, PlotRenderer.InteractivePointPixels(1240, 600), 9);
+        Assert.Equal(PlotRenderer.MaxInteractivePointPixels, PlotRenderer.InteractivePointPixels(2560, 1300), 9);
+        // A small or not-yet-laid-out pane never draws a speck.
+        Assert.Equal(PlotRenderer.MinInteractivePointPixels, PlotRenderer.InteractivePointPixels(200, 150), 9);
+        Assert.InRange(PlotRenderer.InteractivePointPixels(0, 0),
+            PlotRenderer.MinInteractivePointPixels, PlotRenderer.MaxInteractivePointPixels);
+    }
+
     [Fact]
     public void PointsAreDrawnAtTheSizeAskedFor_BackgroundAndListsAlike()
     {

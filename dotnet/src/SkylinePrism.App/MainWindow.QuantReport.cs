@@ -21,7 +21,8 @@ public partial class MainWindow
     {
         try
         {
-            await GenerateQuantReportAsync();
+            using (BeginDiffBusy())
+                await GenerateQuantReportAsync();
         }
         catch (Exception ex)
         {

@@ -178,7 +178,7 @@ public partial class MainWindow
         DiffPane.Visibility = pane == VizPane.Differential ? Visibility.Visible : Visibility.Collapsed;
         MarkersPane.Visibility = pane == VizPane.Markers ? Visibility.Visible : Visibility.Collapsed;
 
-        SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
+        SetSkylineFollow(pane);
 
         // Re-checked on every pane change rather than once: the user can point the output box at
         // another directory at any time, and whether that one has a measured denominator is what

@@ -61,9 +61,11 @@ internal static class VizNavigation
     }
 
     /// <summary>
-    /// Whether to poll Skyline for its current selection. Only the dynamic-range plot follows it, and
-    /// only while it is on screen - the poll is a live RPC to another process on a timer, so leaving
-    /// it running behind a hidden pane costs Skyline work for a plot nobody is looking at.
+    /// Whether to poll Skyline for its current selection. The dynamic-range plot and the Volcano
+    /// follow it - the two panes whose points select in Skyline - and only while one of them is on
+    /// screen: the poll is a live RPC to another process on a timer, so leaving it running behind a
+    /// hidden pane costs Skyline work for a plot nobody is looking at.
     /// </summary>
-    public static bool ShouldFollowSkylineSelection(VizPane? pane) => pane == VizPane.DynamicRange;
+    public static bool ShouldFollowSkylineSelection(VizPane? pane) =>
+        pane is VizPane.DynamicRange or VizPane.Differential;
 }

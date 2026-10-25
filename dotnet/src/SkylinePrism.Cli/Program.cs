@@ -242,8 +242,8 @@ public static partial class Program
     {
         var opts = ParseOptions(args,
             multiValue: new HashSet<string>
-                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical",
-                  "--restrict-to", "--covariate-type" });
+                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers",
+                  "--additional-metadata", "--clinical", "--restrict-to", "--covariate-type" });
         var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
         RefuseReportFlagsWithoutReport(opts);
         // Resolved before anything runs, so a mistyped panel name refuses the command rather than
@@ -274,8 +274,8 @@ public static partial class Program
 
         var dataset = DifferentialDataset.Load(dir, level);
         // Before anything validates a column name, so --group-by, --adjust-for and the rest can name
-        // a clinical column, as they can in the pane once a clinical CSV is attached there.
-        AttachClinicalFrom(opts, dataset);
+        // a joined column, as they can in the pane once an additional metadata CSV is attached there.
+        AttachAdditionalMetadataFrom(opts, dataset);
         RefuseUngroupableMarkers(opts, dataset, markerPanels, trendRequested);
         if (trendRequested)
             return RunDifferentialTrend(opts, dataset, level, dir, markerPanels);
@@ -396,28 +396,38 @@ public static partial class Program
     }
 
     /// <summary>
-    /// <c>--clinical</c>: join an external clinical table to the samples - the same
-    /// <see cref="DifferentialDataset.AttachClinical"/> the pane's Clinical CSV input runs, so the key
-    /// column is detected the same way and the same columns are added.
+    /// <c>--additional-metadata</c>: join an external table of per-sample annotations to the samples -
+    /// the same <see cref="DifferentialDataset.AttachClinical"/> the tool's Additional metadata input
+    /// runs, so the key column is detected the same way and the same columns are added.
     /// </summary>
     /// <remarks>
     /// <para>Refused when nothing matches: the pane can say so and carry on, but a command that named a
-    /// clinical file almost certainly depends on one of its columns, and would otherwise fail later on
+    /// metadata file almost certainly depends on one of its columns, and would otherwise fail later on
     /// "no metadata column" without saying the join was the cause.</para>
     /// <para>Repeatable, and joined in the order given - the pane lets a second file be attached on top
     /// of the first, and a report records both, so the command that regenerates it must take both.</para>
+    /// <para><c>--clinical</c>, the flag's name up to dotnet-v26.30.0, still works and says it is
+    /// deprecated: every quant report written before then records its command with it, and that
+    /// command has to keep regenerating the report.</para>
     /// </remarks>
-    private static void AttachClinicalFrom(ParsedOptions opts, DifferentialDataset dataset)
+    private static void AttachAdditionalMetadataFrom(ParsedOptions opts, DifferentialDataset dataset)
     {
-        foreach (var path in opts.GetList("--clinical"))
+        var deprecated = opts.GetList("--clinical");
+        if (deprecated.Count > 0)
+            Console.Error.WriteLine(
+                "WARNING: --clinical is deprecated; use --additional-metadata (the same file, the same join).");
+        // Both lists, not GetList over both names: that returns the first name it finds, and would
+        // drop every --clinical file from a command that also used the new name.
+        foreach (var path in opts.GetList("--additional-metadata").Concat(deprecated))
         {
             var joined = dataset.AttachClinical(path);
             var rate = (joined.MatchRate * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
             if (joined.KeyColumn is null || joined.AddedColumns.Count == 0)
                 throw new ArgumentException(
-                    $"--clinical: no column of {Path.GetFileName(path)} matched the samples (best match {rate}); "
-                    + "the key column needs to hold the replicate names for at least half the samples.");
-            Console.WriteLine($"Clinical CSV: joined {Path.GetFileName(path)} on '{joined.KeyColumn}' "
+                    $"--additional-metadata: no column of {Path.GetFileName(path)} matched the samples "
+                    + $"(best match {rate}); the key column needs to hold the replicate names for at least "
+                    + "half the samples.");
+            Console.WriteLine($"Additional metadata: joined {Path.GetFileName(path)} on '{joined.KeyColumn}' "
                 + $"({rate} of samples matched), added {string.Join(", ", joined.AddedColumns)}");
         }
     }
@@ -1315,11 +1325,14 @@ public static partial class Program
         paired design cannot do this: there the subject block absorbs the contrast.
 
         Options:
-            --clinical CSV...      Join an external clinical table to the samples first, exactly as
-                                   the pane's Clinical CSV input does (key column detected by value);
+            --additional-metadata CSV...
+                                   Join a table of extra per-sample annotations (clinical data,
+                                   demographics) to the samples first, exactly as the tool's
+                                   Additional metadata input does (key column detected by value);
                                    its columns can then be named by --group-by, --adjust-for,
                                    --subject, --trend-over and --markers-group-by. Repeatable: several
-                                   tables are joined in the order given
+                                   tables are joined in the order given. (--clinical, its old name,
+                                   still works but is deprecated)
             --level LEVEL          protein (default) or peptide
             --design DESIGN        unpaired (default), paired, blocked, trend, trend-within-subject
             --subject COL          Metadata column identifying the subject (alias: --pair-by).
