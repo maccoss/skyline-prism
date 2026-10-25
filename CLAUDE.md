@@ -191,7 +191,7 @@ The current implementation follows this stage structure:
 ```text
 Stage 1: Merge CSVs (streaming, memory-efficient)
     ↓
-Stage 2: Transition → Peptide rollup (Tukey median polish)
+Stage 2: Transition → Peptide rollup (sum by default)
     ↓
 Stage 2b: Peptide Global Normalization (median or VSN)
     ↓ [Optional: RT correction - disabled by default]
@@ -269,9 +269,9 @@ skyline-prism/
 
 ## Key Algorithms
 
-### Tukey Median Polish (Default for Rollups)
+### Tukey Median Polish (Default for Protein Rollup)
 
-Used for both transition→peptide and peptide→protein rollups. Decomposes a matrix into:
+The default for peptide→protein, and available for transition→peptide (whose default is `sum`). Decomposes a matrix into:
 - Row effects (see table below)
 - Column effects (sample abundance - **this is the output**)
 - Residuals (noise/outliers - **preserved for biological analysis**)
@@ -993,7 +993,7 @@ nit, since most of this repository's hard-won knowledge lives in prose.
 - **Sample types**: `experimental`, `qc`, `reference` - these have specific meanings in the normalization workflow
 - **Column naming**: input column names are auto-detected per document and matched ignoring case, spaces and underscores - see `Core/IO/SkylineColumns.cs` (the `data:` config section overrides it)
 - **Log scale**: Most operations work on log2-transformed abundances
-- **Median polish is default**: For both transition→peptide and peptide→protein rollups
+- **Rollup defaults**: `sum` for transition→peptide, Tukey median polish for peptide→protein
 - **Two-arm pipeline**: Batch correction happens at the reporting level (peptide or protein), not before rollup
 
 ## FASTA-Based Protein Parsimony
