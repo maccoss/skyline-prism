@@ -18,7 +18,7 @@ It is the single source of truth for agent guidance (it supersedes the former `A
 
 ## Project Overview
 
-**Skyline-PRISM** (Proteomics Reference-Integrated Signal Modeling) normalizes LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and reference-anchored batch correction. It ships as a cross-platform `prism` CLI and a Windows Skyline external tool, both built from the .NET 10 code under `dotnet/`.
+**Skyline-PRISM** (PRISM for short) normalizes LC-MS proteomics data exported from [Skyline](https://skyline.ms), with robust protein quantification using Tukey median polish and ComBat batch correction. The name is no longer an acronym: do not expand it. It ships as a cross-platform `prism` CLI and a Windows Skyline external tool, both built from the .NET 10 code under `dotnet/`.
 
 > [!NOTE]
 > PRISM began as a Python package (`skyline-prism` on PyPI). That engine was **retired and removed** after its last release, `v26.4.4`; the C# code reproduced its numbers to 1e-9 on the deterministic stages. Older Python releases remain available from the `v*` tags and PyPI but are unmaintained. Do not add Python engine code back, and do not describe PRISM as a Python package.
