@@ -1572,11 +1572,11 @@ public partial class MainWindow
             // that put a second PCA in this pane in the first place.
             PublishClinicalToQcPane(result.AddedColumns);
 
-            // The Markers pane keeps its own cache for the OTHER feature level, and that copy was
-            // loaded before this join existed. GetMarkersDatasetAsync reuses the Differential
-            // dataset when the directory and level both match - so the stale case is specifically
-            // the two panes sitting on different levels, where the marker cache is returned as-is
-            // and the clinical columns promised here never appear in it.
+            // The shared dataset cache (Markers pane, Dynamic Range detail window) holds the OTHER
+            // feature level, read before this join existed. GetCorrectedDatasetAsync reuses the
+            // Differential dataset when the directory and level both match - so the stale case is
+            // specifically the panes sitting on different levels, where the cached copy is returned
+            // as-is and the columns promised here never appear in it.
             InvalidateMarkers();
 
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
@@ -2664,9 +2664,8 @@ public partial class MainWindow
 
     // ---------------------------------------------------------------- follow Skyline's selection
     //
-    // The Volcano's half of the poll the Dynamic Range pane started: picking a protein or peptide in
-    // Skyline's tree or document grid rings it here. The timer, its busy flag and its failure count
-    // are the Dynamic Range pane's (SetSkylineFollow) - one pane is on screen at a time.
+    // Picking a protein or peptide in Skyline's tree or document grid rings it here. The polling is
+    // SkylineSelectionFollower's (SetSkylineFollow); this pane supplies PrepareVolcanoFollow.
     private string? _diffFollowedLocator;
 
     /// <summary>
@@ -2686,70 +2685,47 @@ public partial class MainWindow
     private bool _volcanoReringPending;
 
     /// <summary>
-    /// Ask Skyline what is selected and, when it has changed, make it the Volcano's selection - the
-    /// ring, the hit-table row, and the detail window if it is already open. Never sent back to
-    /// Skyline: the selection came from there.
+    /// The Volcano's side of a poll, on the UI thread: what to ask Skyline for at the dataset's
+    /// level, and the dataset to resolve against, captured here so the worker never reads a control.
+    /// Null unless the Volcano is the view and has points.
     /// </summary>
-    private async void PollSkylineSelectionForVolcano()
+    private SkylineSelectionFollower.Poll? PrepareVolcanoFollow()
     {
-        if (_rangeFollowBusy || _session is null || _diffDataset is null
-            || DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0)
+        if (_diffDataset is null || DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0)
+            return null;
+        var ds = _diffDataset;
+        var level = AbundanceLevelOf(ds);
+        return new SkylineSelectionFollower.Poll(
+            level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule",
+            locator => FindFeatureByLocator(locator, level, ds),
+            (locator, item) => ApplyVolcanoFollow(locator, item as string, ds));
+    }
+
+    /// <summary>
+    /// Make what Skyline has selected the Volcano's selection - the ring, the hit-table row, and the
+    /// detail window if it is already open - when it has changed, or when a re-render dropped the
+    /// ring. Never sent back to Skyline: the selection came from there.
+    /// </summary>
+    private void ApplyVolcanoFollow(string locator, string? resolvedId, DifferentialDataset ds)
+    {
+        var changed = locator != _diffFollowedLocator;
+        if (!changed && !_volcanoReringPending)
             return;
-        _rangeFollowBusy = true;
-        try
+        if (changed)
         {
-            var ds = _diffDataset;
-            var level = AbundanceLevelOf(ds);
-            // Skyline resolves the ancestor at this level, so a precursor or transition selection -
-            // or a row in the document grid - still lands on the right feature.
-            var elementType = level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule";
-            var session = _session;
-            var found = await Task.Run<(string? Locator, string? FeatureId)>(() =>
-            {
-                string? locator;
-                try
-                {
-                    locator = session.Execute(c => c.GetSelectedElementLocator(elementType));
-                }
-                catch (Exception)
-                {
-                    return (null, null); // busy, closed, or mid-document-change; retry next tick
-                }
-                if (locator is null)
-                    return (null, null);
-                return (locator, FindFeatureByLocator(locator, level, ds));
-            });
-
-            if (found.Locator is null)
-                return;
-            var changed = found.Locator != _diffFollowedLocator;
-            if (!changed && !_volcanoReringPending)
-                return;
-            if (changed)
-            {
-                _diffFollowedLocator = found.Locator;
-                _diffFollowedFeatureId = found.FeatureId;
-            }
-            _volcanoReringPending = false;
-
-            // The level, the run or the view may have changed while the call was in flight.
-            var featureId = _diffFollowedFeatureId;
-            if (!ReferenceEquals(ds, _diffDataset) || DiffSelectedView() != DiffView.Volcano
-                || featureId is null || featureId == _volcanoSelectedId
-                || ds.IdentityOf(featureId) is null)
-                return;
-
-            FollowVolcanoFeature(featureId, announce: changed);
-            _rangeFollowFailures = 0;
+            _diffFollowedLocator = locator;
+            _diffFollowedFeatureId = resolvedId;
         }
-        catch (Exception ex)
-        {
-            NoteFollowFailure(ex);
-        }
-        finally
-        {
-            _rangeFollowBusy = false;
-        }
+        _volcanoReringPending = false;
+
+        // The level, the run or the view may have changed while the call was in flight.
+        var featureId = _diffFollowedFeatureId;
+        if (!ReferenceEquals(ds, _diffDataset) || DiffSelectedView() != DiffView.Volcano
+            || featureId is null || featureId == _volcanoSelectedId
+            || ds.IdentityOf(featureId) is null)
+            return;
+
+        FollowVolcanoFeature(featureId, announce: changed);
     }
 
     /// <summary>
@@ -2763,7 +2739,7 @@ public partial class MainWindow
     private string? FindFeatureByLocator(string locator, AbundanceLevel level, DifferentialDataset ds)
     {
         Dictionary<string, string>? index;
-        lock (_rangeLocatorLock)
+        lock (_locatorLock)
             index = ReferenceEquals(_diffIdByLocatorFor, ds) ? _diffIdByLocator : null;
 
         if (index is null)
@@ -2773,7 +2749,7 @@ public partial class MainWindow
             {
                 string? featureLocator;
                 bool unavailable;
-                lock (_rangeLocatorLock)
+                lock (_locatorLock)
                     featureLocator = ResolveLocator(
                         AsLocatorEntry(ds.IdentityOf(i)), level, out _, out unavailable);
                 if (unavailable)
@@ -2781,7 +2757,7 @@ public partial class MainWindow
                 if (featureLocator is not null)
                     index.TryAdd(featureLocator, ds.FeatureIds[i]); // first wins, as the forward map does
             }
-            lock (_rangeLocatorLock)
+            lock (_locatorLock)
             {
                 _diffIdByLocator = index;
                 _diffIdByLocatorFor = ds;

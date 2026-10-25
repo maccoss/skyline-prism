@@ -117,7 +117,7 @@ public class UiThreadSafetyTests
         foreach (Match c in Regex.Matches(body, @"\bcatch\s*(?:\(([^)]*)\))?\s*(when\s*\()?"))
         {
             // Only the HANDLER'S OWN catch counts - depth 1, i.e. a statement of the method body
-            // itself. A catch nested inside a lambda is not protection: PollSkylineSelection wraps
+            // itself. A catch nested inside a lambda is not protection: the selection poll wrapped
             // its RPC call in `Task.Run(() => { try { ... } catch { ... } })`, and counting that let
             // this check pass on the exact code that shipped without a handler-level catch at all.
             if (DepthAt(body, c.Index) != 1)

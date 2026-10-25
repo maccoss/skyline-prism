@@ -1458,6 +1458,9 @@ public partial class MainWindow : Window
         InvalidateDynamicRange();
         InvalidateIonAccounting();
         InvalidateDifferential();
+        // The shared dataset cache too: keyed by directory it would never serve the old run, but it
+        // would keep both of its levels' matrices in memory until something else was read.
+        InvalidateMarkers();
 
         // Whether the Ion accounting pane exists AT ALL depends on this directory carrying measured
         // ion accounting, so the rail has to be re-checked here and not only when a pane changes -

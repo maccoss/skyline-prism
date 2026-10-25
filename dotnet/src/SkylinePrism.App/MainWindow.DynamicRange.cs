@@ -65,144 +65,113 @@ public partial class MainWindow
     // ---------------------------------------------------------------- follow Skyline's selection
     //
     // The other direction: picking a protein or peptide in Skyline highlights it here, and on the
-    // Volcano (PollSkylineSelectionForVolcano). Skyline's RPC is request/response and cannot push
-    // events, so this polls - one lightweight call, and only while one of those panes is on screen.
-    private System.Windows.Threading.DispatcherTimer? _rangeFollowTimer;
+    // Volcano. SkylineSelectionFollower does the polling for both; each pane only says what to ask
+    // for and what to do with the answer (PrepareRangeFollow, PrepareVolcanoFollow).
+    private System.Windows.Threading.DispatcherTimer? _followTimer;
+    private SkylineSelectionFollower? _follower;
     private string? _rangeFollowedLocator;
-    private bool _rangeFollowBusy;
     private Dictionary<string, AbundanceEntry>? _rangeEntryByLocator;
     private AbundanceLevel _rangeEntryByLocatorLevel = AbundanceLevel.Protein;
 
-    /// <summary>The pane the timer is following Skyline for, or null when it is stopped.</summary>
-    private VizPane? _followPane;
-
-    private static readonly TimeSpan RangeFollowInterval = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan FollowInterval = TimeSpan.FromMilliseconds(750);
 
     /// <summary>
     /// Start/stop following Skyline's selection as a pane comes into and out of view. One timer
-    /// serves both panes that follow it, since only one is ever on screen.
+    /// serves every pane that follows it, since only one is ever on screen.
     /// </summary>
     private void SetSkylineFollow(VizPane? pane)
     {
-        _followPane = VizNavigation.ShouldFollowSkylineSelection(pane) ? pane : null;
-        if (_followPane is null)
+        Func<SkylineSelectionFollower.Poll?>? prepare = pane switch
         {
-            _rangeFollowTimer?.Stop();
+            _ when !VizNavigation.ShouldFollowSkylineSelection(pane) => null,
+            VizPane.DynamicRange => PrepareRangeFollow,
+            VizPane.Differential => PrepareVolcanoFollow,
+            _ => null,
+        };
+        if (prepare is null || _session is null) // standalone: nothing to follow
+        {
+            _follower?.Follow(null);
+            _followTimer?.Stop();
             return;
         }
-        if (_session is null)
-            return; // standalone: nothing to follow
 
-        _rangeFollowFailures = 0;
-        if (_rangeFollowTimer is null)
+        if (_follower is null)
         {
-            _rangeFollowTimer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = RangeFollowInterval,
-            };
-            _rangeFollowTimer.Tick += (_, _) =>
-            {
-                if (_followPane == VizPane.Differential)
-                    PollSkylineSelectionForVolcano();
-                else
-                    PollSkylineSelection();
-            };
+            var session = _session;
+            _follower = new SkylineSelectionFollower(
+                elementType => session.Execute(c => c.GetSelectedElementLocator(elementType)),
+                App.WriteLog,
+                Log);
         }
-        _rangeFollowTimer.Start();
+        _follower.Follow(prepare);
+
+        if (_followTimer is null)
+        {
+            _followTimer = new System.Windows.Threading.DispatcherTimer { Interval = FollowInterval };
+            _followTimer.Tick += (_, _) => OnFollowTick();
+        }
+        _followTimer.Start();
     }
 
-    /// <summary>
-    /// Ask Skyline what is selected and, when it has changed, highlight the matching point.
-    /// <para>
-    /// The RPC runs off the UI thread - it opens a pipe and waits on a busy application, which must
-    /// never freeze this window - and one poll is never allowed to overlap the next, so a Skyline
-    /// that has gone slow just makes this quieter rather than piling up requests.
-    /// </para>
-    /// </summary>
-    private async void PollSkylineSelection()
+    /// <summary>One tick: poll, and stop the timer once the follower has given up.</summary>
+    private async void OnFollowTick()
     {
-        if (_rangeFollowBusy || _session is null || !_rangeLoaded || _rangeEntries.Count == 0)
-            return;
-        _rangeFollowBusy = true;
+        // async void on a timer: PollOnceAsync never throws, and this catches anyway, because an
+        // exception escaping here is an error dialog every 750 ms until the tool is killed.
         try
         {
-            var level = RangeLevel;
-            // Skyline resolves the ancestor at this level, so a precursor or transition selection -
-            // or a row in the precursor document grid - still lands on the right point.
-            var elementType = level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule";
-            var session = _session;
-            var entries = _rangeEntries;
-            // The RPC and the index build both go off the UI thread: the call waits on a busy
-            // application, and the index resolves every entry - 150,000 of them at peptide level.
-            var found = await Task.Run<(string? Locator, AbundanceEntry? Entry)>(() =>
-            {
-                string? locator;
-                try
-                {
-                    locator = session.Execute(c => c.GetSelectedElementLocator(elementType));
-                }
-                catch (Exception)
-                {
-                    return (null, null); // busy, closed, or mid-document-change; retry next tick
-                }
-                if (locator is null)
-                    return (null, null);
-                return (locator, FindEntryByLocator(locator, level, entries));
-            });
-
-            if (found.Locator is null || found.Locator == _rangeFollowedLocator)
+            if (_follower is null)
                 return;
-            _rangeFollowedLocator = found.Locator;
-
-            // Level or data may have changed while the call was in flight.
-            if (RangeLevel != level || !_rangeLoaded || !ReferenceEquals(entries, _rangeEntries))
-                return;
-
-            var entry = found.Entry;
-            if (entry is null || ReferenceEquals(entry, _rangeSelected))
-                return;
-
-            _rangeSelected = entry;
-            RenderDynamicRange();
-            RangeStatusText.Text =
-                $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
-                + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
-            // Redraws the detail window if it is open; never opens or raises it from here.
-            ShowRangeFeatureDetail(entry, activate: false);
-            _rangeFollowFailures = 0;
+            await _follower.PollOnceAsync();
+            if (_follower.Stopped)
+                _followTimer?.Stop();
         }
         catch (Exception ex)
         {
-            NoteFollowFailure(ex);
-        }
-        finally
-        {
-            _rangeFollowBusy = false;
+            App.WriteLog("Following Skyline's selection failed: " + ex);
+            _followTimer?.Stop();
         }
     }
 
     /// <summary>
-    /// A poll that threw. Both polls are <c>async void</c> on a timer: an escaping exception becomes
-    /// an unhandled application exception, and the timer keeps firing - so one fault produces an
-    /// error dialog every 750 ms until the tool is killed. Nothing here is worth interrupting the
-    /// user for; following the selection is a convenience, and the plots are unaffected.
+    /// The Dynamic Range pane's side of a poll, on the UI thread: what to ask Skyline for at the
+    /// plotted level, and the entries to resolve against, captured here so the worker never reads
+    /// a control. Null while nothing is plotted.
     /// </summary>
-    private void NoteFollowFailure(Exception ex)
+    private SkylineSelectionFollower.Poll? PrepareRangeFollow()
     {
-        App.WriteLog("Following Skyline's selection failed: " + ex);
-        if (++_rangeFollowFailures >= MaxRangeFollowFailures)
-        {
-            _rangeFollowTimer?.Stop();
-            Log("Stopped following Skyline's selection after "
-                + $"{MaxRangeFollowFailures} consecutive failures ({ex.Message}). "
-                + "Clicking a point still works; switch away from this pane and back to retry.");
-        }
+        if (!_rangeLoaded || _rangeEntries.Count == 0)
+            return null;
+        var level = RangeLevel;
+        var entries = _rangeEntries;
+        return new SkylineSelectionFollower.Poll(
+            level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule",
+            locator => FindEntryByLocator(locator, level, entries),
+            (locator, item) => ApplyRangeFollow(locator, item as AbundanceEntry, level, entries));
     }
 
-    /// <summary>Consecutive poll failures; the timer gives up rather than retrying a broken state forever.</summary>
-    private int _rangeFollowFailures;
+    /// <summary>Highlight what Skyline has selected, when it has changed.</summary>
+    private void ApplyRangeFollow(
+        string locator, AbundanceEntry? entry, AbundanceLevel level, List<AbundanceEntry> entries)
+    {
+        if (locator == _rangeFollowedLocator)
+            return;
+        _rangeFollowedLocator = locator;
 
-    private const int MaxRangeFollowFailures = 3;
+        // Level or data may have changed while the call was in flight.
+        if (RangeLevel != level || !_rangeLoaded || !ReferenceEquals(entries, _rangeEntries))
+            return;
+        if (entry is null || ReferenceEquals(entry, _rangeSelected))
+            return;
+
+        _rangeSelected = entry;
+        RenderDynamicRange();
+        RangeStatusText.Text =
+            $"Following Skyline: {entry.Label} (rank {entry.Rank:N0}, "
+            + $"log10 {entry.Log10Abundance:0.00}){DescribeProteins(entry)}";
+        // Redraws the detail window if it is open; never opens or raises it from here.
+        ShowRangeFeatureDetail(entry, activate: false);
+    }
 
     /// <summary>
     /// The plotted point a Skyline locator refers to. Built by resolving every entry through the same
@@ -216,7 +185,7 @@ public partial class MainWindow
         // both go through the same lazily-built locator map. The lock is taken per entry rather than
         // around the whole build, so a click is never held up for the length of it.
         Dictionary<string, AbundanceEntry>? index;
-        lock (_rangeLocatorLock)
+        lock (_locatorLock)
             index = _rangeEntryByLocatorLevel == level ? _rangeEntryByLocator : null;
 
         if (index is null)
@@ -226,14 +195,14 @@ public partial class MainWindow
             {
                 string? entryLocator;
                 bool unavailable;
-                lock (_rangeLocatorLock)
+                lock (_locatorLock)
                     entryLocator = ResolveLocator(entry, level, out _, out unavailable);
                 if (unavailable)
                     return null; // could not read the tree; do not cache a half-built index
                 if (entryLocator is not null)
                     index.TryAdd(entryLocator, entry); // first wins, as the forward map does
             }
-            lock (_rangeLocatorLock)
+            lock (_locatorLock)
             {
                 // Only if the entries are still the plotted ones; a reload cleared the index meanwhile.
                 if (ReferenceEquals(entries, _rangeEntries))
@@ -247,7 +216,7 @@ public partial class MainWindow
     }
 
     /// <summary>Guards the locator map and its reverse index, which the click and the poll share.</summary>
-    private readonly object _rangeLocatorLock = new();
+    private readonly object _locatorLock = new();
 
     /// <summary>
     /// The rollup that produced the matrix now plotted, read from the run's own parameters.json (null
@@ -1014,7 +983,7 @@ public partial class MainWindow
             DifferentialDataset ds;
             try
             {
-                ds = await GetMarkersDatasetAsync(dir, level);
+                ds = await GetCorrectedDatasetAsync(dir, level);
             }
             catch (Exception ex)
             {
@@ -1233,7 +1202,7 @@ public partial class MainWindow
     private string? ResolveLocatorLocked(
         AbundanceEntry entry, AbundanceLevel level, out bool viaFallback, out bool unavailable)
     {
-        lock (_rangeLocatorLock)
+        lock (_locatorLock)
             return ResolveLocator(entry, level, out viaFallback, out unavailable);
     }
 
