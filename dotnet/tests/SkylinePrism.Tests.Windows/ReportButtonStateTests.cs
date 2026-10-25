@@ -67,11 +67,29 @@ public class ReportButtonStateTests
         var probe = Probe;
         var latest = probe.LastIndexOf("if (probe == _reportProbe)", StringComparison.Ordinal);
         Assert.True(latest >= 0);
-        Assert.Contains("OpenReportButton.IsEnabled = hasQc && !_isRunning;", probe[latest..], StringComparison.Ordinal);
-        Assert.Contains("_lastReportPath = hasQc ? qcReport : null;", probe[latest..], StringComparison.Ordinal);
+        Assert.Contains("OpenReportButton.IsEnabled = hasQc && usable;", probe[latest..], StringComparison.Ordinal);
+        Assert.Contains("_openReportPath = hasQc && usable ? qcReport : null;", probe[latest..], StringComparison.Ordinal);
 
         var outside = Source.Replace(probe, "", StringComparison.Ordinal);
         Assert.DoesNotContain("OpenReportButton.IsEnabled = reportExists", outside, StringComparison.Ordinal);
-        Assert.DoesNotContain("_lastReportPath = reportPath", outside, StringComparison.Ordinal);
+        Assert.DoesNotContain("_openReportPath = reportPath", outside, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AStoppedOrFailedRun_DoesNotOfferThePreviousRunsReport()
+    {
+        // Following the directory alone, a re-run stopped half way enabled Open QC Report on the report
+        // the run BEFORE it wrote, beside outputs the stopped run had partly rewritten.
+        var probe = Probe;
+        Assert.Contains("!string.Equals(dir, _incompleteRunDir", probe, StringComparison.Ordinal);
+
+        var source = Source;
+        var start = source.IndexOf("_incompleteRunDir = outputDir.Trim();", StringComparison.Ordinal);
+        var pipeline = source.IndexOf("() => RunPipeline(", StringComparison.Ordinal);
+        var cleared = source.IndexOf("_incompleteRunDir = null;", StringComparison.Ordinal);
+        Assert.True(start >= 0 && start < pipeline, "The directory is not marked incomplete before the run starts.");
+        Assert.True(cleared > pipeline, "The mark is not cleared after the pipeline finishes.");
+        Assert.True(cleared < source.IndexOf("catch (Exception ex) when (RunOutcome.IsCancellation", StringComparison.Ordinal),
+            "The mark must be cleared only on the success path, not by a stop or failure.");
     }
 }

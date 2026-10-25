@@ -19,9 +19,10 @@ about reading them. The output directory, **Run PRISM** and **Stop** sit above b
 apply either way.
 
 **To look at an earlier run, point the output directory at its folder** (**Browse...**). Nothing
-re-runs: every Visualization pane reads from that directory, and the one on screen reloads when it
-changes; **Open QC Report** opens the `qc_report.html` in it, and **Publish to Panorama...** publishes
-it. **Open provenance...**, beside **Run PRISM**, loads the settings that run used from its
+re-runs: every Visualization pane reads from that directory (QC Plots reloads at once if it is on
+screen; the others reload when you next open them); **Open QC Report** opens the `qc_report.html` in
+it, and **Publish to Panorama...** publishes it. After a run that was stopped or failed, neither button
+is offered for that directory until a run there finishes, because its report is the previous run's. **Open provenance...**, beside **Run PRISM**, loads the settings that run used from its
 `parameters.json` into the Settings tab. While a run is in progress the output directory is read-only
 and **Browse...** is disabled, since the run is writing into it.
 

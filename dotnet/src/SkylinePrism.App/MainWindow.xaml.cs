@@ -27,7 +27,7 @@ namespace SkylinePrism.App;
 public partial class MainWindow : Window
 {
     private SkylineSession? _session;
-    private string? _lastReportPath;
+    private string? _openReportPath;
     private bool _isRunning;
 
     /// <summary>
@@ -1334,6 +1334,11 @@ public partial class MainWindow : Window
             typedTolerances ? IonProductTolText.Text?.Trim() : null,
             typedTolerances ? IonPrecursorTolText.Text?.Trim() : null);
 
+        // Until this run finishes, the directory's reports belong to the run before it, and its parquet
+        // files may be half rewritten - so a stop or failure leaves them unopenable (see
+        // UpdateReportButtonsAsync). Cleared only by finishing.
+        _incompleteRunDir = outputDir.Trim();
+
         try
         {
             _runCancellation = new CancellationTokenSource();
@@ -1346,6 +1351,7 @@ public partial class MainWindow : Window
             // can block for a long time when the output dir is on OneDrive / scanned by Defender, and
             // doing it on the UI thread would freeze the window.
             Log("Loading QC data for the plots...");
+            _incompleteRunDir = null;
             await LoadQcAsync(outputDir);
             // No button state here: Open QC Report and Publish follow the Output directory box, and the
             // finally below re-checks it once _isRunning is cleared - which is when the report the run
@@ -1467,22 +1473,29 @@ public partial class MainWindow : Window
         if (IsInitialized)
             UpdateIonNavVisibility();
 
-        // Invalidating only drops caches. Nothing re-entered the pane on screen, so the plot being
-        // looked at kept showing the PREVIOUS directory until the user switched panes - while an empty
-        // pane seemed to update, because reaching it was itself a switch. So the pane on screen reloads
-        // once the box has been still for a moment.
-        _ = ReloadShownPaneAsync();
+        // Invalidating only drops caches. Nothing re-entered the QC pane, so the plots being looked at
+        // kept showing the PREVIOUS directory until the user switched panes - while an empty pane
+        // seemed to update, because reaching it was itself a switch. So it reloads once the box has
+        // been still for a moment.
+        _ = ReloadQcIfShownAsync();
     }
 
     // Each change of the Output directory box is numbered, and only the latest reloads the pane.
     private int _outputDirChange;
 
     /// <summary>
-    /// Reload the visualization pane on screen for the Output directory box, once the box has been
-    /// still for <see cref="ReportProbeDelay"/> - the same pause the report buttons wait for, so a path
-    /// typed a character at a time is read once rather than once per keystroke.
+    /// Reload the QC pane, if it is on screen, for the Output directory box once the box has been still
+    /// for <see cref="ReportProbeDelay"/> - the same pause the report buttons wait for, so a path typed
+    /// a character at a time is read once rather than once per keystroke.
     /// </summary>
-    private async Task ReloadShownPaneAsync()
+    /// <remarks>
+    /// The QC pane only, deliberately. Its loads are Parquet.Net reads serialized through
+    /// <see cref="LoadQcAsync"/>. Spectrum density and Differential read merged_data through DuckDB,
+    /// and reloading them here could start a second DuckDB read while the previous directory's is
+    /// still running - two readers on two threads, which crashes the process (CLAUDE.md, the DuckDB.NET
+    /// caution). Those panes still reload on the next visit, as before.
+    /// </remarks>
+    private async Task ReloadQcIfShownAsync()
     {
         var change = ++_outputDirChange;
         try
@@ -1490,7 +1503,10 @@ public partial class MainWindow : Window
             await Task.Delay(ReportProbeDelay);
             if (change != _outputDirChange || !IsInitialized)
                 return;
-            await ShowSelectedVizPaneAsync();
+            var pane = VizNavigation.Current(
+                ReferenceEquals(MainTabs.SelectedItem, VisualizationTab), VizNav.SelectedIndex);
+            if (pane == VizPane.Qc)
+                await EnsureQcLoadedAsync();
         }
         catch (Exception ex)
         {
@@ -3150,6 +3166,11 @@ public partial class MainWindow : Window
     // The directory the buttons' state was last decided for.
     private string? _reportProbedDir;
 
+    // The output directory of a run that was stopped or failed, or null. Its qc_report.html is the
+    // PREVIOUS run's, beside outputs the stopped run may have partly rewritten, so it is neither opened
+    // nor published as though it were a result. Set when a run starts, cleared when one finishes.
+    private string? _incompleteRunDir;
+
     /// <summary>How long the Output directory box must be still before its reports are looked for.</summary>
     private static readonly TimeSpan ReportProbeDelay = TimeSpan.FromMilliseconds(300);
 
@@ -3192,9 +3213,11 @@ public partial class MainWindow : Window
                 (File.Exists(qcReport), File.Exists(Path.Combine(dir, "quant", "quant_report.html"))));
             if (probe == _reportProbe)
             {
-                OpenReportButton.IsEnabled = hasQc && !_isRunning;
-                _lastReportPath = hasQc ? qcReport : null;
-                PublishButton.IsEnabled = (hasQc || hasQuant) && !_isRunning;
+                var usable = !_isRunning
+                    && !string.Equals(dir, _incompleteRunDir, StringComparison.OrdinalIgnoreCase);
+                OpenReportButton.IsEnabled = hasQc && usable;
+                _openReportPath = hasQc && usable ? qcReport : null;
+                PublishButton.IsEnabled = (hasQc || hasQuant) && usable;
                 _reportProbedDir = dir;
             }
         }
@@ -3220,8 +3243,8 @@ public partial class MainWindow : Window
 
     private void OnOpenReport(object sender, RoutedEventArgs e)
     {
-        if (_lastReportPath is not null && File.Exists(_lastReportPath))
-            Process.Start(new ProcessStartInfo(_lastReportPath) { UseShellExecute = true });
+        if (_openReportPath is not null && File.Exists(_openReportPath))
+            Process.Start(new ProcessStartInfo(_openReportPath) { UseShellExecute = true });
     }
 
     private static Dictionary<string, string> ReadSampleTypes(string metadataCsv)

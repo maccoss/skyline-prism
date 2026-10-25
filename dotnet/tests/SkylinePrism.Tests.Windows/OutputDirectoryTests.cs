@@ -37,7 +37,18 @@ public class OutputDirectoryTests
         // user switched panes; the QC pane was not even invalidated.
         var changed = Body(Read("MainWindow.xaml.cs"), "private void OnOutputDirChanged(");
         Assert.Contains("InvalidateQc();", changed, StringComparison.Ordinal);
-        Assert.Contains("_ = ReloadShownPaneAsync();", changed, StringComparison.Ordinal);
+        Assert.Contains("_ = ReloadQcIfShownAsync();", changed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheReload_StartsNoDuckDbRead()
+    {
+        // Re-entering whichever pane is on screen would reload Spectrum density or Differential, which
+        // read merged_data through DuckDB - possibly while the previous directory's read is still
+        // running, and two DuckDB readers on two threads crash the process. Only the QC pane reloads.
+        var reload = Body(Read("MainWindow.xaml.cs"), "private async Task ReloadQcIfShownAsync()");
+        Assert.DoesNotContain("ShowSelectedVizPaneAsync", reload, StringComparison.Ordinal);
+        Assert.Contains("if (pane == VizPane.Qc)", reload, StringComparison.Ordinal);
     }
 
     [Fact]
