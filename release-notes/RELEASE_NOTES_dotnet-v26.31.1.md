@@ -2,9 +2,10 @@
 
 **Opening an earlier run's results in the Skyline tool now works the way it should.** Pointing the
 Output directory at a previous run's folder now enables Open QC Report and reloads the QC plots on
-screen, the directory is locked while a run is going, and pressing Stop no longer shows a "run failed"
-dialog. A bug-fix release: no quantity PRISM computes changed, and the `prism` CLI changed only in its
-`--help` header.
+screen, the directory is locked while a run is going, and pressing Stop while a Skyline document is
+being exported no longer shows a "run failed" dialog. The Tool Store description is rewritten, and the
+tool is now simply Skyline-PRISM. A bug-fix release: no quantity PRISM computes changed, and the
+`prism` CLI changed only in its `--help` header.
 
 ## Bug Fixes
 
