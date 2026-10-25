@@ -1,7 +1,5 @@
 # Skyline-PRISM Specification
 
-**PRISM**: Proteomics Reference-Integrated Signal Modeling
-
 ## Specification Document for Implementation
 
 ### Overview

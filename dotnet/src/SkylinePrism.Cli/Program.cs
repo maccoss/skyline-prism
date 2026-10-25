@@ -1193,7 +1193,7 @@ public static partial class Program
     };
 
     private const string UsageText = """
-        Skyline-PRISM: Proteomics Reference-Integrated Signal Modeling
+        Skyline-PRISM
 
         Retention-time-aware normalization of transition-level LC-MS proteomics data
         exported from Skyline, with robust protein quantification (Tukey median polish)
