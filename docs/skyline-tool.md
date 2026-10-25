@@ -18,6 +18,14 @@ The window splits in two at the top. **Analysis** is about producing results; **
 about reading them. The output directory, **Run PRISM** and **Stop** sit above both, because they
 apply either way.
 
+**To look at an earlier run, point the output directory at its folder** (**Browse...**). Nothing
+re-runs: every Visualization pane reads from that directory (QC Plots reloads at once if it is on
+screen; the others reload when you next open them); **Open QC Report** opens the `qc_report.html` in
+it, and **Publish to Panorama...** publishes it. After a run that was stopped or failed, neither button
+is offered for that directory until a run there finishes, because its report is the previous run's. **Open provenance...**, beside **Run PRISM**, loads the settings that run used from its
+`parameters.json` into the Settings tab. While a run is in progress the output directory is read-only
+and **Browse...** is disabled, since the run is writing into it.
+
 ### Analysis
 
 | Tab | What it is for |
@@ -811,7 +819,8 @@ answer covers settings only.
 **Stop** cancels the pipeline, and closing the window while a run is in progress asks first and then stops
 it. Cancellation is checked *inside* the long stages — the merge query is interrupted through DuckDB, and
 the rollup and normalization check per peptide block and per row group — so it takes effect in seconds
-rather than at the end of whatever stage was running.
+rather than at the end of whatever stage was running. A stopped run says so in the Log and shows no
+error dialog; a run that fails shows one, and Ctrl+C copies its text.
 
 Files already written are left in place. They are intermediates of an incomplete run, and the next run
 rebuilds them.

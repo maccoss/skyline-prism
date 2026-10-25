@@ -101,7 +101,7 @@
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Output directory:" VerticalAlignment="Center" Margin="0,0,8,0" />
             <TextBox Grid.Column="1" x:Name="OutputDirBox" VerticalAlignment="Center" TextChanged="OnOutputDirChanged" />
-            <Button Grid.Column="2" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowse" />
+            <Button Grid.Column="2" x:Name="OutputBrowseButton" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowse" />
         </Grid>
 
         <Grid Grid.Row="3" Margin="0,0,0,10">
