@@ -154,8 +154,9 @@ Once a run finishes, the **Visualization** tab holds the interactive views: QC p
 Dynamic Range (with protein lists and two-way selection with the document tree), Ion accounting, a
 **Differential** analysis pane (limma moderated-t volcano, sample PCA, peptide detection-frequency test,
 and g:Profiler enrichment, with covariate adjustment and per-feature boxplots), and a **Markers** pane
-(row z-scored heatmap + per-group boxplot for any protein panel). An external clinical metadata CSV can
-be attached at the top of the window and joined to the samples for grouping and covariate adjustment.
+(row z-scored heatmap + per-group boxplot for any protein panel). An additional metadata CSV (clinical
+data, demographics) can be attached at the top of the window and joined to the samples for grouping and
+covariate adjustment.
 
 **[docs/skyline-tool.md](docs/skyline-tool.md)** covers what the window does once a run finishes: the
 Dynamic Range and Spectrum density plots, protein lists, two-way selection with the document tree,

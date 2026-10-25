@@ -34,7 +34,7 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 
 | Pane | What it is for |
 |------|----------------|
-| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation). The PCA groups by the Replicates report, `sample_metadata.csv` (`batch`) and any attached clinical CSV, and any component pair up to PC6 |
+| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation). The PCA groups by the Replicates report, `sample_metadata.csv` (`batch`) and any attached additional metadata CSV, and any component pair up to PC6 |
 | **Spectrum density** | How many precursors a single DIA spectrum had to resolve at once |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
 | **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
@@ -120,13 +120,22 @@ one whose peptide arm never finished — can only show **As run**.
 - **Select in Skyline** → the matching point is ringed on the plot. This follows the Targets tree and the
   document grids, and it follows a selection made at *any* depth: with a transition selected, the protein
   plot rings the protein containing it.
+- **The per-feature window** opens on a click, as on the Volcano: that protein or peptide's log2
+  abundance in every replicate the plot averages, one box per sample type, with each replicate named on
+  hover. While it is open it follows a selection made in Skyline as well (it is not raised over Skyline
+  when it does). Under a rollup override the plotted protein is recomputed but the window shows the run's
+  own rollup, and says so.
+
+Modified peptides are matched by modification *position*, not by name, because PRISM carries the
+report's Unimod form (`C(unimod:4)`) and Skyline's tree names peptides by mass (`C[+57.021464]`). The
+exact name is always tried first.
 
 The status line under the plot names whatever was matched. Because PRISM runs its own parsimony, which can
 group proteins differently from the document, it reports **every** protein group a peptide belongs to
 rather than implying a single assignment.
 
 > Following Skyline's selection polls the document (Skyline cannot notify us), so it runs only while this
-> tab is on screen. It stops when you switch tabs or close the window.
+> tab or the Differential pane is on screen. It stops when you switch away or close the window.
 
 ### Checking a marker normalization
 
@@ -492,7 +501,12 @@ current state is always shown underneath in one line - `Moderated t; default: in
 count; Benjamini-Hochberg` - so you can see what ran without opening it. The button at the top right of the
 settings column hides the whole column to give the plot the window's width; the strip it leaves brings it back. The **View** (Volcano,
 Detection, Enrichment) is a set of tabs above the plot, beside **Quant report...**. Every setting reruns
-the contrast as you change it; there is no Run button.
+the contrast as you change it; there is no Run button. Anything that takes more than a second shows a
+progress bar beside the status line.
+
+Switching **Level** keeps the comparison: the Group by column, both arms, and the Adjust for ticks (with
+any type you switched) carry over to the other level and the contrast reruns there. A value or column the
+other level does not have is left at its default.
 
 Pick the **Level** (protein or peptide), a **Group by** metadata column, and the values to contrast
 (**A** vs **B**); a positive log2 fold change means higher in B. Both arms are tick lists, so either
@@ -594,10 +608,19 @@ contrast:
 
 - **Volcano** — moderated-t log2 fold change against -log10 p, with a ranked hit table beside it.
   Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
-  split by the two groups.
-- **Detection** — a per-peptide test of whether a peptide is *detected* (from the transition-level
-  `merged_data` `DetectionQValue`, not the dense abundance) at a different rate between the two groups.
-  This is the genuine on/off signal the dense corrected matrix cannot give. Which test runs follows the
+  split by the two groups, and selects the protein or peptide in Skyline. Selection works the other way
+  too, as on the Dynamic Range plot: select a protein or peptide in Skyline's Targets tree or a document
+  grid and it is ringed on the Volcano and its row selected in the table (the boxplot window, if it is
+  open, follows it). Modified peptides match in both directions even though PRISM names them in Unimod
+  form (`C(unimod:4)`) and Skyline's tree by mass (`C[+57.021464]`).
+- **Detection** — *is the peptide seen more often in one group than the other?* Skyline integrates a
+  peak for every peptide in every run, even where there is nothing there, so the abundance matrix has no
+  gaps and the Volcano cannot tell "low" from "absent". This view asks the presence/absence question
+  instead: for each peptide it counts, in each group, the runs where the precursor passed the detection
+  q-value cut (`DetectionQValue < 0.01`, read from the transition-level `merged_data`), and tests whether
+  those detection RATES differ. The plot is the rate difference (B - A: +0.5 means detected in 50 percentage points
+  more of B's runs, say 30% against 80%) against -log10 p; the table gives each group's rate. Peptide level only. Use it
+  for things that switch on or off between groups rather than shift in amount. Which test runs follows the
   design: Fisher exact when unpaired, **McNemar's exact test** over the matched pairs when the design is
   paired, and a Firth-penalized logistic regression when covariates are set. Under McNemar only the
   *discordant* pairs carry information — a subject detected in both conditions, or in neither, is its own
@@ -622,7 +645,7 @@ contrast:
 > **The sample PCA is in the QC Plots pane, not here.** There were briefly two - this pane had its own
 > because the QC one could only be grouped by a Skyline Replicates report, which a run from the CLI does
 > not have. The QC pane now groups by that report *plus* the run's own `sample_metadata.csv` (so `batch`
-> is always available) *plus* any clinical CSV attached below, and lets you pick which component pair to
+> is always available) *plus* any additional metadata CSV attached below, and lets you pick which component pair to
 > plot, so there is one PCA and it can do what both could.
 
 Read every view against the same caveats: the corrected matrix is dense, so an "undetected" peptide is
@@ -663,24 +686,26 @@ opens in your browser when it finishes.
 > [!NOTE]
 > **The same report runs headlessly.** Every report the button writes shows, near the top, the exact
 > `prism differential ... --report` command that regenerates it - contrast, design, prior, hit rule,
-> clinical CSV and marker panels included - built from what the analysis actually ran (a covariate
+> additional metadata CSV and marker panels included - built from what the analysis actually ran (a covariate
 > left ticked under a test that cannot use it is not in it; the report says it was not applied).
-> Rerun elsewhere it writes the same files, with three conditions: the clinical CSV must exist at the
+> Rerun elsewhere it writes the same files, with three conditions: the additional metadata CSV must exist at the
 > path the command names; a marker list you saved yourself must exist on that machine too (point
 > `PRISM_PROTEIN_LISTS` at a copy of your lists file); and the enrichment section is whatever
 > g:Profiler returns on the day, so it can change as g:Profiler updates its annotations. Where a value
 > cannot be written as a command at all - a level containing a comma, say - the report says so in
 > place of a command. See [differential-analysis.md](differential-analysis.md#the-quant-report).
 
-### Attaching a clinical CSV
+### Attaching additional metadata
 
-The **Clinical CSV** input at the top of the window (beside the metadata report) joins an external
-clinical table to the samples. The identifier column is detected by value — the column whose entries best
+The **Additional metadata** input at the top of the window (beside the metadata report) joins an
+external per-sample table to the samples - clinical data, demographics, anything that is not annotated
+in the Skyline document. (It was labeled *Clinical CSV* up to dotnet-v26.30.0, and the CLI flag was
+`--clinical`.) The identifier column is detected by value — the column whose entries best
 match the sample names, preferring a near one-to-one match so a low-cardinality column cannot win by
 coincidence — and every other column is added to the metadata, so it becomes available in **Group by**
 and **Adjust for** across the Differential and Markers panes. If nothing matches at least half the
 samples, nothing is added and the status line says so. The same join runs headless as
-`prism differential --clinical <csv>`, and a quant report records which clinical file it used.
+`prism differential --additional-metadata <csv>`, and a quant report records which file it used.
 
 ---
 

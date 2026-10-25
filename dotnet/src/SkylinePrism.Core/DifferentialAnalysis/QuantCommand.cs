@@ -15,7 +15,7 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// pane names the exact command that regenerates it headless, and a report typed at the CLI names its
 /// own command back in canonical form. Every statistical choice is spelled out explicitly rather than
 /// left to a default, so the command still means the same thing if a default later changes.</para>
-/// <para>It only NAMES what it cannot carry - a clinical CSV, a user's own marker list - so those
+/// <para>It only NAMES what it cannot carry - an additional metadata CSV, a user's own marker list - so those
 /// must exist wherever the command is run. And where a value cannot survive the CLI's parsing at all
 /// (a level containing a comma, which <c>-a</c> splits on), no command is offered rather than one
 /// that would silently select something else: see <see cref="TryArguments"/>.</para>
@@ -85,8 +85,8 @@ public static class QuantCommand
 
         var args = new List<string> { "differential" };
         Single(args, "-d", TrimSeparator(request.OutputDir), "the output directory");
-        foreach (var clinical in ds.AttachedClinicalCsvs)
-            Single(args, "--clinical", clinical, "a clinical CSV path");
+        foreach (var metadata in ds.AttachedClinicalCsvs)
+            Single(args, "--additional-metadata", metadata, "an additional metadata CSV path");
         args.AddRange(new[] { "--level", DifferentialTokens.Level(ds.Level) });
         args.AddRange(new[] { "--design", DifferentialTokens.Design(o.Design) });
 

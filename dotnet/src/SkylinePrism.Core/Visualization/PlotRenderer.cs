@@ -557,11 +557,38 @@ public static partial class PlotRenderer
 
     /// <summary>
     /// The diameter, in pixels, Skyline draws a point of <paramref name="points"/> at on a pane of this
-    /// size. Pass rendered pixels: on a display scaled to 150% a WPF control's actual size times 1.5.
+    /// size. Right for a PNG, whose canvas is the pane; an interactive plot wants
+    /// <see cref="InteractivePointPixels"/>.
     /// </summary>
     public static double SkylinePointPixels(
         double widthPx, double heightPx, double points = SkylinePointSizeNormal) =>
         points * SkylineSymbolScale(widthPx, heightPx);
+
+    /// <summary>Smallest point <see cref="InteractivePointPixels"/> draws.</summary>
+    public const double MinInteractivePointPixels = 8;
+
+    /// <summary>Largest point <see cref="InteractivePointPixels"/> draws - Skyline's size on an 864 x 576 pane.</summary>
+    public const double MaxInteractivePointPixels = 18;
+
+    /// <summary>
+    /// The point diameter for the tool's Dynamic Range pane: Skyline's size for the pane's
+    /// DEVICE-INDEPENDENT size, held between <see cref="MinInteractivePointPixels"/> and
+    /// <see cref="MaxInteractivePointPixels"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Skyline's rule only keeps a point in proportion because ZedGraph scales the text by the
+    /// same factor. ScottPlot's WPF control does not scale anything - it never sets
+    /// <c>Plot.ScaleFactor</c>, so text, lines and the other plots' markers are a fixed number of
+    /// rendered pixels whatever the display. Sizing only these points by the pane made them the one
+    /// thing on screen that grew, and by how much depended on the computer.</para>
+    /// <para>Measured in rendered pixels, as this used to be, a 1240 x 600 pane gave 19 px at 100%
+    /// display scaling and 37 px at 200% beside the same 24 px tick labels; a maximized pane on a
+    /// 2560-wide monitor gave 40 px at 100%. Measured in device-independent pixels the ratio to the
+    /// text no longer depends on the display's scaling, and the cap stops a large monitor turning
+    /// several thousand ranked points into a solid band.</para>
+    /// </remarks>
+    public static double InteractivePointPixels(double widthDip, double heightDip) =>
+        Math.Clamp(SkylinePointPixels(widthDip, heightDip), MinInteractivePointPixels, MaxInteractivePointPixels);
 
     /// <summary>Histogram of per-feature CVs with a median line, for one sample-type group.</summary>
     public static byte[] CvHistogram(double[] cvs, string title, string colorHex, double medianCv)

@@ -45,41 +45,69 @@ public partial class FeatureDetailWindow : Window
         string aName, IReadOnlyList<double> aValues, IReadOnlyList<string> aReplicates,
         string bName, IReadOnlyList<double> bValues, IReadOnlyList<string> bReplicates)
     {
-        _points.Clear();
         var inv = CultureInfo.InvariantCulture;
         var fc = double.IsFinite(logFc) ? logFc.ToString("0.###", inv) : "n/a";
         var qs = double.IsFinite(q) ? q.ToString("0.##e0", inv) : "n/a";
-        HeaderText.Text = label == featureId ? label : $"{label} ({featureId})";
-        SubText.Text =
+        ShowGroups(label, featureId,
             // "non-missing", never "detected": a Skyline export integrates imputed peak boundaries
             // for every replicate, so the corrected matrix is dense and a finite value here may
             // carry no real signal at all. Calling these counts detections would contradict the
             // pane's own caveat and overstate what the boxplot shows.
             $"log2FC (B/A) = {fc}   adj.P = {qs}   -   {aName}: n={aValues.Count}, "
-            + $"{bName}: n={bValues.Count} (non-missing values)";
+            + $"{bName}: n={bValues.Count} (non-missing values)",
+            new[] { new DetailGroup(aName, aValues, aReplicates), new DetailGroup(bName, bValues, bReplicates) });
+    }
+
+    /// <summary>One box: its name, its values and the replicate behind each value, index-aligned.</summary>
+    public sealed record DetailGroup(string Name, IReadOnlyList<double> Values, IReadOnlyList<string> Replicates);
+
+    /// <summary>
+    /// Colors past the Volcano's two arms, for the Dynamic Range pane's sample types. Tableau's, so a
+    /// third group reads as one more of the same family rather than as an alarm.
+    /// </summary>
+    private static readonly string[] MoreColors = { "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#e377c2", "#7f7f7f" };
+
+    /// <summary>
+    /// Draw (or redraw) one feature as a box per group with its per-sample points jittered over it -
+    /// the Volcano's two arms, or the Dynamic Range pane's sample types. An empty group keeps its
+    /// place and its name on the axis, so the colors mean the same group whatever is missing.
+    /// </summary>
+    public void ShowGroups(string label, string featureId, string subtitle, IReadOnlyList<DetailGroup> groups)
+    {
+        _points.Clear();
+        HeaderText.Text = label == featureId ? label : $"{label} ({featureId})";
+        SubText.Text = subtitle;
 
         var plt = DetailPlot.Plot;
         plt.Clear();
 
         var boxes = new List<ScottPlot.Box>();
-        AddBox(boxes, 0, aValues, AColor);
-        AddBox(boxes, 1, bValues, BColor);
+        for (var i = 0; i < groups.Count; i++)
+            AddBox(boxes, i, groups[i].Values, ColorFor(i));
         if (boxes.Count > 0)
             plt.Add.Boxes(boxes);
 
         // Jittered per-sample points, seeded so the layout is stable across redraws of the same feature.
-        var rng = new Random(HashCode.Combine(featureId, aValues.Count, bValues.Count) & 0x7fffffff);
-        AddJitter(plt, 0, aValues, aReplicates, AColor, rng);
-        AddJitter(plt, 1, bValues, bReplicates, BColor, rng);
+        var rng = new Random(HashCode.Combine(featureId, groups.Sum(g => g.Values.Count), groups.Count) & 0x7fffffff);
+        for (var i = 0; i < groups.Count; i++)
+            AddJitter(plt, i, groups[i].Values, groups[i].Replicates, ColorFor(i), rng);
         AddHoverOverlay(plt);
 
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
-            new double[] { 0, 1 }, new[] { aName, bName });
-        plt.Axes.SetLimitsX(-0.6, 1.6);
+            Enumerable.Range(0, groups.Count).Select(i => (double)i).ToArray(),
+            groups.Select(g => g.Name).ToArray());
+        plt.Axes.SetLimitsX(-0.6, Math.Max(0, groups.Count - 1) + 0.6);
         plt.XLabel("group");
         plt.YLabel("log2 abundance");
         PlotRenderer.StyleQcPlot(plt);
         DetailPlot.Refresh();
+
+        static string ColorFor(int i) => i switch
+        {
+            0 => AColor,
+            1 => BColor,
+            _ => MoreColors[(i - 2) % MoreColors.Length],
+        };
     }
 
     /// <summary>

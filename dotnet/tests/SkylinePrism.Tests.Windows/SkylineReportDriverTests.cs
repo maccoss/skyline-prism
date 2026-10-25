@@ -427,6 +427,57 @@ public class SkylineReportDriverTests
         Assert.Equal("Molecule:/sp|P68871|HBB_HUMAN/SHAREDPEPTIDEK", map["SHAREDPEPTIDEK"]);
     }
 
+    [Theory]
+    [InlineData("PEPC(unimod:4)TIDEK", "PEPC[*]TIDEK")]
+    [InlineData("PEPC[+57.021464]TIDEK", "PEPC[*]TIDEK")]
+    [InlineData("PEPC[+57.0]TIDEK", "PEPC[*]TIDEK")]
+    [InlineData("PEPC[Carbamidomethyl (C)]TIDEK", "PEPC[*]TIDEK")]
+    // Two modifications on one residue: Unimod lists both, Skyline may write one summed mass.
+    [InlineData("M(unimod:35)(unimod:1)PEPK", "M[*]PEPK")]
+    [InlineData("M[+58.005479]PEPK", "M[*]PEPK")]
+    [InlineData("PEPTIDEK", "PEPTIDEK")]
+    public void ModificationSignature_ReadsTheSameInEveryNotation(string sequence, string expected) =>
+        Assert.Equal(expected, SkylineReportDriver.ModificationSignature(sequence));
+
+    [Fact]
+    public void ModificationSignature_KeepsAModifiedPeptideApartFromItsUnmodifiedForm()
+    {
+        // Two nodes in the document and two rows in PRISM; collapsing them would send a click on
+        // either to whichever came first.
+        Assert.NotEqual(
+            SkylineReportDriver.ModificationSignature("PEPMK"),
+            SkylineReportDriver.ModificationSignature("PEPM(unimod:35)K"));
+    }
+
+    /// <summary>
+    /// The reported bug: clicking a carbamidomethylated peptide on the Volcano selected nothing in
+    /// Skyline. PRISM's feature id is the report's Unimod form; the tree's name is Skyline's
+    /// <c>ModifiedTarget</c>, which it writes at <c>SequenceModFormatType.full_precision</c>.
+    /// </summary>
+    [Fact]
+    public void GetLocatorMap_FindsAModifiedPeptideByItsUnimodForm()
+    {
+        const string carbamidomethyl = "Molecule:/sp|P02768|ALBU_HUMAN/LVRPEVDVMC[+57.021464]TAFHDNEETFLK";
+        const string oxidized = "Molecule:/sp|P02768|ALBU_HUMAN/LVRPEVDVM[+15.994915]CTAFHDNEETFLK";
+        var client = new FakeClient();
+        client.LocationsByLevel["molecule"] = new List<(string, string)>
+        {
+            ("LVRPEVDVMC[+57.021464]TAFHDNEETFLK", carbamidomethyl),
+            ("LVRPEVDVM[+15.994915]CTAFHDNEETFLK", oxidized),
+        };
+
+        var map = new SkylineReportDriver(new FakeExecutor(client)).GetLocatorMap("molecule");
+
+        // Not by name: the notations differ.
+        Assert.False(map.ContainsKey("LVRPEVDVMC(unimod:4)TAFHDNEETFLK"));
+        // By signature, bare and under the protein - and the two modified forms stay apart.
+        var sig = SkylineReportDriver.ModificationSignature("LVRPEVDVMC(unimod:4)TAFHDNEETFLK");
+        Assert.Equal(carbamidomethyl, map[sig]);
+        Assert.Equal(carbamidomethyl, map["sp|P02768|ALBU_HUMAN/" + sig]);
+        Assert.Equal(oxidized,
+            map[SkylineReportDriver.ModificationSignature("LVRPEVDVM(unimod:35)CTAFHDNEETFLK")]);
+    }
+
     [Fact]
     public void SelectElement_ReportsFailureInsteadOfThrowing()
     {

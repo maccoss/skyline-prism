@@ -1,7 +1,7 @@
 ﻿﻿# Differential analysis
 
 The Skyline tool's **Differential** pane runs a limma empirical-Bayes moderated-t contrast on a
-PRISM output directory: protein or peptide level, two groups from any metadata or clinical column,
+PRISM output directory: protein or peptide level, two groups from any metadata column, including one joined from a separate table,
 optional covariate adjustment, and a choice of empirical-Bayes variance prior. The statistics live
 in `SkylinePrism.Core.DifferentialAnalysis` and are reachable without the GUI.
 
@@ -545,18 +545,20 @@ overrides one (see "Covariate types" above).
 A level named on both sides is refused rather than dropped from one, because which side it was
 dropped from would change the answer and nothing in the output would record the choice.
 
-A contrast on a clinical column - diagnosis, age, sex from a separate table - takes `--clinical`,
-which joins the table exactly as the pane's Clinical CSV input does (the key column is detected by
-value) before any column name is checked:
+A contrast on a column from a separate table - diagnosis, age, sex from the clinical records - takes
+`--additional-metadata`, which joins the table exactly as the tool's Additional metadata input does
+(the key column is detected by value) before any column name is checked:
 
 ```bash
-prism differential -d output/ --clinical clinical.csv --group-by Diagnosis -a Control -b AD \
+prism differential -d output/ --additional-metadata clinical.csv --group-by Diagnosis -a Control -b AD \
     --adjust-for Age,Sex
 ```
 
-A clinical CSV that matches fewer than half the samples is refused rather than silently ignored,
-since the command almost certainly depends on one of its columns. `--clinical` can be given more
-than once; the tables are joined in the order given.
+A table that matches fewer than half the samples is refused rather than silently ignored, since the
+command almost certainly depends on one of its columns. `--additional-metadata` can be given more
+than once; the tables are joined in the order given. It was called `--clinical` up to
+dotnet-v26.30.0, and that name still works - every quant report written before then records its
+command with it - but prints a deprecation warning.
 
 A between-subject contrast where subjects were sampled more than once takes the blocked design:
 
@@ -657,9 +659,9 @@ The report contains:
   that cannot use one (anything but the moderated t) is dropped from the analysis, the detection test
   and the command alike, and the report says so. The test suite runs the recorded command through the
   CLI and requires every file it writes to be byte-identical to the pane's (the HTML apart from its
-  timestamp) - adjusted, paired, stale-covariate and two-clinical-CSV reports included. The
+  timestamp) - adjusted, paired, stale-covariate and two-metadata-table reports included. The
   comparison runs with enrichment off, because g:Profiler answers from its current database and its
-  output can change between two runs of anything. Rerun elsewhere, the command needs the clinical CSV
+  output can change between two runs of anything. Rerun elsewhere, the command needs the additional metadata CSV
   at the path it names and any marker list you saved yourself on that machine (`PRISM_PROTEIN_LISTS`
   can point at a copy of your lists file). Where a value cannot be written on a command line at all -
   a level containing a comma, which `-a`/`-b` split on, or one with leading or trailing spaces - the

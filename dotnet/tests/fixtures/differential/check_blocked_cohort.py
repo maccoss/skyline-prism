@@ -24,7 +24,7 @@ then, from anywhere:
         --group-by Sex -a F -b M --subject "Patient" --prism-csv prism.csv [--rscript PATH]
 
 The group and subject columns must be in the output directory's `sample_metadata.csv`; a column
-that only a `--clinical` CSV supplies is not read here. Samples are selected the way PRISM selects
+that only an `--additional-metadata` CSV supplies is not read here. Samples are selected the way PRISM selects
 them: in an arm, with a non-blank subject, compared trimmed. Features are those observed in every
 selected sample (PRISM tests complete features only).
 

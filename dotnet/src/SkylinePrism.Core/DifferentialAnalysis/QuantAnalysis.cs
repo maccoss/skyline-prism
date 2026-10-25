@@ -458,7 +458,7 @@ public static class QuantAnalysis
             EnrichmentSources: Enrichment.Enrichment.DefaultSources,
             EnrichmentDirection: "both",
             MarkerPanels: markers.Select(m => m.PanelName).ToList(),
-            ClinicalCsvs: ds.AttachedClinicalCsvs.ToList(),
+            AdditionalMetadataCsvs: ds.AttachedClinicalCsvs.ToList(),
             Command: commandLine,
             CommandUnavailable: noCommand,
             CovariateTypes: options.Covariates?.Select(c => $"{c.Name}={CovariateTyping.Token(c.Kind)}").ToList(),

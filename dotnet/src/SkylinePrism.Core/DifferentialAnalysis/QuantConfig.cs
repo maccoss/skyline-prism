@@ -38,7 +38,7 @@ public sealed record QuantContrast(
 /// <param name="Command">The <c>prism differential ... --report</c> command that reproduces the analysis (<see cref="QuantCommand"/>).</param>
 /// <param name="CommandUnavailable">Why no command could be written, when <paramref name="Command"/> is null.</param>
 /// <param name="DetectionTest">The detection test that ran (<see cref="Detection.DetectionAnalysis.Describe"/>), if any.</param>
-/// <param name="ClinicalCsvs">Clinical CSVs joined to the samples (<see cref="DifferentialDataset.AttachedClinicalCsvs"/>), if any.</param>
+/// <param name="AdditionalMetadataCsvs">Additional metadata CSVs joined to the samples (<see cref="DifferentialDataset.AttachedClinicalCsvs"/>), if any.</param>
 /// <param name="PriorUsed">The prior that actually ran, with its source (<see cref="DifferentialResult.VariancePrior"/>,
 /// e.g. "intensity-trend from controls"); it differs from the request when a requested prior had to fall back.</param>
 /// <param name="CovariateTypes">Each requested covariate as <c>COLUMN=numeric|categorical</c>, the form
@@ -61,7 +61,7 @@ public sealed record QuantConfig(
     IReadOnlyList<string> EnrichmentSources,
     string EnrichmentDirection,
     IReadOnlyList<string> MarkerPanels,
-    IReadOnlyList<string>? ClinicalCsvs = null,
+    IReadOnlyList<string>? AdditionalMetadataCsvs = null,
     string? Command = null,
     string? CommandUnavailable = null,
     string? DetectionTest = null,
@@ -85,10 +85,10 @@ public sealed record QuantConfig(
         var inv = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
         sb.Append("level: ").Append(Level).Append('\n');
-        // Only when one was joined: a contrast on a clinical column is not reproducible from the output
-        // directory alone, and this is the file `--clinical` needs.
-        if (ClinicalCsvs is { Count: > 0 })
-            sb.Append("clinical_csv: ").Append(YamlList(ClinicalCsvs)).Append('\n');
+        // Only when one was joined: a contrast on a joined column is not reproducible from the output
+        // directory alone, and this is the file `--additional-metadata` needs.
+        if (AdditionalMetadataCsvs is { Count: > 0 })
+            sb.Append("additional_metadata_csv: ").Append(YamlList(AdditionalMetadataCsvs)).Append('\n');
         sb.Append("contrast:\n");
         if (Contrast.TrendOver is not null)
             // Through Yaml() like group_by below: a trend column named "1.0", or one holding a colon,

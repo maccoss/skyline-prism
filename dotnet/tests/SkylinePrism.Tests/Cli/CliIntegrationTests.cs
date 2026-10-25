@@ -556,12 +556,12 @@ public class CliIntegrationTests
     }
 
     /// <summary>
-    /// <c>--clinical</c> joins an external table the way the pane's Clinical CSV input does, so a
-    /// contrast on a clinical column - the usual disease-vs-control case - runs headless, and the
-    /// report records which file it needed.
+    /// <c>--additional-metadata</c> joins an external table the way the tool's Additional metadata
+    /// input does, so a contrast on a joined column - the usual disease-vs-control case - runs
+    /// headless, and the report records which file it needed.
     /// </summary>
     [Fact]
-    public void Differential_Clinical_ContrastsOnAClinicalColumn_AndTheReportRecordsTheFile()
+    public void Differential_AdditionalMetadata_ContrastsOnAJoinedColumn_AndTheReportRecordsTheFile()
     {
         var outDir = TempDir();
         try
@@ -572,17 +572,54 @@ public class CliIntegrationTests
             File.WriteAllLines(clinical, new[] { "PatientName,Diagnosis" }
                 .Concat(names.Select((n, i) => $"{n},{(i % 2 == 0 ? "AD" : "Control")}")));
 
-            var (code, output) = Invoke("differential", "-d", outDir, "--clinical", clinical,
+            var (code, output) = Invoke("differential", "-d", outDir, "--additional-metadata", clinical,
                 "-g", "Diagnosis", "-a", "Control", "-b", "AD", "--report", "--no-enrichment");
 
             Assert.Equal(0, code);
-            // Named per file, since --clinical is repeatable.
-            Assert.Contains("Clinical CSV: joined clinical.csv on 'PatientName'", output, StringComparison.Ordinal);
+            // Named per file, since --additional-metadata is repeatable.
+            Assert.Contains("Additional metadata: joined clinical.csv on 'PatientName'", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("deprecated", output, StringComparison.Ordinal);
             Assert.StartsWith("# contrast: Diagnosis = AD vs Control",
                 File.ReadLines(Path.Combine(outDir, "differential.csv")).First(), StringComparison.Ordinal);
             var yaml = File.ReadAllText(Path.Combine(outDir, "quant", "quant_parameters.yaml"));
-            Assert.Contains("clinical_csv:", yaml, StringComparison.Ordinal);
+            Assert.Contains("additional_metadata_csv:", yaml, StringComparison.Ordinal);
             Assert.Contains("clinical.csv", yaml, StringComparison.Ordinal);
+            Assert.Contains("--additional-metadata", yaml, StringComparison.Ordinal); // the recorded command
+            var json = File.ReadAllText(Path.Combine(outDir, "quant", "quant_parameters.json"));
+            Assert.Contains("\"additional_metadata_csvs\"", json, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// <c>--clinical</c>, the flag's name up to dotnet-v26.30.0, is what every earlier quant report
+    /// recorded as its command - so it still joins, says it is deprecated, and adds to rather than
+    /// replaces any file given under the new name.
+    /// </summary>
+    [Fact]
+    public void Differential_DeprecatedClinicalFlag_StillJoins_AndCombinesWithTheNewName()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            var names = DifferentialDataset.Load(outDir, FeatureLevel.Protein).MetadataValues("sample");
+            var dx = WriteLines(outDir, "dx.csv", "PatientName,Diagnosis",
+                names.Select((n, i) => $"{n},{(i % 2 == 0 ? "AD" : "Control")}"));
+            var age = WriteLines(outDir, "age.csv", "PatientName,Age",
+                names.Select((n, i) => $"{n},{60 + i}"));
+
+            var (code, output) = Invoke("differential", "-d", outDir,
+                "--additional-metadata", dx, "--clinical", age,
+                "-g", "Diagnosis", "-a", "Control", "-b", "AD", "--adjust-for", "Age");
+
+            Assert.Equal(0, code);
+            Assert.Contains("--clinical is deprecated", output, StringComparison.Ordinal);
+            Assert.Contains("joined dx.csv", output, StringComparison.Ordinal);
+            Assert.Contains("joined age.csv", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -699,7 +736,7 @@ public class CliIntegrationTests
                 Assert.Contains(guiReport.Notes, n => n.StartsWith("Not adjusted for Age", StringComparison.Ordinal));
             }
             if (scenario == "two-clinical")
-                Assert.Equal(2, recorded.Count(a => a == "--clinical"));
+                Assert.Equal(2, recorded.Count(a => a == "--additional-metadata"));
             if (byDefault)
             {
                 Assert.Equal("limma-trend", guiReport.Differential.VariancePrior);
@@ -827,11 +864,11 @@ public class CliIntegrationTests
             var clinical = Path.Combine(outDir, "unrelated.csv");
             File.WriteAllText(clinical, "Id,Diagnosis\nZZZ-1,AD\nZZZ-2,Control\n");
 
-            var (code, output) = Invoke("differential", "-d", outDir, "--clinical", clinical,
+            var (code, output) = Invoke("differential", "-d", outDir, "--additional-metadata", clinical,
                 "-g", "Diagnosis", "-a", "Control", "-b", "AD");
 
             Assert.NotEqual(0, code);
-            Assert.Contains("--clinical: no column of unrelated.csv matched the samples", output,
+            Assert.Contains("--additional-metadata: no column of unrelated.csv matched the samples", output,
                 StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(outDir, "differential.csv")));
         }
@@ -857,7 +894,7 @@ public class CliIntegrationTests
             var clinical = WriteLines(outDir, "clinical.csv", "PatientName,Diagnosis,Week,Subject",
                 names.Select((n, i) => $"{n},{(i % 2 == 0 ? "AD" : "Control")},{i % 4},S{i / 2}"));
             string[] With(string[] contrast, params string[] extra) =>
-                new[] { "differential", "-d", outDir, "--clinical", clinical }.Concat(contrast).Concat(extra).ToArray();
+                new[] { "differential", "-d", outDir, "--additional-metadata", clinical }.Concat(contrast).Concat(extra).ToArray();
             var twoArm = new[] { "-g", "Diagnosis", "-a", "Control", "-b", "AD" };
             void Accepted(string[] args)
             {

@@ -127,10 +127,10 @@ public class QuantConfigTests
     [Fact]
     public void ToYaml_ClinicalPath_IsRecordedWithItsBackslashesEscaped()
     {
-        var cfg = TwoGroup() with { ClinicalCsvs = new[] { @"C:\data\clinical.csv" } };
-        Assert.Contains(@"clinical_csv: [""C:\\data\\clinical.csv""]", cfg.ToYaml());
+        var cfg = TwoGroup() with { AdditionalMetadataCsvs = new[] { @"C:\data\clinical.csv" } };
+        Assert.Contains(@"additional_metadata_csv: [""C:\\data\\clinical.csv""]", cfg.ToYaml());
         // And absent entirely when no clinical CSV was joined.
-        Assert.DoesNotContain("clinical_csv", TwoGroup().ToYaml());
+        Assert.DoesNotContain("additional_metadata_csv", TwoGroup().ToYaml());
     }
 
     [Fact]

@@ -33,9 +33,7 @@ public partial class MainWindow
         MarkersSettingsExpandButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private DifferentialDataset? _markersDataset;
-    private string? _markersDir;
-    private FeatureLevel _markersLevel;
+    private LevelDatasetCache<DifferentialDataset>? _datasetCache;
     private bool _markersSuppress;
 
     /// <summary>The dataset the pane is currently showing - whether loaded here or reused from the
@@ -98,7 +96,7 @@ public partial class MainWindow
         DifferentialDataset ds;
         try
         {
-            ds = await GetMarkersDatasetAsync(dir, level);
+            ds = await GetCorrectedDatasetAsync(dir, level);
         }
         catch (Exception ex)
         {
@@ -124,31 +122,42 @@ public partial class MainWindow
         RenderMarkers();
     }
 
-    private async Task<DifferentialDataset> GetMarkersDatasetAsync(string dir, FeatureLevel level)
+    /// <summary>
+    /// One level of a directory's corrected matrix, for the Markers pane and the Dynamic Range
+    /// pane's per-feature window: the Differential pane's dataset when it is the same directory and
+    /// level (it already has any additional metadata joined), else <see cref="LevelDatasetCache{T}"/>,
+    /// which reads each level once and joins the additional metadata the same way.
+    /// </summary>
+    private Task<DifferentialDataset> GetCorrectedDatasetAsync(string dir, FeatureLevel level)
     {
-        // Reuse the Differential pane's dataset when it is the same directory + level (it already has any
-        // clinical CSV attached); otherwise load our own and attach the clinical CSV the same way.
         if (_diffDataset is not null && _diffLoadedDir == dir && _diffLoadedLevel == level)
-            return _diffDataset;
-        if (_markersDataset is not null && _markersDir == dir && _markersLevel == level)
-            return _markersDataset;
+            return Task.FromResult(_diffDataset);
 
-        var ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
-        if (_clinicalCsvPath is not null && File.Exists(_clinicalCsvPath))
+        // Read on the UI thread, before the load starts: the path belongs with the read it was
+        // current for, and the worker must not reach back into the window for it.
+        var metadataCsv = _clinicalCsvPath;
+        _datasetCache ??= new LevelDatasetCache<DifferentialDataset>();
+        return _datasetCache.GetAsync(dir, level, () => LoadWithMetadata(dir, level, metadataCsv));
+    }
+
+    /// <summary>
+    /// Read a level and join an additional metadata CSV to it. Runs on a worker thread. Attaching a
+    /// new file clears the cache (InvalidateMarkers), so nothing read with the old one is reused.
+    /// </summary>
+    private static DifferentialDataset LoadWithMetadata(string dir, FeatureLevel level, string? metadataCsv)
+    {
+        var ds = DifferentialDataset.Load(dir, level);
+        if (metadataCsv is not null && File.Exists(metadataCsv))
         {
             try
             {
-                ds.AttachClinical(_clinicalCsvPath);
+                ds.AttachClinical(metadataCsv);
             }
             catch
             {
-                // a mismatched clinical file just adds nothing; not fatal
+                // a mismatched metadata file just adds nothing; not fatal
             }
         }
-
-        _markersDataset = ds;
-        _markersDir = dir;
-        _markersLevel = level;
         return ds;
     }
 
@@ -252,8 +261,7 @@ public partial class MainWindow
     /// </remarks>
     private void InvalidateMarkers()
     {
-        _markersDataset = null;
-        _markersDir = null;
+        _datasetCache?.Clear();
         _markersActive = null;
     }
 
@@ -314,7 +322,7 @@ public partial class MainWindow
             MarkersBoxPlot.Reset();
             MarkersBoxPlot.Refresh();
             MarkersStatusText.Text =
-                $"None of {combined.Name}'s {result.Total} members matched a {_markersLevel.ToString().ToLowerInvariant()} feature.";
+                $"None of {combined.Name}'s {result.Total} members matched a {ds.Level.ToString().ToLowerInvariant()} feature.";
             MarkersNoteText.Text = result.NotDetected.Count == 0
                 ? "No members detected in this run."
                 : "Not detected: " + NamePreview.Of(result.NotDetected, NotDetectedShown);

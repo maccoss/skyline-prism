@@ -959,8 +959,8 @@ public partial class MainWindow
                 : _diffDataset is null
                     ? "Unavailable: no run is loaded. Set the output directory above to a finished PRISM run. "
                       + "A trend needs a numeric column to fit a slope against."
-                    : "Unavailable: this run has no numeric column to fit a slope against. Attach a clinical "
-                      + "CSV that has one (a time, a dose, a numeric stage), or annotate one in the Skyline "
+                    : "Unavailable: this run has no numeric column to fit a slope against. Attach an "
+                      + "additional metadata CSV that has one (a time, a dose, a numeric stage), or annotate one in the Skyline "
                       + "document and re-export." + Environment.NewLine + Environment.NewLine + help;
     }
 
@@ -1109,6 +1109,11 @@ public partial class MainWindow
         if (_diffLoaded && _diffLoadedDir == dir && _diffLoadedLevel == level)
             return; // already current for this directory + level
 
+        // Taken before anything is cleared. A dataset still loaded here means the same directory at
+        // the other level - a new directory invalidates it first - so the contrast the user set up is
+        // carried across rather than reset to the first two values of the default column.
+        var carried = _diffDataset is not null ? CaptureContrastChoices() : null;
+
         ClearDiffOutput();
         DiffStatusText.Text = "Loading...";
         var request = ++_diffRequest;
@@ -1117,7 +1122,8 @@ public partial class MainWindow
         _diffLoading = true;
         try
         {
-            ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
+            using (BeginDiffBusy())
+                ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
         }
         catch (Exception ex)
         {
@@ -1176,13 +1182,86 @@ public partial class MainWindow
         {
             DiffGroupByCombo.ItemsSource = ds.MetadataColumns;
             DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);
+            // Suppressed, so taking the carried column over the default raises nothing in between.
+            if (carried?.GroupBy is { } kept && ds.MetadataColumns.Contains(kept))
+                DiffGroupByCombo.SelectedItem = kept;
         }
 
         PopulateDiffGroupValues();
+        var restored = carried is not null && RestoreContrastChoices(carried);
         UpdateDiffControls();
         DiffStatusText.Text =
             $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
             $"{ds.SampleIds.Length} samples. Pick the arms to contrast; it runs as you choose.";
+
+        // The same contrast at the new level is what switching level asked for, so it runs at once
+        // rather than leaving the restored pickers over an empty plot.
+        if (restored)
+            await RunCurrentViewAsync();
+    }
+
+    /// <summary>
+    /// What the user set up in the contrast pickers - the grouping column, each arm's ticked values,
+    /// and the Adjust-for ticks with any type they switched - by NAME, so it can be put back on the
+    /// pickers a reload rebuilds.
+    /// </summary>
+    private sealed record ContrastChoices(
+        string? GroupBy,
+        IReadOnlyList<string> A,
+        IReadOnlyList<string> B,
+        IReadOnlyDictionary<string, CovariateKind> Covariates);
+
+    private ContrastChoices CaptureContrastChoices() => new(
+        DiffGroupByCombo.SelectedItem as string,
+        _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList(),
+        _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList(),
+        _diffCovariateValues.Where(v => v.IsSelected).ToDictionary(v => v.Name, v => v.Kind, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Put carried choices back on freshly populated pickers, wherever the names still exist. Returns
+    /// whether the arms were restored, which is what makes the contrast worth re-running unasked.
+    /// </summary>
+    /// <remarks>
+    /// The two levels are read from one output directory, so their metadata is normally identical;
+    /// a value or column missing at the new level is simply left at its default rather than failing.
+    /// An arm that would come back EMPTY keeps its default instead - an empty arm is an error, and
+    /// the user did not ask for one.
+    /// </remarks>
+    private bool RestoreContrastChoices(ContrastChoices carried)
+    {
+        // The arms only mean something under the column they were picked from; the covariates are
+        // carried whether or not that column survived.
+        var sameColumn = string.Equals(
+            DiffGroupByCombo.SelectedItem as string, carried.GroupBy, StringComparison.Ordinal);
+
+        using (SuppressDiff())
+        {
+            // Not short-circuited: both arms are put back even when one cannot be.
+            var restoredArms = sameColumn
+                && RestoreArm(_diffAValues, carried.A) & RestoreArm(_diffBValues, carried.B);
+
+            foreach (var choice in _diffCovariateValues)
+            {
+                if (!carried.Covariates.TryGetValue(choice.Name, out var kind))
+                    continue;
+                // The type before the tick, and only to a type the column can take.
+                if (choice.CanSwitch)
+                    choice.Kind = kind;
+                choice.IsSelected = true;
+            }
+
+            UpdateDiffArmSummaries();
+            return restoredArms;
+        }
+
+        static bool RestoreArm(List<QcGroupValue> values, IReadOnlyList<string> ticked)
+        {
+            if (!values.Any(v => ticked.Contains(v.Name, StringComparer.Ordinal)))
+                return false;
+            foreach (var v in values)
+                v.IsSelected = ticked.Contains(v.Name, StringComparer.Ordinal);
+            return true;
+        }
     }
 
     /// <summary>
@@ -1421,7 +1500,7 @@ public partial class MainWindow
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Choose clinical metadata CSV",
+            Title = "Choose additional metadata CSV",
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -1482,7 +1561,7 @@ public partial class MainWindow
             if (result.KeyColumn is null || result.AddedColumns.Count == 0)
             {
                 DiffStatusText.Text =
-                    $"Clinical CSV: no column matched the samples (best match rate {result.MatchRate:P0}). " +
+                    $"Additional metadata: no column matched the samples (best match rate {result.MatchRate:P0}). " +
                     "Nothing was added.";
                 return;
             }
@@ -1493,11 +1572,11 @@ public partial class MainWindow
             // that put a second PCA in this pane in the first place.
             PublishClinicalToQcPane(result.AddedColumns);
 
-            // The Markers pane keeps its own cache for the OTHER feature level, and that copy was
-            // loaded before this join existed. GetMarkersDatasetAsync reuses the Differential
-            // dataset when the directory and level both match - so the stale case is specifically
-            // the two panes sitting on different levels, where the marker cache is returned as-is
-            // and the clinical columns promised here never appear in it.
+            // The shared dataset cache (Markers pane, Dynamic Range detail window) holds the OTHER
+            // feature level, read before this join existed. GetCorrectedDatasetAsync reuses the
+            // Differential dataset when the directory and level both match - so the stale case is
+            // specifically the panes sitting on different levels, where the cached copy is returned
+            // as-is and the columns promised here never appear in it.
             InvalidateMarkers();
 
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
@@ -1510,12 +1589,12 @@ public partial class MainWindow
 
             PopulateDiffGroupValues();
             DiffStatusText.Text =
-                $"Attached {result.AddedColumns.Count} clinical column(s) via key '{result.KeyColumn}' " +
+                $"Attached {result.AddedColumns.Count} metadata column(s) via key '{result.KeyColumn}' " +
                 $"(matched {result.MatchRate:P0} of samples): {string.Join(", ", result.AddedColumns)}.";
         }
         catch (Exception ex)
         {
-            DiffStatusText.Text = $"Could not attach clinical CSV: {ex.Message}";
+            DiffStatusText.Text = $"Could not attach the additional metadata CSV: {ex.Message}";
         }
     }
 
@@ -1545,6 +1624,7 @@ public partial class MainWindow
 
         // Anything already in flight is now stale, whatever order it finishes in.
         var request = ++_diffViewRequest;
+        using var busy = BeginDiffBusy();
         switch (DiffSelectedView())
         {
             case DiffView.Detection:
@@ -1557,6 +1637,43 @@ public partial class MainWindow
                 await RunVolcanoAsync(request);
                 break;
         }
+    }
+
+    // ---------------------------------------------------------------- busy indicator
+
+    /// <summary>How long work runs before the bar beside the status line appears.</summary>
+    private static readonly TimeSpan DiffBusyDelay = TimeSpan.FromSeconds(1);
+
+    private DelayedBusyIndicator? _diffBusy;
+
+    /// <summary>
+    /// Mark Differential-pane work as running until the returned scope is disposed: the progress bar
+    /// shows once work has run past <see cref="DiffBusyDelay"/> and hides when nothing is left
+    /// running (<see cref="DelayedBusyIndicator"/>). Indeterminate: neither the loader nor the tests
+    /// report how far along they are, and a bar that invents a fraction is worse than one that only
+    /// says "working".
+    /// </summary>
+    private IDisposable BeginDiffBusy() =>
+        (_diffBusy ??= new DelayedBusyIndicator(
+            visible => DiffProgress.Visibility = visible ? Visibility.Visible : Visibility.Collapsed,
+            AfterDelay)).Begin();
+
+    /// <summary>Run <paramref name="action"/> once after <see cref="DiffBusyDelay"/> on the UI thread.</summary>
+    private static IDisposable AfterDelay(Action action)
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = DiffBusyDelay };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            action();
+        };
+        timer.Start();
+        return new TimerCancel(timer);
+    }
+
+    private sealed class TimerCancel(System.Windows.Threading.DispatcherTimer timer) : IDisposable
+    {
+        public void Dispose() => timer.Stop();
     }
 
     /// <summary>Whether this run is still the current one. False means drop everything and paint nothing.</summary>
@@ -2492,23 +2609,8 @@ public partial class MainWindow
         // The DATASET's level, not _diffLoadedLevel: the identity just came out of this dataset, and
         // resolving it against the other level's document tree would look up a peptide among
         // proteins.
-        var level = _diffDataset!.Level == FeatureLevel.Protein
-            ? AbundanceLevel.Protein
-            : AbundanceLevel.Peptide;
-
-        // ResolveLocator speaks AbundanceEntry, so the identity is presented as one. Only the
-        // identity fields matter here - the abundance/rank fields are never read on this path.
-        var entry = new AbundanceEntry(
-            Key: identity.FeatureId,
-            Label: identity.Label,
-            Accession: identity.Accessions.FirstOrDefault(),
-            Gene: identity.Genes.FirstOrDefault(),
-            ProteinName: identity.ProteinNames.FirstOrDefault(),
-            MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0)
-        {
-            ProteinGroups = identity.ProteinGroups,
-            ProteinNames = identity.ProteinNames,
-        };
+        var level = AbundanceLevelOf(_diffDataset!);
+        var entry = AsLocatorEntry(identity);
 
         var locator = ResolveLocatorLocked(entry, level, out var viaFallback, out var treeUnavailable);
         if (locator is null)
@@ -2527,6 +2629,12 @@ public partial class MainWindow
             DiffStatusText.Text = $"Could not select {label} in Skyline.";
             return;
         }
+        // Already followed: the poll must not read this selection back. Two features can resolve to
+        // one document node, and the reverse index would hand back whichever came first - moving the
+        // ring, and the detail window, off the point that was just clicked.
+        _diffFollowedLocator = locator;
+        _diffFollowedFeatureId = featureId;
+        _volcanoReringPending = false;
 
         DiffStatusText.Text = $"Selected {label} in Skyline"
             + (viaFallback
@@ -2535,7 +2643,161 @@ public partial class MainWindow
                 : ".");
     }
 
-    private void ShowFeatureDetail(string featureId)
+    private static AbundanceLevel AbundanceLevelOf(DifferentialDataset ds) =>
+        ds.Level == FeatureLevel.Protein ? AbundanceLevel.Protein : AbundanceLevel.Peptide;
+
+    /// <summary>
+    /// A feature's identity presented as the <see cref="AbundanceEntry"/> ResolveLocator speaks. Only
+    /// the identity fields matter - the abundance/rank fields are never read on this path.
+    /// </summary>
+    private static AbundanceEntry AsLocatorEntry(FeatureIdentity identity) => new(
+        Key: identity.FeatureId,
+        Label: identity.Label,
+        Accession: identity.Accessions.FirstOrDefault(),
+        Gene: identity.Genes.FirstOrDefault(),
+        ProteinName: identity.ProteinNames.FirstOrDefault(),
+        MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0)
+    {
+        ProteinGroups = identity.ProteinGroups,
+        ProteinNames = identity.ProteinNames,
+    };
+
+    // ---------------------------------------------------------------- follow Skyline's selection
+    //
+    // Picking a protein or peptide in Skyline's tree or document grid rings it here. The polling is
+    // SkylineSelectionFollower's (SetSkylineFollow); this pane supplies PrepareVolcanoFollow.
+    private string? _diffFollowedLocator;
+
+    /// <summary>
+    /// The feature <see cref="_diffFollowedLocator"/> stands for. Kept rather than looked up again,
+    /// because two features can share a document node and the reverse index returns the first - after
+    /// a click on the second, re-ringing by lookup would move the ring to the other one.
+    /// </summary>
+    private string? _diffFollowedFeatureId;
+    private DifferentialDataset? _diffIdByLocatorFor;
+    private Dictionary<string, string>? _diffIdByLocator;
+
+    /// <summary>
+    /// Set by a re-render, which drops the ring: the next poll puts Skyline's selection back on the
+    /// new plot even though the selection itself has not changed - and does it quietly, leaving the
+    /// status line on the new contrast's result rather than replacing it with "Following Skyline".
+    /// </summary>
+    private bool _volcanoReringPending;
+
+    /// <summary>
+    /// The Volcano's side of a poll, on the UI thread: what to ask Skyline for at the dataset's
+    /// level, and the dataset to resolve against, captured here so the worker never reads a control.
+    /// Null unless the Volcano is the view and has points.
+    /// </summary>
+    private SkylineSelectionFollower.Poll? PrepareVolcanoFollow()
+    {
+        if (_diffDataset is null || DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0)
+            return null;
+        var ds = _diffDataset;
+        var level = AbundanceLevelOf(ds);
+        return new SkylineSelectionFollower.Poll(
+            level == AbundanceLevel.Protein ? "MoleculeGroup" : "Molecule",
+            locator => FindFeatureByLocator(locator, level, ds),
+            (locator, item) => ApplyVolcanoFollow(locator, item as string, ds));
+    }
+
+    /// <summary>
+    /// Make what Skyline has selected the Volcano's selection - the ring, the hit-table row, and the
+    /// detail window if it is already open - when it has changed, or when a re-render dropped the
+    /// ring. Never sent back to Skyline: the selection came from there.
+    /// </summary>
+    private void ApplyVolcanoFollow(string locator, string? resolvedId, DifferentialDataset ds)
+    {
+        var changed = locator != _diffFollowedLocator;
+        if (!changed && !_volcanoReringPending)
+            return;
+        if (changed)
+        {
+            _diffFollowedLocator = locator;
+            _diffFollowedFeatureId = resolvedId;
+        }
+        _volcanoReringPending = false;
+
+        // The level, the run or the view may have changed while the call was in flight.
+        var featureId = _diffFollowedFeatureId;
+        if (!ReferenceEquals(ds, _diffDataset) || DiffSelectedView() != DiffView.Volcano
+            || featureId is null || featureId == _volcanoSelectedId
+            || ds.IdentityOf(featureId) is null)
+            return;
+
+        FollowVolcanoFeature(featureId, announce: changed);
+    }
+
+    /// <summary>
+    /// The feature a Skyline locator refers to, by resolving every feature through the same locator
+    /// map a click uses - so the two directions agree by construction, as on the Dynamic Range pane.
+    /// Built once per dataset, on the poll's worker thread.
+    /// <para>The shared lock is taken per feature, not around the whole build: a click resolves
+    /// through the same map on the UI thread, and holding the lock across 70,000 peptides froze the
+    /// window for as long as the build took.</para>
+    /// </summary>
+    private string? FindFeatureByLocator(string locator, AbundanceLevel level, DifferentialDataset ds)
+    {
+        Dictionary<string, string>? index;
+        lock (_locatorLock)
+            index = ReferenceEquals(_diffIdByLocatorFor, ds) ? _diffIdByLocator : null;
+
+        if (index is null)
+        {
+            index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < ds.FeatureIds.Length; i++)
+            {
+                string? featureLocator;
+                bool unavailable;
+                lock (_locatorLock)
+                    featureLocator = ResolveLocator(
+                        AsLocatorEntry(ds.IdentityOf(i)), level, out _, out unavailable);
+                if (unavailable)
+                    return null; // could not read the tree; do not cache a half-built index
+                if (featureLocator is not null)
+                    index.TryAdd(featureLocator, ds.FeatureIds[i]); // first wins, as the forward map does
+            }
+            lock (_locatorLock)
+            {
+                _diffIdByLocator = index;
+                _diffIdByLocatorFor = ds;
+            }
+        }
+        return index.TryGetValue(locator, out var hit) ? hit : null;
+    }
+
+    /// <summary>
+    /// Make a feature selected in Skyline the Volcano's selection: <see cref="SelectVolcanoFeature"/>
+    /// without the trip back to Skyline, and without opening or raising the detail window, which
+    /// would take the focus from the window the user is clicking in.
+    /// </summary>
+    /// <param name="announce">
+    /// Whether to say so in the status line: true for a new selection in Skyline, false when only
+    /// re-ringing the same one on a re-rendered plot, whose status line is the new result.
+    /// </param>
+    private void FollowVolcanoFeature(string featureId, bool announce)
+    {
+        _volcanoSyncing = true;
+        try
+        {
+            _volcanoSelectedId = featureId;
+            HighlightVolcanoPoint(featureId);
+            HighlightGridRow(featureId);
+            if (_featureDetailWindow is not null)
+                ShowFeatureDetail(featureId, activate: false);
+            if (announce)
+                DiffStatusText.Text = $"Following Skyline: {DescribeFeature(featureId)}"
+                    + (_volcanoPoints.Any(p => string.Equals(p.FeatureId, featureId, StringComparison.Ordinal))
+                        ? "."
+                        : " - not on the plot (no finite fold change or p-value in this contrast).");
+        }
+        finally
+        {
+            _volcanoSyncing = false;
+        }
+    }
+
+    private void ShowFeatureDetail(string featureId, bool activate = true)
     {
         if (_diffDataset is null)
             return;
@@ -2570,11 +2832,7 @@ public partial class MainWindow
         var label = _diffLabelById.GetValueOrDefault(featureId, featureId);
         _volcanoRowById.TryGetValue(featureId, out var dr);
 
-        if (_featureDetailWindow is null)
-        {
-            _featureDetailWindow = new FeatureDetailWindow { Owner = this };
-            _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
-        }
+        var window = FeatureDetail();
 
         // A trend has no arms to box, so it gets the trajectory instead: abundance against the
         // trend column, the fitted line, and one faint line per subject where there are subjects.
@@ -2598,18 +2856,43 @@ public partial class MainWindow
                     : string.Empty);
             }
 
-            _featureDetailWindow.ShowTrendFeature(label, featureId, dr?.LogFc ?? double.NaN,
+            window.ShowTrendFeature(label, featureId, dr?.LogFc ?? double.NaN,
                 dr?.AdjPValue ?? double.NaN, _volcanoAName, xs, ys, reps,
                 DiffSelectedDesign() == DifferentialDesign.LinearTrendWithinSubject ? subs : null);
         }
         else
         {
-            _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
+            window.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
                 dr?.AdjPValue ?? double.NaN,
                 _volcanoAName, aVals, aReps, _volcanoBName, bVals, bReps);
         }
-        _featureDetailWindow.Show();
-        _featureDetailWindow.Activate();
+        PresentFeatureDetail(activate);
+    }
+
+    /// <summary>
+    /// The one per-feature window, shared by the Volcano and the Dynamic Range pane; created on first
+    /// use and forgotten when the user closes it.
+    /// </summary>
+    private FeatureDetailWindow FeatureDetail()
+    {
+        if (_featureDetailWindow is null)
+        {
+            _featureDetailWindow = new FeatureDetailWindow { Owner = this };
+            _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
+        }
+        return _featureDetailWindow;
+    }
+
+    /// <summary>
+    /// Show the per-feature window, bringing it forward only when <paramref name="activate"/> - a
+    /// selection that came from Skyline must not take the focus from Skyline.
+    /// </summary>
+    private void PresentFeatureDetail(bool activate)
+    {
+        var window = FeatureDetail();
+        window.Show();
+        if (activate)
+            window.Activate();
     }
 
     /// <summary>
@@ -2715,8 +2998,10 @@ public partial class MainWindow
         _volcanoSelMarker = sel;
 
         // A re-render is a new contrast, so nothing is selected until the user picks again - and the
-        // old id would point into a hit list that no longer contains it.
+        // old id would point into a hit list that no longer contains it. The next poll puts Skyline's
+        // selection back on the new plot, without touching the status line.
         _volcanoSelectedId = null;
+        _volcanoReringPending = true;
     }
 
     /// <summary>

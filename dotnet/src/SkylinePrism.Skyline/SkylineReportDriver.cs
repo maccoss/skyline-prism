@@ -336,9 +336,13 @@ public sealed class SkylineReportDriver
     /// <summary>
     /// Name -&gt; ElementLocator for a document tree level ("group" = proteins, "molecule" = peptides), for
     /// navigating to a plotted point. Locators come from Skyline rather than being built by string
-    /// surgery, so protein naming, modifications and duplicate sequences are Skyline's problem, not ours.
+    /// surgery, so protein naming and duplicate sequences are Skyline's problem, not ours.
     /// Keys are indexed under several forms (see <see cref="LocatorKeys"/>) because the plot is keyed on
     /// the PRISM matrices' identifiers, not on Skyline's display names.
+    /// <para>Modifications are NOT left to Skyline: the tree names a peptide by its mass-delta sequence
+    /// (<c>C[+57.021464]</c>) while PRISM's peptides carry the report's Unimod form (<c>C(unimod:4)</c>),
+    /// so a modified peptide matched nothing by name. Each peptide is also indexed under its
+    /// <see cref="ModificationSignature"/>, which a caller tries after the exact forms.</para>
     /// </summary>
     public Dictionary<string, string> GetLocatorMap(string level)
     {
@@ -386,7 +390,45 @@ public sealed class SkylineReportDriver
             if (p.Length > 0 && p is not "sp" and not "tr")
                 yield return p;
         }
+
+        // The notation-free forms of a modified peptide, bare and under its protein. Only the
+        // peptide segment is rewritten: a protein name can carry parentheses of its own.
+        if (slash >= 0 && slash + 1 < locator.Length)
+        {
+            var peptide = locator[(slash + 1)..];
+            var signature = ModificationSignature(peptide);
+            if (!string.Equals(signature, peptide, StringComparison.Ordinal))
+            {
+                yield return signature;
+                var parent = locator.LastIndexOf('/', slash - 1 < 0 ? 0 : slash - 1);
+                if (parent >= 0 && parent < slash)
+                    yield return locator[(parent + 1)..(slash + 1)] + signature;
+            }
+        }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex ModificationRun = new(
+        @"(?:\[[^\]]*\]|\([^)]*\))+", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// A modified sequence with every modification replaced by one placeholder, so the same peptide
+    /// reads the same in any notation: <c>PEPC(unimod:4)K</c>, <c>PEPC[+57.021464]K</c> and
+    /// <c>PEPC[+57.0]K</c> all give <c>PEPC[*]K</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>The position is kept and only the identity dropped, unlike
+    /// <c>SpectralLibrary.StripModifications</c>: <c>PEPMK</c> and <c>PEPM[+15.994915]K</c> are two
+    /// nodes in a Skyline document and two rows in PRISM, and stripping both to <c>PEPMK</c> would send
+    /// a click on either to whichever came first. A run of adjacent modifications is one placeholder,
+    /// because Skyline may write two modifications on one residue as a single summed mass where the
+    /// Unimod form lists both.</para>
+    /// <para>No table of modifications is involved, so there is nothing to keep up to date - the same
+    /// choice the spectral-library lookup made. What it cannot tell apart is two DIFFERENT
+    /// modifications at the same position of the same sequence; the exact forms are always tried
+    /// first, so that only matters when the notations differ as well.</para>
+    /// </remarks>
+    public static string ModificationSignature(string modifiedSequence) =>
+        ModificationRun.Replace(modifiedSequence, "[*]");
 
     /// <summary>Select an element in the document tree. Returns false when Skyline refuses or is gone.</summary>
     public bool SelectElement(string elementLocator)
