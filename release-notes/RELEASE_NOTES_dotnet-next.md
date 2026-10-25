@@ -24,6 +24,11 @@ as the GitHub Release description and fails if it is missing.
   cancellation reached the window wrapped in the per-input error that names the document, and was
   not recognized as a stop; the Log now says the run was stopped. A run that genuinely fails still
   shows the dialog, which now says that Ctrl+C copies its text.
+- Rewrote the Skyline Tool Store description. It had led with reference-anchored ComBat, which is opt-in
+  and not the default, and it listed none of the tool's panes beyond QC plots. It now describes standard
+  ComBat, the Differential, Markers, Dynamic Range, Ion accounting and Spectrum density panes, `.sky.zip`
+  input, and the `prism` CLI. The name is now just Skyline-PRISM, here and in `prism --help`, without the
+  old acronym expansion.
 
 ## Performance
 
