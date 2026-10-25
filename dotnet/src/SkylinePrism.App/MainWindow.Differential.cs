@@ -1229,12 +1229,16 @@ public partial class MainWindow
     /// </remarks>
     private bool RestoreContrastChoices(ContrastChoices carried)
     {
-        if (!string.Equals(DiffGroupByCombo.SelectedItem as string, carried.GroupBy, StringComparison.Ordinal))
-            return false;
+        // The arms only mean something under the column they were picked from; the covariates are
+        // carried whether or not that column survived.
+        var sameColumn = string.Equals(
+            DiffGroupByCombo.SelectedItem as string, carried.GroupBy, StringComparison.Ordinal);
 
         using (SuppressDiff())
         {
-            var restoredArms = RestoreArm(_diffAValues, carried.A) & RestoreArm(_diffBValues, carried.B);
+            // Not short-circuited: both arms are put back even when one cannot be.
+            var restoredArms = sameColumn
+                && RestoreArm(_diffAValues, carried.A) & RestoreArm(_diffBValues, carried.B);
 
             foreach (var choice in _diffCovariateValues)
             {
@@ -2625,6 +2629,12 @@ public partial class MainWindow
             DiffStatusText.Text = $"Could not select {label} in Skyline.";
             return;
         }
+        // Already followed: the poll must not read this selection back. Two features can resolve to
+        // one document node, and the reverse index would hand back whichever came first - moving the
+        // ring, and the detail window, off the point that was just clicked.
+        _diffFollowedLocator = locator;
+        _diffFollowedFeatureId = featureId;
+        _volcanoReringPending = false;
 
         DiffStatusText.Text = $"Selected {label} in Skyline"
             + (viaFallback
@@ -2658,8 +2668,22 @@ public partial class MainWindow
     // Skyline's tree or document grid rings it here. The timer, its busy flag and its failure count
     // are the Dynamic Range pane's (SetSkylineFollow) - one pane is on screen at a time.
     private string? _diffFollowedLocator;
+
+    /// <summary>
+    /// The feature <see cref="_diffFollowedLocator"/> stands for. Kept rather than looked up again,
+    /// because two features can share a document node and the reverse index returns the first - after
+    /// a click on the second, re-ringing by lookup would move the ring to the other one.
+    /// </summary>
+    private string? _diffFollowedFeatureId;
     private DifferentialDataset? _diffIdByLocatorFor;
     private Dictionary<string, string>? _diffIdByLocator;
+
+    /// <summary>
+    /// Set by a re-render, which drops the ring: the next poll puts Skyline's selection back on the
+    /// new plot even though the selection itself has not changed - and does it quietly, leaving the
+    /// status line on the new contrast's result rather than replacing it with "Following Skyline".
+    /// </summary>
+    private bool _volcanoReringPending;
 
     /// <summary>
     /// Ask Skyline what is selected and, when it has changed, make it the Volcano's selection - the
@@ -2696,16 +2720,26 @@ public partial class MainWindow
                 return (locator, FindFeatureByLocator(locator, level, ds));
             });
 
-            if (found.Locator is null || found.Locator == _diffFollowedLocator)
+            if (found.Locator is null)
                 return;
-            _diffFollowedLocator = found.Locator;
+            var changed = found.Locator != _diffFollowedLocator;
+            if (!changed && !_volcanoReringPending)
+                return;
+            if (changed)
+            {
+                _diffFollowedLocator = found.Locator;
+                _diffFollowedFeatureId = found.FeatureId;
+            }
+            _volcanoReringPending = false;
 
             // The level, the run or the view may have changed while the call was in flight.
+            var featureId = _diffFollowedFeatureId;
             if (!ReferenceEquals(ds, _diffDataset) || DiffSelectedView() != DiffView.Volcano
-                || found.FeatureId is null || found.FeatureId == _volcanoSelectedId)
+                || featureId is null || featureId == _volcanoSelectedId
+                || ds.IdentityOf(featureId) is null)
                 return;
 
-            FollowVolcanoFeature(found.FeatureId);
+            FollowVolcanoFeature(featureId, announce: changed);
             _rangeFollowFailures = 0;
         }
         catch (Exception ex)
@@ -2722,28 +2756,38 @@ public partial class MainWindow
     /// The feature a Skyline locator refers to, by resolving every feature through the same locator
     /// map a click uses - so the two directions agree by construction, as on the Dynamic Range pane.
     /// Built once per dataset, on the poll's worker thread.
+    /// <para>The shared lock is taken per feature, not around the whole build: a click resolves
+    /// through the same map on the UI thread, and holding the lock across 70,000 peptides froze the
+    /// window for as long as the build took.</para>
     /// </summary>
     private string? FindFeatureByLocator(string locator, AbundanceLevel level, DifferentialDataset ds)
     {
+        Dictionary<string, string>? index;
         lock (_rangeLocatorLock)
+            index = ReferenceEquals(_diffIdByLocatorFor, ds) ? _diffIdByLocator : null;
+
+        if (index is null)
         {
-            if (_diffIdByLocator is null || !ReferenceEquals(_diffIdByLocatorFor, ds))
+            index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < ds.FeatureIds.Length; i++)
             {
-                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                for (var i = 0; i < ds.FeatureIds.Length; i++)
-                {
-                    var featureLocator = ResolveLocator(
-                        AsLocatorEntry(ds.IdentityOf(i)), level, out _, out var unavailable);
-                    if (unavailable)
-                        return null; // could not read the tree; do not cache a half-built index
-                    if (featureLocator is not null)
-                        map.TryAdd(featureLocator, ds.FeatureIds[i]); // first wins, as the forward map does
-                }
-                _diffIdByLocator = map;
+                string? featureLocator;
+                bool unavailable;
+                lock (_rangeLocatorLock)
+                    featureLocator = ResolveLocator(
+                        AsLocatorEntry(ds.IdentityOf(i)), level, out _, out unavailable);
+                if (unavailable)
+                    return null; // could not read the tree; do not cache a half-built index
+                if (featureLocator is not null)
+                    index.TryAdd(featureLocator, ds.FeatureIds[i]); // first wins, as the forward map does
+            }
+            lock (_rangeLocatorLock)
+            {
+                _diffIdByLocator = index;
                 _diffIdByLocatorFor = ds;
             }
-            return _diffIdByLocator.TryGetValue(locator, out var hit) ? hit : null;
         }
+        return index.TryGetValue(locator, out var hit) ? hit : null;
     }
 
     /// <summary>
@@ -2751,7 +2795,11 @@ public partial class MainWindow
     /// without the trip back to Skyline, and without opening or raising the detail window, which
     /// would take the focus from the window the user is clicking in.
     /// </summary>
-    private void FollowVolcanoFeature(string featureId)
+    /// <param name="announce">
+    /// Whether to say so in the status line: true for a new selection in Skyline, false when only
+    /// re-ringing the same one on a re-rendered plot, whose status line is the new result.
+    /// </param>
+    private void FollowVolcanoFeature(string featureId, bool announce)
     {
         _volcanoSyncing = true;
         try
@@ -2761,10 +2809,11 @@ public partial class MainWindow
             HighlightGridRow(featureId);
             if (_featureDetailWindow is not null)
                 ShowFeatureDetail(featureId, activate: false);
-            DiffStatusText.Text = $"Following Skyline: {DescribeFeature(featureId)}"
-                + (_volcanoPoints.Any(p => string.Equals(p.FeatureId, featureId, StringComparison.Ordinal))
-                    ? "."
-                    : " - not on the plot (no finite fold change or p-value in this contrast).");
+            if (announce)
+                DiffStatusText.Text = $"Following Skyline: {DescribeFeature(featureId)}"
+                    + (_volcanoPoints.Any(p => string.Equals(p.FeatureId, featureId, StringComparison.Ordinal))
+                        ? "."
+                        : " - not on the plot (no finite fold change or p-value in this contrast).");
         }
         finally
         {
@@ -2807,11 +2856,7 @@ public partial class MainWindow
         var label = _diffLabelById.GetValueOrDefault(featureId, featureId);
         _volcanoRowById.TryGetValue(featureId, out var dr);
 
-        if (_featureDetailWindow is null)
-        {
-            _featureDetailWindow = new FeatureDetailWindow { Owner = this };
-            _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
-        }
+        var window = FeatureDetail();
 
         // A trend has no arms to box, so it gets the trajectory instead: abundance against the
         // trend column, the fitted line, and one faint line per subject where there are subjects.
@@ -2835,19 +2880,43 @@ public partial class MainWindow
                     : string.Empty);
             }
 
-            _featureDetailWindow.ShowTrendFeature(label, featureId, dr?.LogFc ?? double.NaN,
+            window.ShowTrendFeature(label, featureId, dr?.LogFc ?? double.NaN,
                 dr?.AdjPValue ?? double.NaN, _volcanoAName, xs, ys, reps,
                 DiffSelectedDesign() == DifferentialDesign.LinearTrendWithinSubject ? subs : null);
         }
         else
         {
-            _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
+            window.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
                 dr?.AdjPValue ?? double.NaN,
                 _volcanoAName, aVals, aReps, _volcanoBName, bVals, bReps);
         }
-        _featureDetailWindow.Show();
+        PresentFeatureDetail(activate);
+    }
+
+    /// <summary>
+    /// The one per-feature window, shared by the Volcano and the Dynamic Range pane; created on first
+    /// use and forgotten when the user closes it.
+    /// </summary>
+    private FeatureDetailWindow FeatureDetail()
+    {
+        if (_featureDetailWindow is null)
+        {
+            _featureDetailWindow = new FeatureDetailWindow { Owner = this };
+            _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
+        }
+        return _featureDetailWindow;
+    }
+
+    /// <summary>
+    /// Show the per-feature window, bringing it forward only when <paramref name="activate"/> - a
+    /// selection that came from Skyline must not take the focus from Skyline.
+    /// </summary>
+    private void PresentFeatureDetail(bool activate)
+    {
+        var window = FeatureDetail();
+        window.Show();
         if (activate)
-            _featureDetailWindow.Activate();
+            window.Activate();
     }
 
     /// <summary>
@@ -2953,10 +3022,10 @@ public partial class MainWindow
         _volcanoSelMarker = sel;
 
         // A re-render is a new contrast, so nothing is selected until the user picks again - and the
-        // old id would point into a hit list that no longer contains it. Forgetting the followed
-        // locator lets the next poll ring whatever Skyline has selected on the new plot.
+        // old id would point into a hit list that no longer contains it. The next poll puts Skyline's
+        // selection back on the new plot, without touching the status line.
         _volcanoSelectedId = null;
-        _diffFollowedLocator = null;
+        _volcanoReringPending = true;
     }
 
     /// <summary>

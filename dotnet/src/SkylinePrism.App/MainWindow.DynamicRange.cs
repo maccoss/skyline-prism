@@ -213,25 +213,37 @@ public partial class MainWindow
         string locator, AbundanceLevel level, List<AbundanceEntry> entries)
     {
         // Called from the poll's worker thread while a click may be resolving on the UI thread, and
-        // both go through the same lazily-built locator map.
+        // both go through the same lazily-built locator map. The lock is taken per entry rather than
+        // around the whole build, so a click is never held up for the length of it.
+        Dictionary<string, AbundanceEntry>? index;
         lock (_rangeLocatorLock)
+            index = _rangeEntryByLocatorLevel == level ? _rangeEntryByLocator : null;
+
+        if (index is null)
         {
-            if (_rangeEntryByLocator is null || _rangeEntryByLocatorLevel != level)
+            index = new Dictionary<string, AbundanceEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
             {
-                var map = new Dictionary<string, AbundanceEntry>(StringComparer.OrdinalIgnoreCase);
-                foreach (var entry in entries)
-                {
-                    var entryLocator = ResolveLocator(entry, level, out _, out var unavailable);
-                    if (unavailable)
-                        return null; // could not read the tree; do not cache a half-built index
-                    if (entryLocator is not null)
-                        map.TryAdd(entryLocator, entry); // first wins, as the forward map does
-                }
-                _rangeEntryByLocator = map;
-                _rangeEntryByLocatorLevel = level;
+                string? entryLocator;
+                bool unavailable;
+                lock (_rangeLocatorLock)
+                    entryLocator = ResolveLocator(entry, level, out _, out unavailable);
+                if (unavailable)
+                    return null; // could not read the tree; do not cache a half-built index
+                if (entryLocator is not null)
+                    index.TryAdd(entryLocator, entry); // first wins, as the forward map does
             }
-            return _rangeEntryByLocator.TryGetValue(locator, out var hit) ? hit : null;
+            lock (_rangeLocatorLock)
+            {
+                // Only if the entries are still the plotted ones; a reload cleared the index meanwhile.
+                if (ReferenceEquals(entries, _rangeEntries))
+                {
+                    _rangeEntryByLocator = index;
+                    _rangeEntryByLocatorLevel = level;
+                }
+            }
         }
+        return index.TryGetValue(locator, out var hit) ? hit : null;
     }
 
     /// <summary>Guards the locator map and its reverse index, which the click and the poll share.</summary>
@@ -1020,7 +1032,14 @@ public partial class MainWindow
                 : entry.Key;
             var row = Array.IndexOf(ds.FeatureIds, featureId);
             if (row < 0)
+            {
+                // Said, not skipped: the click asked for a window, and nothing appearing at all looks
+                // like a click that missed.
+                if (activate)
+                    RangeStatusText.Text += $" (no per-replicate values for {entry.Label}: '{featureId}' is "
+                        + $"not a row of corrected_{(level == FeatureLevel.Protein ? "proteins" : "peptides")})";
                 return;
+            }
 
             var byType = ds.MetadataColumns.Contains("sample_type") ? ds.MetadataValues("sample_type") : null;
             var groups = new SortedDictionary<string, (List<double> Values, List<string> Replicates)>(
@@ -1045,18 +1064,11 @@ public partial class MainWindow
                 + "(non-missing values" + (byType is null ? ")" : ", by sample_type)")
                 + (recomputed ? "   -   values are the run's own rollup, not the recomputed one" : "");
 
-            if (_featureDetailWindow is null)
-            {
-                _featureDetailWindow = new FeatureDetailWindow { Owner = this };
-                _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
-            }
-
-            _featureDetailWindow.ShowGroups(entry.Label, featureId, subtitle,
+            var window = FeatureDetail();
+            window.ShowGroups(entry.Label, featureId, subtitle,
                 groups.Select(kv => new FeatureDetailWindow.DetailGroup(kv.Key, kv.Value.Values, kv.Value.Replicates))
                     .ToList());
-            _featureDetailWindow.Show();
-            if (activate)
-                _featureDetailWindow.Activate();
+            PresentFeatureDetail(activate);
         }
         catch (Exception ex)
         {
@@ -1099,6 +1111,10 @@ public partial class MainWindow
             RangeStatusText.Text = $"Could not select {entry.Label} in Skyline.";
             return;
         }
+        // Already followed: the poll must not read this selection back. Two entries can resolve to
+        // one document node, and the reverse index would hand back whichever came first - moving the
+        // ring, and the detail window, off the point that was just clicked.
+        _rangeFollowedLocator = locator;
 
         RangeStatusText.Text =
             $"Selected {entry.Label} in Skyline (rank {entry.Rank:N0}, log10 {entry.Log10Abundance:0.00}){where}"

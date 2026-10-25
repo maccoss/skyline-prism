@@ -81,23 +81,22 @@ public partial class FeatureDetailWindow : Window
         var plt = DetailPlot.Plot;
         plt.Clear();
 
-        var shown = groups;
         var boxes = new List<ScottPlot.Box>();
-        for (var i = 0; i < shown.Count; i++)
-            AddBox(boxes, i, shown[i].Values, ColorFor(i));
+        for (var i = 0; i < groups.Count; i++)
+            AddBox(boxes, i, groups[i].Values, ColorFor(i));
         if (boxes.Count > 0)
             plt.Add.Boxes(boxes);
 
         // Jittered per-sample points, seeded so the layout is stable across redraws of the same feature.
-        var rng = new Random(HashCode.Combine(featureId, shown.Sum(g => g.Values.Count), shown.Count) & 0x7fffffff);
-        for (var i = 0; i < shown.Count; i++)
-            AddJitter(plt, i, shown[i].Values, shown[i].Replicates, ColorFor(i), rng);
+        var rng = new Random(HashCode.Combine(featureId, groups.Sum(g => g.Values.Count), groups.Count) & 0x7fffffff);
+        for (var i = 0; i < groups.Count; i++)
+            AddJitter(plt, i, groups[i].Values, groups[i].Replicates, ColorFor(i), rng);
         AddHoverOverlay(plt);
 
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
-            Enumerable.Range(0, shown.Count).Select(i => (double)i).ToArray(),
-            shown.Select(g => g.Name).ToArray());
-        plt.Axes.SetLimitsX(-0.6, Math.Max(1, shown.Count - 1) + 0.6);
+            Enumerable.Range(0, groups.Count).Select(i => (double)i).ToArray(),
+            groups.Select(g => g.Name).ToArray());
+        plt.Axes.SetLimitsX(-0.6, Math.Max(0, groups.Count - 1) + 0.6);
         plt.XLabel("group");
         plt.YLabel("log2 abundance");
         PlotRenderer.StyleQcPlot(plt);
