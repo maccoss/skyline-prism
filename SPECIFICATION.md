@@ -2052,7 +2052,9 @@ pass/fail verdict. Reference and QC are different materials injected at differen
 whichever started with more excess variance has more of it to remove; an asymmetric improvement is
 ordinary and does not establish over- or under-correction. It is also undefined (NaN, not infinity)
 when the reference CV did not improve at all. The verdict fails only on evidence of damage: a QC CV
-that got worse, or QC and reference collapsing together in PCA space.
+that got worse. The QC-reference PCA distance ratio is likewise a note: it is measured from the raw
+rollup, so a loading difference between the reference and QC injections - which normalization
+removes by design - shrinks it with nothing wrong.
 
 ---
 

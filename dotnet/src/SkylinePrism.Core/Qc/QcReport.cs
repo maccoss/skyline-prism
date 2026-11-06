@@ -508,7 +508,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
     /// inference matched nothing, and the run completed and reported "0 reference, 0 qc, 192
     /// experimental". "0 of 192" is an alarm; "not enough of both" is not.</para>
     /// </summary>
-    private static void AppendValidation(
+    internal static void AppendValidation(
         StringBuilder sb, ValidationStatus? v, int nRef, int nQc, int nSamples)
     {
         if (v is null)
@@ -526,15 +526,27 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             return;
         }
 
+        // A FAILED banner names its reasons inside the banner. They used to be only in the WARNINGS
+        // box below the table and the metrics line, where a reader who saw a red banner over two green
+        // improvements reasonably concluded that nothing had failed.
         sb.Append($"<div class=\"status {(v.Passed ? "status-pass" : "status-fail")}\">"
-            + $"Validation: {(v.Passed ? "PASSED" : "FAILED")}</div>");
+            + $"Validation: {(v.Passed ? "PASSED" : "FAILED")}");
+        if (v.Failures.Count > 0)
+        {
+            sb.Append("<ul style=\"margin:6px 0 0 0;font-weight:normal\">");
+            foreach (var f in v.Failures)
+                sb.Append($"<li>{HtmlEncode(f)}</li>");
+            sb.Append("</ul>");
+        }
+        sb.Append("</div>");
         // Say what the verdict is answering, so a FAILED banner points at something actionable and a
         // PASSED one is not read as a blanket endorsement.
         sb.Append("<p class=\"note\">The verdict asks one question: did the processing damage the "
-            + "controls? It fails only if the QC CV got <em>worse</em>, or if the QC and reference "
-            + "samples collapsed onto each other in PCA space. The reference and QC groups improving by "
-            + "different amounts is not a failure - they are different materials injected at different "
-            + "amounts, so one can have more excess variance to remove than the other.</p>");
+            + "controls? It fails only if the QC CV got <em>worse</em> (or could not be measured). The "
+            + "reference and QC groups improving by different amounts is not a failure - they are "
+            + "different materials injected at different amounts, so one can have more excess variance "
+            + "to remove than the other - and neither is the two groups moving closer in PCA space, "
+            + "which normalization does whenever their loading differed.</p>");
 
         sb.Append("<table><tr><th>Control CV</th><th>Raw</th><th>Corrected</th><th>Improvement</th></tr>");
         void Row(string label, double before, double after, double impFrac)
@@ -552,14 +564,17 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             : v.RelativeVarianceReduction.ToString("0.00");
         var pca = double.IsNaN(v.PcaDistanceRatio) ? "n/a" : v.PcaDistanceRatio.ToString("0.00");
         sb.Append($"<p style=\"color:#555\">Relative variance reduction (QC/reference improvement): "
-            + $"<strong>{rvr}</strong> (reported for information - it does not affect the verdict) "
-            + "&nbsp;&middot;&nbsp; "
-            + $"PCA QC-reference distance ratio (after/before): <strong>{pca}</strong> (collapse if &lt; 0.5)</p>");
+            + $"<strong>{rvr}</strong> &nbsp;&middot;&nbsp; "
+            + $"PCA QC-reference distance ratio (after/before): <strong>{pca}</strong> "
+            + "(both reported for information - neither affects the verdict)</p>");
 
-        if (v.Warnings.Count > 0)
+        // The failures are already in the banner; this box is for what is worth a look but decided
+        // nothing, such as a reference CV that rose.
+        var otherWarnings = v.Warnings.Except(v.Failures).ToList();
+        if (otherWarnings.Count > 0)
         {
             sb.Append("<div class=\"warnings\"><strong>WARNINGS</strong><ul>");
-            foreach (var w in v.Warnings)
+            foreach (var w in otherWarnings)
                 sb.Append($"<li>{HtmlEncode(w)}</li>");
             sb.Append("</ul></div>");
         }

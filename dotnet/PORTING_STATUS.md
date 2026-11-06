@@ -168,8 +168,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not done · **[-]** deferred 
       (a per-row choice renders one segment and blanks the others). Nothing produces a scheduled window
       today; `ScheduledWindowTests` / `DynamicDiaTests` keep the primitives honest until something can
 - [x] Control-correlation heatmap, RT-lowess curve overlay, RT-binned CV (all before/after)
-- [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement, PCA
-      QC-reference distance collapse; RVR is reported as a note and decides nothing) — `ValidationStatus`
+- [x] Pass/fail validation status + warnings banner (dual-control: QC CV improvement; RVR and the
+      PCA QC-reference distance ratio are reported as notes and decide nothing) — `ValidationStatus`
 - [x] RT-bin abundance boxplot (before/after)
 - [-] 3-stage plot variants — N/A: our pipeline is 2-stage (raw -> corrected); the Python 3-stage
       needs a persisted post-normalization/pre-ComBat intermediate we don't keep
@@ -245,7 +245,8 @@ Legend: **[x]** done · **[~]** partial · **[ ]** not done · **[-]** deferred 
       any annotation), applied to PCA, CV, and intensity plots with a standardized per-group palette
 
 ## Validation status & warnings (Python validation.py)
-- [x] Pass/fail verdict + warnings banner (QC-CV-increased, PCA QC-reference distance collapse) —
+- [x] Pass/fail verdict + warnings banner (QC-CV-increased; the PCA QC-reference distance ratio is a
+      NOTE in C#, measured from raw data so it shrinks with any loading difference) —
       `ValidationStatus.Compute`, rendered in the HTML report (`QcReport.AppendValidation`). The
       QC-vs-reference improvement ratio (RVR) is reported as a NOTE, not a warning, and is not part of
       the verdict in either engine: the two control groups are different materials at different

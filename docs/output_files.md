@@ -804,8 +804,10 @@ peptide column the rows were partitioned on (the name is left over from when the
   `parameters.json`), a Processing Parameters table for each stage, and the full re-runnable config
   as YAML in a collapsible block
 - Validation verdict: PASSED/FAILED plus control-CV before/after. It fails only if the QC CV got
-  worse or the QC and reference samples collapsed together in PCA space - the two control groups
-  improving by different amounts is reported as a note, not a failure
+  worse (or could not be measured), and a FAILED banner names the reason. The two control groups
+  improving by different amounts, and the QC and reference samples moving closer in PCA space, are
+  reported as notes, not failures - the PCA distance is measured against the raw data, so it
+  shrinks whenever normalization removes a loading difference between the two
 - Intensity distributions (box plots)
 - PCA plots (before/after normalization)
 - CV distributions for control samples

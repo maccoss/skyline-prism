@@ -8,24 +8,38 @@ namespace SkylinePrism.Core.Qc;
 /// <summary>
 /// Dual-control validation verdict (validation.py:validate_correction / ValidationMetrics). Uses the
 /// reference and QC samples to judge whether correction damaged the data: the QC CV must be
-/// measurable and must not get worse, and QC/reference must not collapse together in PCA space.
-/// Every failing condition also produces a <see cref="Warnings"/> entry, so a FAILED verdict always
-/// says what failed.
+/// measurable and must not get worse. Every failing condition produces a <see cref="Failures"/> entry (and the same text in
+/// <see cref="Warnings"/>), so a FAILED verdict always says what failed. <see cref="Warnings"/> also
+/// carries observations that do not decide the verdict, such as a reference CV that rose, which is why
+/// the two lists are kept apart: the banner names the failures, not everything worth a look.
 ///
 /// <para>The relative variance reduction (RVR = QC improvement / reference improvement) is reported as
 /// a <see cref="Notes"/> observation, NOT as a warning and NOT as part of the verdict. Reference and QC
 /// are different materials injected at different amounts, so one of them having more headroom to
 /// improve than the other is ordinary - it does not imply overfitting, and failing a run on it is
-/// excessive. A real problem shows up as a QC CV that got worse or as controls collapsing together,
-/// both of which are checked on their own terms.</para>
+/// excessive. A real problem shows up as a QC CV that got worse, which is checked on its own terms.</para>
+///
+/// <para>The QC-reference PCA distance ratio is a <see cref="Notes"/> observation too. It used to fail
+/// the verdict below 0.5, as a sign that correction had collapsed the two control groups onto each
+/// other, but its "before" is the RAW rollup: whatever loading difference separates the reference
+/// and QC injections is part of that distance, and normalization removes it by design. A run whose
+/// reference and QC both improved therefore read FAILED (a 264-sample cohort: CVs +30% and +6%,
+/// ratio 0.43). A pure loading offset between the groups drives the ratio to zero, and that is the
+/// processing working, not damage.</para>
 /// </summary>
 public sealed record ValidationStatus(
     double ReferenceCvBefore, double ReferenceCvAfter, double ReferenceCvImprovement,
     double QcCvBefore, double QcCvAfter, double QcCvImprovement,
     double RelativeVarianceReduction,
     double PcaDistanceBefore, double PcaDistanceAfter, double PcaDistanceRatio,
-    bool Passed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Notes)
+    bool Passed, IReadOnlyList<string> Failures, IReadOnlyList<string> Warnings, IReadOnlyList<string> Notes)
 {
+    /// <summary>True when the QC-reference PCA distance shrank enough to be noted. Decides nothing.</summary>
+    public bool PcaDistanceShrank => PcaDistanceRatio < PcaNoteRatio;
+
+    /// <summary>The PCA distance ratio (after/before) below which the shrinkage is reported as a note.</summary>
+    public const double PcaNoteRatio = 0.5;
+
     /// <summary>
     /// Compute the verdict at one level from before/after LOG2 matrices [features, samples] and the
     /// reference / QC sample column indices. Returns null when either control group has &lt; 2 samples.
@@ -58,15 +72,14 @@ public sealed record ValidationStatus(
         // reader can act on. That includes a QC CV that could not be measured at all - qcImp is
         // forced to 0 in that case, which would otherwise fail the verdict silently.
         var qcMeasurable = qcBefore > 0 && !double.IsNaN(qcBefore) && !double.IsNaN(qcAfter);
-        var warnings = new List<string>();
+        var failures = new List<string>();
         if (!qcMeasurable)
-            warnings.Add("QC CV could not be measured (no usable QC values), so the correction could not be validated.");
+            failures.Add("QC CV could not be measured (no usable QC values), so the correction could not be validated.");
         else if (qcImp < 0)
-            warnings.Add("QC CV increased after normalization.");
+            failures.Add("QC CV increased after normalization.");
+        var warnings = new List<string>(failures);
         if (refImp < 0)
             warnings.Add("Reference CV increased after normalization.");
-        if (pcaRatio < 0.5)
-            warnings.Add($"QC-reference PCA distance decreased by {(1 - pcaRatio) * 100:0.0}% - control samples may be collapsing together.");
 
         // The QC-vs-reference ratio is an observation, not a defect. The two control groups are
         // different materials at different injection amounts; whichever started with more excess
@@ -93,15 +106,26 @@ public sealed record ValidationStatus(
                 + "together - on its own this is not a problem.");
         }
 
-        // Only genuine damage fails the verdict: the independent control got worse, or the two control
-        // groups collapsed onto each other. An unchanged QC CV (qcImp == 0) is not damage. A NaN PCA
-        // ratio (degenerate geometry) is unmeasured, not failed - but an unmeasurable QC CV is,
-        // because then nothing was validated; both cases are stated in the warnings above.
-        var passed = qcMeasurable && qcImp >= 0 && !(pcaRatio < 0.5);
+        // Measured from the raw rollup, so it cannot tell a collapse from a loading difference that
+        // normalization removed - see the type's remarks. Reported, never failed.
+        if (pcaRatio < PcaNoteRatio)
+        {
+            notes.Add(
+                $"The QC-reference distance in PCA space shrank by {(1 - pcaRatio) * 100:0.0}% "
+                + $"(ratio {pcaRatio:0.00}). It is measured against the raw data, so it includes any "
+                + "difference in loading between the reference and QC injections, which normalization "
+                + "removes by design - on its own this is not a problem. Check the PCA plots if the two "
+                + "materials are expected to stay well apart.");
+        }
+
+        // Only genuine damage fails the verdict: the independent control got worse. An unchanged QC
+        // CV (qcImp == 0) is not damage, but an unmeasurable QC CV is, because then nothing was
+        // validated. The verdict is exactly "no failures", so it can never fail without naming why.
+        var passed = failures.Count == 0;
 
         return new ValidationStatus(
             refBefore, refAfter, refImp, qcBefore, qcAfter, qcImp, rvr,
-            distBefore, distAfter, pcaRatio, passed, warnings, notes);
+            distBefore, distAfter, pcaRatio, passed, failures, warnings, notes);
     }
 
     // Euclidean distance between the QC and reference centroids in 2-D PCA space.

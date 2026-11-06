@@ -82,8 +82,7 @@ public class RvrDegenerateTests
         var status = Evaluate(0.30, 0.34, 0.50, 0.48);
 
         Assert.True(status.QcCvImprovement > 0);
-        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5,
-            "an undefined RVR must not be the thing that fails the verdict");
+        Assert.True(status.Passed, "an undefined RVR must not be the thing that fails the verdict");
     }
 
     [Fact]
@@ -98,8 +97,7 @@ public class RvrDegenerateTests
         Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.Ordinal));
         Assert.DoesNotContain(status.Warnings.Concat(status.Notes),
             m => m.Contains("overfitting", StringComparison.OrdinalIgnoreCase));
-        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5,
-            "an asymmetric improvement must not be the thing that fails the verdict");
+        Assert.True(status.Passed, "an asymmetric improvement must not be the thing that fails the verdict");
     }
 
     [Fact]
@@ -111,7 +109,7 @@ public class RvrDegenerateTests
         Assert.True(status.RelativeVarianceReduction < 0.5);
         Assert.Contains(status.Notes, n => n.Contains("RVR=", StringComparison.Ordinal));
         Assert.DoesNotContain(status.Warnings, w => w.Contains("RVR", StringComparison.Ordinal));
-        Assert.True(status.Passed || status.PcaDistanceRatio < 0.5);
+        Assert.True(status.Passed);
     }
 
     [Fact]
