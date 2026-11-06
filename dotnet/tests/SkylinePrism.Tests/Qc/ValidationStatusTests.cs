@@ -32,7 +32,8 @@ public class ValidationStatusTests
         var v = ValidationStatus.Compute(before, after, Ref, Qc);
         Assert.NotNull(v);
         Assert.True(v!.QcCvImprovement > 0, $"QC CV should improve, got {v.QcCvImprovement}");
-        Assert.DoesNotContain(v.Warnings, w => w.Contains("QC CV increased"));
+        Assert.DoesNotContain(v.Failures, w => w.Contains("QC CV increased"));
+        Assert.True(v.Passed);
     }
 
     [Fact]
@@ -43,9 +44,9 @@ public class ValidationStatusTests
         var v = ValidationStatus.Compute(before, after, Ref, Qc);
         Assert.NotNull(v);
         Assert.True(v!.QcCvImprovement < 0);
-        Assert.Contains(v.Warnings, w => w.Contains("QC CV increased"));
         Assert.False(v.Passed);
         Assert.Contains(v.Failures, w => w.Contains("QC CV increased"));
+        Assert.DoesNotContain(v.Warnings, w => w.Contains("QC CV increased"));
 
         // The report names the reason in the banner itself, not only in a WARNINGS box below the
         // table, and does not repeat it there.
@@ -59,30 +60,40 @@ public class ValidationStatusTests
         // The reference got worse too here: that is a warning, below, and not in the banner.
         Assert.DoesNotContain("Reference CV increased", banner);
         Assert.Contains("Reference CV increased", html);
+        // The banner list is new markup in a page Panorama publishes; it must stay acceptable there.
+        Assert.Empty(SkylinePrism.Core.Panorama.WikiReport.Refusals(html));
     }
 
-    [Fact]
-    public void PcaDistanceShrinking_IsANote_AndDoesNotFailTheVerdict()
+    // Reference and QC differ by a uniform +2 offset in "apart" and not at all in "together"; both
+    // control CVs are tighter in "together".
+    private static (double[,] Apart, double[,] Together) OffsetRemoved()
     {
-        // The shape of a real report that read FAILED over two green improvements: both control CVs
-        // improve, but the QC-reference distance shrinks below 0.5. Here the reference and QC differ
-        // only by a uniform +2 offset before (a loading difference) and not at all after - which is
-        // normalization working, so it must not fail the run.
-        var before = new double[12, 4];
-        var after = new double[12, 4];
+        var apart = new double[12, 4];
+        var together = new double[12, 4];
         for (var f = 0; f < 12; f++)
         {
             var baseVal = 10 + f;
             var wobble = (f % 3 - 1) * 0.4;
-            before[f, 0] = baseVal + 1.0 + wobble;
-            before[f, 1] = baseVal - 1.0 - wobble;
-            before[f, 2] = baseVal + 2 + 1.0 - wobble;
-            before[f, 3] = baseVal + 2 - 1.0 + wobble;
-            after[f, 0] = baseVal + 0.2 + wobble;
-            after[f, 1] = baseVal - 0.2 - wobble;
-            after[f, 2] = baseVal + 0.2 - wobble;
-            after[f, 3] = baseVal - 0.2 + wobble;
+            apart[f, 0] = baseVal + 1.0 + wobble;
+            apart[f, 1] = baseVal - 1.0 - wobble;
+            apart[f, 2] = baseVal + 2 + 1.0 - wobble;
+            apart[f, 3] = baseVal + 2 - 1.0 + wobble;
+            together[f, 0] = baseVal + 0.2 + wobble;
+            together[f, 1] = baseVal - 0.2 - wobble;
+            together[f, 2] = baseVal + 0.2 - wobble;
+            together[f, 3] = baseVal - 0.2 + wobble;
         }
+        return (apart, together);
+    }
+
+    [Fact]
+    public void PcaDistanceShrinkingFromRaw_IsANote_AndDoesNotFailTheVerdict()
+    {
+        // The shape of a real report that read FAILED over two green improvements: both control CVs
+        // improve, but the QC-reference distance shrinks below 0.5. Measured from raw data, a +2
+        // offset that is gone after processing is a loading difference normalization removed - with
+        // no normalized matrix to tell it apart from a collapse, it must not fail the run.
+        var (before, after) = OffsetRemoved();
 
         var v = ValidationStatus.Compute(before, after, Ref, Qc);
         Assert.NotNull(v);
@@ -99,6 +110,48 @@ public class ValidationStatusTests
         var html = sb.ToString();
         Assert.Contains("Validation: PASSED", html);
         Assert.Contains("<strong>NOTES</strong>", html);
+        Assert.Contains("for information only", html);
+    }
+
+    [Fact]
+    public void PcaDistanceShrinkingInNormalization_PassesWithoutANote()
+    {
+        // The same raw -> output change, but the normalized matrix shows the offset was already gone
+        // before batch correction: normalization removed it, and ComBat moved nothing.
+        var (raw, after) = OffsetRemoved();
+
+        var v = ValidationStatus.Compute(raw, after, Ref, Qc, normalized: after);
+        Assert.NotNull(v);
+        Assert.True(v!.PcaFromNormalized);
+        Assert.Equal(1.0, v.PcaDistanceRatio, 12);
+        Assert.True(v.Passed);
+        Assert.DoesNotContain(v.Notes, n => n.Contains("PCA", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PcaCollapseInBatchCorrection_FailsTheVerdict_AndNamesIt()
+    {
+        // The two materials are still apart after normalization and together after batch correction:
+        // ComBat removed a real difference, which is what the check exists to catch. Both CVs improve,
+        // so the collapse is the only reason, and the banner has to say so.
+        var (apart, together) = OffsetRemoved();
+
+        var v = ValidationStatus.Compute(apart, together, Ref, Qc, normalized: apart);
+        Assert.NotNull(v);
+        Assert.True(v!.QcCvImprovement > 0 && v.ReferenceCvImprovement > 0);
+        Assert.True(v.PcaDistanceShrank, $"expected the distance to shrink, ratio {v.PcaDistanceRatio}");
+        Assert.False(v.Passed);
+        var failure = Assert.Single(v.Failures);
+        Assert.Contains("Batch correction moved the QC and reference groups", failure);
+
+        var sb = new System.Text.StringBuilder();
+        QcReport.AppendValidation(sb, v, 2, 2, 4);
+        var html = sb.ToString();
+        var banner = html.Substring(0, html.IndexOf("</div>", StringComparison.Ordinal));
+        Assert.Contains("Validation: FAILED", banner);
+        Assert.Contains("Batch correction moved", banner);
+        Assert.Contains("fails below 0.5", html);
+        Assert.Empty(SkylinePrism.Core.Panorama.WikiReport.Refusals(html));
     }
 
     [Fact]
@@ -120,7 +173,7 @@ public class ValidationStatusTests
         Assert.NotNull(v);
         Assert.Contains(v!.Warnings, w => w.Contains("Reference CV increased"));
         Assert.DoesNotContain(v.Failures, w => w.Contains("Reference CV increased"));
-        Assert.Equal(v.Failures.Count == 0, v.Passed);
+        Assert.True(v.Passed);
     }
 
     [Fact]
