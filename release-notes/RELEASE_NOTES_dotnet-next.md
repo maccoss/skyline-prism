@@ -22,6 +22,17 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- The QC report's PCA QC-reference distance check now measures what batch correction did, not
+  what normalization did. A 264-sample run read "Validation: FAILED" above two green CV improvements
+  (reference +30%, QC +6%) because the ratio was 0.43, below the 0.5 cutoff. The ratio was measured
+  from the raw rollup, so any loading difference between the reference and QC injections counted
+  toward it, even though normalization removes that difference by design. It is now measured from
+  the normalized, pre-ComBat peptides (`peptides_log2_internal.parquet`) to the corrected output,
+  and still fails below 0.5, because batch correction pulling two different materials together is
+  real damage. An output directory without that file gets the raw ratio as a note only.
+- A "Validation: FAILED" banner now names the reason inside the banner. Before, the reason was
+  only in a WARNINGS box below the control-CV table. That box now holds only warnings that did not
+  decide the verdict, such as a reference CV that rose.
 - With `sample_metadata.csv` open in Excel, switching the Differential pane between Protein and Peptide
   failed with "being used by another process" and emptied every picker, so nothing could be grouped.
   PRISM now reads its CSV and TSV inputs (sample metadata, additional metadata CSVs, `protein_groups.csv`,

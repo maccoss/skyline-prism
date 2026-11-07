@@ -7,31 +7,55 @@ namespace SkylinePrism.Core.Qc;
 
 /// <summary>
 /// Dual-control validation verdict (validation.py:validate_correction / ValidationMetrics). Uses the
-/// reference and QC samples to judge whether correction damaged the data: the QC CV must be
-/// measurable and must not get worse, and QC/reference must not collapse together in PCA space.
-/// Every failing condition also produces a <see cref="Warnings"/> entry, so a FAILED verdict always
-/// says what failed.
+/// reference and QC samples to judge whether processing damaged the data. Every failing condition is a
+/// <see cref="Failures"/> entry and <see cref="Passed"/> is exactly "no failures", so a FAILED verdict
+/// always says what failed. <see cref="Warnings"/> holds only what is worth a look but decided nothing,
+/// such as a reference CV that rose: the banner names the failures, the box below the rest.
 ///
 /// <para>The relative variance reduction (RVR = QC improvement / reference improvement) is reported as
 /// a <see cref="Notes"/> observation, NOT as a warning and NOT as part of the verdict. Reference and QC
 /// are different materials injected at different amounts, so one of them having more headroom to
 /// improve than the other is ordinary - it does not imply overfitting, and failing a run on it is
-/// excessive. A real problem shows up as a QC CV that got worse or as controls collapsing together,
-/// both of which are checked on their own terms.</para>
+/// excessive. A real problem shows up as a QC CV that got worse, which is checked on its own terms.</para>
+///
+/// <para>The QC-reference PCA distance ratio fails the verdict below <see cref="PcaCollapseRatio"/>
+/// only when its "before" is the NORMALIZED, pre-ComBat matrix, so that it measures what batch
+/// correction alone did to the separation of two different materials. Measured from the RAW rollup,
+/// as it once was, the distance includes whatever loading difference separates the reference and QC
+/// injections, which normalization removes by design: a pure loading offset drives the ratio to zero
+/// with nothing wrong, and a 264-sample cohort whose reference and QC CVs both improved (+30%, +6%)
+/// read FAILED on a ratio of 0.43. When no normalized matrix is available the raw ratio is still
+/// computed, but it is only a <see cref="Notes"/> observation.</para>
 /// </summary>
 public sealed record ValidationStatus(
     double ReferenceCvBefore, double ReferenceCvAfter, double ReferenceCvImprovement,
     double QcCvBefore, double QcCvAfter, double QcCvImprovement,
     double RelativeVarianceReduction,
-    double PcaDistanceBefore, double PcaDistanceAfter, double PcaDistanceRatio,
-    bool Passed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Notes)
+    double PcaDistanceBefore, double PcaDistanceAfter, double PcaDistanceRatio, bool PcaFromNormalized,
+    IReadOnlyList<string> Failures, IReadOnlyList<string> Warnings, IReadOnlyList<string> Notes)
 {
+    /// <summary>True when nothing failed. Derived, so it cannot disagree with <see cref="Failures"/>.</summary>
+    public bool Passed => Failures.Count == 0;
+
+    /// <summary>True when the QC-reference PCA distance ratio is below <see cref="PcaCollapseRatio"/>.</summary>
+    public bool PcaDistanceShrank => PcaDistanceRatio < PcaCollapseRatio;
+
     /// <summary>
-    /// Compute the verdict at one level from before/after LOG2 matrices [features, samples] and the
-    /// reference / QC sample column indices. Returns null when either control group has &lt; 2 samples.
+    /// The PCA distance ratio (after/before) below which the control groups are taken to have
+    /// collapsed: a failure when measured across batch correction, a note when measured from raw data.
+    /// </summary>
+    public const double PcaCollapseRatio = 0.5;
+
+    /// <summary>
+    /// Compute the verdict at one level. All matrices are LOG2 [features, samples] with the same sample
+    /// columns in the same order: <paramref name="before"/> the raw rollup, <paramref name="after"/>
+    /// the corrected output, and <paramref name="normalized"/> the normalized, pre-ComBat matrix
+    /// (<c>peptides_log2_internal</c>), which when given is the PCA "before". The CVs are always raw
+    /// against corrected. Returns null when either control group has &lt; 2 samples.
     /// </summary>
     public static ValidationStatus? Compute(
-        double[,] before, double[,] after, IReadOnlyList<int> refIdx, IReadOnlyList<int> qcIdx)
+        double[,] before, double[,] after, IReadOnlyList<int> refIdx, IReadOnlyList<int> qcIdx,
+        double[,]? normalized = null)
     {
         if (refIdx.Count < 2 || qcIdx.Count < 2)
             return null;
@@ -50,7 +74,8 @@ public sealed record ValidationStatus(
         // the reference degradation is reported as its own warning below.
         var rvr = refImp > 0 ? qcImp / refImp : double.NaN;
 
-        var distBefore = PcaCentroidDistance(before, refIdx, qcIdx);
+        var pcaFromNormalized = normalized is not null;
+        var distBefore = PcaCentroidDistance(normalized ?? before, refIdx, qcIdx);
         var distAfter = PcaCentroidDistance(after, refIdx, qcIdx);
         var pcaRatio = distBefore > 0 ? distAfter / distBefore : double.NaN;
 
@@ -58,15 +83,27 @@ public sealed record ValidationStatus(
         // reader can act on. That includes a QC CV that could not be measured at all - qcImp is
         // forced to 0 in that case, which would otherwise fail the verdict silently.
         var qcMeasurable = qcBefore > 0 && !double.IsNaN(qcBefore) && !double.IsNaN(qcAfter);
-        var warnings = new List<string>();
+        var failures = new List<string>();
         if (!qcMeasurable)
-            warnings.Add("QC CV could not be measured (no usable QC values), so the correction could not be validated.");
+            failures.Add(
+                "QC CV could not be measured (no usable QC values), so the correction could not be validated.");
         else if (qcImp < 0)
-            warnings.Add("QC CV increased after normalization.");
+            failures.Add("QC CV increased after normalization.");
+
+        // Measured across batch correction alone, a collapse is correction removing the real difference
+        // between two materials - which is what happens when the controls are confounded with batch.
+        if (pcaFromNormalized && pcaRatio < PcaCollapseRatio)
+        {
+            failures.Add(
+                $"Batch correction moved the QC and reference groups {(1 - pcaRatio) * 100:0.0}% closer "
+                + $"together in PCA space (distance ratio {pcaRatio:0.00}, after/before batch correction). "
+                + "They are different materials, so correction that pulls them together is removing real "
+                + "differences - check whether either control is confined to some of the batches.");
+        }
+
+        var warnings = new List<string>();
         if (refImp < 0)
             warnings.Add("Reference CV increased after normalization.");
-        if (pcaRatio < 0.5)
-            warnings.Add($"QC-reference PCA distance decreased by {(1 - pcaRatio) * 100:0.0}% - control samples may be collapsing together.");
 
         // The QC-vs-reference ratio is an observation, not a defect. The two control groups are
         // different materials at different injection amounts; whichever started with more excess
@@ -93,15 +130,26 @@ public sealed record ValidationStatus(
                 + "together - on its own this is not a problem.");
         }
 
-        // Only genuine damage fails the verdict: the independent control got worse, or the two control
-        // groups collapsed onto each other. An unchanged QC CV (qcImp == 0) is not damage. A NaN PCA
-        // ratio (degenerate geometry) is unmeasured, not failed - but an unmeasurable QC CV is,
-        // because then nothing was validated; both cases are stated in the warnings above.
-        var passed = qcMeasurable && qcImp >= 0 && !(pcaRatio < 0.5);
+        // Without the normalized matrix the ratio is measured from the raw rollup, so it cannot tell a
+        // collapse from a loading difference that normalization removed - see the type's remarks.
+        // Reported, never failed.
+        if (!pcaFromNormalized && pcaRatio < PcaCollapseRatio)
+        {
+            notes.Add(
+                $"The QC-reference distance in PCA space shrank by {(1 - pcaRatio) * 100:0.0}% "
+                + $"(ratio {pcaRatio:0.00}). It is measured against the raw data, because this output "
+                + "has no normalized pre-batch-correction peptides, so it includes any difference in "
+                + "loading between the reference and QC injections, which normalization removes by "
+                + "design - on its own this is not a problem. Check the PCA plots if the two materials "
+                + "are expected to stay well apart.");
+        }
 
+        // Only genuine damage fails the verdict: the independent control got worse, or batch correction
+        // collapsed the two controls. An unchanged QC CV (qcImp == 0) is not damage, but an
+        // unmeasurable QC CV is, because then nothing was validated.
         return new ValidationStatus(
             refBefore, refAfter, refImp, qcBefore, qcAfter, qcImp, rvr,
-            distBefore, distAfter, pcaRatio, passed, warnings, notes);
+            distBefore, distAfter, pcaRatio, pcaFromNormalized, failures, warnings, notes);
     }
 
     // Euclidean distance between the QC and reference centroids in 2-D PCA space.

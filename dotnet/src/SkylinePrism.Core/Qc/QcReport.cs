@@ -81,7 +81,11 @@ public static partial class QcReport
         var peptidePlots = RenderLevelSections("peptide", pepRaw, pepCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
         var proteinPlots = RenderLevelSections("protein", protRaw, protCorrected, typeLabels, refIdx, qcIdx, savePlots, plotsDir, rtLowessRan);
 
-        var validation = ValidationStatus.Compute(pepRaw.Values, pepCorrected.Values, refIdx, qcIdx);
+        // The PCA collapse check is measured across batch correction alone, so its "before" is the
+        // normalized, pre-ComBat matrix; from the raw rollup it would count the loading difference
+        // that normalization removes.
+        var validation = ValidationStatus.Compute(pepRaw.Values, pepCorrected.Values, refIdx, qcIdx,
+            LoadNormalizedPeptides(outputDir, pepMeta, sampleCols));
         var runInfo = Provenance.ReadRunInfo(Path.Combine(outputDir, "parameters.json"));
 
         // A pure file read, so `prism qc -d` shows these on any directory that has been measured
@@ -508,7 +512,7 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
     /// inference matched nothing, and the run completed and reported "0 reference, 0 qc, 192
     /// experimental". "0 of 192" is an alarm; "not enough of both" is not.</para>
     /// </summary>
-    private static void AppendValidation(
+    internal static void AppendValidation(
         StringBuilder sb, ValidationStatus? v, int nRef, int nQc, int nSamples)
     {
         if (v is null)
@@ -526,15 +530,28 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             return;
         }
 
+        // A FAILED banner names its reasons inside the banner. They used to be only in the WARNINGS
+        // box below the table and the metrics line, where a reader who saw a red banner over two green
+        // improvements reasonably concluded that nothing had failed.
         sb.Append($"<div class=\"status {(v.Passed ? "status-pass" : "status-fail")}\">"
-            + $"Validation: {(v.Passed ? "PASSED" : "FAILED")}</div>");
+            + $"Validation: {(v.Passed ? "PASSED" : "FAILED")}");
+        if (v.Failures.Count > 0)
+        {
+            sb.Append("<ul style=\"margin:6px 0 0 0;font-weight:normal\">");
+            foreach (var f in v.Failures)
+                sb.Append($"<li>{HtmlEncode(f)}</li>");
+            sb.Append("</ul>");
+        }
+        sb.Append("</div>");
         // Say what the verdict is answering, so a FAILED banner points at something actionable and a
         // PASSED one is not read as a blanket endorsement.
         sb.Append("<p class=\"note\">The verdict asks one question: did the processing damage the "
-            + "controls? It fails only if the QC CV got <em>worse</em>, or if the QC and reference "
-            + "samples collapsed onto each other in PCA space. The reference and QC groups improving by "
-            + "different amounts is not a failure - they are different materials injected at different "
-            + "amounts, so one can have more excess variance to remove than the other.</p>");
+            + "controls? It fails if the QC CV got <em>worse</em> (or could not be measured), or if batch "
+            + "correction pulled the QC and reference groups together in PCA space. The two groups "
+            + "improving by different amounts is not a failure - they are different materials injected "
+            + "at different amounts, so one can have more excess variance to remove than the other - and "
+            + "neither is normalization moving them closer, which it does whenever their loading "
+            + "differed.</p>");
 
         sb.Append("<table><tr><th>Control CV</th><th>Raw</th><th>Corrected</th><th>Improvement</th></tr>");
         void Row(string label, double before, double after, double impFrac)
@@ -551,11 +568,16 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
             ? "n/a"
             : v.RelativeVarianceReduction.ToString("0.00");
         var pca = double.IsNaN(v.PcaDistanceRatio) ? "n/a" : v.PcaDistanceRatio.ToString("0.00");
+        var pcaSpan = v.PcaFromNormalized
+            ? $"after/before batch correction): <strong>{pca}</strong> "
+                + $"(fails below {ValidationStatus.PcaCollapseRatio:0.0})"
+            : $"after processing/raw): <strong>{pca}</strong> (for information only)";
         sb.Append($"<p style=\"color:#555\">Relative variance reduction (QC/reference improvement): "
-            + $"<strong>{rvr}</strong> (reported for information - it does not affect the verdict) "
-            + "&nbsp;&middot;&nbsp; "
-            + $"PCA QC-reference distance ratio (after/before): <strong>{pca}</strong> (collapse if &lt; 0.5)</p>");
+            + $"<strong>{rvr}</strong> (for information only) &nbsp;&middot;&nbsp; "
+            + $"PCA QC-reference distance ratio ({pcaSpan}</p>");
 
+        // The failures are already in the banner; this box is for what is worth a look but decided
+        // nothing, such as a reference CV that rose.
         if (v.Warnings.Count > 0)
         {
             sb.Append("<div class=\"warnings\"><strong>WARNINGS</strong><ul>");
@@ -651,6 +673,33 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
         if (reader.ColumnNames.Contains(PepMetaRt, StringComparer.Ordinal))
             meanRt = reader.ReadDoubles(PepMetaRt);
         return new Matrix(m, sampleCols, n, meanRt);
+    }
+
+    /// <summary>
+    /// <c>peptides_log2_internal.parquet</c> (LOG2, post-normalization, pre-ComBat) with its sample
+    /// columns in <paramref name="sampleCols"/> order, or null when the file is absent or does not carry
+    /// every one of those samples. Before dotnet-v26.15.0 the file held post-ComBat values; read from
+    /// such a directory the PCA ratio is about 1 and the check passes without having measured anything.
+    /// </summary>
+    private static double[,]? LoadNormalizedPeptides(
+        string outputDir, IReadOnlyList<string> metaCols, IReadOnlyList<string> sampleCols)
+    {
+        var path = Path.Combine(outputDir, "peptides_log2_internal.parquet");
+        if (!File.Exists(path))
+            return null;
+        var m = LoadMatrix(path, metaCols);
+        var position = m.SampleCols.Select((s, j) => (s, j)).ToDictionary(p => p.s, p => p.j, StringComparer.Ordinal);
+        if (!sampleCols.All(position.ContainsKey))
+            return null;
+
+        var reordered = new double[m.RowCount, sampleCols.Count];
+        for (var j = 0; j < sampleCols.Count; j++)
+        {
+            var src = position[sampleCols[j]];
+            for (var i = 0; i < m.RowCount; i++)
+                reordered[i, j] = m.Values[i, src];
+        }
+        return reordered;
     }
 
     private static Matrix Log2(Matrix linear)

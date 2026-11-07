@@ -2052,7 +2052,12 @@ pass/fail verdict. Reference and QC are different materials injected at differen
 whichever started with more excess variance has more of it to remove; an asymmetric improvement is
 ordinary and does not establish over- or under-correction. It is also undefined (NaN, not infinity)
 when the reference CV did not improve at all. The verdict fails only on evidence of damage: a QC CV
-that got worse, or QC and reference collapsing together in PCA space.
+that got worse, or batch correction collapsing the two control groups. The second is the
+QC-reference PCA distance ratio measured across batch correction alone - from the normalized,
+pre-ComBat peptides (`peptides_log2_internal.parquet`) to `corrected_peptides.parquet` - and it fails
+below 0.5. It is not measured from the raw rollup, because a loading difference between the reference
+and QC injections, which normalization removes by design, would shrink it with nothing wrong. An
+output directory without the normalized file falls back to the raw ratio, reported only as a note.
 
 ---
 
