@@ -479,6 +479,15 @@ public class CliIntegrationTests
         "--markers-group-by", "batch")]
     [InlineData("--no-enrichment needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--no-enrichment")]
+    [InlineData("--enrichment-direction needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--enrichment-direction", "pooled")]
+    [InlineData("--organism needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--organism", "mmusculus")]
+    // Bad values are refused before differential.csv is written, not when the report is.
+    [InlineData("--enrichment-direction must be separate or pooled", "-g", "sample_type", "-a", "qc",
+        "-b", "experimental", "--report", "--enrichment-direction", "up")]
+    [InlineData("--organism wants a g:Profiler organism id", "-g", "sample_type", "-a", "qc",
+        "-b", "experimental", "--report", "--organism", "Mus musculus")]
     // A mistyped panel is refused before anything is written, not after differential.csv exists.
     [InlineData("No marker panel 'nosuchpanel'", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--report", "--markers", "nosuchpanel")]

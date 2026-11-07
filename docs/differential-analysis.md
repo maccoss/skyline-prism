@@ -646,6 +646,20 @@ ones), `--markers-group-by` picks their grouping column (default: `--group-by`; 
 trend), and `--no-enrichment` skips g:Profiler on a machine with no internet access. An unknown panel
 or column is refused before anything is written.
 
+Enrichment takes two more flags. `--enrichment-direction separate` (the default) submits the hits
+higher in B and those lower in B as two lists against the same background, so every term says which
+way its genes moved; `pooled` submits every hit as one list. Pooling is the weaker test when the
+biology is directional: a pathway whose members all rise shares the list with an unrelated one whose
+members all fall, each diluting the other's over-representation, and the term cannot say which way
+it went. `--organism` names the g:Profiler organism (`hsapiens`, `mmusculus`, `rnorvegicus`, ...).
+Without it, the organism is inferred from the species code most of the run's UniProt entry names
+carry (`ICAM1_MOUSE`), taken as a majority so contaminants (human keratins, a yeast spike-in) do not
+decide it; with no species code in the names it falls back to `hsapiens` and the report says so. Up
+to this release every run was queried as human. g:Profiler matches symbols without regard to case,
+so mouse symbols mostly landed on their human namesakes and results looked plausible, but the
+annotations were human and mouse-only genes dropped out of both query and background. The recorded
+command always names both flags, so a re-run queries what the report did.
+
 The report contains:
 
 - the analysis parameters, as a table and as YAML (also written to `quant_parameters.yaml` /
@@ -673,8 +687,10 @@ The report contains:
   covariates are set, McNemar's exact test over the matched subjects when the design is paired, and
   Fisher exact otherwise. The section names the test, and a paired design that had to run unpaired
   says why;
-- **functional enrichment** - the g:Profiler bars, when the network is reachable and there are
-  significant genes;
+- **functional enrichment** - the g:Profiler bars and terms, one block for the hits higher in B and
+  one for those lower (or a single block when pooled), with the organism queried and how it was
+  chosen, when the network is reachable and there are significant genes. `enrichment_terms.csv`
+  leads with a `direction` column (`up`, `down` or `pooled`), since one term can be enriched both ways;
 - **marker panels** - a heatmap and panel-score boxplot for each selected panel.
 
 Beside the HTML it writes the result tables as CSVs (`differential.csv` - the same file, from the

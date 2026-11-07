@@ -96,6 +96,8 @@ public partial class MainWindow
             MarkerGroupBy = MarkersGroupByCombo.SelectedItem as string,
             // Enrichment always runs from the button; with no network it becomes a note, not a failure.
             EnrichmentPoster = DiffPoster,
+            // The Enrichment view's own choice, so the report enriches the way the pane just did.
+            EnrichmentPooled = DiffEnrichPooled(),
             CachedDetection = _detectionData is not null && _detectionDir == dir ? _detectionData : null,
         };
 

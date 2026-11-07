@@ -230,7 +230,15 @@ public partial class MainWindow
 
     private sealed record DetGlmRow(string Peptide, double RateA, double RateB, double LogOR, double P, double Q);
 
-    private sealed record EnrichRow(string Source, string Term, double PValue, double Fold, string TermId);
+    /// <summary>
+    /// One enriched term in the table. <paramref name="Direction"/> leads because with up and down
+    /// enriched separately the same term can be listed twice; <paramref name="TermKey"/> - direction
+    /// and term id - is what a click looks the term up by.
+    /// </summary>
+    private sealed record EnrichRow(string Direction, string Source, string Term, double PValue, double Fold, string TermKey);
+
+    /// <summary>The lookup key of a term: its id within one direction's list.</summary>
+    private static string EnrichKey(EnrichmentTerm t) => $"{t.Direction}|{t.TermId}";
 
     /// <summary>A significant protein that a clicked enrichment term contains.</summary>
     private sealed record TermProtein(string Protein, string Gene, double Log2FC, double AdjP);
@@ -836,6 +844,8 @@ public partial class MainWindow
             }
         }
 
+        UpdateEnrichDirectionVisibility();
+
         // Changing the design can strand the selection on a test that no longer applies. Fall back
         // to the moderated t, which is valid under both, rather than leaving an invisible selection.
         if (DiffTestCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
@@ -1103,6 +1113,8 @@ public partial class MainWindow
                 DiffEffectCutCombo.SelectedIndex = 0;
             if (DiffCorrectionCombo.SelectedItem is null)
                 DiffCorrectionCombo.SelectedIndex = 0; // Benjamini-Hochberg
+            if (DiffEnrichDirectionCombo.SelectedItem is null)
+                DiffEnrichDirectionCombo.SelectedIndex = 0; // up and down separately
         }
 
         var level = DiffSelectedLevel();
@@ -1600,6 +1612,9 @@ public partial class MainWindow
 
     private async void OnDiffViewChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (!IsInitialized)
+            return;
+        UpdateEnrichDirectionVisibility(); // outside the guards: the switch follows the view even mid-load
         if (_diffSuppress || _diffDataset is null)
             return;
         try
@@ -2150,9 +2165,15 @@ public partial class MainWindow
         if (!StillCurrent(request))
             return;
 
-        var (sig, background) = Enrichment.SigAndBackgroundGenes(
-            res, fid => _diffGeneById.GetValueOrDefault(fid), rule);
-        if (sig.Count == 0)
+        // The map this load built, taken now: the query runs off the UI thread, and a reload started
+        // meanwhile replaces the field and fills the new map in place, which a concurrent read must
+        // never see.
+        var geneById = _diffGeneById;
+
+        // Counted before anything is sent, so "no hits" is said without a network round trip.
+        var (anySig, _) = Enrichment.SigAndBackgroundGenes(
+            res, fid => geneById.GetValueOrDefault(fid), rule);
+        if (anySig.Count == 0)
         {
             ClearDiffOutput();
             DiffStatusText.Text =
@@ -2161,11 +2182,15 @@ public partial class MainWindow
             return;
         }
 
-        DiffStatusText.Text = $"Querying g:Profiler for {sig.Count} genes...";
-        List<EnrichmentTerm> terms;
+        var pooled = DiffEnrichPooled();
+        var organism = Enrichment.ResolveOrganism(null, dataset.FeatureProteinNames, out var organismSource);
+        DiffStatusText.Text = $"Querying g:Profiler ({organism}) for {anySig.Count} genes"
+            + (pooled ? "..." : ", higher and lower separately...");
+        EnrichmentRun run;
         try
         {
-            terms = await Task.Run(() => Enrichment.GProfiler(sig, background, DiffPoster));
+            run = await Task.Run(() => Enrichment.RunByDirection(res, fid => geneById.GetValueOrDefault(fid),
+                rule, pooled, organism, organismSource, DiffPoster));
             if (!StillCurrent(request))
                 return;
         }
@@ -2177,7 +2202,7 @@ public partial class MainWindow
         {
             DiffStatusText.Text =
                 $"Enrichment timed out after {HttpJsonPoster.DefaultTimeout.TotalSeconds:0}s with "
-                + $"{sig.Count} genes against a background of {background.Count}. The server is "
+                + $"{anySig.Count} genes. The server is "
                 + "reachable but slow - try a stricter hit rule to send fewer genes.";
             return;
         }
@@ -2189,49 +2214,114 @@ public partial class MainWindow
 
         // Index the terms and map each significant gene to its protein(s), so clicking a term row can
         // list the proteins behind it. Genes come out of the same rule the volcano/enrichment used.
-        _enrichTermsById = terms.ToDictionary(t => t.TermId, t => t, StringComparer.Ordinal);
+        // Keyed by direction as well as id: run separately, one term can be enriched both ways.
+        var terms = run.Terms;
+        _enrichTermsById = terms.ToDictionary(EnrichKey, t => t, StringComparer.Ordinal);
         _enrichFeaturesByGene = BuildEnrichFeaturesByGene(res, rule);
 
-        RenderEnrichment(terms);
-        DiffGrid.ItemsSource = terms.Take(1000)
-            .Select(t => new EnrichRow(t.Source, t.TermName, t.PValue, t.FoldEnrichment, t.TermId)).ToList();
-        DiffStatusText.Text = terms.Count == 0
-            ? $"No enriched terms for {sig.Count} significant genes (background {background.Count})."
-            : $"{terms.Count} enriched terms for {sig.Count} significant genes (background {background.Count}).";
+        RenderEnrichment(run, bVal);
+        // Most significant first across both lists, so the table leads with the strongest term
+        // whichever way it went; the direction column says which.
+        DiffGrid.ItemsSource = terms.OrderBy(t => t.PValue).Take(1000)
+            .Select(t => new EnrichRow(EnrichDirectionWord(t.Direction, bVal), t.Source, t.TermName, t.PValue,
+                t.FoldEnrichment, EnrichKey(t)))
+            .ToList();
+        var perQuery = string.Join("; ", run.Queries.Select(q =>
+            $"{Enrichment.DescribeDirection(q.Direction, bVal)}: {q.Terms} term{(q.Terms == 1 ? "" : "s")} "
+            + $"from {q.SignificantGenes} gene{(q.SignificantGenes == 1 ? "" : "s")}"));
+        DiffStatusText.Text = $"{perQuery} (background {run.Background}; {run.Organism}, {run.OrganismSource}).";
     }
 
-    private void RenderEnrichment(IReadOnlyList<EnrichmentTerm> terms)
+    /// <summary>The direction column's word for a term: "up in KO", "down in KO", or "pooled".</summary>
+    private static string EnrichDirectionWord(EnrichmentDirection direction, string bLabel) => direction switch
+    {
+        EnrichmentDirection.Up => "up in " + bLabel,
+        EnrichmentDirection.Down => "down in " + bLabel,
+        _ => "pooled",
+    };
+
+    /// <summary>
+    /// Whether the Enrichment view pools every hit into one query rather than enriching the features
+    /// higher and lower in B separately (the default).
+    /// </summary>
+    private bool DiffEnrichPooled() =>
+        (DiffEnrichDirectionCombo.SelectedItem as ListBoxItem)?.Tag as string == "Pooled";
+
+    /// <summary>The up/down switch is shown only on the view it changes.</summary>
+    private void UpdateEnrichDirectionVisibility() =>
+        DiffEnrichDirectionCombo.Visibility = DiffSelectedView() == DiffView.Enrichment
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private async void OnDiffEnrichDirectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            if (DiffSelectedView() == DiffView.Enrichment)
+                await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffEnrichDirectionChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// The enriched terms as horizontal bars: run separately, the top terms higher in B (red) above
+    /// the top terms lower in B (blue), each block most significant first; pooled, one green block.
+    /// </summary>
+    private void RenderEnrichment(EnrichmentRun run, string bLabel)
     {
         DiffPlot.Reset();
         var plt = DiffPlot.Plot;
-        if (terms.Count > 0)
+        // Fewer per block when there are two, so the labels on the y-axis stay legible.
+        var perBlock = run.Queries.Count > 1 ? 10 : 15;
+        var blocks = run.Queries
+            .Select(q => (q.Direction, Terms: run.Terms.Where(t => t.Direction == q.Direction)
+                .OrderBy(t => t.PValue).Take(perBlock).ToList()))
+            .Where(b => b.Terms.Count > 0)
+            .ToList();
+        if (blocks.Count > 0)
         {
             // Horizontal bars with the term on the y-axis: a vertical bar chart cannot carry a term
-            // name at all, so the plot said nothing the table did not. Terms arrive sorted by p; the
-            // most significant sits at the TOP (the highest bar position).
-            var top = terms.Take(15).ToList();
-            var bars = new List<ScottPlot.Bar>(top.Count);
-            var positions = new double[top.Count];
-            var labels = new string[top.Count];
-            for (var i = 0; i < top.Count; i++)
+            // name at all, so the plot said nothing the table did not. Positions count down from the
+            // top, with a one-row gap between the two blocks.
+            var rows = blocks.Sum(b => b.Terms.Count) + blocks.Count - 1;
+            var positions = new List<double>();
+            var labels = new List<string>();
+            var pos = rows - 1;
+            foreach (var (direction, terms) in blocks)
             {
-                var pos = top.Count - 1 - i; // i = 0 (smallest p) -> top of the plot
-                bars.Add(new ScottPlot.Bar
+                var bars = new List<ScottPlot.Bar>(terms.Count);
+                foreach (var t in terms)
                 {
-                    Position = pos,
-                    Value = -Math.Log10(Math.Max(top[i].PValue, 1e-300)),
-                    Orientation = ScottPlot.Orientation.Horizontal,
-                    FillColor = ScottPlot.Color.FromHex("#2ca02c"),
-                });
-                positions[pos] = pos;
-                labels[pos] = TruncateTerm(top[i].TermName);
+                    bars.Add(new ScottPlot.Bar
+                    {
+                        Position = pos,
+                        Value = -Math.Log10(Math.Max(t.PValue, 1e-300)),
+                        Orientation = ScottPlot.Orientation.Horizontal,
+                        FillColor = ScottPlot.Color.FromHex(Enrichment.DirectionColor(direction)),
+                    });
+                    positions.Add(pos);
+                    labels.Add(TruncateTerm(t.TermName));
+                    pos--;
+                }
+
+                var barPlot = plt.Add.Bars(bars);
+                barPlot.LegendText = direction == EnrichmentDirection.Both
+                    ? "all hits (pooled)"
+                    : Enrichment.DescribeDirection(direction, bLabel);
+                pos--; // the gap before the next block
             }
 
-            plt.Add.Bars(bars);
-            plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(positions, labels);
+            plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(positions.ToArray(), labels.ToArray());
             plt.Axes.Left.TickLabelStyle.FontSize = 11;
-            plt.Axes.SetLimitsY(-0.7, top.Count - 0.3);
+            plt.Axes.SetLimitsY(-0.7, rows - 0.3);
             plt.XLabel("-log10 p (g:SCS)");
+            if (blocks.Count > 1 || blocks[0].Direction != EnrichmentDirection.Both)
+                plt.ShowLegend(ScottPlot.Alignment.LowerRight);
         }
 
         PlotRenderer.StyleQcPlot(plt);
@@ -2282,9 +2372,9 @@ public partial class MainWindow
 
     private void OnDiffGridAutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
     {
-        // FeatureId backs click-to-boxplot and TermId backs click-to-members; neither is a column the
+        // FeatureId backs click-to-boxplot and TermKey backs click-to-members; neither is a column the
         // user needs to see.
-        if (e.PropertyName is "FeatureId" or "TermId")
+        if (e.PropertyName is "FeatureId" or "TermKey")
         {
             e.Cancel = true;
             return;
@@ -2304,6 +2394,7 @@ public partial class MainWindow
             "Fold" => ("fold", "0.0"),
             "Source" => ("source", null),
             "Term" => ("term", null),
+            "Direction" => ("direction", null),
             _ => (e.PropertyName, (string?)null),
         };
 
@@ -2557,11 +2648,20 @@ public partial class MainWindow
     /// <summary>Open (or refresh) the popup listing the significant proteins in a clicked term.</summary>
     private void ShowTermProteins(EnrichRow row)
     {
-        if (!_enrichTermsById.TryGetValue(row.TermId, out var term))
+        if (!_enrichTermsById.TryGetValue(row.TermKey, out var term))
             return;
 
+        // A term from the "higher in B" list lists only the proteins that went up: a gene can carry
+        // features moving both ways (two peptides, two isoform groups), and the other direction's took
+        // no part in this term's query.
         var proteins = term.IntersectingGenes
             .SelectMany(g => _enrichFeaturesByGene.GetValueOrDefault(g) ?? Enumerable.Empty<TermProtein>())
+            .Where(p => term.Direction switch
+            {
+                EnrichmentDirection.Up => p.Log2FC > 0,
+                EnrichmentDirection.Down => p.Log2FC < 0,
+                _ => true,
+            })
             .GroupBy(p => p.Protein)
             .Select(g => g.First())
             .OrderByDescending(p => Math.Abs(p.Log2FC))

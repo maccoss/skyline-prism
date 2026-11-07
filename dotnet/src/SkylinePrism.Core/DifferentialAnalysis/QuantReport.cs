@@ -55,6 +55,9 @@ public sealed class QuantReportInputs
     /// <summary>The detection test the design called for (<see cref="DetectionAnalysis"/>); null omits the section.</summary>
     public DetectionAnalysisResult? Detection { get; init; }
     public IReadOnlyList<EnrichmentTerm>? Enrichment { get; init; }
+
+    /// <summary>How <see cref="Enrichment"/> was produced - organism, direction, genes per query - or null.</summary>
+    public EnrichmentRun? EnrichmentRun { get; init; }
     public IReadOnlyList<MarkerReportSection>? Markers { get; init; }
 
     /// <summary>The sample columns of the contrast (group A then B), for the raw differential values.</summary>
@@ -189,8 +192,40 @@ public static class QuantReport
         }
 
         // --- Enrichment ---
-        if (inputs.Enrichment is { Count: > 0 } terms)
+        if (inputs.EnrichmentRun is { } run)
         {
+            sb.Append("<div class=\"section-header\">Functional enrichment (g:Profiler)</div>");
+            sb.Append("<p class=\"note\">Organism <code>").Append(HtmlEncode(run.Organism)).Append("</code> (")
+              .Append(HtmlEncode(run.OrganismSource)).Append("); background: the ")
+              .Append(run.Background.ToString(Inv)).Append(" genes tested. ")
+              .Append(run.Pooled
+                  ? "Every hit was submitted as one list, whichever way it moved."
+                  : "Hits higher and lower in " + HtmlEncode(inputs.BLabel) + " were submitted as two lists, so "
+                    + "each term says which way its genes moved.")
+              .Append("</p>");
+            foreach (var q in run.Queries)
+            {
+                var label = Enrichment.Enrichment.DescribeDirection(q.Direction, inputs.BLabel);
+                var mine = run.Terms.Where(t => t.Direction == q.Direction).ToList();
+                sb.Append("<h3>").Append(HtmlEncode(char.ToUpperInvariant(label[0]) + label[1..]))
+                  .Append($": {mine.Count} term{(mine.Count == 1 ? "" : "s")} from {q.SignificantGenes} gene{(q.SignificantGenes == 1 ? "" : "s")}</h3>");
+                if (mine.Count == 0)
+                {
+                    sb.Append(q.SignificantGenes == 0
+                        ? "<p class=\"note\">No significant genes in this direction - nothing was submitted.</p>"
+                        : "<p class=\"note\">No term was enriched.</p>");
+                    continue;
+                }
+
+                AppendImage(sb, PlotRenderer.EnrichmentBarsPng(mine, color: Enrichment.Enrichment.DirectionColor(q.Direction)),
+                    "Top enriched terms, " + label);
+                AppendEnrichmentTable(sb, mine.Take(maxHitRows));
+                AppendPreviewNote(sb, mine.Count, maxHitRows, "enrichment_terms.csv (every term, full gene lists)");
+            }
+        }
+        else if (inputs.Enrichment is { Count: > 0 } terms)
+        {
+            // Terms with no record of how they were produced: one list, as before directions existed.
             sb.Append("<div class=\"section-header\">Functional enrichment (g:Profiler)</div>");
             AppendImage(sb, PlotRenderer.EnrichmentBarsPng(terms), "Top enriched terms");
             sb.Append($"<h3>Enriched terms ({terms.Count})</h3>");
@@ -282,9 +317,11 @@ public static class QuantReport
         if (inputs.Enrichment is { Count: > 0 } terms)
             using (var w = new StreamWriter(Path.Combine(quantDir, "enrichment_terms.csv")))
             {
-                w.WriteLine("source,term_id,term_name,p_value,fold_enrichment,intersection_size,genes");
+                // direction first: the same term can appear twice, once per list, and the column is
+                // what tells the two rows apart.
+                w.WriteLine("direction,source,term_id,term_name,p_value,fold_enrichment,intersection_size,genes");
                 foreach (var t in terms)
-                    w.WriteLine(string.Join(",", Csv(t.Source), Csv(t.TermId), Csv(t.TermName),
+                    w.WriteLine(string.Join(",", DirectionCsvToken(t.Direction), Csv(t.Source), Csv(t.TermId), Csv(t.TermName),
                         N(t.PValue), N(t.FoldEnrichment), t.IntersectionSize,
                         Csv(string.Join(";", t.IntersectingGenes))));
             }
@@ -479,6 +516,14 @@ public static class QuantReport
               .Append("</td></tr>");
         sb.Append("</table>");
     }
+
+    /// <summary>The <c>direction</c> column of enrichment_terms.csv: up, down or pooled.</summary>
+    internal static string DirectionCsvToken(EnrichmentDirection direction) => direction switch
+    {
+        EnrichmentDirection.Up => "up",
+        EnrichmentDirection.Down => "down",
+        _ => "pooled",
+    };
 
     private static void AppendEnrichmentTable(StringBuilder sb, IEnumerable<EnrichmentTerm> terms)
     {
