@@ -637,7 +637,13 @@ contrast:
   design falls back to the unpaired GLM, because adjusting a paired binary outcome needs conditional
   logistic regression, which is not implemented; the status line says so rather than letting it pass.
 - **Enrichment** — g:Profiler functional enrichment of the significant hits against the tested
-  background.
+  background. By default the hits **higher in B** and those **lower in B** go as two separate lists
+  (**Up and down separately**, beside the view tabs): each term then says which way its genes moved,
+  and a pathway that went up is not diluted by an unrelated one that went down. **Pooled** sends every
+  hit as one list, as earlier versions did. The bars are red for higher in B and blue for lower; the
+  table's direction column says the same, and clicking a term lists only the proteins that moved its
+  way. The organism is read from the run's UniProt entry names (`ICAM1_MOUSE` → `mmusculus`), and the
+  status line names it — earlier versions queried every run as human.
 
   > [!IMPORTANT]
   > **This sends data off the machine, to a third party.** Running it POSTs gene symbols to

@@ -1424,10 +1424,12 @@ public static partial class PlotRenderer
 
     /// <summary>
     /// A static enrichment PNG for the quant report: the top terms as horizontal bars, most significant
-    /// at the top, term names on the y-axis, -log10 p on the x-axis.
+    /// at the top, term names on the y-axis, -log10 p on the x-axis. <paramref name="color"/> tells the
+    /// direction apart when up and down are enriched separately.
     /// </summary>
     public static byte[] EnrichmentBarsPng(
-        IReadOnlyList<DifferentialAnalysis.Enrichment.EnrichmentTerm> terms, int top = 15)
+        IReadOnlyList<DifferentialAnalysis.Enrichment.EnrichmentTerm> terms, int top = 15,
+        string color = "#2ca02c")
     {
         var plt = new Plot();
         var shown = terms.Take(top).ToList();
@@ -1444,7 +1446,7 @@ public static partial class PlotRenderer
                     Position = pos,
                     Value = -Math.Log10(Math.Max(shown[i].PValue, 1e-300)),
                     Orientation = Orientation.Horizontal,
-                    FillColor = Color.FromHex("#2ca02c"),
+                    FillColor = Color.FromHex(color),
                 });
                 positions[pos] = pos;
                 labels[pos] = shown[i].TermName.Length <= 45 ? shown[i].TermName : shown[i].TermName[..44] + "...";

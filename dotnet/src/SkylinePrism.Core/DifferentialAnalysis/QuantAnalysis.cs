@@ -97,6 +97,18 @@ public sealed class QuantRequest
     /// <summary>Where g:Profiler requests go; null skips enrichment (with a note).</summary>
     public IJsonPoster? EnrichmentPoster { get; init; }
 
+    /// <summary>
+    /// Enrich every hit as one list, instead of the default two - those higher in B and those lower
+    /// (<see cref="Enrichment.Enrichment.RunByDirection"/>).
+    /// </summary>
+    public bool EnrichmentPooled { get; init; }
+
+    /// <summary>
+    /// The g:Profiler organism id (<c>mmusculus</c>), or null to infer it from the features' UniProt
+    /// entry names (<see cref="Enrichment.Enrichment.ResolveOrganism"/>).
+    /// </summary>
+    public string? Organism { get; init; }
+
     /// <summary>A detection matrix already loaded for <see cref="OutputDir"/>, to reuse rather than re-read merged_data.</summary>
     public DetectionMatrixData? CachedDetection { get; init; }
 }
@@ -369,6 +381,11 @@ public static class QuantAnalysis
 
         // --- enrichment: needs the network ---
         IReadOnlyList<EnrichmentTerm>? enrichment = null;
+        EnrichmentRun? enrichmentRun = null;
+        // Resolved whether or not enrichment runs, so the recorded parameters and command name the
+        // organism a re-run would query.
+        var organism = Enrichment.Enrichment.ResolveOrganism(
+            request.Organism, ds.FeatureProteinNames, out var organismSource);
         if (request.EnrichmentPoster is null)
         {
             notes.Add("Enrichment skipped: not requested.");
@@ -377,12 +394,19 @@ public static class QuantAnalysis
         {
             try
             {
-                var (sig, background) = Enrichment.Enrichment.SigAndBackgroundGenes(
-                    res, id => geneById.GetValueOrDefault(id), rule);
-                if (sig.Count == 0)
+                var run = Enrichment.Enrichment.RunByDirection(res, id => geneById.GetValueOrDefault(id),
+                    rule, request.EnrichmentPooled, organism, organismSource, request.EnrichmentPoster);
+                if (run.SignificantGenes == 0)
+                {
                     notes.Add("Enrichment skipped: no significant genes to submit.");
+                }
                 else
-                    enrichment = Enrichment.Enrichment.GProfiler(sig, background, request.EnrichmentPoster);
+                {
+                    enrichmentRun = run;
+                    enrichment = run.Terms;
+                    foreach (var q in run.Queries.Where(q => q.SignificantGenes == 0))
+                        notes.Add($"Enrichment: no significant genes {Enrichment.Enrichment.DescribeDirection(q.Direction, bLabel)} - nothing to enrich in that direction.");
+                }
             }
             catch (Exception ex)
             {
@@ -456,7 +480,8 @@ public static class QuantAnalysis
             DetectionQ: DetectionQ,
             EnrichmentEnabled: enrichment is not null,
             EnrichmentSources: Enrichment.Enrichment.DefaultSources,
-            EnrichmentDirection: "both",
+            EnrichmentDirection: Enrichment.Enrichment.DirectionToken(request.EnrichmentPooled),
+            EnrichmentOrganism: organism,
             MarkerPanels: markers.Select(m => m.PanelName).ToList(),
             AdditionalMetadataCsvs: ds.AttachedClinicalCsvs.ToList(),
             Command: commandLine,
@@ -485,6 +510,7 @@ public static class QuantAnalysis
             ContrastColumns = valueColumns,
             Detection = detection,
             Enrichment = enrichment,
+            EnrichmentRun = enrichmentRun,
             Markers = markers,
         };
 

@@ -115,6 +115,13 @@ public sealed class DifferentialDataset
     /// <summary>Feature identifiers (matrix rows).</summary>
     public string[] FeatureIds { get; }
 
+    /// <summary>
+    /// Each feature's leading UniProt entry name(s) (<c>ICAM1_MOUSE</c>), from <c>leading_name</c>;
+    /// <c>;</c>-separated for a shared peptide, empty where the matrix has none. Parallel to
+    /// <see cref="FeatureIds"/>. The species code in them is what enrichment infers its organism from.
+    /// </summary>
+    public IReadOnlyList<string> FeatureProteinNames => _featureProteinNames;
+
     /// <summary>Human-readable feature labels (gene names for proteins); parallel to <see cref="FeatureIds"/>.</summary>
     public string[] FeatureLabels { get; }
 

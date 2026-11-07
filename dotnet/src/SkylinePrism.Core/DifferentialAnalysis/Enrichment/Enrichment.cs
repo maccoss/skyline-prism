@@ -32,7 +32,33 @@ public sealed record EnrichmentTerm(
     int IntersectionSize,
     int DomainSize,
     double FoldEnrichment,
-    IReadOnlyList<string> IntersectingGenes);
+    IReadOnlyList<string> IntersectingGenes)
+{
+    /// <summary>
+    /// Which hit list the term came from: features higher in B (<see cref="EnrichmentDirection.Up"/>),
+    /// lower in B (<see cref="EnrichmentDirection.Down"/>), or both pooled.
+    /// </summary>
+    public EnrichmentDirection Direction { get; init; } = EnrichmentDirection.Both;
+}
+
+/// <summary>One g:Profiler query of an <see cref="EnrichmentRun"/>: its direction and how many genes it sent.</summary>
+public sealed record EnrichmentQuery(EnrichmentDirection Direction, int SignificantGenes, int Terms);
+
+/// <summary>
+/// What <see cref="Enrichment.RunByDirection"/> did: the organism queried, the background size, one
+/// entry per query, and every term found, each tagged with its <see cref="EnrichmentTerm.Direction"/>.
+/// </summary>
+public sealed record EnrichmentRun(
+    string Organism,
+    string OrganismSource,
+    bool Pooled,
+    int Background,
+    IReadOnlyList<EnrichmentQuery> Queries,
+    IReadOnlyList<EnrichmentTerm> Terms)
+{
+    /// <summary>The genes submitted across every query.</summary>
+    public int SignificantGenes => Queries.Sum(q => q.SignificantGenes);
+}
 
 /// <summary>One gene's novelty classification against Open Targets association scores.</summary>
 public sealed record NoveltyRow(string Gene, double? AssocScore, string Status);
@@ -103,8 +129,16 @@ public static class Enrichment
     public static (List<string> Significant, List<string> Background) SigAndBackgroundGenes(
         DifferentialResult res, Func<string, string?> geneForFeature, SignificanceRule rule,
         EnrichmentDirection direction = EnrichmentDirection.Both)
+        => (SignificantGenes(res, geneForFeature, rule, direction), BackgroundGenes(res, geneForFeature));
+
+    /// <summary>The enrichment universe: the genes of every tested feature.</summary>
+    private static List<string> BackgroundGenes(DifferentialResult res, Func<string, string?> geneForFeature) =>
+        CleanSymbols(res.Rows.Select(r => geneForFeature(r.FeatureId)));
+
+    /// <summary>The genes of the features passing <paramref name="rule"/> and moving in <paramref name="direction"/>.</summary>
+    private static List<string> SignificantGenes(DifferentialResult res, Func<string, string?> geneForFeature,
+        SignificanceRule rule, EnrichmentDirection direction)
     {
-        var background = CleanSymbols(res.Rows.Select(r => geneForFeature(r.FeatureId)));
         bool Passes(DifferentialRow r)
         {
             if (!rule.IsSignificant(r))
@@ -117,8 +151,193 @@ public static class Enrichment
             };
         }
 
-        var sig = CleanSymbols(res.Rows.Where(Passes).Select(r => geneForFeature(r.FeatureId)));
-        return (sig, background);
+        return CleanSymbols(res.Rows.Where(Passes).Select(r => geneForFeature(r.FeatureId)));
+    }
+
+    /// <summary>The g:Profiler organism used when none is given and none can be inferred.</summary>
+    public const string DefaultOrganism = "hsapiens";
+
+    /// <summary>
+    /// UniProt species mnemonics (the part after the underscore in an entry name such as
+    /// <c>ICAM1_MOUSE</c>) and the g:Profiler organism id each maps to.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> OrganismBySpeciesCode { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["HUMAN"] = "hsapiens",
+            ["MOUSE"] = "mmusculus",
+            ["RAT"] = "rnorvegicus",
+            ["BOVIN"] = "btaurus",
+            ["PIG"] = "sscrofa",
+            ["SHEEP"] = "oaries",
+            ["HORSE"] = "ecaballus",
+            ["CANLF"] = "clfamiliaris",
+            ["FELCA"] = "fcatus",
+            ["RABIT"] = "ocuniculus",
+            ["MACMU"] = "mmulatta",
+            ["CHICK"] = "ggallus",
+            ["DANRE"] = "drerio",
+            ["DROME"] = "dmelanogaster",
+            ["CAEEL"] = "celegans",
+            ["YEAST"] = "scerevisiae",
+            ["SCHPO"] = "spombe",
+            ["ARATH"] = "athaliana",
+        };
+
+    /// <summary>
+    /// The g:Profiler organism the features come from, read off their UniProt entry names
+    /// (<c>ICAM1_MOUSE</c> -> <c>mmusculus</c>): the species code most of them carry, or null when
+    /// none carries a known code or no code is a clear majority.
+    /// </summary>
+    /// <remarks>
+    /// <para>Up to now every query went to g:Profiler as <c>hsapiens</c>. g:Profiler matches symbols
+    /// without regard to case, so mouse symbols mostly landed on their human namesakes and the result
+    /// looked plausible - but annotations were the human ones, and mouse-only genes fell out of both
+    /// the query and the background without a word.</para>
+    /// <para>A majority rather than the first name, because a search database carries contaminants
+    /// from other species (human keratins and trypsin in a mouse run, yeast enolase as a spike-in).
+    /// Only the first entry of a <c>;</c>-separated group is read, for the same reason: a shared
+    /// group's other members say nothing the leading one does not.</para>
+    /// <para>The majority is taken over EVERY species code, mapped or not, and only the winner is
+    /// mapped. Dropping the codes this table does not know first would let a contaminant decide: a
+    /// <c>_XENTR</c> run with one mouse keratin would be queried as mouse and reported as inferred.
+    /// An unmapped winner gives null, so the caller falls back and says so.</para>
+    /// </remarks>
+    public static string? InferOrganism(IEnumerable<string?> entryNames) =>
+        MajoritySpeciesCode(entryNames) is { } code ? OrganismBySpeciesCode.GetValueOrDefault(code) : null;
+
+    /// <summary>
+    /// The species code (<c>MOUSE</c>, <c>XENTR</c>) carried by more than half of the entry names that
+    /// carry one, whether or not <see cref="OrganismBySpeciesCode"/> maps it; null when none does.
+    /// </summary>
+    private static string? MajoritySpeciesCode(IEnumerable<string?> entryNames)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var withCode = 0;
+        foreach (var raw in entryNames)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+            var name = raw.Split(';')[0].Trim();
+            var underscore = name.LastIndexOf('_');
+            if (underscore <= 0 || underscore == name.Length - 1)
+                continue;
+            var code = name[(underscore + 1)..].ToUpperInvariant();
+            if (!IsSpeciesCode(code))
+                continue;
+            withCode++;
+            counts[code] = counts.GetValueOrDefault(code) + 1;
+        }
+
+        if (withCode == 0)
+            return null;
+        var (top, n) = counts.OrderByDescending(kv => kv.Value).Select(kv => (kv.Key, kv.Value)).First();
+        return n * 2 > withCode ? top : null;
+    }
+
+    /// <summary>
+    /// Whether a token has the shape of a UniProt species mnemonic: 3 to 5 letters or digits, at least
+    /// one a letter (<c>MOUSE</c>, <c>RAT</c>, <c>9ACTN</c>). Keeps an accession behind a contaminant
+    /// prefix (<c>CON__P12345</c>) or a free-text suffix from being counted as a species.
+    /// </summary>
+    private static bool IsSpeciesCode(string code) =>
+        code.Length is >= 3 and <= 5 && code.All(char.IsAsciiLetterOrDigit) && code.Any(char.IsAsciiLetter);
+
+    /// <summary>
+    /// The organism to query: <paramref name="requested"/> when given, else the one inferred from
+    /// <paramref name="entryNames"/>, else <see cref="DefaultOrganism"/>. <paramref name="source"/>
+    /// says which, in words a report can print.
+    /// </summary>
+    public static string ResolveOrganism(string? requested, IEnumerable<string?> entryNames, out string source)
+    {
+        if (!string.IsNullOrWhiteSpace(requested))
+        {
+            source = "as requested";
+            return requested.Trim();
+        }
+
+        var code = MajoritySpeciesCode(entryNames);
+        if (code is not null && OrganismBySpeciesCode.TryGetValue(code, out var inferred))
+        {
+            source = "inferred from the UniProt entry names";
+            return inferred;
+        }
+
+        // Said without naming --organism: this text reaches the tool's status line and the report it
+        // writes, and the tool has no organism control to point at.
+        source = code is null
+            ? "default - no UniProt species code (such as _MOUSE) in the protein names"
+            : $"default - most protein names are _{code}, which has no g:Profiler organism mapped here";
+        return DefaultOrganism;
+    }
+
+    /// <summary>The token for a direction choice, as <c>--enrichment-direction</c> takes it and a report records it.</summary>
+    public static string DirectionToken(bool pooled) => pooled ? "pooled" : "separate";
+
+    /// <summary>
+    /// Parse <c>--enrichment-direction</c>: <c>separate</c> (the default - up and down as two
+    /// queries) or <c>pooled</c> (one query of every hit). Returns whether it is pooled.
+    /// </summary>
+    public static bool ParseDirectionToken(string? token) => (token ?? "separate").Trim().ToLowerInvariant() switch
+    {
+        "separate" or "separately" => false,
+        "pooled" or "both" => true,
+        var other => throw new ArgumentException(
+            $"--enrichment-direction must be separate or pooled, not '{other}'."),
+    };
+
+    /// <summary>
+    /// The bar color for a direction - red for higher in B, blue for lower, green when pooled - shared
+    /// by the pane and the report so the two read the same way.
+    /// </summary>
+    public static string DirectionColor(EnrichmentDirection direction) => direction switch
+    {
+        EnrichmentDirection.Up => "#d62728",
+        EnrichmentDirection.Down => "#1f77b4",
+        _ => "#2ca02c",
+    };
+
+    /// <summary>What one direction's hit list is, named after arm B: "higher in KO".</summary>
+    public static string DescribeDirection(EnrichmentDirection direction, string bLabel) => direction switch
+    {
+        EnrichmentDirection.Up => $"higher in {bLabel}",
+        EnrichmentDirection.Down => $"lower in {bLabel}",
+        _ => "either direction (pooled)",
+    };
+
+    /// <summary>
+    /// Run enrichment for a contrast's hits: by default as two queries - the features higher in B and
+    /// those lower in B - or, with <paramref name="pooled"/>, as one query of every hit.
+    /// </summary>
+    /// <remarks>
+    /// <para>Separate is the default because pooling hides the biology it is meant to find. A pathway
+    /// whose members all go up shares a pooled list with an unrelated one whose members all go down,
+    /// each diluting the other's over-representation; and a pooled term cannot say which way its
+    /// genes moved, which is usually the first question about it.</para>
+    /// <para>Both queries share one background - every tested feature - so their p-values are on the
+    /// same footing. A direction with no hits is recorded with zero genes and no request is sent.</para>
+    /// </remarks>
+    public static EnrichmentRun RunByDirection(DifferentialResult res, Func<string, string?> geneForFeature,
+        SignificanceRule rule, bool pooled, string organism, string organismSource, IJsonPoster poster)
+    {
+        var directions = pooled
+            ? new[] { EnrichmentDirection.Both }
+            : new[] { EnrichmentDirection.Up, EnrichmentDirection.Down };
+        var queries = new List<EnrichmentQuery>(directions.Length);
+        var terms = new List<EnrichmentTerm>();
+        // Built once and shared: it is every tested gene whichever direction is queried.
+        var background = BackgroundGenes(res, geneForFeature);
+        foreach (var direction in directions)
+        {
+            var sig = SignificantGenes(res, geneForFeature, rule, direction);
+            var found = sig.Count == 0
+                ? new List<EnrichmentTerm>()
+                : GProfiler(sig, background, poster, organism: organism).Select(t => t with { Direction = direction }).ToList();
+            queries.Add(new EnrichmentQuery(direction, sig.Count, found.Count));
+            terms.AddRange(found);
+        }
+
+        return new EnrichmentRun(organism, organismSource, pooled, background.Count, queries, terms);
     }
 
     /// <summary>

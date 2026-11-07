@@ -915,6 +915,17 @@
                                 A/B arms, which a trend does not have. -->
                                 <ListBoxItem x:Name="DiffViewEnrichmentItem">Enrichment</ListBoxItem>
                                 </ListBox>
+                                <!-- Enrichment only: shown while that view is up. Up and down are
+                                separate by default - pooled, a pathway that goes up and an unrelated
+                                one that goes down dilute each other, and no term can say which way
+                                its genes moved. No item preselected here: see XamlInitializationOrderTests;
+                                LoadDifferentialAsync selects the first. -->
+                                <ListBox x:Name="DiffEnrichDirectionCombo" SelectionChanged="OnDiffEnrichDirectionChanged"
+                                Visibility="Collapsed" Margin="12,0,0,0" Style="{StaticResource Segmented}"
+                                ToolTip="Up and down separately: the hits higher in B and those lower in B go to g:Profiler as two lists, and each term says which way its genes moved. Pooled: every hit as one list, whichever way it moved.">
+                                <ListBoxItem Tag="Separate">Up and down separately</ListBoxItem>
+                                <ListBoxItem Tag="Pooled">Pooled</ListBoxItem>
+                                </ListBox>
                                 <!-- No Run button: every selector in this row re-runs the contrast on
                                 its own (the tick lists when their drop-down closes), so a manual
                                 refresh was a control that never needed pressing, in a row that

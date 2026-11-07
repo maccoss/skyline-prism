@@ -368,6 +368,8 @@ public static partial class Program
             MarkerPanels = panels,
             MarkerGroupBy = opts.GetSingleOrNull("--markers-group-by"),
             EnrichmentPoster = poster,
+            EnrichmentPooled = Enrichment.ParseDirectionToken(opts.GetSingleOrNull("--enrichment-direction")),
+            Organism = OrganismFrom(opts),
             Restrictions = ParseRestrictions(opts),
         });
 
@@ -460,12 +462,40 @@ public static partial class Program
     private static void RefuseReportFlagsWithoutReport(ParsedOptions opts)
     {
         if (opts.GetSingleOrNull("--report") is not null)
+        {
+            // The values checked now, not when the report is written: by then differential.csv exists,
+            // and a typo would leave a results file behind a command that failed.
+            Enrichment.ParseDirectionToken(opts.GetSingleOrNull("--enrichment-direction"));
+            OrganismFrom(opts);
             return;
+        }
         if (opts.GetList("--markers").Count > 0)
             throw new ArgumentException("--markers needs --report.");
-        foreach (var flag in new[] { "--markers-group-by", "--no-enrichment" })
+        foreach (var flag in new[] { "--markers-group-by", "--no-enrichment", "--enrichment-direction", "--organism" })
             if (opts.GetSingleOrNull(flag) is not null)
                 throw new ArgumentException($"{flag} needs --report.");
+    }
+
+    /// <summary>
+    /// <c>--organism</c>: a g:Profiler organism id such as <c>mmusculus</c>, or null to infer it from the
+    /// run's UniProt entry names. Checked for shape only - g:Profiler holds the list, and it grows.
+    /// </summary>
+    private static string? OrganismFrom(ParsedOptions opts)
+    {
+        var organism = opts.GetSingleOrNull("--organism")?.Trim();
+        if (organism is null)
+            return null;
+        // ParseOptions records a value-taking option given with no value as "true", which passes the
+        // shape check below and would be sent to g:Profiler as an organism.
+        if (organism == "true")
+            throw new ArgumentException("--organism needs a g:Profiler organism id, such as mmusculus.");
+        // Letters, digits and underscores: strain-level ids carry digits, and a stray space, capital or
+        // punctuation is the typo this guards against.
+        if (organism.Length == 0 || !organism.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
+            throw new ArgumentException(
+                $"--organism wants a g:Profiler organism id - lower-case letters, digits and underscores, "
+                + $"such as hsapiens or mmusculus - not '{organism}'.");
+        return organism;
     }
 
     /// <summary>Whether the flags ask for a trend design.</summary>
@@ -1407,6 +1437,12 @@ public static partial class Program
                                    e.g. "EV markers (core)". Repeat, space- or comma-separate
             --markers-group-by COL Column to group the panels by (default: --group-by)
             --no-enrichment        Skip g:Profiler, for machines with no internet access
+            --enrichment-direction separate|pooled
+                                   separate (default): enrich the hits higher in B and those lower
+                                   in B as two lists, so each term says which way its genes moved.
+                                   pooled: one list of every hit
+            --organism ID          g:Profiler organism, e.g. hsapiens, mmusculus, rnorvegicus
+                                   (default: inferred from the UniProt entry names, e.g. _MOUSE)
 
         EXAMPLES:
             # Disease against control, protein level, default moderated t

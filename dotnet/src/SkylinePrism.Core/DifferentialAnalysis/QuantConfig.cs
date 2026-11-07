@@ -45,6 +45,7 @@ public sealed record QuantContrast(
 /// <c>--covariate-type</c> takes - the type it was fitted as, inferred or set.</param>
 /// <param name="Subject">The subject column, for a design that reads one (paired, blocked, trend within subject).</param>
 /// <param name="BlockCorrelation">The intra-subject correlation a blocked contrast was fitted at.</param>
+/// <param name="EnrichmentOrganism">The g:Profiler organism enrichment queried (or would query), e.g. <c>mmusculus</c>.</param>
 public sealed record QuantConfig(
     string Level,
     QuantContrast Contrast,
@@ -67,7 +68,8 @@ public sealed record QuantConfig(
     string? DetectionTest = null,
     IReadOnlyList<string>? CovariateTypes = null,
     string? Subject = null,
-    double? BlockCorrelation = null)
+    double? BlockCorrelation = null,
+    string? EnrichmentOrganism = null)
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -137,6 +139,8 @@ public sealed record QuantConfig(
         sb.Append("  enabled: ").Append(EnrichmentEnabled ? "true" : "false").Append('\n');
         sb.Append("  sources: ").Append(YamlList(EnrichmentSources)).Append('\n');
         sb.Append("  direction: ").Append(EnrichmentDirection).Append('\n');
+        if (!string.IsNullOrEmpty(EnrichmentOrganism))
+            sb.Append("  organism: ").Append(EnrichmentOrganism).Append('\n');
         sb.Append("markers:\n");
         sb.Append("  panels: ").Append(YamlList(MarkerPanels)).Append('\n');
         // A literal block, not a quoted scalar: the command carries quotes and Windows backslashes,

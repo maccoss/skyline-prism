@@ -161,7 +161,20 @@ public static class QuantCommand
         }
 
         if (request.EnrichmentPoster is null)
+        {
             args.Add("--no-enrichment");
+        }
+        else
+        {
+            // Both always, not only when they differ from the default: an inferred organism and the
+            // default direction are each one release away from meaning something else, and the
+            // recorded command has to keep querying what this report queried.
+            args.AddRange(new[] { "--enrichment-direction", Enrichment.Enrichment.DirectionToken(request.EnrichmentPooled) });
+            args.AddRange(new[]
+            {
+                "--organism", Enrichment.Enrichment.ResolveOrganism(request.Organism, ds.FeatureProteinNames, out _),
+            });
+        }
 
         arguments = args;
         reason = problems.Count == 0 ? null : string.Join("; ", problems.Distinct(StringComparer.Ordinal));
