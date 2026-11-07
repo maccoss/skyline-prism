@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1220,6 +1220,11 @@ public partial class MainWindow : Window
         _isRunning = true;
         UpdateRunEnabled();
 
+        // Consumed at once, on every path: left set by a run that returned early (inputs removed, a
+        // setup error), it would let a later, unrelated run skip the overwrite question.
+        var retryDir = _retryRunDir;
+        _retryRunDir = null;
+
         // Everything between the claim and the run can throw - a control that will not parse, a
         // share that cannot be listed, a label collision - and this is an `async void` handler, so an
         // escaping exception never reaches the finally further down that releases the claim. The Run
@@ -1255,9 +1260,9 @@ public partial class MainWindow : Window
             var existing = await Task.Run(
                 () => ExistingResults.Inspect(outputDirToCheck, configToCheck));
             // A retry after a locked-file failure already had its answer; the folder now holds that
-            // run's partial output, and asking again would be asking the same question twice.
-            var retrying = _retryingRun;
-            _retryingRun = false;
+            // run's partial output, and asking again would be asking the same question twice. Only for
+            // the folder that run was writing: pointed anywhere else, the question is a new one.
+            var retrying = SameRunDirectory(retryDir, outputDirToCheck);
             if (!retrying && existing.OverwritePrompt() is { } prompt)
             {
                 // The stage-level detail when there is any, under the sentence that matters. It says
@@ -1280,7 +1285,7 @@ public partial class MainWindow : Window
             // Files the run will rewrite but another program - nearly always Excel - has open. Asked
             // now, because the first write to them is at Stage 5, after the whole pipeline: finding
             // out from the failure cost the user the run, and the message was a stack trace.
-            if (!await ConfirmOutputsWritableAsync(outputDirToCheck))
+            if (!await ConfirmOutputsWritableAsync(outputDirToCheck, configToCheck))
             {
                 Log("Run cancelled: files in the output directory are open in another program.");
                 ShowAnalysis(AnalysisPane.Log);
@@ -1420,25 +1425,50 @@ public partial class MainWindow : Window
 
         if (retry)
         {
-            _retryingRun = true;
+            _retryRunDir = outputDir;
             OnRun(sender, e);
         }
     }
 
-    /// <summary>Set for the one run that retries a locked-file failure, so it skips the overwrite question.</summary>
-    private bool _retryingRun;
+    /// <summary>
+    /// The output directory of a run that failed on a locked file and is being retried: the one run
+    /// into that directory that skips the overwrite question. Consumed by the next <see cref="OnRun"/>
+    /// whatever it does.
+    /// </summary>
+    private string? _retryRunDir;
+
+    /// <summary>Whether two output directory entries name the same folder, ignoring case and a trailing separator.</summary>
+    internal static bool SameRunDirectory(string? a, string? b)
+    {
+        static string? Norm(string? p)
+        {
+            if (string.IsNullOrWhiteSpace(p))
+                return null;
+            try
+            {
+                return System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(p.Trim()));
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException)
+            {
+                return null;
+            }
+        }
+
+        var na = Norm(a);
+        return na is not null && string.Equals(na, Norm(b), StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Make sure no file the run will rewrite is held open by another program, asking the user to
     /// close any that are. Returns false if they cancel.
     /// </summary>
-    private async Task<bool> ConfirmOutputsWritableAsync(string outputDir)
+    private async Task<bool> ConfirmOutputsWritableAsync(string outputDir, PrismConfig config)
     {
         while (true)
         {
             var dir = outputDir.Trim();
             // Off the UI thread: the output directory is routinely a network share.
-            var held = await Task.Run(() => SharedFile.HeldOpenOutputs(dir));
+            var held = await Task.Run(() => SharedFile.HeldOpen(dir, PrismPipeline.UserOpenedOutputs(config)));
             if (held.Count == 0)
                 return true;
 

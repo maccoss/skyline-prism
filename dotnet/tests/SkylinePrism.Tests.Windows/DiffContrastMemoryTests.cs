@@ -134,6 +134,52 @@ public class DiffContrastMemoryTests
         Assert.True(clear >= 0 && remember > clear && remember < empty);
     }
 
+    /// <summary>
+    /// The column a load opened on is remembered even when nobody picked it, so a contrast set up on
+    /// the default column survives a reload whose default would differ; and rebuilding the Adjust-for
+    /// picker refreshes its closed-state text, since restored ticks raise no callback. Source checks,
+    /// as above: both need a real window and a run.
+    /// </summary>
+    [Fact]
+    public void Pane_SeedsTheGroupByAndRefreshesTheCovariateSummary()
+    {
+        var source = File.ReadAllText(Path.Combine(AppDir(), "MainWindow.Differential.cs"));
+
+        var populate = source.IndexOf("private bool PopulateDiffGroupValues()", StringComparison.Ordinal);
+        var seed = source.IndexOf("_diffMemory.RememberGroupBy(col);", populate, StringComparison.Ordinal);
+        Assert.True(populate >= 0 && seed > populate, "PopulateDiffGroupValues must seed the remembered Group by");
+
+        var covariates = source.IndexOf("private void PopulateDiffCovariates(", StringComparison.Ordinal);
+        var end = source.IndexOf("\n    }", covariates, StringComparison.Ordinal);
+        Assert.Contains("UpdateDiffArmSummaries();", source[covariates..end], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A Retry skips the overwrite question only for the folder the failed run was writing - the same
+    /// folder however it is typed - and never for another one.
+    /// </summary>
+    [Theory]
+    [InlineData(@"C:\runs\out", @"C:\runs\out", true)]
+    [InlineData(@"C:\runs\out", @"c:\RUNS\out\", true)]
+    [InlineData(@"C:\runs\out", @" C:\runs\out ", true)]
+    [InlineData(@"C:\runs\out", @"C:\runs\other", false)]
+    [InlineData(null, @"C:\runs\out", false)]
+    [InlineData(@"C:\runs\out", "", false)]
+    public void SameRunDirectory_MatchesOnlyTheRetriedFolder(string? retry, string current, bool same) =>
+        Assert.Equal(same, MainWindow.SameRunDirectory(retry, current));
+
+    /// <summary>The retry folder is consumed when the run handler starts, before any early return.</summary>
+    [Fact]
+    public void Pane_ConsumesTheRetryFolderBeforeAnyEarlyReturn()
+    {
+        var source = File.ReadAllText(Path.Combine(AppDir(), "MainWindow.xaml.cs"));
+        var run = source.IndexOf("private async void OnRun(", StringComparison.Ordinal);
+        var consume = source.IndexOf("_retryRunDir = null;", run, StringComparison.Ordinal);
+        var firstReturn = source.IndexOf("return;", source.IndexOf("_inputs.Count == 0", run, StringComparison.Ordinal),
+            StringComparison.Ordinal);
+        Assert.True(run >= 0 && consume > run && consume < firstReturn);
+    }
+
     private static string AppDir() => Path.GetFullPath(Path.Combine(
         AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "SkylinePrism.App"));
 }

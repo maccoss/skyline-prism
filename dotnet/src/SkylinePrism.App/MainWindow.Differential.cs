@@ -1089,6 +1089,16 @@ public partial class MainWindow
             return;
         }
 
+        // Not while a run is writing this directory: its matrices and sample_metadata.csv are being
+        // rewritten, and a read that lands part way through takes a prefix of the rows. The run
+        // invalidates this pane when it finishes, so the next visit loads the finished files.
+        if (_isRunning && SameRunDirectory(_incompleteRunDir, dir))
+        {
+            DiffStatusText.Text = "A PRISM run is writing this directory. The Differential pane loads "
+                + "its results once the run finishes.";
+            return;
+        }
+
         using (SuppressDiff())
         {
             if (DiffViewCombo.SelectedItem is null)
@@ -1273,6 +1283,14 @@ public partial class MainWindow
         // are rebuilt, so coming back to that column brings its arms back.
         RememberDiffChoices();
 
+        // The column on screen is the remembered one even when nobody chose it: a load that opened on
+        // the default and only had its arms changed must reopen on the same column, not on whatever a
+        // later run's metadata makes the default. Not over a remembered column this matrix lacks,
+        // though - another run without it falls back to its own default, and coming back here should
+        // still find the column the user picked.
+        if (_diffMemory.GroupBy is not { } remembered || _diffDataset.MetadataColumns.Contains(remembered))
+            _diffMemory.RememberGroupBy(col);
+
         var values = _diffDataset.MetadataValues(col)
             .Where(v => !string.IsNullOrEmpty(v))
             .Select(v => v!)
@@ -1382,7 +1400,11 @@ public partial class MainWindow
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
         DiffCovariateRows.ItemsSource = _diffCovariateRows;
-        RefreshDiffCovariateRows();
+        // The closed picker's text and the method line, not just the rows: ticks restored from memory
+        // were set in the initializer, which raises no Changed callback, so the picker went on reading
+        // "(none - tick columns to add)" over covariates that were in the model.
+        UpdateDiffArmSummaries(); // also rebuilds the covariate rows
+        UpdateDiffMethodSummary();
     }
 
     /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>

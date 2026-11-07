@@ -1,7 +1,9 @@
 using System;
 using System.IO;
 using SkylinePrism.Core.DifferentialAnalysis;
+using SkylinePrism.Core.Config;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Tests.TestSupport;
 using Xunit;
 
@@ -42,28 +44,30 @@ public class SharedFileTests
     }
 
     /// <summary>
-    /// The pre-run check finds exactly the rewritten files another program holds, and leaves a file
-    /// it would not rewrite - or one nobody holds - alone. Windows only: elsewhere a hold is advisory
-    /// and nothing is ever reported.
+    /// The pre-run check finds exactly the files the run will write that another program holds. A CSV
+    /// the run only READS - an additional metadata file kept in the output directory - can be open in
+    /// Excel without stopping anything. Windows only: elsewhere a hold is advisory and nothing is ever
+    /// reported.
     /// </summary>
     [Fact]
-    public void HeldOpenOutputs_NamesTheFilesExcelHas()
+    public void HeldOpen_NamesOnlyTheRunsOwnOutputsExcelHas()
     {
         if (!OperatingSystem.IsWindows())
             return;
         var dir = Directory.CreateTempSubdirectory("prism-shared-").FullName;
         try
         {
-            foreach (var name in new[] { "sample_metadata.csv", "protein_groups.csv", "notes.xlsx" })
+            foreach (var name in new[] { "sample_metadata.csv", "protein_groups.csv", "clinical.csv" })
                 File.WriteAllText(Path.Combine(dir, name), "x");
+            var outputs = PrismPipeline.UserOpenedOutputs(new PrismConfig());
 
-            Assert.Empty(SharedFile.HeldOpenOutputs(dir));
+            Assert.Empty(SharedFile.HeldOpen(dir, outputs));
             using (HoldLikeExcel(Path.Combine(dir, "sample_metadata.csv")))
-            using (HoldLikeExcel(Path.Combine(dir, "notes.xlsx")))
-                Assert.Equal(new[] { "sample_metadata.csv" }, SharedFile.HeldOpenOutputs(dir));
+            using (HoldLikeExcel(Path.Combine(dir, "clinical.csv")))
+                Assert.Equal(new[] { "sample_metadata.csv" }, SharedFile.HeldOpen(dir, outputs));
 
             // Released: the retry goes ahead.
-            Assert.Empty(SharedFile.HeldOpenOutputs(dir));
+            Assert.Empty(SharedFile.HeldOpen(dir, outputs));
             // The probe opened for write but wrote nothing.
             Assert.Equal("x", File.ReadAllText(Path.Combine(dir, "sample_metadata.csv")));
         }
@@ -73,11 +77,55 @@ public class SharedFileTests
         }
     }
 
+    /// <summary>The list follows the config: the matrices' format, and marker scores only when they are made.</summary>
+    [Fact]
+    public void UserOpenedOutputs_FollowTheConfig()
+    {
+        var defaults = PrismPipeline.UserOpenedOutputs(new PrismConfig());
+        Assert.Contains("sample_metadata.csv", defaults);
+        Assert.Contains("corrected_proteins.parquet", defaults);
+        Assert.DoesNotContain("marker_normalization.csv", defaults);
+
+        var csv = new PrismConfig();
+        csv.Output.Format = "csv";
+        csv.MarkerNormalization.Enabled = true;
+        var asCsv = PrismPipeline.UserOpenedOutputs(csv);
+        Assert.Contains("corrected_peptides.csv", asCsv);
+        Assert.Contains("marker_normalization.csv", asCsv);
+        Assert.DoesNotContain("corrected_peptides.parquet", asCsv);
+    }
+
     [Fact]
     public void HeldOpen_IsFalseForAMissingFileOrDirectory()
     {
         Assert.False(SharedFile.IsHeldOpen(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "x.csv")));
-        Assert.Empty(SharedFile.HeldOpenOutputs(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))));
+        Assert.Empty(SharedFile.HeldOpen(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")),
+            new[] { "sample_metadata.csv" }));
+    }
+
+    /// <summary>
+    /// What a read racing the pipeline's rewrite of sample_metadata.csv sees - the header and a prefix
+    /// of the rows - is refused, not analyzed as a quietly smaller cohort.
+    /// </summary>
+    [Fact]
+    public void DifferentialDatasetLoad_RefusesMetadataMissingSomeOfTheMatrixSamples()
+    {
+        var source = Fixtures.Path2("mini", "e2e-sum", "output");
+        var dir = Directory.CreateTempSubdirectory("prism-shared-").FullName;
+        try
+        {
+            File.Copy(Path.Combine(source, "corrected_proteins.parquet"), Path.Combine(dir, "corrected_proteins.parquet"));
+            var lines = File.ReadAllLines(Path.Combine(source, "sample_metadata.csv"));
+            File.WriteAllLines(Path.Combine(dir, "sample_metadata.csv"), lines[..100]); // header + 99 of 166
+
+            var ex = Assert.Throws<InvalidOperationException>(() => DifferentialDataset.Load(dir, FeatureLevel.Protein));
+            Assert.Contains("67 of the 166 samples", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("no row in sample_metadata.csv", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     /// <summary>The run's failure path recognises the lock however deeply the pipeline wrapped it.</summary>

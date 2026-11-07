@@ -38,13 +38,6 @@ public static class SharedFile
     }
 
     /// <summary>
-    /// The extensions of the files a run rewrites at the top of its output directory and a user is
-    /// likely to have open elsewhere - Excel for the CSVs, a notebook or viewer for the rest.
-    /// </summary>
-    private static readonly HashSet<string> RewrittenExtensions =
-        new(System.StringComparer.OrdinalIgnoreCase) { ".csv", ".tsv", ".parquet", ".json", ".xml" };
-
-    /// <summary>
     /// Whether another program has <paramref name="path"/> open in a way that stops it being written -
     /// what Excel does to every CSV it shows. False for a file that does not exist, or that cannot be
     /// written for some other reason (read-only, no permission): that is not something closing a
@@ -87,22 +80,24 @@ public static class SharedFile
     }
 
     /// <summary>
-    /// The files at the top of <paramref name="outputDir"/> that a run would rewrite and that another
-    /// program has open, as file names. Empty when the directory does not exist yet.
+    /// Which of <paramref name="fileNames"/> in <paramref name="directory"/> another program has open,
+    /// in the order given. Pass the files a run will write
+    /// (<see cref="Pipeline.PrismPipeline.UserOpenedOutputs"/>), never a directory listing: a file the
+    /// run only reads can be open in Excel without stopping anything.
     /// </summary>
     /// <remarks>
     /// Asked BEFORE a run, because the first write to one of them comes at Stage 5 - after the whole
-    /// pipeline - so finding out from the failure costs the user the run.
+    /// pipeline - so finding out from the failure costs the user the run. A name that does not exist
+    /// yet is not held.
     /// </remarks>
-    public static IReadOnlyList<string> HeldOpenOutputs(string outputDir)
+    public static IReadOnlyList<string> HeldOpen(string directory, IEnumerable<string> fileNames)
     {
         var held = new List<string>();
-        if (!Directory.Exists(outputDir))
+        if (!Directory.Exists(directory))
             return held;
-        foreach (var file in Directory.EnumerateFiles(outputDir))
-            if (RewrittenExtensions.Contains(Path.GetExtension(file)) && IsHeldOpen(file))
-                held.Add(Path.GetFileName(file));
-        held.Sort(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var name in fileNames)
+            if (IsHeldOpen(Path.Combine(directory, name)))
+                held.Add(name);
         return held;
     }
 
