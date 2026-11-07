@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SkylinePrism.Core.IO;
 
 namespace SkylinePrism.Core.Qc;
 
@@ -246,7 +247,7 @@ public sealed class ProteinListSet
     public static List<string> ReadMembersFile(string path)
     {
         var members = new List<string>();
-        foreach (var raw in File.ReadAllLines(path))
+        foreach (var raw in SharedFile.ReadAllLines(path))
         {
             var line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))

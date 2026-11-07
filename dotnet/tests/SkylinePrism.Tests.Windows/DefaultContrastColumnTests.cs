@@ -90,7 +90,8 @@ public class DefaultContrastColumnTests
     /// to exercise, and the regression was only seen by launching the tool.
     /// </summary>
     [Theory]
-    [InlineData("MainWindow.Differential.cs", "DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);")]
+    // The Differential pane prefers the column the user last chose, and falls back to the rule.
+    [InlineData("MainWindow.Differential.cs", ": DefaultContrastColumn(ds);")]
     [InlineData("MainWindow.Markers.cs", "MarkersGroupByCombo.SelectedItem = DefaultContrastColumn(ds);")]
     public void BothPanes_DefaultThroughTheSharedRule(string file, string call)
     {

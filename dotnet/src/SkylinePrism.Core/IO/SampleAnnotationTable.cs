@@ -70,7 +70,7 @@ public sealed class SampleAnnotationTable
         {
             if (!File.Exists(csvPath))
                 return Empty;
-            lines = File.ReadAllLines(csvPath);
+            lines = SharedFile.ReadAllLines(csvPath);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

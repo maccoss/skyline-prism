@@ -67,7 +67,7 @@ public sealed class MarkerNormalizationReport
             var path = Path.Combine(outputDir, FileName);
             if (!File.Exists(path))
                 return null;
-            return Parse(File.ReadAllLines(path));
+            return Parse(SharedFile.ReadAllLines(path));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
         {
