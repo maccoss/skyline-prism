@@ -1032,6 +1032,35 @@ public sealed class PrismPipeline
     public static readonly IReadOnlyList<string> SampleMetadataColumns =
         new[] { "sample_id", "sample", "sample_type", "batch", "acquired_time", "run_order" };
 
+    /// <summary>
+    /// The files at the top of the output directory that a run under <paramref name="config"/> rewrites
+    /// and that a person opens in another program - a spreadsheet for the tables, an editor for the
+    /// provenance - so the tool can ask for them to be closed before the run rather than fail at Stage 5.
+    /// </summary>
+    /// <remarks>
+    /// The run's own planned names, not every file with a likely extension: an additional metadata CSV
+    /// or a pre-exported report kept in the output directory is only READ, and being open in Excel is
+    /// no reason to stop a run that never writes it. Working intermediates (rollups, residuals, caches)
+    /// are left out because nobody has them open; the corrected matrices follow
+    /// <c>output.format</c>, and the marker scores exist only when marker normalization is on. Keep this
+    /// in step with the writes in <see cref="Run"/> - each name here is one of them.
+    /// </remarks>
+    public static IReadOnlyList<string> UserOpenedOutputs(PrismConfig config)
+    {
+        var format = string.IsNullOrWhiteSpace(config.Output.Format) ? "parquet" : config.Output.Format.Trim();
+        var names = new List<string>
+        {
+            "sample_metadata.csv",
+            "protein_groups.csv",
+            "parameters.json",
+            "corrected_peptides." + format,
+            "corrected_proteins." + format,
+        };
+        if (config.MarkerNormalization.Enabled)
+            names.Add("marker_normalization.csv");
+        return names;
+    }
+
     internal static void WriteSampleMetadata(
         string path, IReadOnlyList<string> samples,
         IReadOnlyDictionary<string, string> resolvedBatch, IReadOnlyDictionary<string, string> resolvedType,

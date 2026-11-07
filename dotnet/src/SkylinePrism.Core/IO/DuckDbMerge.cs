@@ -492,7 +492,7 @@ public static class DuckDbMerge
         if (!info.Exists || info.Length == 0)
             return 0;
 
-        using var sr = new StreamReader(path);
+        using var sr = SharedFile.OpenText(path);
         long sampled = 0;
         var lines = 0;
         for (; lines < 200; lines++)
@@ -575,7 +575,7 @@ public static class DuckDbMerge
         }
 
         var delimiter = suffix is ".tsv" or ".txt" ? '\t' : ',';
-        using var sr = new StreamReader(filePath);
+        using var sr = SharedFile.OpenText(filePath);
         var line = sr.ReadLine() ?? string.Empty;
         return line.Split(delimiter).Select(s => s.Trim()).ToList();
     }

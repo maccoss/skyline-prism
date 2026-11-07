@@ -61,7 +61,7 @@ internal static class ParquetColumnIo
     /// what shipped - was losing hours of instrument reads to a lock PRISM placed on itself.</para>
     /// </remarks>
     internal static FileStream OpenRead(string path) =>
-        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        SharedFile.OpenRead(path);
 
     /// <summary>
     /// Options for every read and write, so the two cannot drift. Compression lives here because v6

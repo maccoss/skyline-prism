@@ -128,7 +128,7 @@ internal sealed class ReplicateAnnotations
     {
         if (!File.Exists(path))
             return;
-        var lines = File.ReadAllLines(path);
+        var lines = SharedFile.ReadAllLines(path);
         if (lines.Length < 2)
             return;
         var header = CsvLine.Split(lines[0]);

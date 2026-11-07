@@ -156,7 +156,7 @@ public sealed class ReplicateMetadata
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
 
-        var lines = File.ReadAllLines(path);
+        var lines = SharedFile.ReadAllLines(path);
         if (lines.Length < 2)
             return null;
 

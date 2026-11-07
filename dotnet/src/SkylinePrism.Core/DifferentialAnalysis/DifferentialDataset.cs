@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -252,7 +252,7 @@ public sealed class DifferentialDataset
         if (!File.Exists(clinicalCsvPath))
             throw new FileNotFoundException($"Clinical CSV not found: {clinicalCsvPath}", clinicalCsvPath);
 
-        var lines = File.ReadAllLines(clinicalCsvPath);
+        var lines = SharedFile.ReadAllLines(clinicalCsvPath);
         if (lines.Length < 2)
             return new ClinicalAttachResult(null, 0.0, 0, Array.Empty<string>());
 
@@ -442,6 +442,19 @@ public sealed class DifferentialDataset
         var alignedMeta = alignment.Select(a => a.Meta).ToArray();
         var matched = new HashSet<string>(sampleCols, StringComparer.Ordinal);
         var annotCols = table.ColumnNames.Where(c => !matched.Contains(c)).ToList();
+
+        // The other direction: a SAMPLE column of the matrix with no metadata row. Sample columns are
+        // the only ones carrying the document separator, so they cannot be mistaken for annotation
+        // columns. Unchecked, they fell through to annotCols and the contrast ran on the rest - which
+        // is exactly what reading sample_metadata.csv while a run is rewriting it produces: a header
+        // and a prefix of the rows, every sample past the cut silently gone.
+        var unmatchedSamples = annotCols.Where(c => c.Contains(ReplicateMetadata.SampleIdSeparator, StringComparison.Ordinal)).ToList();
+        if (unmatchedSamples.Count > 0)
+            throw new InvalidOperationException(
+                $"{unmatchedSamples.Count} of the {sampleCols.Length + unmatchedSamples.Count} samples in "
+                + $"{matrixName} have no row in sample_metadata.csv ({NamePreview.Of(unmatchedSamples, show: 3)}). "
+                + "If a PRISM run is writing this directory, wait for it to finish and load again; "
+                + "otherwise re-run the pipeline so the matrix and the metadata come from the same run.");
 
         var idColumn = ChooseColumn(table, level == FeatureLevel.Protein
             ? new[] { "protein_group" }
@@ -638,7 +651,7 @@ public sealed class DifferentialDataset
     private static (Dictionary<string, string?[]> ByRow, IReadOnlyList<string> Columns) ReadSampleMetadata(
         string path)
     {
-        var lines = File.ReadAllLines(path);
+        var lines = SharedFile.ReadAllLines(path);
         if (lines.Length == 0)
             throw new InvalidOperationException("sample_metadata.csv is empty.");
 

@@ -162,6 +162,13 @@ public partial class MainWindow
     // rest as one arm.
     private List<QcGroupValue> _diffAValues = new();
     private List<QcGroupValue> _diffBValues = new();
+
+    /// <summary>The Group-by column the arm lists were built for, or null while the pickers are empty.</summary>
+    private string? _diffArmsColumn;
+
+    /// <summary>The contrast the user set up, kept by name across every rebuild of the pickers.</summary>
+    private readonly DiffContrastMemory _diffMemory = new();
+
     private HttpJsonPoster? _diffPoster;
     private bool _diffSuppress;
     private int _diffRequest;
@@ -981,6 +988,10 @@ public partial class MainWindow
     /// </summary>
     private void ClearDiffPickers()
     {
+        // Kept before it is emptied, so the next run that loads - a retry, the other level, a
+        // re-run - comes back with the same contrast rather than the defaults.
+        RememberDiffChoices();
+        _diffArmsColumn = null;
         using (SuppressDiff())
         {
             DiffGroupByCombo.ItemsSource = null;
@@ -1088,6 +1099,16 @@ public partial class MainWindow
             return;
         }
 
+        // Not while a run is writing this directory: its matrices and sample_metadata.csv are being
+        // rewritten, and a read that lands part way through takes a prefix of the rows. The run
+        // invalidates this pane when it finishes, so the next visit loads the finished files.
+        if (_isRunning && SameRunDirectory(_incompleteRunDir, dir))
+        {
+            DiffStatusText.Text = "A PRISM run is writing this directory. The Differential pane loads "
+                + "its results once the run finishes.";
+            return;
+        }
+
         using (SuppressDiff())
         {
             if (DiffViewCombo.SelectedItem is null)
@@ -1120,11 +1141,6 @@ public partial class MainWindow
         var level = DiffSelectedLevel();
         if (_diffLoaded && _diffLoadedDir == dir && _diffLoadedLevel == level)
             return; // already current for this directory + level
-
-        // Taken before anything is cleared. A dataset still loaded here means the same directory at
-        // the other level - a new directory invalidates it first - so the contrast the user set up is
-        // carried across rather than reset to the first two values of the default column.
-        var carried = _diffDataset is not null ? CaptureContrastChoices() : null;
 
         ClearDiffOutput();
         DiffStatusText.Text = "Loading...";
@@ -1193,14 +1209,15 @@ public partial class MainWindow
         using (SuppressDiff())
         {
             DiffGroupByCombo.ItemsSource = ds.MetadataColumns;
-            DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);
-            // Suppressed, so taking the carried column over the default raises nothing in between.
-            if (carried?.GroupBy is { } kept && ds.MetadataColumns.Contains(kept))
-                DiffGroupByCombo.SelectedItem = kept;
+            // The column the user last chose, wherever this run has it - the other level of the same
+            // run, a re-run, or a load retried after a failure - and the default only otherwise.
+            DiffGroupByCombo.SelectedItem =
+                _diffMemory.GroupBy is { } kept && ds.MetadataColumns.Contains(kept)
+                    ? kept
+                    : DefaultContrastColumn(ds);
         }
 
-        PopulateDiffGroupValues();
-        var restored = carried is not null && RestoreContrastChoices(carried);
+        var restored = PopulateDiffGroupValues();
         UpdateDiffControls();
         DiffStatusText.Text =
             $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
@@ -1213,67 +1230,23 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// What the user set up in the contrast pickers - the grouping column, each arm's ticked values,
-    /// and the Adjust-for ticks with any type they switched - by NAME, so it can be put back on the
-    /// pickers a reload rebuilds.
-    /// </summary>
-    private sealed record ContrastChoices(
-        string? GroupBy,
-        IReadOnlyList<string> A,
-        IReadOnlyList<string> B,
-        IReadOnlyDictionary<string, CovariateKind> Covariates);
-
-    private ContrastChoices CaptureContrastChoices() => new(
-        DiffGroupByCombo.SelectedItem as string,
-        _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList(),
-        _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList(),
-        _diffCovariateValues.Where(v => v.IsSelected).ToDictionary(v => v.Name, v => v.Kind, StringComparer.Ordinal));
-
-    /// <summary>
-    /// Put carried choices back on freshly populated pickers, wherever the names still exist. Returns
-    /// whether the arms were restored, which is what makes the contrast worth re-running unasked.
+    /// Copy what the pickers show into <see cref="_diffMemory"/>, before anything rebuilds or empties
+    /// them: the arms under the column they were built for, the Subject, and the Adjust-for ticks.
     /// </summary>
     /// <remarks>
-    /// The two levels are read from one output directory, so their metadata is normally identical;
-    /// a value or column missing at the new level is simply left at its default rather than failing.
-    /// An arm that would come back EMPTY keeps its default instead - an empty arm is an error, and
-    /// the user did not ask for one.
+    /// Taken at the moments state would otherwise be lost rather than on every tick, because the
+    /// pickers ARE the live state between those moments - a second copy kept in step on every click
+    /// would be one more thing to drift.
     /// </remarks>
-    private bool RestoreContrastChoices(ContrastChoices carried)
+    private void RememberDiffChoices()
     {
-        // The arms only mean something under the column they were picked from; the covariates are
-        // carried whether or not that column survived.
-        var sameColumn = string.Equals(
-            DiffGroupByCombo.SelectedItem as string, carried.GroupBy, StringComparison.Ordinal);
-
-        using (SuppressDiff())
-        {
-            // Not short-circuited: both arms are put back even when one cannot be.
-            var restoredArms = sameColumn
-                && RestoreArm(_diffAValues, carried.A) & RestoreArm(_diffBValues, carried.B);
-
-            foreach (var choice in _diffCovariateValues)
-            {
-                if (!carried.Covariates.TryGetValue(choice.Name, out var kind))
-                    continue;
-                // The type before the tick, and only to a type the column can take.
-                if (choice.CanSwitch)
-                    choice.Kind = kind;
-                choice.IsSelected = true;
-            }
-
-            UpdateDiffArmSummaries();
-            return restoredArms;
-        }
-
-        static bool RestoreArm(List<QcGroupValue> values, IReadOnlyList<string> ticked)
-        {
-            if (!values.Any(v => ticked.Contains(v.Name, StringComparer.Ordinal)))
-                return false;
-            foreach (var v in values)
-                v.IsSelected = ticked.Contains(v.Name, StringComparer.Ordinal);
-            return true;
-        }
+        if (_diffArmsColumn is null)
+            return; // nothing on the pickers to keep
+        var (a, b) = SelectedArmLevels();
+        _diffMemory.RememberArms(_diffArmsColumn, a, b);
+        _diffMemory.RememberSubject(DiffPairByCombo.SelectedItem as string);
+        _diffMemory.RememberCovariates(_diffCovariateValues.Select(v =>
+            (v.Name, v.IsSelected, v.Overridden ? v.Kind : (CovariateKind?)null)));
     }
 
     /// <summary>
@@ -1308,31 +1281,51 @@ public partial class MainWindow
             ?? columns.FirstOrDefault();
     }
 
-    private void PopulateDiffGroupValues()
+    /// <summary>
+    /// Build the arm, Subject and Adjust-for pickers for the selected Group-by column, putting back
+    /// whatever the user last chose for it (<see cref="DiffContrastMemory"/>). Returns whether the
+    /// arms were restored rather than defaulted - the case worth re-running unasked after a load.
+    /// </summary>
+    private bool PopulateDiffGroupValues()
     {
         if (_diffDataset is null || DiffGroupByCombo.SelectedItem is not string col)
-            return;
+            return false;
+
+        // What the pickers hold now belongs to the column they were built for; keep it before they
+        // are rebuilt, so coming back to that column brings its arms back.
+        RememberDiffChoices();
+
+        // The column on screen is the remembered one even when nobody chose it: a load that opened on
+        // the default and only had its arms changed must reopen on the same column, not on whatever a
+        // later run's metadata makes the default. Not over a remembered column this matrix lacks,
+        // though - another run without it falls back to its own default, and coming back here should
+        // still find the column the user picked.
+        if (_diffMemory.GroupBy is not { } remembered || _diffDataset.MetadataColumns.Contains(remembered))
+            _diffMemory.RememberGroupBy(col);
 
         var values = _diffDataset.MetadataValues(col)
             .Where(v => !string.IsNullOrEmpty(v))
+            .Select(v => v!)
             .Distinct()
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
 
-        // Default to the first two values, which is what the single pickers did; anything more is
-        // an explicit choice by the user.
+        // The arms last ticked under this column; else the first two values, which is what the
+        // single pickers did - anything more is an explicit choice by the user.
+        var restored = _diffMemory.TryGetArms(col, values, out var keptA, out var keptB);
         _diffAValues = values
             .Select((v, i) => new QcGroupValue
             {
-                Name = v!, IsSelected = i == 0, Changed = UpdateDiffArmSummaries,
+                Name = v, IsSelected = restored ? keptA.Contains(v) : i == 0, Changed = UpdateDiffArmSummaries,
             })
             .ToList();
         _diffBValues = values
             .Select((v, i) => new QcGroupValue
             {
-                Name = v!, IsSelected = i == 1, Changed = UpdateDiffArmSummaries,
+                Name = v, IsSelected = restored ? keptB.Contains(v) : i == 1, Changed = UpdateDiffArmSummaries,
             })
             .ToList();
+        _diffArmsColumn = col;
 
         DiffACombo.ItemsSource = _diffAValues;
         DiffBCombo.ItemsSource = _diffBValues;
@@ -1343,7 +1336,9 @@ public partial class MainWindow
         var pairCandidates = _diffDataset.MetadataColumns
             .Where(m => !string.Equals(m, col, StringComparison.Ordinal))
             .ToList();
-        var keepPair = DiffPairByCombo.SelectedItem as string;
+        // From memory too, not only the picker: a failed load empties the picker, and the retry
+        // should not quietly lose the Subject a paired design needs.
+        var keepPair = DiffPairByCombo.SelectedItem as string ?? _diffMemory.Subject;
         using (SuppressDiff())
         {
             DiffPairByCombo.ItemsSource = pairCandidates;
@@ -1353,6 +1348,7 @@ public partial class MainWindow
         }
 
         PopulateDiffCovariates(col);
+        return restored;
     }
 
     /// <summary>
@@ -1400,17 +1396,27 @@ public partial class MainWindow
             .Select(c =>
             {
                 var inferred = CovariateTyping.Infer(c, _diffDataset.MetadataValues(c));
-                // Kind before the callbacks, so setting it raises nothing.
+                // The tick and type the user last gave this column, so a new Group by, a level switch
+                // or a reload does not silently drop an adjustment. A switched type comes back only
+                // where the column can still take it (a column of numbers).
+                var ticked = _diffMemory.TryGetCovariate(c, out var switched);
+                // Kind and tick before the callbacks, so setting them raises nothing.
                 return new DiffCovariateChoice
                 {
-                    Name = c, Inferred = inferred, Kind = inferred.Kind,
+                    Name = c, Inferred = inferred,
+                    Kind = switched is { } k && inferred.AllNumeric ? k : inferred.Kind,
+                    IsSelected = ticked,
                     Changed = OnDiffCovariateChoiceChanged, KindChanged = OnDiffCovariateKindChanged,
                 };
             })
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
         DiffCovariateRows.ItemsSource = _diffCovariateRows;
-        RefreshDiffCovariateRows();
+        // The closed picker's text and the method line, not just the rows: ticks restored from memory
+        // were set in the initializer, which raises no Changed callback, so the picker went on reading
+        // "(none - tick columns to add)" over covariates that were in the model.
+        UpdateDiffArmSummaries(); // also rebuilds the covariate rows
+        UpdateDiffMethodSummary();
     }
 
     /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>
@@ -1491,6 +1497,7 @@ public partial class MainWindow
         {
             if (!IsInitialized || _diffSuppress || _diffDataset is null)
                 return;
+            _diffMemory.RememberGroupBy(DiffGroupByCombo.SelectedItem as string);
             PopulateDiffGroupValues();
             // A trend ignores the arms entirely, so changing the grouping column cannot move it.
             if (DiffIsTrend())
@@ -1599,6 +1606,7 @@ public partial class MainWindow
                 DiffGroupByCombo.SelectedItem = result.AddedColumns[0];
             }
 
+            _diffMemory.RememberGroupBy(result.AddedColumns[0]);
             PopulateDiffGroupValues();
             DiffStatusText.Text =
                 $"Attached {result.AddedColumns.Count} metadata column(s) via key '{result.KeyColumn}' " +
@@ -2485,6 +2493,7 @@ public partial class MainWindow
         {
             if (!IsInitialized || _diffSuppress || _diffDataset is null)
                 return;
+            _diffMemory.RememberSubject(DiffPairByCombo.SelectedItem as string);
             if (!DiffSelectedDesign().UsesSubjects())
                 return; // only those designs consult the subject column
             await RunCurrentViewAsync();

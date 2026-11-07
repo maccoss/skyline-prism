@@ -165,6 +165,23 @@ public partial class App : Application
 
         try
         {
+            // The copyable window where it can be shown - on the UI thread, with a dispatcher that is
+            // still running. A fault on a worker thread gets the plain message box, which is safe from
+            // any thread; marshalling to a UI thread that may itself be stuck could hang instead.
+            if (Current?.Dispatcher is { HasShutdownStarted: false } d && d.CheckAccess())
+            {
+                PrismMessageWindow.ShowError(Current.MainWindow, "Skyline-PRISM error",
+                    ex?.Message ?? "Unknown error", ex, LogFilePath);
+                return;
+            }
+        }
+        catch
+        {
+            // Fall through to the message box below.
+        }
+
+        try
+        {
             MessageBox.Show(
                 (ex?.ToString() ?? "Unknown error")
                 + Environment.NewLine + Environment.NewLine

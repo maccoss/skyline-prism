@@ -1295,7 +1295,7 @@ public static class IonAccountingStore
 
         try
         {
-            var lines = File.ReadAllLines(path);
+            var lines = SharedFile.ReadAllLines(path);
             if (lines.Length < 2)
                 return types;
 
