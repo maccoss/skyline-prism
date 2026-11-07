@@ -122,6 +122,23 @@ public class EnrichmentDirectionTests
         Assert.Null(Enrichment.InferOrganism(new[] { "A_UNKNOWNSPECIES" }));
     }
 
+    /// <summary>
+    /// The majority is over every species code, mapped or not: a run that is mostly an unmapped species
+    /// is not handed to the one mapped contaminant it carries, and the fallback names the species.
+    /// </summary>
+    [Fact]
+    public void InferOrganism_AnUnmappedMajorityIsNotWonByAMappedContaminant()
+    {
+        var names = Enumerable.Range(0, 99).Select(i => $"P{i}_XENTR").Append("K1C10_MOUSE").ToArray();
+
+        Assert.Null(Enrichment.InferOrganism(names));
+        Assert.Equal("hsapiens", Enrichment.ResolveOrganism(null, names, out var source));
+        Assert.Contains("_XENTR", source);
+
+        // An accession behind a contaminant prefix is not a species code, so it does not dilute one.
+        Assert.Equal("mmusculus", Enrichment.InferOrganism(new[] { "A_MOUSE", "CON__P12345", "CON__Q99999" }));
+    }
+
     [Fact]
     public void ResolveOrganism_RequestedThenInferredThenHuman()
     {

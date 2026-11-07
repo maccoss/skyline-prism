@@ -485,6 +485,10 @@ public static partial class Program
         var organism = opts.GetSingleOrNull("--organism")?.Trim();
         if (organism is null)
             return null;
+        // ParseOptions records a value-taking option given with no value as "true", which passes the
+        // shape check below and would be sent to g:Profiler as an organism.
+        if (organism == "true")
+            throw new ArgumentException("--organism needs a g:Profiler organism id, such as mmusculus.");
         // Letters, digits and underscores: strain-level ids carry digits, and a stray space, capital or
         // punctuation is the typo this guards against.
         if (organism.Length == 0 || !organism.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))

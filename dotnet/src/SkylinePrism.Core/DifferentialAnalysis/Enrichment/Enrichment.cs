@@ -198,8 +198,19 @@ public static class Enrichment
     /// from other species (human keratins and trypsin in a mouse run, yeast enolase as a spike-in).
     /// Only the first entry of a <c>;</c>-separated group is read, for the same reason: a shared
     /// group's other members say nothing the leading one does not.</para>
+    /// <para>The majority is taken over EVERY species code, mapped or not, and only the winner is
+    /// mapped. Dropping the codes this table does not know first would let a contaminant decide: a
+    /// <c>_XENTR</c> run with one mouse keratin would be queried as mouse and reported as inferred.
+    /// An unmapped winner gives null, so the caller falls back and says so.</para>
     /// </remarks>
-    public static string? InferOrganism(IEnumerable<string?> entryNames)
+    public static string? InferOrganism(IEnumerable<string?> entryNames) =>
+        MajoritySpeciesCode(entryNames) is { } code ? OrganismBySpeciesCode.GetValueOrDefault(code) : null;
+
+    /// <summary>
+    /// The species code (<c>MOUSE</c>, <c>XENTR</c>) carried by more than half of the entry names that
+    /// carry one, whether or not <see cref="OrganismBySpeciesCode"/> maps it; null when none does.
+    /// </summary>
+    private static string? MajoritySpeciesCode(IEnumerable<string?> entryNames)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
         var withCode = 0;
@@ -212,7 +223,7 @@ public static class Enrichment
             if (underscore <= 0 || underscore == name.Length - 1)
                 continue;
             var code = name[(underscore + 1)..].ToUpperInvariant();
-            if (!OrganismBySpeciesCode.ContainsKey(code))
+            if (!IsSpeciesCode(code))
                 continue;
             withCode++;
             counts[code] = counts.GetValueOrDefault(code) + 1;
@@ -221,8 +232,16 @@ public static class Enrichment
         if (withCode == 0)
             return null;
         var (top, n) = counts.OrderByDescending(kv => kv.Value).Select(kv => (kv.Key, kv.Value)).First();
-        return n * 2 > withCode ? OrganismBySpeciesCode[top] : null;
+        return n * 2 > withCode ? top : null;
     }
+
+    /// <summary>
+    /// Whether a token has the shape of a UniProt species mnemonic: 3 to 5 letters or digits, at least
+    /// one a letter (<c>MOUSE</c>, <c>RAT</c>, <c>9ACTN</c>). Keeps an accession behind a contaminant
+    /// prefix (<c>CON__P12345</c>) or a free-text suffix from being counted as a species.
+    /// </summary>
+    private static bool IsSpeciesCode(string code) =>
+        code.Length is >= 3 and <= 5 && code.All(char.IsAsciiLetterOrDigit) && code.Any(char.IsAsciiLetter);
 
     /// <summary>
     /// The organism to query: <paramref name="requested"/> when given, else the one inferred from
@@ -237,7 +256,8 @@ public static class Enrichment
             return requested.Trim();
         }
 
-        if (InferOrganism(entryNames) is { } inferred)
+        var code = MajoritySpeciesCode(entryNames);
+        if (code is not null && OrganismBySpeciesCode.TryGetValue(code, out var inferred))
         {
             source = "inferred from the UniProt entry names";
             return inferred;
@@ -245,7 +265,9 @@ public static class Enrichment
 
         // Said without naming --organism: this text reaches the tool's status line and the report it
         // writes, and the tool has no organism control to point at.
-        source = "default - no UniProt species code (such as _MOUSE) in the protein names";
+        source = code is null
+            ? "default - no UniProt species code (such as _MOUSE) in the protein names"
+            : $"default - most protein names are _{code}, which has no g:Profiler organism mapped here";
         return DefaultOrganism;
     }
 

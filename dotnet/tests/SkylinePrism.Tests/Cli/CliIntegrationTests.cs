@@ -488,6 +488,9 @@ public class CliIntegrationTests
         "-b", "experimental", "--report", "--enrichment-direction", "up")]
     [InlineData("--organism wants a g:Profiler organism id", "-g", "sample_type", "-a", "qc",
         "-b", "experimental", "--report", "--organism", "Mus musculus")]
+    // A bare --organism reaches the parser as "true", which would pass the shape check.
+    [InlineData("--organism needs a g:Profiler organism id", "-g", "sample_type", "-a", "qc",
+        "-b", "experimental", "--report", "--organism")]
     // A mistyped panel is refused before anything is written, not after differential.csv exists.
     [InlineData("No marker panel 'nosuchpanel'", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--report", "--markers", "nosuchpanel")]
