@@ -115,7 +115,7 @@ public static class RollupComparison
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!File.Exists(metadataCsv))
             return map;
-        var lines = File.ReadAllLines(metadataCsv);
+        var lines = SharedFile.ReadAllLines(metadataCsv);
         if (lines.Length < 2)
             return map;
         // Quote-aware: this file carries the replicate annotations, whose values can contain commas

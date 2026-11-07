@@ -590,7 +590,7 @@ public static class IonAccountingRun
             try
             {
                 var samples = new List<string>();
-                var lines = File.ReadAllLines(metadata);
+                var lines = SharedFile.ReadAllLines(metadata);
                 if (lines.Length > 1)
                 {
                     var header = lines[0].Split(',');

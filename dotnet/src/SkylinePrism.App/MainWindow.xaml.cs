@@ -1254,7 +1254,11 @@ public partial class MainWindow : Window
             var configToCheck = BuildConfigFromUi();
             var existing = await Task.Run(
                 () => ExistingResults.Inspect(outputDirToCheck, configToCheck));
-            if (existing.OverwritePrompt() is { } prompt)
+            // A retry after a locked-file failure already had its answer; the folder now holds that
+            // run's partial output, and asking again would be asking the same question twice.
+            var retrying = _retryingRun;
+            _retryingRun = false;
+            if (!retrying && existing.OverwritePrompt() is { } prompt)
             {
                 // The stage-level detail when there is any, under the sentence that matters. It says
                 // which stages differ and is a lower bound; it is not the reason to stop.
@@ -1271,6 +1275,16 @@ public partial class MainWindow : Window
                     ShowAnalysis(AnalysisPane.Log);
                     return;
                 }
+            }
+
+            // Files the run will rewrite but another program - nearly always Excel - has open. Asked
+            // now, because the first write to them is at Stage 5, after the whole pipeline: finding
+            // out from the failure cost the user the run, and the message was a stack trace.
+            if (!await ConfirmOutputsWritableAsync(outputDirToCheck))
+            {
+                Log("Run cancelled: files in the output directory are open in another program.");
+                ShowAnalysis(AnalysisPane.Log);
+                return;
             }
 
             // Labels double as exported file stems and as batch labels, so they must be unique
@@ -1339,6 +1353,8 @@ public partial class MainWindow : Window
         // UpdateReportButtonsAsync). Cleared only by finishing.
         _incompleteRunDir = outputDir.Trim();
 
+        // Set by a locked-file failure the user chose to retry; acted on once the run is released.
+        var retry = false;
         try
         {
             _runCancellation = new CancellationTokenSource();
@@ -1374,17 +1390,24 @@ public partial class MainWindow : Window
             Log("STOPPED: the run was cancelled. Partial files in the output directory are "
                 + "intermediates of an incomplete run - re-run to rebuild them.");
         }
+        catch (Exception ex) when (SharedFile.IsSharingViolation(ex))
+        {
+            // A file opened elsewhere after the check above - typically sample_metadata.csv opened in
+            // Excel while the run went on. Not a fault: say what to do and offer to go again.
+            Log("ERROR: " + ex.Message);
+            App.WriteLog("Run failed on a file held open by another program: " + ex);
+            retry = PrismMessageWindow.Show(this, "A file is open in another program",
+                "PRISM could not write a file in the output directory because another program has it "
+                + "open - usually Excel. Close it there, then click Retry to run again.",
+                ex.Message, isError: false, new[] { "Retry", "Cancel" }, App.LogFilePath) == "Retry";
+        }
         catch (Exception ex)
         {
             Log("ERROR: " + ex.Message);
             App.WriteLog("Run failed: " + ex);
-            // A Windows message box copies its whole text on Ctrl+C, but nothing on it says so, and a
-            // screenshot of a stack trace is what got sent instead.
-            MessageBox.Show(
-                ex.ToString() + Environment.NewLine + Environment.NewLine
-                + "See the full log at:" + Environment.NewLine + App.LogFilePath
-                + Environment.NewLine + Environment.NewLine + "Press Ctrl+C to copy this message.",
-                "PRISM run failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            // Selectable, with a Copy button: a message box copies on Ctrl+C, but nothing on it says
+            // so, and a screenshot of a stack trace is what got sent instead.
+            PrismMessageWindow.ShowError(this, "PRISM run failed", ex.Message, ex, App.LogFilePath);
         }
         finally
         {
@@ -1393,6 +1416,43 @@ public partial class MainWindow : Window
             _runCancellation = null;
             StopButton.IsEnabled = false;
             UpdateRunEnabled();
+        }
+
+        if (retry)
+        {
+            _retryingRun = true;
+            OnRun(sender, e);
+        }
+    }
+
+    /// <summary>Set for the one run that retries a locked-file failure, so it skips the overwrite question.</summary>
+    private bool _retryingRun;
+
+    /// <summary>
+    /// Make sure no file the run will rewrite is held open by another program, asking the user to
+    /// close any that are. Returns false if they cancel.
+    /// </summary>
+    private async Task<bool> ConfirmOutputsWritableAsync(string outputDir)
+    {
+        while (true)
+        {
+            var dir = outputDir.Trim();
+            // Off the UI thread: the output directory is routinely a network share.
+            var held = await Task.Run(() => SharedFile.HeldOpenOutputs(dir));
+            if (held.Count == 0)
+                return true;
+
+            var which = held.Count == 1 ? held[0] : $"{held.Count} files";
+            var answer = PrismMessageWindow.Show(this, "Close files to run PRISM",
+                $"{which} in the output directory {(held.Count == 1 ? "is" : "are")} open in another "
+                + "program - usually Excel. PRISM rewrites "
+                + (held.Count == 1 ? "it" : "them")
+                + " during the run, and Windows does not allow writing a file that another program has "
+                + "open. Close " + (held.Count == 1 ? "it" : "them") + ", then click Retry.",
+                string.Join(Environment.NewLine, held.Select(h => System.IO.Path.Combine(dir, h))),
+                isError: false, new[] { "Retry", "Cancel" });
+            if (answer != "Retry")
+                return false;
         }
     }
 
@@ -1522,7 +1582,7 @@ public partial class MainWindow : Window
         var ids = new List<string>();
         if (!File.Exists(path))
             return ids;
-        var lines = File.ReadAllLines(path);
+        var lines = SharedFile.ReadAllLines(path);
         if (lines.Length < 2)
             return ids;
         var header = lines[0].Split(',');
@@ -3252,7 +3312,7 @@ public partial class MainWindow : Window
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!File.Exists(metadataCsv))
             return map;
-        var lines = File.ReadAllLines(metadataCsv);
+        var lines = SharedFile.ReadAllLines(metadataCsv);
         if (lines.Length < 2)
             return map;
         // Quote-aware - sample_metadata.csv carries the replicate annotations now, and their values

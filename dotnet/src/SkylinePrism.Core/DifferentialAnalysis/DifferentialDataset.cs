@@ -245,7 +245,7 @@ public sealed class DifferentialDataset
         if (!File.Exists(clinicalCsvPath))
             throw new FileNotFoundException($"Clinical CSV not found: {clinicalCsvPath}", clinicalCsvPath);
 
-        var lines = File.ReadAllLines(clinicalCsvPath);
+        var lines = SharedFile.ReadAllLines(clinicalCsvPath);
         if (lines.Length < 2)
             return new ClinicalAttachResult(null, 0.0, 0, Array.Empty<string>());
 
@@ -631,7 +631,7 @@ public sealed class DifferentialDataset
     private static (Dictionary<string, string?[]> ByRow, IReadOnlyList<string> Columns) ReadSampleMetadata(
         string path)
     {
-        var lines = File.ReadAllLines(path);
+        var lines = SharedFile.ReadAllLines(path);
         if (lines.Length == 0)
             throw new InvalidOperationException("sample_metadata.csv is empty.");
 
