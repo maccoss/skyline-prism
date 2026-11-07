@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
+using SkylinePrism.Core.IO;
 
 namespace SkylinePrism.Core.Library;
 
@@ -136,7 +137,7 @@ public sealed class SpectralLibrary
             throw new FileNotFoundException("Carafe TSV library not found", path);
 
         var lib = new SpectralLibrary();
-        using var reader = new StreamReader(path);
+        using var reader = SharedFile.OpenText(path);
         var headerLine = reader.ReadLine();
         if (headerLine is null)
             throw new InvalidDataException($"Empty Carafe TSV library: {path}");

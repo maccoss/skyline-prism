@@ -548,7 +548,7 @@ public sealed class PrismInput : INotifyPropertyChanged
         if (suffix == ".parquet")
             return ParquetTable.ReadColumnNames(path);
 
-        using var reader = new StreamReader(path);
+        using var reader = SharedFile.OpenText(path);
         var header = reader.ReadLine() ?? "";
         // CsvLine.Split honours quoting, so a quoted column name keeps its commas and loses its
         // quotes; a tab-delimited header has neither problem.
