@@ -291,8 +291,9 @@ public static class Enrichment
     };
 
     /// <summary>
-    /// The bar color for a direction - red for higher in B, blue for lower, green when pooled - shared
-    /// by the pane and the report so the two read the same way.
+    /// The color for a direction - red for higher in B, blue for lower, green when pooled - shared by
+    /// the enrichment bars and the volcano's hits, in the pane and the report, so a red bar and a red
+    /// point mean the same thing everywhere.
     /// </summary>
     public static string DirectionColor(EnrichmentDirection direction) => direction switch
     {
@@ -300,6 +301,14 @@ public static class Enrichment
         EnrichmentDirection.Down => "#1f77b4",
         _ => "#2ca02c",
     };
+
+    /// <summary>
+    /// Which direction's hit list a feature with this log2 fold change (B / A) belongs to - the same
+    /// split the separate up and down queries make. A zero change is in neither, so it is
+    /// <see cref="EnrichmentDirection.Both"/>.
+    /// </summary>
+    public static EnrichmentDirection DirectionOf(double logFc) =>
+        logFc > 0 ? EnrichmentDirection.Up : logFc < 0 ? EnrichmentDirection.Down : EnrichmentDirection.Both;
 
     /// <summary>What one direction's hit list is, named after arm B: "higher in KO".</summary>
     public static string DescribeDirection(EnrichmentDirection direction, string bLabel) => direction switch

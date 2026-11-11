@@ -1300,7 +1300,8 @@ public static partial class PlotRenderer
 
     /// <summary>
     /// A static volcano PNG for the quantification report: effect size (x) against -log10 of the p the
-    /// <paramref name="rule"/> judges by, grey for non-hits and red for hits, with the rule's threshold
+    /// <paramref name="rule"/> judges by, grey for non-hits and hits in their direction's color (red
+    /// higher in B, blue lower, as the enrichment bars - <see cref="DifferentialAnalysis.Enrichment.Enrichment.DirectionColor"/>), with the rule's threshold
     /// guides, and the strongest hits labeled. The interactive Volcano in the app draws the same points;
     /// this is the headless copy the report and the CLI use, so it carries no hover or selection.
     /// </summary>
@@ -1328,8 +1329,7 @@ public static partial class PlotRenderer
     {
         var bgX = new List<double>();
         var bgY = new List<double>();
-        var sigX = new List<double>();
-        var sigY = new List<double>();
+        var hitsByDirection = new Dictionary<DifferentialAnalysis.Enrichment.EnrichmentDirection, (List<double> X, List<double> Y)>();
         var hits = new List<(double X, double Y, string Label)>();
         foreach (var r in res.Rows)
         {
@@ -1338,8 +1338,11 @@ public static partial class PlotRenderer
                 continue;
             if (rule.IsSignificant(r))
             {
-                sigX.Add(r.LogFc);
-                sigY.Add(y);
+                var dir = DifferentialAnalysis.Enrichment.Enrichment.DirectionOf(r.LogFc);
+                if (!hitsByDirection.TryGetValue(dir, out var xy))
+                    hitsByDirection[dir] = xy = (new List<double>(), new List<double>());
+                xy.X.Add(r.LogFc);
+                xy.Y.Add(y);
                 hits.Add((r.LogFc, y, labelFor(r.FeatureId)));
             }
             else
@@ -1358,20 +1361,17 @@ public static partial class PlotRenderer
             bg.MarkerSize = VolcanoBackgroundMarkerSize;
         }
 
-        if (sigX.Count > 0)
+        // Hits in their direction's color - red higher in B, blue lower - the same colors the
+        // enrichment bars use, so a red point and a red bar mean the same thing.
+        foreach (var (dir, xy) in hitsByDirection.OrderBy(kv => kv.Key))
         {
-            var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
-            sig.Color = Color.FromHex("#d62728");
+            var sig = plt.Add.Markers(xy.X.ToArray(), xy.Y.ToArray());
+            sig.Color = Color.FromHex(DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(dir));
             sig.MarkerSize = VolcanoHitMarkerSize;
         }
 
-        if (rule.Log2FcThreshold > 0)
-        {
-            plt.Add.VerticalLine(rule.Log2FcThreshold);
-            plt.Add.VerticalLine(-rule.Log2FcThreshold);
-        }
-
-        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
+        AddVolcanoGuides(plt, rule.PThreshold,
+            rule.Log2FcThreshold > 0 ? new[] { -rule.Log2FcThreshold, rule.Log2FcThreshold } : Array.Empty<double>());
 
         plt.XLabel(xLabel);
         plt.YLabel(rule.YAxisLabel(corrected));
@@ -1580,6 +1580,26 @@ public static partial class PlotRenderer
         return result;
     }
 
+    /// <summary>
+    /// A volcano's threshold guides: a horizontal line at -log10 of <paramref name="pThreshold"/> and a
+    /// vertical line at each of <paramref name="xs"/>. All neutral grey - left to ScottPlot they took
+    /// its cycle colors, which put a red line on the side whose hits are blue.
+    /// </summary>
+    public static void AddVolcanoGuides(Plot plt, double pThreshold, params double[] xs)
+    {
+        foreach (var x in xs)
+            StyleGuide(plt.Add.VerticalLine(x));
+        StyleGuide(plt.Add.HorizontalLine(-Math.Log10(pThreshold)));
+    }
+
+    private static void StyleGuide(ScottPlot.Plottables.AxisLine line)
+    {
+        line.Color = VolcanoGuideColor;
+        line.LineWidth = 2;
+    }
+
+    internal static readonly Color VolcanoGuideColor = Color.FromHex("#7f7f7f");
+
     // Volcano marks and labels, sized to the figure-scale axis text StyleQcPlot sets (24-30 pt), as
     // the PCA markers are. At the earlier 5/6 px points and 11 pt labels, a volcano pasted onto a
     // slide showed specks and unreadable names beside axis labels three times their size.
@@ -1627,8 +1647,7 @@ public static partial class PlotRenderer
             sig.MarkerSize = VolcanoHitMarkerSize;
         }
 
-        plt.Add.VerticalLine(0.0);
-        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
+        AddVolcanoGuides(plt, rule.PThreshold, 0.0);
         plt.XLabel("detection rate difference (B - A)");
         plt.YLabel(rule.YAxisLabel(corrected));
         StyleQcPlot(plt);

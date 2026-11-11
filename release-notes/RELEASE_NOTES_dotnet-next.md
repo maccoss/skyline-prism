@@ -20,6 +20,12 @@ as the GitHub Release description and fails if it is missing.
   sized to the axis text, each label goes on a free side of its point where it cannot be read as a
   neighbour's (a hit with no free side is left unnamed rather than overprinted), up to 10 labels,
   and a long title shrinks to fit. The detection volcano got the same point sizes and title fix.
+- The volcano drew every hit red, while the Enrichment view beside it uses red for higher in B and
+  blue for lower - so a red point and a red bar meant different things. Volcano hits are now red
+  when higher in B and blue when lower, in the Differential pane and the quant report alike, from
+  the same color definition the enrichment bars use. The threshold guide lines, which had taken
+  ScottPlot's cycle colors (a red line beside the blue hits in the pane), are now neutral grey on
+  every volcano.
 
 ## Performance
 

@@ -75,6 +75,45 @@ public class VolcanoLegibilityTests
         });
     }
 
+    /// <summary>
+    /// Hits are colored by direction with the enrichment bars' colors - red higher in B, blue lower -
+    /// so a red point and a red bar mean the same thing. They used to be red on both sides.
+    /// </summary>
+    [Fact]
+    public void HitsAreColoredByDirection_AsTheEnrichmentBarsAre()
+    {
+        var rows = new List<DifferentialRow>();
+        for (var k = 0; k < 3; k++)
+            rows.Add(new DifferentialRow($"UP{k}", 2.0 + k, 4, 15, 8, 1e-10, 1e-10, 14, 16));
+        for (var k = 0; k < 5; k++)
+            rows.Add(new DifferentialRow($"DN{k}", -2.0 - k, 4, 15, 8, 1e-10, 1e-10, 16, 14));
+        for (var k = 0; k < 7; k++)
+            rows.Add(new DifferentialRow($"NS{k}", (k - 3) * 0.1, 1, 15, 0.5, 0.5, 0.9, 15, 15));
+        var res = new DifferentialResult(rows, 10, 10, rows.Count, rows.Count, 18, 4, "global",
+            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+
+        var plt = new Plot();
+        PlotRenderer.DrawDifferentialVolcano(plt, res, SignificanceRule.Default, corrected: true,
+            "log2FC", id => id);
+        var marks = plt.GetPlottables<ScottPlot.Plottables.Markers>().ToList();
+
+        Assert.Equal(3, marks.Count);
+        var up = marks.Single(m => m.Data.GetScatterPoints().Count == 3);
+        var down = marks.Single(m => m.Data.GetScatterPoints().Count == 5);
+        Assert.All(up.Data.GetScatterPoints(), p => Assert.True(p.X > 0));
+        Assert.All(down.Data.GetScatterPoints(), p => Assert.True(p.X < 0));
+        Assert.Equal(Color.FromHex(SkylinePrism.Core.DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
+            SkylinePrism.Core.DifferentialAnalysis.Enrichment.EnrichmentDirection.Up)), up.Color);
+        Assert.Equal(Color.FromHex(SkylinePrism.Core.DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
+            SkylinePrism.Core.DifferentialAnalysis.Enrichment.EnrichmentDirection.Down)), down.Color);
+        Assert.NotEqual(up.Color, down.Color);
+
+        // The guides are neutral: in ScottPlot's cycle colors one of them was red on the blue side.
+        var guides = plt.GetPlottables<ScottPlot.Plottables.AxisLine>().ToList();
+        Assert.Equal(3, guides.Count);
+        Assert.All(guides, g => Assert.Equal(PlotRenderer.VolcanoGuideColor, g.LineColor));
+    }
+
     private static readonly PlotRenderer.LabelBox Canvas = new(0, 0, 1000, 600);
 
     /// <summary>
