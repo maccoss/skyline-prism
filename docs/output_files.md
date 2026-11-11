@@ -60,7 +60,7 @@ below. Neither touches any file `prism run` wrote.
 
 | File | One row per | Holds |
 |---|---|---|
-| `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
+| `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. A protein's `label` is its gene, or its accession where no gene is known; `gene` is empty then, never the `NA` placeholder. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
 
 Four to seven `#` comment lines precede the header, because a results file outlives the shell that
 produced it and every one of these is a question a reader asks of it:
@@ -237,7 +237,7 @@ These are the main files you will use for downstream analysis.
 | `leading_protein` | string | Full protein accession of the leading protein |
 | `leading_name` | string | Full protein name from FASTA header |
 | `leading_uniprot_id` | string | UniProt accession (extracted from FASTA header) |
-| `leading_gene_name` | string | Gene name (extracted from FASTA header) |
+| `leading_gene_name` | string | Gene name (extracted from FASTA header); `NA` where the header names none, which the differential analysis reads as no gene |
 | `leading_description` | string | Protein description from FASTA |
 | `n_peptides` | int64 | Number of peptides used for quantification |
 | `n_unique_peptides` | int64 | Number of unique (proteotypic) peptides |

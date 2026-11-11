@@ -1310,7 +1310,22 @@ public static partial class PlotRenderer
         bool corrected, string xLabel, Func<string, string> labelFor, string? title = null)
     {
         var plt = new Plot();
+        DrawDifferentialVolcano(plt, res, rule, corrected, xLabel, labelFor, title);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
 
+    /// <summary>
+    /// Draws <see cref="DifferentialVolcanoPng"/>'s plot onto <paramref name="plt"/>, laid out for an
+    /// image of <paramref name="width"/> x <paramref name="height"/>, so its marks and labels can be
+    /// checked without decoding an image.
+    /// </summary>
+    internal static void DrawDifferentialVolcano(
+        Plot plt,
+        DifferentialAnalysis.DifferentialResult res,
+        DifferentialAnalysis.SignificanceRule rule,
+        bool corrected, string xLabel, Func<string, string> labelFor, string? title = null,
+        int width = Width, int height = Height)
+    {
         var bgX = new List<double>();
         var bgY = new List<double>();
         var sigX = new List<double>();
@@ -1337,15 +1352,17 @@ public static partial class PlotRenderer
         if (bgX.Count > 0)
         {
             var bg = plt.Add.Markers(bgX.ToArray(), bgY.ToArray());
-            bg.Color = Color.FromHex("#b8c4d0");
-            bg.MarkerSize = 5;
+            // Translucent, so the dense middle of thousands of non-hits reads as a cloud with a
+            // core rather than as one solid blot.
+            bg.Color = Color.FromHex("#b8c4d0").WithAlpha(0.7);
+            bg.MarkerSize = VolcanoBackgroundMarkerSize;
         }
 
         if (sigX.Count > 0)
         {
             var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
             sig.Color = Color.FromHex("#d62728");
-            sig.MarkerSize = 6;
+            sig.MarkerSize = VolcanoHitMarkerSize;
         }
 
         if (rule.Log2FcThreshold > 0)
@@ -1356,22 +1373,220 @@ public static partial class PlotRenderer
 
         plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
 
-        // Label the strongest hits (by significance, then effect) - enough to orient a reader without
-        // turning the plot into a wall of text.
-        foreach (var h in hits.OrderByDescending(h => h.Y).ThenByDescending(h => Math.Abs(h.X)).Take(15))
-        {
-            var t = plt.Add.Text(h.Label, h.X, h.Y);
-            t.LabelAlignment = Alignment.LowerCenter;
-            StyleTextLabel(t, 11);
-        }
-
-        if (!string.IsNullOrEmpty(title))
-            plt.Title(title);
         plt.XLabel(xLabel);
         plt.YLabel(rule.YAxisLabel(corrected));
         StyleQcPlot(plt);
-        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+        if (!string.IsNullOrEmpty(title))
+            FitTitleToWidth(plt, title, width);
+
+        if (hits.Count == 0)
+            return;
+
+        // Headroom above the strongest hits, which are the ones labeled and sit at the very top.
+        plt.Axes.AutoScale();
+        var lim = plt.Axes.GetLimits();
+        plt.Axes.SetLimits(lim.Left, lim.Right, lim.Bottom, lim.Top + 0.12 * (lim.Top - lim.Bottom));
+
+        // Label the strongest hits (by significance, then effect) - enough to orient a reader without
+        // turning the plot into a wall of text - each on whichever side of its point is free. Laid
+        // out in pixels, so the plot is rendered once to fix where the data area is.
+        plt.RenderInMemory(width, height);
+        var dataRect = plt.RenderManager.LastRender.DataRect;
+        var ordered = hits.OrderByDescending(h => h.Y).ThenByDescending(h => Math.Abs(h.X)).ToList();
+        var points = ordered.Select(h => plt.GetPixel(new Coordinates(h.X, h.Y))).ToList();
+        var placements = PlaceVolcanoLabels(
+            points.Select(p => (p.X, p.Y)).ToList(),
+            ordered.Select(h => EstimateLabelSize(h.Label, VolcanoLabelFontSize)).ToList(),
+            new LabelBox(dataRect.Left, dataRect.Top, dataRect.Right, dataRect.Bottom),
+            VolcanoHitMarkerSize / 2f, VolcanoLabeledHits);
+        foreach (var (index, side) in placements)
+        {
+            var h = ordered[index];
+            var t = plt.Add.Text(h.Label, h.X, h.Y);
+            var gap = VolcanoHitMarkerSize / 2f + LabelGap;
+            var lean = VolcanoHitMarkerSize / 4f;
+            (t.LabelAlignment, t.OffsetX, t.OffsetY) = side switch
+            {
+                LabelSide.Above => (Alignment.LowerCenter, 0f, -gap),
+                LabelSide.AboveRight => (Alignment.LowerLeft, lean, -gap),
+                LabelSide.AboveLeft => (Alignment.LowerRight, -lean, -gap),
+                LabelSide.Below => (Alignment.UpperCenter, 0f, gap),
+                LabelSide.Right => (Alignment.MiddleLeft, gap, 0f),
+                _ => (Alignment.MiddleRight, -gap, 0f),
+            };
+            StyleTextLabel(t, VolcanoLabelFontSize, bold: true);
+        }
     }
+
+    /// <summary>
+    /// Set a report plot's title at the size StyleQcPlot gives titles, or smaller - as large as fits
+    /// <paramref name="width"/> - but never below a readable floor. Must follow StyleQcPlot, which
+    /// sets one title size for every QC plot: a contrast title such as "Treatment_Responder_Week12 vs
+    /// Placebo_NonResponder_Week12 by Arm_Response" ran off both edges at that size, and ScottPlot
+    /// does not wrap. Width is estimated as for labels (<see cref="EstimateLabelSize"/>).
+    /// </summary>
+    internal static void FitTitleToWidth(Plot plt, string title, int width)
+    {
+        plt.Title(title);
+        var fits = TitleFillFraction * width / (TitleEmPerChar * Math.Max(1, title.Length));
+        plt.Axes.Title.Label.FontSize = (float)Math.Clamp(fits, MinTitleFontSize, MaxTitleFontSize);
+    }
+
+    internal const double MaxTitleFontSize = 28;
+    internal const double MinTitleFontSize = 14;
+    internal const double TitleEmPerChar = 0.62;
+    internal const double TitleFillFraction = 0.94;
+
+    /// <summary>
+    /// Pixels between a hit's edge and its label: enough that a label beside one point and a label
+    /// above its neighbour, on the same row, do not touch.
+    /// </summary>
+    internal const float LabelGap = 4f;
+
+    /// <summary>
+    /// How many of the strongest hits are considered for a label, per label wanted. Considering
+    /// every hit made placement quadratic in their number - a peptide-level contrast with thousands
+    /// of hits crowded at the top could stall the report - and a hit far down the order would not be
+    /// read as one of "the strongest" anyway.
+    /// </summary>
+    internal const int LabelCandidatesPerLabel = 5;
+
+    /// <summary>
+    /// Where a label sits relative to the point it names, in the order they are tried. The diagonals
+    /// come before Below because the strongest hits share the top row, where a label straight above
+    /// a point is often a few pixels into its neighbour's and below is where the next hits sit.
+    /// </summary>
+    internal enum LabelSide { Above, AboveRight, AboveLeft, Below, Right, Left }
+
+    /// <summary>A rectangle in pixels, y increasing downward as on the rendered image.</summary>
+    internal readonly record struct LabelBox(float Left, float Top, float Right, float Bottom)
+    {
+        public bool Overlaps(LabelBox o) => Left < o.Right && o.Left < Right && Top < o.Bottom && o.Top < Bottom;
+        public bool Inside(LabelBox o) => Left >= o.Left && Right <= o.Right && Top >= o.Top && Bottom <= o.Bottom;
+
+        /// <summary>Distance from this box's center to a point - where a reader's eye puts the label.</summary>
+        public float CenterDistanceTo(float x, float y)
+        {
+            var dx = (Left + Right) / 2 - x;
+            var dy = (Top + Bottom) / 2 - y;
+            return MathF.Sqrt(dx * dx + dy * dy);
+        }
+    }
+
+    /// <summary>
+    /// How much nearer its own point a label's center must be than any other hit. A label leaning
+    /// over a neighbour reads as the neighbour's: a volcano once printed one protein's accession
+    /// squarely over a neighbouring hit's point, and left that hit unnamed beside it.
+    /// </summary>
+    internal const float LabelOwnershipMargin = 1.2f;
+
+    /// <summary>
+    /// A bold label's size in pixels at <paramref name="fontSize"/>. An estimate - 0.62 em per
+    /// character, on the generous side of the plot fonts, and 1.1 em of line - so two labels judged
+    /// apart do not touch. Measuring exactly would tie the layout to the installed font.
+    /// </summary>
+    internal static (float Width, float Height) EstimateLabelSize(string text, double fontSize) =>
+        ((float)(0.62 * fontSize * Math.Max(1, text.Length)), (float)(1.1 * fontSize));
+
+    /// <summary>
+    /// Choose labels for points taken strongest first: each goes on the first free side in
+    /// <see cref="LabelSide"/> order; a label that fits nowhere is left out and the next point is tried,
+    /// until <paramref name="maxLabels"/> are placed or the first
+    /// <see cref="LabelCandidatesPerLabel"/> x <paramref name="maxLabels"/> points have been tried.
+    /// Free means inside <paramref name="bounds"/>, clear of every label already placed and of every
+    /// point's mark - a label over another hit hides the very thing the plot is for - and nearer its
+    /// own point than any other by <see cref="LabelOwnershipMargin"/>, so it cannot be read as
+    /// another's. Pixel coordinates, y downward. Linear in the number of points for a fixed
+    /// <paramref name="maxLabels"/>.
+    /// </summary>
+    internal static List<(int Index, LabelSide Side)> PlaceVolcanoLabels(
+        IReadOnlyList<(float X, float Y)> points, IReadOnlyList<(float Width, float Height)> sizes,
+        LabelBox bounds, float markerRadius, int maxLabels)
+    {
+        var marks = points.Select(p => new LabelBox(p.X - markerRadius, p.Y - markerRadius,
+            p.X + markerRadius, p.Y + markerRadius)).ToList();
+        var placed = new List<LabelBox>();
+        var result = new List<(int, LabelSide)>();
+        var gap = markerRadius + LabelGap;
+        var lean = markerRadius / 2;
+        LabelBox BoxFor(int k, LabelSide side)
+        {
+            var (x, y) = points[k];
+            var (w, h) = sizes[k];
+            return side switch
+            {
+                LabelSide.Above => new LabelBox(x - w / 2, y - gap - h, x + w / 2, y - gap),
+                LabelSide.AboveRight => new LabelBox(x + lean, y - gap - h, x + lean + w, y - gap),
+                LabelSide.AboveLeft => new LabelBox(x - lean - w, y - gap - h, x - lean, y - gap),
+                LabelSide.Below => new LabelBox(x - w / 2, y + gap, x + w / 2, y + gap + h),
+                LabelSide.Right => new LabelBox(x + gap, y - h / 2, x + gap + w, y + h / 2),
+                _ => new LabelBox(x - gap - w, y - h / 2, x - gap, y + h / 2),
+            };
+        }
+        var candidates = Math.Min(points.Count, maxLabels * LabelCandidatesPerLabel);
+        // Each candidate's natural place, above it. A label is first sought where it takes no place
+        // a later point could still be labeled in - else the first hit on a crowded row, labeled
+        // leaning toward its neighbour, leaves that neighbour (often as strong) with nowhere to go.
+        // Only as many later points as labels remain: reserving for a point that can never get a
+        // label only pushes the ones that will off their best side.
+        var natural = Enumerable.Range(0, candidates).Select(k => BoxFor(k, LabelSide.Above)).ToList();
+        var sides = Enum.GetValues<LabelSide>();
+        bool Clear(int i, LabelBox box, bool considerate)
+        {
+            if (!box.Inside(bounds))
+                return false;
+            foreach (var p in placed)
+                if (box.Overlaps(p))
+                    return false;
+            var (x, y) = points[i];
+            var own = LabelOwnershipMargin * box.CenterDistanceTo(x, y);
+            for (var k = 0; k < points.Count; k++)
+            {
+                if (k == i)
+                    continue;
+                if (box.Overlaps(marks[k]) || box.CenterDistanceTo(points[k].X, points[k].Y) < own)
+                    return false;
+            }
+            if (considerate)
+            {
+                var stillToLabel = maxLabels - result.Count - 1;
+                for (var k = i + 1; k < candidates && k <= i + stillToLabel; k++)
+                    if (box.Overlaps(natural[k]))
+                        return false;
+            }
+            return true;
+        }
+
+        for (var i = 0; i < candidates && result.Count < maxLabels; i++)
+        {
+            LabelSide? chosen = null;
+            foreach (var considerate in new[] { true, false })
+            {
+                foreach (var side in sides)
+                {
+                    var box = BoxFor(i, side);
+                    if (!Clear(i, box, considerate))
+                        continue;
+                    chosen = side;
+                    placed.Add(box);
+                    break;
+                }
+                if (chosen is not null)
+                    break;
+            }
+            if (chosen is { } s)
+                result.Add((i, s));
+        }
+        return result;
+    }
+
+    // Volcano marks and labels, sized to the figure-scale axis text StyleQcPlot sets (24-30 pt), as
+    // the PCA markers are. At the earlier 5/6 px points and 11 pt labels, a volcano pasted onto a
+    // slide showed specks and unreadable names beside axis labels three times their size.
+    internal const float VolcanoBackgroundMarkerSize = 9;
+    internal const float VolcanoHitMarkerSize = 14;
+    internal const double VolcanoLabelFontSize = 20;
+    internal const int VolcanoLabeledHits = 10;
 
     /// <summary>
     /// A static detection volcano PNG for the quant report: detection-rate difference (B - A) against
@@ -1401,24 +1616,24 @@ public static partial class PlotRenderer
         if (bgX.Count > 0)
         {
             var bg = plt.Add.Markers(bgX.ToArray(), bgY.ToArray());
-            bg.Color = Color.FromHex("#b8c4d0");
-            bg.MarkerSize = 5;
+            bg.Color = Color.FromHex("#b8c4d0").WithAlpha(0.7);
+            bg.MarkerSize = VolcanoBackgroundMarkerSize;
         }
 
         if (sigX.Count > 0)
         {
             var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
             sig.Color = Color.FromHex("#2ca02c");
-            sig.MarkerSize = 6;
+            sig.MarkerSize = VolcanoHitMarkerSize;
         }
 
         plt.Add.VerticalLine(0.0);
         plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
-        if (!string.IsNullOrEmpty(title))
-            plt.Title(title);
         plt.XLabel("detection rate difference (B - A)");
         plt.YLabel(rule.YAxisLabel(corrected));
         StyleQcPlot(plt);
+        if (!string.IsNullOrEmpty(title))
+            FitTitleToWidth(plt, title, Width);
         return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 

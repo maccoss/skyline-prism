@@ -122,7 +122,12 @@ public sealed class DifferentialDataset
     /// </summary>
     public IReadOnlyList<string> FeatureProteinNames => _featureProteinNames;
 
-    /// <summary>Human-readable feature labels (gene names for proteins); parallel to <see cref="FeatureIds"/>.</summary>
+    /// <summary>
+    /// Human-readable feature labels, parallel to <see cref="FeatureIds"/>: for a protein its gene,
+    /// else its UniProt accession (<c>leading_uniprot_id</c>, then <c>leading_protein</c>), else empty
+    /// (callers then show the feature id); for a peptide its modified sequence. Never a placeholder
+    /// such as "NA".
+    /// </summary>
     public string[] FeatureLabels { get; }
 
     /// <summary>
@@ -200,7 +205,11 @@ public sealed class DifferentialDataset
     /// <summary>The parquet column used as the feature id.</summary>
     public string IdColumn { get; }
 
-    /// <summary>The parquet column used as the feature label.</summary>
+    /// <summary>
+    /// The parquet column the feature label is primarily taken from: <c>leading_gene_name</c> for a
+    /// protein matrix that has it - where a protein has no gene, its label falls back to its accession
+    /// (see <see cref="FeatureLabels"/>) - otherwise the id column.
+    /// </summary>
     public string LabelColumn { get; }
 
     /// <summary>Metadata columns available for building a contrast (e.g. sample_type, batch, ...).</summary>
@@ -465,7 +474,6 @@ public sealed class DifferentialDataset
 
         var nFeatures = table.RowCount;
         var featureIds = table.GetString(idColumn).Select(s => s ?? string.Empty).ToArray();
-        var featureLabels = table.GetString(labelColumn).Select(s => s ?? string.Empty).ToArray();
         // Genes come from leading_gene_name at BOTH levels - the C# engine stamps it onto
         // corrected_peptides as well (PrismPipeline.PeptideGroupColumns) - and are kept apart from
         // the display label, which at peptide level is the modified sequence. Empty when the column
@@ -485,6 +493,18 @@ public sealed class DifferentialDataset
         var featureGroups = IdentityColumn(table, "protein_group", nFeatures);
         var featureAccessions = IdentityColumn(table, "leading_protein", nFeatures);
         var featureProteinNames = IdentityColumn(table, "leading_name", nFeatures);
+        // A protein is labeled by its gene, then - where none is known, as for most proteins of a
+        // non-model organism - by its UniProt accession, which still names it uniquely and can be
+        // looked up. leading_uniprot_id before leading_protein, as the Dynamic Range labels do:
+        // leading_protein is whatever Skyline called the protein and can be a whole FASTA id
+        // ("sp|P02768|ALBU_HUMAN"), which does not read on a plot. An empty label is left for the
+        // caller to replace with the protein-group id. Before this, the label was leading_gene_name
+        // verbatim, so every unannotated protein carried parsimony's "NA" placeholder and a volcano
+        // showed a column of identical "NA" labels.
+        var featureUniProtIds = IdentityColumn(table, "leading_uniprot_id", nFeatures);
+        var featureLabels = labelColumn == "leading_gene_name"
+            ? featureGenes.Select((g, i) => FirstNamed(g, featureUniProtIds[i], featureAccessions[i])).ToArray()
+            : table.GetString(labelColumn).Select(s => s ?? string.Empty).ToArray();
 
         var exprLog2 = new double[nFeatures, sampleCols.Length];
         for (var j = 0; j < sampleCols.Length; j++)
@@ -688,11 +708,30 @@ public sealed class DifferentialDataset
         return (byRow, columns);
     }
 
-    /// <summary>An identity column, or all-empty when the matrix does not carry it.</summary>
+    /// <summary>
+    /// An identity column, or all-empty when the matrix does not carry it. A placeholder for an
+    /// unknown name becomes empty, member by member of a ";"-separated list, so the members stay
+    /// aligned with the other identity columns.
+    /// </summary>
     private static string[] IdentityColumn(ParquetTable table, string name, int nFeatures) =>
         table.HasColumn(name)
-            ? table.GetString(name).Select(s => s ?? string.Empty).ToArray()
+            ? table.GetString(name).Select(NamePlaceholder.Clean).ToArray()
             : Enumerable.Repeat(string.Empty, nFeatures).ToArray();
+
+    /// <summary>
+    /// The first of <paramref name="candidates"/> that names something, with the empty members of a
+    /// ";"-separated list left out; empty when none does.
+    /// </summary>
+    private static string FirstNamed(params string[] candidates)
+    {
+        foreach (var c in candidates)
+        {
+            var named = c.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (named.Length > 0)
+                return string.Join(";", named);
+        }
+        return string.Empty;
+    }
 
     /// <summary>
     /// The members of a ";"-separated group column. A shared peptide lists every protein group it

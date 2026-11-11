@@ -237,7 +237,9 @@ public static class DynamicRange
     {
         if (column is null || row >= column.Length)
             return null;
-        var v = column[row];
-        return string.IsNullOrWhiteSpace(v) ? null : v;
+        // A placeholder name is no name: otherwise parsimony's "NA" for an unknown gene beat the
+        // accession in the label fallback below, and an unannotated protein was labeled "NA".
+        var v = NamePlaceholder.Clean(column[row]);
+        return v.Length == 0 ? null : v;
     }
 }

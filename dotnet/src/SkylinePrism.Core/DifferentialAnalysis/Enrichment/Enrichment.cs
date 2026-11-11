@@ -84,7 +84,8 @@ public static class Enrichment
 
     /// <summary>
     /// De-duplicate and stringify gene symbols (order preserving), splitting delimited multi-gene
-    /// fields on <c>; , / |</c> and whitespace and dropping empty / "nan" / "none". Real HGNC symbols
+    /// fields on <c>; , / |</c> and whitespace and dropping empty values and every placeholder
+    /// <see cref="IO.NamePlaceholder"/> knows - "NA", "nan", "none" and the rest. Real HGNC symbols
     /// contain none of those characters, so a delimited value must be split before use.
     /// </summary>
     public static List<string> CleanSymbols(IEnumerable<string?> genes)
@@ -93,13 +94,16 @@ public static class Enrichment
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var g in genes)
         {
-            if (g is null)
+            // Placeholders out first, member by member of a ";" list, BEFORE splitting: "N/A" split on
+            // "/" is the two "symbols" N and A. "NA" is what parsimony writes for an unknown gene, and
+            // it was submitted as one.
+            var named = IO.NamePlaceholder.Clean(g);
+            if (named.Length == 0)
                 continue;
-            foreach (var tok in SymbolSplit.Split(g.Trim()))
+            foreach (var tok in SymbolSplit.Split(named.Trim()))
             {
                 var s = tok.Trim();
-                if (s.Length == 0 || s.Equals("nan", StringComparison.OrdinalIgnoreCase)
-                    || s.Equals("none", StringComparison.OrdinalIgnoreCase) || seen.Contains(s))
+                if (IO.NamePlaceholder.Is(s) || seen.Contains(s))
                     continue;
                 seen.Add(s);
                 outList.Add(s);

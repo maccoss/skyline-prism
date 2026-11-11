@@ -72,6 +72,30 @@ public class DynamicRangeTests
         }
     }
 
+    /// <summary>
+    /// Parsimony writes "NA" for a protein with no known gene. It is no name: the label falls back to
+    /// the accession, and the entry reports no gene - before, the plot labeled every such protein "NA".
+    /// </summary>
+    [Fact]
+    public void Compute_APlaceholderGeneIsNoGene_TheAccessionLabelsIt()
+    {
+        var dir = TempDir();
+        try
+        {
+            var path = WriteProteins(
+                dir, new[] { "ALB", "NA" }, new[] { "P02768", "A0A024R161" },
+                new[] { 1000000.0, 1000 }, new[] { 1000000.0, 1000 });
+            var entries = DynamicRange.Compute(ParquetTable.Load(path), AbundanceLevel.Protein);
+
+            Assert.Equal(new[] { "ALB", "A0A024R161" }, entries.Select(e => e.Label));
+            Assert.Null(entries[1].Gene);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Compute_HonoursAReplicateSubsetAndCanReorderTheRanking()
     {
