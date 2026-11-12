@@ -648,10 +648,13 @@
                                         <StackPanel Margin="12,0,12,12">
                                 <TextBlock Text="Compare" Margin="0,2,0,3" Foreground="#555" />
                                 <ListBox x:Name="DiffDesignCombo" SelectionChanged="OnDiffDesignChanged"
-                                ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a subject column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. 'Blocked by subject' is for a contrast BETWEEN subjects (sex, onset site) when subjects were sampled more than once: each subject's samples are modeled as correlated rather than as independent evidence, with one correlation shared by every feature (limma's duplicateCorrelation). Paired cannot do that, because there the subject absorbs the contrast. The two 'Trend' designs fit a slope against a numeric column instead of contrasting two arms - hover each for when it applies." Style="{StaticResource SegmentedTwoColumn}">
-                                <ListBoxItem Tag="Unpaired">Unpaired</ListBoxItem>
-                                <ListBoxItem Tag="Paired">Paired</ListBoxItem>
-                                <ListBoxItem Tag="BlockedBySubject">Blocked by subject</ListBoxItem>
+                                ToolTip="How the samples are related. Hover each choice for what it does and when it applies." Style="{StaticResource SegmentedTwoColumn}">
+                                <ListBoxItem Tag="Unpaired"
+                                ToolTip="Two independent groups, one sample per subject: every sample counts as its own evidence. The ordinary case-control contrast. If subjects gave more than one sample, use Blocked by subject - counting repeated samples as independent makes the p-values too small.">Unpaired</ListBoxItem>
+                                <ListBoxItem Tag="Paired"
+                                ToolTip="Each subject has one sample in A and one in B - before and after, two tissues. Tests each subject's own change, so the differences between subjects drop out of the error. Needs a Subject column; a subject missing either sample is left out, and the status line says how many.">Paired</ListBoxItem>
+                                <ListBoxItem Tag="BlockedBySubject"
+                                ToolTip="A contrast BETWEEN subjects (disease vs control, sex) when subjects were sampled more than once. A subject's samples are modeled as correlated - one correlation shared by every feature, as limma's duplicateCorrelation estimates it - rather than as independent. Needs a Subject column and the moderated t. Paired cannot do this: there the subject block absorbs a between-subject contrast.">Blocked by subject</ListBoxItem>
                                 <!-- GRAYED (disabled, still shown) when no run is loaded or the run
                                 has no numeric column, by UpdateDiffControls, with a tooltip saying
                                 what would enable them - hiding them made the entries vanish at the
@@ -667,8 +670,10 @@
                                 <TextBlock Text="Level" Margin="0,10,0,3" Foreground="#555" />
                                 <ListBox x:Name="DiffLevelCombo" SelectionChanged="OnDiffLevelChanged"
                                 ToolTip="Protein- or peptide-level corrected matrix." Style="{StaticResource Segmented}">
-                                <ListBoxItem>Protein</ListBoxItem>
-                                <ListBoxItem>Peptide</ListBoxItem>
+                                <ListBoxItem
+                                ToolTip="Test each protein group (corrected_proteins). Fewer tests than peptides, each resting on all of its peptides; the variance prior can use each protein's peptide count.">Protein</ListBoxItem>
+                                <ListBoxItem
+                                ToolTip="Test each peptide (corrected_peptides): finds a change in one peptide - a processed or modified form - that its protein's rollup hides. Many more tests, and a protein's peptides are correlated, which Benjamini-Yekutieli allows for.">Peptide</ListBoxItem>
                                 </ListBox>
                                 <Border BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Margin="0,14,0,0">
                                     <TextBlock Text="Comparison" FontWeight="SemiBold" Margin="0,8,0,0" />
@@ -792,9 +797,11 @@
                                     <TextBlock Text="Hits" FontWeight="SemiBold" Margin="0,8,0,0" />
                                 </Border>
                                 <ListBox x:Name="DiffPKindCombo" SelectionChanged="OnDiffThresholdSelected"
-                                ToolTip="Which p-value the cut-off applies to. 'Adjusted p' is the honest default. 'Raw p' is offered because a small pilot cohort can have nothing at all surviving correction, and the uncorrected ranking is a legitimate way to judge whether a full study is worth running - the plot's y-axis and the status line both say which one is in force, so a screenshot cannot be mistaken for a corrected result." Style="{StaticResource Segmented}">
-                                <ListBoxItem Tag="Adjusted">Adjusted p</ListBoxItem>
-                                <ListBoxItem Tag="Raw">Raw p</ListBoxItem>
+                                ToolTip="Which p-value the cut-off applies to. Hover each choice for when to use it." Style="{StaticResource Segmented}">
+                                <ListBoxItem Tag="Adjusted"
+                                ToolTip="Apply the cut-off to the p-value after multiple-testing correction (Method, Correct). The default, and the one to quote a hit list on.">Adjusted p</ListBoxItem>
+                                <ListBoxItem Tag="Raw"
+                                ToolTip="Apply the cut-off to the uncorrected p-value. For judging whether a full study is worth running when a pilot is too small for anything to survive correction; with thousands of features tested, many raw-p hits are expected by chance alone. The plot's y-axis and the status line both say which p is in force, so a screenshot cannot be mistaken for a corrected result.">Raw p</ListBoxItem>
                                 </ListBox>
                                 <!-- A grid, not a wrapping row, so each threshold stays beside its own input: wrapped, the
                                      effect label landed at the end of one line and its value at the start of the next. -->
@@ -830,18 +837,24 @@
                                     <StackPanel Margin="0,0,0,4">
                                         <TextBlock Text="Test" Margin="0,10,0,3" Foreground="#555" />
                                         <ComboBox x:Name="DiffTestCombo" SelectionChanged="OnDiffTestChanged"
-                                        ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
-                                        <ComboBoxItem Tag="ModeratedT">Moderated t</ComboBoxItem>
+                                        ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which needs no normality but asks whether one group tends to run higher rather than whether the means differ. Only the moderated t can adjust for covariates.">
+                                        <ComboBoxItem Tag="ModeratedT"
+                                        ToolTip="limma's empirical-Bayes t: each feature's variance is shrunk toward a prior fitted across all features, which steadies the test when each group has few samples. The default, and the only test that can adjust for covariates or block by subject.">Moderated t</ComboBoxItem>
                                         <!-- Each of these applies to one design only. UpdateDiffControls
                                         collapses AND disables the ones that do not apply: WPF's
                                         arrow-key and type-ahead selection skip disabled items but
                                         not collapsed ones, so hiding alone leaves an inapplicable
                                         test one keypress away. Same idiom as RefreshQcPlotKinds. -->
-                                        <ComboBoxItem x:Name="DiffTestWelchItem" Tag="WelchT">Welch t</ComboBoxItem>
-                                        <ComboBoxItem x:Name="DiffTestStudentItem" Tag="StudentT">Student t</ComboBoxItem>
-                                        <ComboBoxItem x:Name="DiffTestMannWhitneyItem" Tag="MannWhitney">Mann-Whitney</ComboBoxItem>
-                                        <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT">Paired t</ComboBoxItem>
-                                        <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon">Wilcoxon</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffTestWelchItem" Tag="WelchT"
+                                        ToolTip="The ordinary two-sample t-test without assuming the two groups have equal variance. Each feature is tested on its own samples alone, so at small n it has less power than the moderated t.">Welch t</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffTestStudentItem" Tag="StudentT"
+                                        ToolTip="The classic two-sample t-test, assuming both groups have the same variance. Each feature is tested on its own samples alone.">Student t</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffTestMannWhitneyItem" Tag="MannWhitney"
+                                        ToolTip="Rank test for two independent groups (Wilcoxon rank-sum). Needs no normality and resists outliers. It tests whether one group's values tend to be higher than the other's - a median shift only if the two groups' distributions have the same shape - and needs several samples per group to reach a small p.">Mann-Whitney</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT"
+                                        ToolTip="t-test on each subject's A-to-B difference (Paired design). Each feature is tested on its own pairs alone.">Paired t</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon"
+                                        ToolTip="Signed-rank test on each subject's A-to-B difference (Paired design): the rank-based counterpart of the paired t. It needs no normality, but it does assume the differences are symmetric about their center; with skewed differences, do not read its p as a test of a zero median.">Wilcoxon</ComboBoxItem>
                                         </ComboBox>
                                         <!-- Tag carries the value, Content the label, as the Density and Ion
                                         Accounting pickers do - so the displayed wording can change
@@ -857,19 +870,25 @@
                                         prior named, so Core chooses by level exactly as the CLI and
                                         proteomics-toolkit do. UpdateDiffControls rewrites its text to
                                         say which prior that is for the loaded matrix. -->
-                                        <ComboBoxItem x:Name="DiffPriorDefaultItem" Tag="Default">Default (by level)</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffPriorDefaultItem" Tag="Default"
+                                        ToolTip="Choose by level, as the CLI does with no --prior: Intensity and peptide count for proteins, Intensity trend for peptides.">Default (by level)</ComboBoxItem>
                                         <!-- Needs n_peptides, so collapsed at peptide level like the
                                         peptide-count prior below. -->
-                                        <ComboBoxItem x:Name="DiffPriorIntensityNPeptidesItem" Tag="LimmaTrendIntensityNPeptides">Intensity and peptide count (limma)</ComboBoxItem>
-                                        <ComboBoxItem Tag="LimmaTrend">Intensity trend (limma)</ComboBoxItem>
-                                        <ComboBoxItem Tag="Global">Global</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffPriorIntensityNPeptidesItem" Tag="LimmaTrendIntensityNPeptides"
+                                        ToolTip="The prior variance follows both a protein's mean log2 intensity and its peptide count, fitted to this contrast's residuals: at the same intensity, a protein measured by more peptides varies less. Protein level only. Reported as limma-trend-intensity-n-peptides.">Intensity and peptide count (limma)</ComboBoxItem>
+                                        <ComboBoxItem Tag="LimmaTrend"
+                                        ToolTip="limma's trend=TRUE: the prior variance follows a curve of residual variance against mean log2 intensity, fitted to this contrast's residuals, so dim features are not judged by the precision of bright ones. Reported as limma-trend.">Intensity trend (limma)</ComboBoxItem>
+                                        <ComboBoxItem Tag="Global"
+                                        ToolTip="One prior variance for every feature - limma's plain eBayes. The simplest prior; it ignores that dim features vary more than bright ones.">Global</ComboBoxItem>
                                         <!-- Both count priors need n_peptides, which only the protein
                                         matrix has, so UpdateDiffControls collapses and disables them at
                                         peptide level rather than offering a prior that cannot be fitted. -->
-                                        <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount">Peptide count</ComboBoxItem>
+                                        <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount"
+                                        ToolTip="The prior variance follows each protein's peptide count alone (DEqMS), not its intensity. Protein level only.">Peptide count</ComboBoxItem>
                                         <!-- Last, and labeled deprecated: kept so earlier results can be
                                         reproduced, and the only prior "from controls" applies to. -->
-                                        <ComboBoxItem Tag="IntensityTrend">Intensity trend, toolkit (deprecated)</ComboBoxItem>
+                                        <ComboBoxItem Tag="IntensityTrend"
+                                        ToolTip="proteomics-toolkit's intensity-trend estimator, kept to reproduce earlier results. Its shape comes from the QC and reference pools, which carry technical variance only, so it is optimistic for bright features and conservative for dim ones.">Intensity trend, toolkit (deprecated)</ComboBoxItem>
                                         </ComboBox>
                                         <!-- ToolTipService.ShowOnDisabled, because this control is GRAYED
                                         rather than hidden when the run has no controls, and WPF
@@ -885,11 +904,16 @@
                                         <ComboBox x:Name="DiffCorrectionCombo"
                                         SelectionChanged="OnDiffCorrectionChanged"
                                         ToolTip="Multiple-testing correction applied to the raw p-values. Benjamini-Hochberg controls the false-discovery rate under independence or positive dependence. Benjamini-Yekutieli is valid under arbitrary dependence - worth reaching for at peptide level, where peptides from one protein are strongly correlated. Bonferroni and Holm control the family-wise error rate instead, and are far stricter. 'None' reports the raw p in the adjusted column.">
-                                        <ComboBoxItem Tag="BenjaminiHochberg">Benjamini-Hochberg</ComboBoxItem>
-                                        <ComboBoxItem Tag="BenjaminiYekutieli">Benjamini-Yekutieli</ComboBoxItem>
-                                        <ComboBoxItem Tag="Holm">Holm</ComboBoxItem>
-                                        <ComboBoxItem Tag="Bonferroni">Bonferroni</ComboBoxItem>
-                                        <ComboBoxItem Tag="None">None</ComboBoxItem>
+                                        <ComboBoxItem Tag="BenjaminiHochberg"
+                                        ToolTip="Controls the false discovery rate: called at 0.05, at most 5% of the hits are false on average - often fewer, never a promise for one list. Valid when features are independent or positively correlated. The usual choice.">Benjamini-Hochberg</ComboBoxItem>
+                                        <ComboBoxItem Tag="BenjaminiYekutieli"
+                                        ToolTip="The false discovery rate under any correlation between features. Stricter than Benjamini-Hochberg; worth it at peptide level, where the peptides of one protein move together.">Benjamini-Yekutieli</ComboBoxItem>
+                                        <ComboBoxItem Tag="Holm"
+                                        ToolTip="Controls the family-wise error rate - the chance of even one false hit. Always calls at least as many hits as Bonferroni, with the same guarantee.">Holm</ComboBoxItem>
+                                        <ComboBoxItem Tag="Bonferroni"
+                                        ToolTip="Controls the family-wise error rate by multiplying each p-value by the number of features tested. The strictest choice; with thousands of proteins it calls only very large effects.">Bonferroni</ComboBoxItem>
+                                        <ComboBoxItem Tag="None"
+                                        ToolTip="No correction: the adjusted column repeats the raw p-value. For exploring only - with thousands of features, false hits are expected.">None</ComboBoxItem>
                                         </ComboBox>
                                     </StackPanel>
                                 </Expander>
