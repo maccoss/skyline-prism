@@ -29,9 +29,10 @@ public enum FeatureLevel
 /// <param name="FeatureId">The matrix row's id: a protein-group id, or a modified peptide sequence.</param>
 /// <param name="Label">What to show for it - a gene name for a protein, the sequence for a peptide.</param>
 /// <param name="ProteinGroups">PRISM's protein-group ids, empty if the matrix carried none.</param>
-/// <param name="Accessions">Leading accession per group, index-aligned to <paramref name="ProteinGroups"/>.</param>
-/// <param name="ProteinNames">Leading protein name per group, index-aligned.</param>
-/// <param name="Genes">Leading gene name per group, index-aligned.</param>
+/// <param name="Accessions">Leading accession per group, index-aligned to <paramref name="ProteinGroups"/>:
+/// an unknown member is an empty string, kept in its place; the list is empty when no member is known.</param>
+/// <param name="ProteinNames">Leading protein name per group, index-aligned the same way.</param>
+/// <param name="Genes">Leading gene name per group, index-aligned the same way.</param>
 public sealed record FeatureIdentity(
     string FeatureId,
     string Label,
@@ -169,9 +170,9 @@ public sealed class DifferentialDataset
         FeatureIds[index],
         FeatureLabels[index],
         SplitGroups(_featureGroups[index]),
-        SplitGroups(_featureAccessions[index]),
-        SplitGroups(_featureProteinNames[index]),
-        SplitGroups(FeatureGenes[index]));
+        NamePlaceholder.SplitAligned(_featureAccessions[index]),
+        NamePlaceholder.SplitAligned(_featureProteinNames[index]),
+        NamePlaceholder.SplitAligned(FeatureGenes[index]));
 
     /// <summary>
     /// <see cref="IdentityOf(int)"/> for a feature id, or null when the id is not in this matrix.
@@ -497,13 +498,14 @@ public sealed class DifferentialDataset
         // non-model organism - by its UniProt accession, which still names it uniquely and can be
         // looked up. leading_uniprot_id before leading_protein, as the Dynamic Range labels do:
         // leading_protein is whatever Skyline called the protein and can be a whole FASTA id
-        // ("sp|P02768|ALBU_HUMAN"), which does not read on a plot. An empty label is left for the
-        // caller to replace with the protein-group id. Before this, the label was leading_gene_name
-        // verbatim, so every unannotated protein carried parsimony's "NA" placeholder and a volcano
-        // showed a column of identical "NA" labels.
+        // ("sp|P02768|ALBU_HUMAN"), which does not read on a plot. With none of them, the label is the
+        // protein-group id - here, not left to each caller, because one that forgot (the CSV writer,
+        // the hover readout) printed a blank. Before this, the label was leading_gene_name verbatim,
+        // so every unannotated protein carried parsimony's "NA" placeholder and a volcano showed a
+        // column of identical "NA" labels.
         var featureUniProtIds = IdentityColumn(table, "leading_uniprot_id", nFeatures);
         var featureLabels = labelColumn == "leading_gene_name"
-            ? featureGenes.Select((g, i) => FirstNamed(g, featureUniProtIds[i], featureAccessions[i])).ToArray()
+            ? featureGenes.Select((g, i) => FirstNamed(g, featureUniProtIds[i], featureAccessions[i], featureIds[i])).ToArray()
             : table.GetString(labelColumn).Select(s => s ?? string.Empty).ToArray();
 
         var exprLog2 = new double[nFeatures, sampleCols.Length];

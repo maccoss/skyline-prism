@@ -13,7 +13,12 @@ as the GitHub Release description and fails if it is missing.
   hits carried the same useless name. It is now labeled by its UniProt accession, and the
   protein-group id where it has neither. The `NA` placeholder also no longer reaches the `gene`
   column, the hover readout, or the gene list sent to g:Profiler for enrichment, which had also
-  split "N/A" into two "symbols". The output files still write `NA`, as before.
+  split "N/A" into two "symbols". The output files still write `NA`, as before. A shared peptide
+  whose first protein group has no known gene or name keeps an empty slot for it, so each name stays
+  beside its own group in the Dynamic Range readout and in `differential.csv`; a protein with no
+  gene, accession or UniProt id is labeled by its protein-group id in `differential.csv` and the
+  hover readout too, not left blank; and a placeholder after a comma, bar or space ("ALB,N/A") no
+  longer reaches g:Profiler as the symbols N and A.
 - The quant report's volcano was unreadable once pasted onto a slide: 5-6 px points and 11 pt labels
   beside 24-30 pt axis text, labels piled on top of each other where hits sat close together, a label
   at the edge cut off, and a long contrast title running off both sides. Points and labels are now

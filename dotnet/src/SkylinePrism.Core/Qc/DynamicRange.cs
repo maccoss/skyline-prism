@@ -90,14 +90,12 @@ public static class DynamicRange
     /// </summary>
     public const string GroupSeparator = ";";
 
-    /// <summary>First of a ';'-separated list, or null when empty - the group used to identify a peptide.</summary>
-    public static string? FirstGroup(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        var first = value!.Split(GroupSeparator, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        return string.IsNullOrWhiteSpace(first) ? null : first.Trim();
-    }
+    /// <summary>
+    /// First member of a ';'-separated list - the group used to identify a peptide - or null when
+    /// that member is empty or a placeholder. Never the second group's value in the first's place:
+    /// a shared peptide whose first group has no gene has no first gene.
+    /// </summary>
+    public static string? FirstGroup(string? value) => NamePlaceholder.FirstMember(value);
 
     /// <summary>
     /// Replicate columns of a corrected matrix. Two filters, because neither alone is sufficient:
@@ -215,9 +213,10 @@ public static class DynamicRange
             var peptide = Value(peptides, row) ?? $"row{row}";
             // A shared peptide maps to several groups. All of them are carried (so the UI can show every
             // protein it is present in); the FIRST identifies it for navigation and list matching.
+            // Names by position, an unknown one left empty in its place, so name k stays group k's.
             var allGroups = SplitGroups(Value(peptideGroups, row));
-            var allNames = SplitGroups(Value(proteinNames, row));
-            var protein = allNames.FirstOrDefault();
+            var allNames = NamePlaceholder.SplitAligned(Value(proteinNames, row));
+            var protein = FirstGroup(Value(proteinNames, row));
             var accession = FirstGroup(Value(peptideAccessions, row));
             var gene = FirstGroup(Value(peptideGenes, row));
             // The label stays the sequence - a peptide plot labeled by gene would collide for every

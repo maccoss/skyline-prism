@@ -47,4 +47,36 @@ public static class NamePlaceholder
         // A list of nothing but placeholders is no name at all, not a row of separators.
         return members.All(m => m.Length == 0) ? string.Empty : string.Join(";", members);
     }
+
+    /// <summary>
+    /// The members of a ";"-separated identity value BY POSITION, placeholders made empty: member k
+    /// names group k, so an unknown member stays as an empty string rather than being dropped. A
+    /// shared peptide in PG0001 and PG0002 with genes <c>NA;ALB</c> is <c>["", "ALB"]</c>; dropping
+    /// the empty slot gave <c>["ALB"]</c>, which pairs ALB with PG0001. Empty when nothing in the
+    /// value names anything.
+    /// </summary>
+    public static IReadOnlyList<string> SplitAligned(string? value)
+    {
+        var cleaned = Clean(value);
+        return cleaned.Length == 0
+            ? Array.Empty<string>()
+            : cleaned.Split(';').Select(m => m.Trim()).ToArray();
+    }
+
+    /// <summary>
+    /// The first member of a ";"-separated identity value - the first group's - or null when that
+    /// member is unknown. Never a later group's name borrowed in its place.
+    /// </summary>
+    public static string? FirstMember(string? value)
+    {
+        var members = SplitAligned(value);
+        return members.Count > 0 && members[0].Length > 0 ? members[0] : null;
+    }
+
+    /// <summary>
+    /// Members back into one ";"-separated value, keeping each in its place: <c>["", "ALB"]</c> is
+    /// <c>;ALB</c>. Empty when no member names anything.
+    /// </summary>
+    public static string JoinAligned(IReadOnlyList<string>? members) =>
+        members is null || members.All(string.IsNullOrEmpty) ? string.Empty : string.Join(";", members);
 }

@@ -2761,14 +2761,19 @@ public partial class MainWindow
     private static AbundanceEntry AsLocatorEntry(FeatureIdentity identity) => new(
         Key: identity.FeatureId,
         Label: identity.Label,
-        Accession: identity.Accessions.FirstOrDefault(),
-        Gene: identity.Genes.FirstOrDefault(),
-        ProteinName: identity.ProteinNames.FirstOrDefault(),
+        // The first group's own names, null where that group's is unknown (an empty slot), as
+        // DynamicRange.FirstGroup gives them - never a later group's name in its place.
+        Accession: FirstKnown(identity.Accessions),
+        Gene: FirstKnown(identity.Genes),
+        ProteinName: FirstKnown(identity.ProteinNames),
         MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0)
     {
         ProteinGroups = identity.ProteinGroups,
         ProteinNames = identity.ProteinNames,
     };
+
+    private static string? FirstKnown(IReadOnlyList<string> members) =>
+        members.Count > 0 && members[0].Length > 0 ? members[0] : null;
 
     // ---------------------------------------------------------------- follow Skyline's selection
     //
