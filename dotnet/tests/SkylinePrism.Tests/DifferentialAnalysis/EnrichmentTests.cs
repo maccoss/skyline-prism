@@ -37,6 +37,17 @@ public class EnrichmentTests
         Assert.Equal(new[] { "GENEA", "GENEB" }, Enrichment.CleanSymbols(new[] { "GENEA;GENEB" }));
     }
 
+    /// <summary>
+    /// "NA" is parsimony's placeholder for an unknown gene; it was submitted to g:Profiler as a gene
+    /// symbol, once per unannotated hit. No placeholder may be.
+    /// </summary>
+    [Fact]
+    public void CleanSymbols_DropsEveryNamePlaceholder()
+    {
+        Assert.Equal(new[] { "ALB" },
+            Enrichment.CleanSymbols(new[] { "NA", "ALB", "N/A", "#N/A", "None", "null", "na;NA" }));
+    }
+
     [Fact]
     public void GProfiler_ComputesFoldEnrichmentAndSendsPayload()
     {

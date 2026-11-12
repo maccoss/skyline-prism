@@ -40,8 +40,10 @@ public class DifferentialDatasetTests
     }
 
     /// <summary>
-    /// Genes are their own array, never the display label. At protein level the two happen to agree
-    /// - the label IS leading_gene_name - so this side only fixes that FeatureGenes is populated.
+    /// Genes are their own array, never the display label. At protein level the two agree wherever a
+    /// gene is known - the label is the gene, falling back to the accession only where there is none
+    /// (<see cref="Load_Protein_PlaceholderGene_FallsBackToAccession_NeverNA"/>) - so this side only
+    /// fixes that FeatureGenes is populated.
     /// </summary>
     [Fact]
     public void Load_Protein_CarriesGeneSymbols()
@@ -217,6 +219,65 @@ public class DifferentialDatasetTests
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// The mini output with its identity columns replaced: PG0002 has no gene, PG0003 has neither a
+    /// gene nor an accession. "NA" is what parsimony writes for an unknown name
+    /// (<c>ParsimonyEngine</c>, <c>ProteinGroup</c>), so that is what a real output carries -
+    /// a non-model-organism run has thousands of them.
+    /// </summary>
+    private static string WriteMiniWithPlaceholderNames()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-na-labels-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        File.Copy(Path.Combine(MiniOutput, "sample_metadata.csv"), Path.Combine(dir, "sample_metadata.csv"));
+
+        var mini = SkylinePrism.Core.IO.ParquetTable.Load(Path.Combine(MiniOutput, "corrected_proteins.parquet"));
+        var sampleCols = mini.ColumnNames.Where(c => c.Contains("__@__", StringComparison.Ordinal)).ToList();
+        var meta = new[]
+        {
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("protein_group", new[] { "PG0001", "PG0002", "PG0003" }),
+            // PG0002's leading_protein is the whole FASTA id, as when Skyline knew the protein by name
+            // only; the clean accession is in leading_uniprot_id.
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_protein", new[] { "E9Q0F0", "sp|P13597|ICAM1_MOUSE", "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_name", new[] { "E9Q0F0_MOUSE", "ICAM1_MOUSE", "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_uniprot_id", new[] { "E9Q0F0", "P13597", "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_gene_name", new[] { "Krt78", "NA", "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Longs("n_peptides", new long[] { 3, 3, 3 }),
+        };
+        var values = sampleCols.Select(c => mini.GetDouble(c).Select(v => v ?? double.NaN).ToArray()).ToList();
+        SkylinePrism.Core.IO.ParquetWideWriter.Write(
+            Path.Combine(dir, "corrected_proteins.parquet"), meta, sampleCols, values, 3);
+        return dir;
+    }
+
+    /// <summary>
+    /// A volcano, hit table and boxplot title label a protein by its gene. With no gene known the
+    /// placeholder "NA" was shown instead - every unannotated protein labeled the same, which says
+    /// nothing. The label must fall back to the protein's UniProt accession - the clean one, not a
+    /// whole FASTA id - and with neither, be empty so callers use the protein-group id. The gene
+    /// array must not carry the placeholder either: enrichment submits it to g:Profiler as a symbol.
+    /// </summary>
+    [Fact]
+    public void Load_Protein_PlaceholderGene_FallsBackToAccession_NeverNA()
+    {
+        var dir = WriteMiniWithPlaceholderNames();
+        try
+        {
+            var d = DifferentialDataset.Load(dir, FeatureLevel.Protein);
+
+            Assert.Equal(new[] { "Krt78", "P13597", "" }, d.FeatureLabels);
+            Assert.Equal(new[] { "Krt78", "", "" }, d.FeatureGenes);
+            var identity = d.IdentityOf("PG0003")!;
+            Assert.Empty(identity.Accessions);
+            Assert.Empty(identity.ProteinNames);
+            Assert.Empty(identity.Genes);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 }
