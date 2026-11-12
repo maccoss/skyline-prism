@@ -48,6 +48,23 @@ public class EnrichmentTests
             Enrichment.CleanSymbols(new[] { "NA", "ALB", "N/A", "#N/A", "None", "null", "na;NA" }));
     }
 
+    /// <summary>
+    /// A placeholder inside a list joined by any delimiter, not only ";": "ALB,N/A" gave ALB, N and
+    /// A, fabricated symbols that went into both the query and the background. "/" still splits a
+    /// real pair of symbols.
+    /// </summary>
+    [Theory]
+    [InlineData("ALB,N/A", new[] { "ALB" })]
+    [InlineData("ALB|#N/A", new[] { "ALB" })]
+    [InlineData("ALB N/A", new[] { "ALB" })]
+    [InlineData("N/A,ALB;#N/A|TP53/MDM2", new[] { "ALB", "TP53", "MDM2" })]
+    [InlineData("HBA1/HBA2", new[] { "HBA1", "HBA2" })]
+    [InlineData("ALB/N/A", new[] { "ALB" })]
+    [InlineData("ALB/#N/A", new[] { "ALB" })]
+    [InlineData("#N/A/ALB/HBB", new[] { "ALB", "HBB" })]
+    public void CleanSymbols_DropsAPlaceholderAfterAnyDelimiter(string value, string[] expected)
+        => Assert.Equal(expected, Enrichment.CleanSymbols(new[] { value }));
+
     [Fact]
     public void GProfiler_ComputesFoldEnrichmentAndSendsPayload()
     {

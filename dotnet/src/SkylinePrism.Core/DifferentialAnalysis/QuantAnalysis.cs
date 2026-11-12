@@ -271,8 +271,7 @@ public static class QuantAnalysis
         var geneById = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < ds.FeatureIds.Length; i++)
         {
-            labelById[ds.FeatureIds[i]] =
-                string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
+            labelById[ds.FeatureIds[i]] = ds.FeatureLabels[i]; // never empty: Load falls back to the id
             if (!string.IsNullOrEmpty(ds.FeatureGenes[i]))
                 geneById[ds.FeatureIds[i]] = ds.FeatureGenes[i];
         }

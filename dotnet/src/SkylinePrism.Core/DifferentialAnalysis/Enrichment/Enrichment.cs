@@ -80,7 +80,8 @@ public static class Enrichment
     /// was actually queried rather than a copy of it.
     /// </summary>
     public static IReadOnlyList<string> DefaultSources { get; } = new[] { "GO:BP", "GO:MF", "GO:CC", "REAC", "KEGG" };
-    private static readonly Regex SymbolSplit = new(@"[;,/|\s]+", RegexOptions.Compiled);
+    // Every list delimiter except "/", which is split last (see CleanSymbols).
+    private static readonly Regex ListSplit = new(@"[;,|\s]+", RegexOptions.Compiled);
 
     /// <summary>
     /// De-duplicate and stringify gene symbols (order preserving), splitting delimited multi-gene
@@ -94,19 +95,33 @@ public static class Enrichment
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var g in genes)
         {
-            // Placeholders out first, member by member of a ";" list, BEFORE splitting: "N/A" split on
-            // "/" is the two "symbols" N and A. "NA" is what parsimony writes for an unknown gene, and
-            // it was submitted as one.
-            var named = IO.NamePlaceholder.Clean(g);
-            if (named.Length == 0)
+            if (string.IsNullOrWhiteSpace(g))
                 continue;
-            foreach (var tok in SymbolSplit.Split(named.Trim()))
+            // Two passes, because "/" is both a list delimiter and part of placeholders: "N/A" split
+            // on "/" is the two "symbols" N and A. So split on everything else first, drop the
+            // placeholders among those members, and only then split what is left on "/". Cleaning
+            // ";" members alone before one combined split missed a placeholder after any other
+            // delimiter: "ALB,N/A" gave ALB, N and A.
+            foreach (var member in ListSplit.Split(g.Trim()))
             {
-                var s = tok.Trim();
-                if (IO.NamePlaceholder.Is(s) || seen.Contains(s))
+                if (IO.NamePlaceholder.Is(member))
                     continue;
-                seen.Add(s);
-                outList.Add(s);
+                // A placeholder can also be "/"-joined to a symbol ("ALB/N/A"), so two neighbouring
+                // pieces that together make one ("N" + "A") are dropped as a pair.
+                var pieces = member.Split('/');
+                for (var k = 0; k < pieces.Length; k++)
+                {
+                    if (k + 1 < pieces.Length && IO.NamePlaceholder.Is(pieces[k] + "/" + pieces[k + 1]))
+                    {
+                        k++;
+                        continue;
+                    }
+                    var s = pieces[k].Trim();
+                    if (IO.NamePlaceholder.Is(s) || seen.Contains(s))
+                        continue;
+                    seen.Add(s);
+                    outList.Add(s);
+                }
             }
         }
 

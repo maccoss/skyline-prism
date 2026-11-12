@@ -110,8 +110,9 @@ public static class DifferentialCsv
     }
 
     /// <summary>A shared feature's several groups, semicolon-joined so the cell stays one field.</summary>
-    private static string Join(IReadOnlyList<string>? values) =>
-        values is null ? string.Empty : string.Join(';', values.Where(v => !string.IsNullOrEmpty(v)));
+    // Positional, as protein_group is: a shared peptide whose first group has no gene is ";ALB",
+    // not "ALB", which would read as the first group's gene.
+    private static string Join(IReadOnlyList<string>? values) => IO.NamePlaceholder.JoinAligned(values);
 
     private static string Num(double v) =>
         double.IsNaN(v) ? string.Empty : v.ToString("G17", CultureInfo.InvariantCulture);

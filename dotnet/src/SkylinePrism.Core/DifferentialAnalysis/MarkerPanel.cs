@@ -74,6 +74,8 @@ public static class MarkerPanel
                 matched.Add(f);
 
         var markerLabels = matched
+            // Evaluate takes any FeatureIdentity, not only one from DifferentialDataset.Load (which
+            // never leaves a label empty), so the id fallback stays.
             .Select(f => string.IsNullOrEmpty(identities[f].Label) ? identities[f].FeatureId : identities[f].Label)
             .ToArray();
         var markerFeatureIds = matched.Select(f => identities[f].FeatureId).ToArray();
