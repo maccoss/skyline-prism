@@ -39,6 +39,14 @@ as the GitHub Release description and fails if it is missing.
   had taken ScottPlot's cycle colors (a red line beside the blue hits in the pane), are now neutral
   grey on every volcano, and the Volcano's selection ring is orange, since a red ring around a red
   hit was hard to find.
+- The Dynamic Range plot's labels criss-crossed once a list put more than a handful on the steep
+  top of the curve: leader lines crossed each other and ran through other labels, and labels sat on
+  the curve over the points they named. Labels are now laid out together, using the open space on
+  both sides of the curve, by simulated annealing over a few hundred spots per label, and measured
+  as ScottPlot draws them rather than estimated. On a 26-protein plasma list at a typical pane size
+  no leaders cross, no labels overlap and nothing sits on the curve; on a small pane a crowded list
+  runs more leaders across the curve, and a leader can pass through another label. Placing 26
+  labels takes about half a second; a long list gets a bounded amount of work.
 - Starting any copy of PRISM re-pointed the Start Menu shortcut at itself - including a development
   build, which an ordinary `dotnet build` makes without the instrument-file reader. Once one had
   been started, every Start Menu launch ran it, and ion accounting reported "this build has no

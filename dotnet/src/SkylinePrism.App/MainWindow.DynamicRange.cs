@@ -861,15 +861,63 @@ public partial class MainWindow
         // positions are the ones at the top of the plot where the eye starts.
         wanted.Sort((a, b) => b.Entry.Log10Abundance.CompareTo(a.Entry.Log10Abundance));
 
-        var placer = new RangeLabelPlacer(
-            _rangeEntries.Count,
-            _rangeEntries[0].Log10Abundance,
-            _rangeEntries[^1].Log10Abundance,
-            RangePlot.ActualWidth,
-            RangePlot.ActualHeight);
+        // Lay the plot out once at the size it is drawn at, so the placer works on the real axis
+        // limits and the real data area rather than guessing how much of the pane the axes take.
+        // In RENDERED pixels throughout: ScottPlot's WPF control never sets Plot.ScaleFactor, so the
+        // text and markers are a fixed number of rendered pixels whatever the display's scaling (see
+        // PlotRenderer.InteractivePointPixels). The data area divided by the display scale, as this
+        // first did, made every label twice its drawn size against the space at 200%. This render
+        // is an extra one, but measured at about 16 ms for a 6,650-point plot, against about 600 ms
+        // for the placement itself, and it also gives the legend's real size.
+        var scale = RangePlot.DisplayScale > 0 ? RangePlot.DisplayScale : 1;
+        var paneW = RangePlot.ActualWidth > 50 ? RangePlot.ActualWidth : 900;
+        var paneH = RangePlot.ActualHeight > 50 ? RangePlot.ActualHeight : 600;
+        plt.RenderInMemory((int)(paneW * scale), (int)(paneH * scale));
+        var limits = plt.Axes.GetLimits();
+        var dataRect = plt.RenderManager.LastRender.DataRect;
+        var dataW = (double)dataRect.Width;
+        var dataH = (double)dataRect.Height;
 
-        foreach (var (entry, color) in wanted)
-            AddRangeLabel(plt, entry, color, placer.Place(entry));
+        var placer = new RangeLabelPlacer(
+            _rangeEntries, limits.Left, limits.Right, limits.Bottom, limits.Top,
+            dataW, dataH, pointSize / 2 + 2, new[] { LegendObstacle(plt.Legend.LastRenderSize, dataW, dataH) },
+            MeasureRangeLabel);
+        var placements = placer.PlaceAll(wanted.Select(w => w.Entry).ToList());
+
+        for (var i = 0; i < wanted.Count; i++)
+            AddRangeLabel(plt, wanted[i].Entry, wanted[i].Color, placements[i]);
+        // The labels must not move the axes the placer laid them out against.
+        plt.Axes.SetLimits(limits);
+    }
+
+    private const float RangeLabelFontSize = 16;
+
+    /// <summary>
+    /// A label's text size as ScottPlot will draw it, in rendered pixels - the unit the placer works
+    /// in, since the WPF control does not scale text with the display.
+    /// </summary>
+    private static (double Width, double Height) MeasureRangeLabel(string text)
+    {
+        var probe = new ScottPlot.Plottables.Text { LabelText = text };
+        PlotRenderer.StyleTextLabel(probe, RangeLabelFontSize, bold: true);
+        using var paint = Paint.NewDisposablePaint();
+        var size = probe.LabelStyle.Measure(text, paint);
+        return (size.Width, size.Height);
+    }
+
+    /// <summary>
+    /// Where the legend sits - in the data area's upper right, at the size the layout render drew it
+    /// - in data-area pixels, so no label is placed under it. The margin covers the legend's offset
+    /// from the corner. It used to be estimated from the list names while the labels were measured,
+    /// so a long list name or a larger legend font could leave part of it uncovered.
+    /// </summary>
+    private static RangeLabelPlacer.Box LegendObstacle(PixelSize legend, double dataW, double dataH)
+    {
+        if (legend.Width <= 0 || legend.Height <= 0)
+            return new RangeLabelPlacer.Box(-1, -1, -1, -1);
+        const double margin = 12;
+        return new RangeLabelPlacer.Box(
+            dataW - legend.Width - margin, dataW, dataH - legend.Height - margin, dataH);
     }
 
     /// <summary>
@@ -900,7 +948,7 @@ public partial class MainWindow
         leader.MarkerSize = 0;
 
         var text = plt.Add.Text(entry.Label, placement.X, placement.Y);
-        PlotRenderer.StyleTextLabel(text, 16, bold: true);
+        PlotRenderer.StyleTextLabel(text, RangeLabelFontSize, bold: true);
         text.LabelFontColor = color;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.75);
         text.LabelBorderColor = color.WithAlpha(0.4);
