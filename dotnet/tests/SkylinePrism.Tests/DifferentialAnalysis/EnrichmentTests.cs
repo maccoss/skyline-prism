@@ -60,6 +60,7 @@ public class EnrichmentTests
     [InlineData("N/A,ALB;#N/A|TP53/MDM2", new[] { "ALB", "TP53", "MDM2" })]
     [InlineData("HBA1/HBA2", new[] { "HBA1", "HBA2" })]
     [InlineData("ALB/N/A", new[] { "ALB" })]
+    [InlineData("ALB/#N/A", new[] { "ALB" })]
     [InlineData("#N/A/ALB/HBB", new[] { "ALB", "HBB" })]
     public void CleanSymbols_DropsAPlaceholderAfterAnyDelimiter(string value, string[] expected)
         => Assert.Equal(expected, Enrichment.CleanSymbols(new[] { value }));
