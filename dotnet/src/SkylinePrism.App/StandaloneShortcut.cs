@@ -15,8 +15,8 @@ namespace SkylinePrism.App;
 /// folder (<c>%LOCALAPPDATA%\Apps\2.0\…\skyl..tion_&lt;hash&gt;\Tools\SkylinePrism\</c>), and that folder is
 /// version-stamped: every Skyline update lands in a NEW hash directory and re-installs the tools there.
 /// A shortcut pointing at today's path therefore goes stale on the next Skyline update. So
-/// <see cref="Refresh"/> re-points an existing shortcut at the current executable every time PRISM starts
-/// from Skyline, which self-heals it. (Old application folders are left behind, so even a stale shortcut
+/// <see cref="Refresh"/> re-points an existing shortcut at the current executable every time an installed
+/// copy of PRISM starts, which self-heals it. (Old application folders are left behind, so even a stale shortcut
 /// keeps opening the previous build rather than breaking outright.)</para>
 /// </summary>
 public static class StandaloneShortcut
@@ -72,9 +72,16 @@ public static class StandaloneShortcut
 
     /// <summary>
     /// If a shortcut already exists but points somewhere else (a previous Skyline application folder),
-    /// re-point it at this build. No-op when absent - creating one is an explicit user choice.
+    /// re-point it at this build - but only when this build is an installed Skyline tool
+    /// (<see cref="IsInstalledTool"/>). No-op when absent - creating one is an explicit user choice.
     /// Returns true when it was rewritten.
     /// </summary>
+    /// <remarks>
+    /// Any build used to re-point it, so starting a development build once - built without the
+    /// instrument-file reader, as an ordinary <c>dotnet build</c> is - took the shortcut over, and
+    /// every later Start Menu launch ran that build: ion accounting then reported "this build has no
+    /// instrument-file reader" on a machine whose installed tool had one.
+    /// </remarks>
     public static bool Refresh(Action<string>? log = null)
     {
         try
@@ -84,6 +91,12 @@ public static class StandaloneShortcut
             var target = ReadTarget();
             if (string.Equals(target, CurrentExePath, StringComparison.OrdinalIgnoreCase))
                 return false;
+            if (!IsInstalledTool(AppContext.BaseDirectory))
+            {
+                log?.Invoke($"Start Menu shortcut left pointing at {target}: this copy is not an installed "
+                            + "Skyline tool, so it does not take the shortcut over.");
+                return false;
+            }
             Create();
             log?.Invoke($"Updated the Start Menu shortcut to this build ({CurrentExePath}).");
             return true;
@@ -93,6 +106,20 @@ public static class StandaloneShortcut
             log?.Invoke("(could not refresh the Start Menu shortcut: " + ex.Message + ")");
             return false;
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="exeDirectory"/> is where Skyline installed a tool: its own folder
+    /// directly inside a <c>Tools</c> folder - <c>...\skyl..tion_&lt;hash&gt;\Tools\~SK6C53\</c> for a
+    /// ClickOnce Skyline, <c>...\Tools\SkylinePrism\</c> for others. A build output
+    /// (<c>bin\Debug\net10.0-windows...\</c>) or a copy unzipped somewhere is not.
+    /// </summary>
+    internal static bool IsInstalledTool(string exeDirectory)
+    {
+        var dir = exeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(dir);
+        return !string.IsNullOrEmpty(parent)
+               && string.Equals(Path.GetFileName(parent), "Tools", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The executable an existing shortcut points at, or null.</summary>

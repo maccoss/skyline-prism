@@ -116,7 +116,7 @@ public partial class MainWindow : Window
               + "via SkylineCmd), set an output directory, then click Run PRISM.");
 
         // Skyline reinstalls its tools into a NEW versioned folder on every update, so an existing
-        // shortcut is re-pointed at this build whenever PRISM starts.
+        // shortcut is re-pointed at this build whenever an installed copy of PRISM starts.
         StandaloneShortcut.Refresh(Log);
         UpdateShortcutButton();
 
