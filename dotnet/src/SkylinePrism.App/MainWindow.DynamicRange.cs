@@ -866,7 +866,9 @@ public partial class MainWindow
         // In RENDERED pixels throughout: ScottPlot's WPF control never sets Plot.ScaleFactor, so the
         // text and markers are a fixed number of rendered pixels whatever the display's scaling (see
         // PlotRenderer.InteractivePointPixels). The data area divided by the display scale, as this
-        // first did, made every label twice its drawn size against the space at 200%.
+        // first did, made every label twice its drawn size against the space at 200%. This render
+        // is an extra one, but measured at about 16 ms for a 6,650-point plot, against about 600 ms
+        // for the placement itself, and it also gives the legend's real size.
         var scale = RangePlot.DisplayScale > 0 ? RangePlot.DisplayScale : 1;
         var paneW = RangePlot.ActualWidth > 50 ? RangePlot.ActualWidth : 900;
         var paneH = RangePlot.ActualHeight > 50 ? RangePlot.ActualHeight : 600;
@@ -878,7 +880,8 @@ public partial class MainWindow
 
         var placer = new RangeLabelPlacer(
             _rangeEntries, limits.Left, limits.Right, limits.Bottom, limits.Top,
-            dataW, dataH, pointSize / 2 + 2, new[] { LegendObstacle(byList, dataW, dataH) }, MeasureRangeLabel);
+            dataW, dataH, pointSize / 2 + 2, new[] { LegendObstacle(plt.Legend.LastRenderSize, dataW, dataH) },
+            MeasureRangeLabel);
         var placements = placer.PlaceAll(wanted.Select(w => w.Entry).ToList());
 
         for (var i = 0; i < wanted.Count; i++)
@@ -889,7 +892,10 @@ public partial class MainWindow
 
     private const float RangeLabelFontSize = 16;
 
-    /// <summary>A label's text size as ScottPlot will draw it, in device-independent pixels.</summary>
+    /// <summary>
+    /// A label's text size as ScottPlot will draw it, in rendered pixels - the unit the placer works
+    /// in, since the WPF control does not scale text with the display.
+    /// </summary>
     private static (double Width, double Height) MeasureRangeLabel(string text)
     {
         var probe = new ScottPlot.Plottables.Text { LabelText = text };
@@ -900,18 +906,18 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Roughly where the legend sits (upper right, one row per list), in data-area pixels, so no
-    /// label is placed under it. An estimate, generous on purpose.
+    /// Where the legend sits - in the data area's upper right, at the size the layout render drew it
+    /// - in data-area pixels, so no label is placed under it. The margin covers the legend's offset
+    /// from the corner. It used to be estimated from the list names while the labels were measured,
+    /// so a long list name or a larger legend font could leave part of it uncovered.
     /// </summary>
-    private static RangeLabelPlacer.Box LegendObstacle(
-        Dictionary<ProteinList, List<AbundanceEntry>> byList, double dataW, double dataH)
+    private static RangeLabelPlacer.Box LegendObstacle(PixelSize legend, double dataW, double dataH)
     {
-        if (byList.Count == 0)
+        if (legend.Width <= 0 || legend.Height <= 0)
             return new RangeLabelPlacer.Box(-1, -1, -1, -1);
-        var longest = byList.Max(kv => $"{kv.Key.Name} ({kv.Value.Count})".Length);
-        var w = 50 + longest * 16 * 0.58;
-        var h = 16 + byList.Count * 30;
-        return new RangeLabelPlacer.Box(dataW - w - 12, dataW, dataH - h - 12, dataH);
+        const double margin = 12;
+        return new RangeLabelPlacer.Box(
+            dataW - legend.Width - margin, dataW, dataH - legend.Height - margin, dataH);
     }
 
     /// <summary>

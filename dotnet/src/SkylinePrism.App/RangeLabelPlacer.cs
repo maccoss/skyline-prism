@@ -71,7 +71,7 @@ internal sealed class RangeLabelPlacer
     private const int AnnealMaxMoves = 150_000;
     private const int AnnealLabelLimit = 100;
     private const int MaxPolishPasses = 25;
-    private const double LargeListPairBudget = 4e6; // spot-against-label comparisons per pass, past the limit
+    internal const double LargeListPairBudget = 4e6; // spot-against-label comparisons per pass, past the limit
     private const int MinSpotsPerLabel = 4;
     private const int PairShortlist = 60;          // spots per label tried in a joint move
     private const double SwapShare = 0.2;          // of annealing moves: swaps between neighbours
@@ -137,8 +137,12 @@ internal sealed class RangeLabelPlacer
         if (n == 0)
             return Array.Empty<Placement>();
         var points = labels.Select(e => (X: ToPxX(e.Rank), Y: ToPxY(e.Log10Abundance))).ToArray();
+        PairEvaluations = 0;
+        var longList = n > AnnealLabelLimit;
+        // A long list defers the leader-across-the-curve check - the expensive part of making a
+        // spot, a curve lookup every few pixels of leader - to the spots it keeps (below).
         var candidates = labels
-            .Select((e, i) => Candidates(points[i], LabelSize(e.Label), withGrid: n <= AnnealLabelLimit).ToArray())
+            .Select((e, i) => Candidates(points[i], LabelSize(e.Label), withGrid: !longList, checkLeader: !longList).ToArray())
             .ToArray();
 
         // A long list gets a bounded amount of work: every step below compares a spot with every
@@ -150,7 +154,7 @@ internal sealed class RangeLabelPlacer
         {
             var keep = (int)Math.Clamp(LargeListPairBudget / ((double)n * n), MinSpotsPerLabel, int.MaxValue);
             candidates = candidates
-                .Select(cs => cs.OrderBy(c => c.FixedCost).Take(keep).ToArray())
+                .Select(cs => cs.OrderBy(c => c.FixedCost).Take(keep).Select(WithLeaderCheck).ToArray())
                 .ToArray();
             polishPasses = 1;
         }
@@ -330,8 +334,8 @@ internal sealed class RangeLabelPlacer
             for (var i = 0; i < chosen.Length; i++)
             {
                 var current = Cost(i, candidates[i][chosen[i]], candidates, chosen, all, points);
-                var best = BestIndex(i, candidates, chosen, all, points);
-                if (Cost(i, candidates[i][best], candidates, chosen, all, points) < current - 1e-6)
+                var (best, bestCost) = BestSpot(i, candidates, chosen, all, points);
+                if (bestCost < current - 1e-6)
                 {
                     chosen[i] = best;
                     moved = true;
@@ -342,7 +346,11 @@ internal sealed class RangeLabelPlacer
         }
     }
 
-    private int BestIndex(int i, Candidate[][] candidates, int[] chosen, bool[] placed, (double X, double Y)[] points)
+    private int BestIndex(int i, Candidate[][] candidates, int[] chosen, bool[] placed, (double X, double Y)[] points) =>
+        BestSpot(i, candidates, chosen, placed, points).Index;
+
+    /// <summary>Label <paramref name="i"/>'s cheapest spot given the others placed, and what it costs.</summary>
+    private (int Index, double Cost) BestSpot(int i, Candidate[][] candidates, int[] chosen, bool[] placed, (double X, double Y)[] points)
     {
         var best = 0;
         var bestCost = double.MaxValue;
@@ -357,19 +365,28 @@ internal sealed class RangeLabelPlacer
                 best = k;
             }
         }
-        return best;
+        return (best, bestCost);
     }
 
     /// <summary>What label <paramref name="i"/> at <paramref name="c"/> costs, given the others placed.</summary>
-    private static double Cost(
+    private double Cost(
         int i, Candidate c, Candidate[][] candidates, int[] chosen, bool[] placed, (double X, double Y)[] points)
     {
         var cost = c.FixedCost;
         for (var j = 0; j < chosen.Length; j++)
             if (j != i && placed[j])
+            {
                 cost += PairCost(c, candidates[j][chosen[j]], points[i] == points[j]);
+                PairEvaluations++;
+            }
         return cost;
     }
+
+    /// <summary>
+    /// How many spot-against-label comparisons the last <see cref="PlaceAll"/> made - the unit of
+    /// work, which the long-list budget bounds. Counted rather than timed so a test can pin it.
+    /// </summary>
+    internal long PairEvaluations { get; private set; }
 
     /// <summary>What two labels cost each other: overlapping, crossing leaders, or a leader through the other.</summary>
     private static double PairCost(Candidate a, Candidate b, bool samePoint)
@@ -442,7 +459,8 @@ internal sealed class RangeLabelPlacer
     /// extends AWAY from the point, so the leader meets its near edge or corner. Spots whose box
     /// leaves the data area are dropped; if that leaves nothing (a tiny plot), all are kept.
     /// </summary>
-    private IEnumerable<Candidate> Candidates((double X, double Y) point, (double W, double H) size, bool withGrid)
+    private IEnumerable<Candidate> Candidates(
+        (double X, double Y) point, (double W, double H) size, bool withGrid, bool checkLeader)
     {
         var all = new List<Candidate>();
         foreach (var r in RadiiPx)
@@ -452,15 +470,15 @@ internal sealed class RangeLabelPlacer
                 var (cos, sin) = (Math.Cos(rad), Math.Sin(rad));
                 var horizontal = cos > 0.4 ? HorizontalAlignment.Left : cos < -0.4 ? HorizontalAlignment.Right : HorizontalAlignment.Center;
                 var vertical = sin > 0.4 ? VerticalAlignment.Bottom : sin < -0.4 ? VerticalAlignment.Top : VerticalAlignment.Middle;
-                all.Add(Make(point, size, point.X + r * cos, point.Y + r * sin, horizontal, vertical));
+                all.Add(Make(point, size, point.X + r * cos, point.Y + r * sin, horizontal, vertical, checkLeader));
             }
         if (withGrid)
             foreach (var dx in GridDxPx)
                 for (var step = -GridHalfSteps; step <= GridHalfSteps; step++)
                 {
                     var dy = step * size.H / 2;
-                    all.Add(Make(point, size, point.X + dx, point.Y + dy, HorizontalAlignment.Left, VerticalAlignment.Middle));
-                    all.Add(Make(point, size, point.X - dx, point.Y + dy, HorizontalAlignment.Right, VerticalAlignment.Middle));
+                    all.Add(Make(point, size, point.X + dx, point.Y + dy, HorizontalAlignment.Left, VerticalAlignment.Middle, checkLeader));
+                    all.Add(Make(point, size, point.X - dx, point.Y + dy, HorizontalAlignment.Right, VerticalAlignment.Middle, checkLeader));
                 }
 
         var inside = all.Where(c => c.Box.X1 >= 0 && c.Box.X2 <= _widthPx && c.Box.Y1 >= 0 && c.Box.Y2 <= _heightPx).ToList();
@@ -469,7 +487,7 @@ internal sealed class RangeLabelPlacer
 
     private Candidate Make(
         (double X, double Y) point, (double W, double H) size, double ax, double ay,
-        HorizontalAlignment horizontal, VerticalAlignment vertical)
+        HorizontalAlignment horizontal, VerticalAlignment vertical, bool checkLeader)
     {
         var x1 = horizontal switch
         {
@@ -494,7 +512,7 @@ internal sealed class RangeLabelPlacer
             fixedCost += OnCurveCost;
             labelClear = false;
         }
-        if (LeaderRunsOverCurve(point.X, point.Y, ax, ay))
+        if (checkLeader && LeaderRunsOverCurve(point.X, point.Y, ax, ay))
             fixedCost += LeaderOverCurveCost;
         foreach (var o in _obstacles)
             if (Overlaps(box, o))
@@ -504,6 +522,12 @@ internal sealed class RangeLabelPlacer
             }
         return new Candidate(point.X, point.Y, ax, ay, box, AlignmentOf(horizontal, vertical), fixedCost, labelClear);
     }
+
+    /// <summary>A spot made without the leader-across-the-curve check, with it added.</summary>
+    private Candidate WithLeaderCheck(Candidate c) =>
+        LeaderRunsOverCurve(c.PointX, c.PointY, c.AnchorX, c.AnchorY)
+            ? c with { FixedCost = c.FixedCost + LeaderOverCurveCost }
+            : c;
 
     internal static bool Overlaps(Box a, Box b) =>
         Math.Min(a.X2, b.X2) > Math.Max(a.X1, b.X1) && Math.Min(a.Y2, b.Y2) > Math.Max(a.Y1, b.Y1);
@@ -609,8 +633,6 @@ internal sealed class RangeLabelPlacer
 
     private Placement ToPlacement(Candidate c) => new(
         _xMin + c.AnchorX * _xPerPx, _yMin + c.AnchorY * _yPerPx,
-        new Box(_xMin + c.Box.X1 * _xPerPx, _xMin + c.Box.X2 * _xPerPx,
-            _yMin + c.Box.Y1 * _yPerPx, _yMin + c.Box.Y2 * _yPerPx),
         c.Alignment, c.Box, c.PointX, c.PointY, c.AnchorX, c.AnchorY);
 
     private static Alignment AlignmentOf(HorizontalAlignment h, VerticalAlignment v) => (v, h) switch
@@ -634,14 +656,14 @@ internal sealed class RangeLabelPlacer
         double PointX, double PointY, double AnchorX, double AnchorY, Box Box, Alignment Alignment,
         double FixedCost, bool LabelClear);
 
-    /// <summary>A rectangle: in data units on a <see cref="Placement"/>, in data-area pixels for an obstacle.</summary>
+    /// <summary>A rectangle, in data-area pixels.</summary>
     internal readonly record struct Box(double X1, double X2, double Y1, double Y2);
 
     /// <summary>
-    /// Where a label's anchor goes, in data units, with its box and the text alignment at the
-    /// anchor - and, for checking a layout, the same box and the leader's ends in data-area pixels.
+    /// Where a label's anchor goes, in data units, and the text alignment at the anchor - and, for
+    /// checking a layout, its box and the leader's ends in data-area pixels.
     /// </summary>
     internal readonly record struct Placement(
-        double X, double Y, Box Box, Alignment Alignment,
+        double X, double Y, Alignment Alignment,
         Box BoxPx, double PointXPx, double PointYPx, double AnchorXPx, double AnchorYPx);
 }

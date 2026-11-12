@@ -207,17 +207,18 @@ public class RangeLabelPlacerTests
     /// 400 labels meant 25 polish passes over 144 spots against 400 labels each.
     /// </summary>
     [Fact]
-    public void ALongList_IsPlacedInBoundedTime()
+    public void ALongList_GetsABoundedAmountOfWork()
     {
         var many = Enumerable.Range(0, 400).Select(i => Entry(1 + i * 7, "PROT" + i)).ToList();
 
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var p = NewPlacer().PlaceAll(many);
-        watch.Stop();
+        var placer = NewPlacer();
+        var p = placer.PlaceAll(many);
 
         Assert.Equal(400, p.Count);
-        // About a second in Debug here; generous for a loaded CI machine.
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"took {watch.Elapsed.TotalSeconds:0.0} s");
+        // Counted, not timed, so a slow CI machine cannot fail it and a regression cannot hide in a
+        // generous time limit: the greedy start, one polish pass and its current-cost check come to
+        // about 1.5 budgets.
+        Assert.InRange(placer.PairEvaluations, 1, (long)(2 * RangeLabelPlacer.LargeListPairBudget));
     }
 
     /// <summary>The search is seeded: the same plot always gets the same labels, redraw after redraw.</summary>
