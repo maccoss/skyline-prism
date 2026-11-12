@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ScottPlot;
 using SkylinePrism.Core.DifferentialAnalysis;
+using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 using SkylinePrism.Core.Visualization;
 using Xunit;
 
@@ -102,10 +103,8 @@ public class VolcanoLegibilityTests
         var down = marks.Single(m => m.Data.GetScatterPoints().Count == 5);
         Assert.All(up.Data.GetScatterPoints(), p => Assert.True(p.X > 0));
         Assert.All(down.Data.GetScatterPoints(), p => Assert.True(p.X < 0));
-        Assert.Equal(Color.FromHex(SkylinePrism.Core.DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
-            SkylinePrism.Core.DifferentialAnalysis.Enrichment.EnrichmentDirection.Up)), up.Color);
-        Assert.Equal(Color.FromHex(SkylinePrism.Core.DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
-            SkylinePrism.Core.DifferentialAnalysis.Enrichment.EnrichmentDirection.Down)), down.Color);
+        Assert.Equal(Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Up)), up.Color);
+        Assert.Equal(Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Down)), down.Color);
         Assert.NotEqual(up.Color, down.Color);
 
         // The guides are neutral: in ScottPlot's cycle colors one of them was red on the blue side.
@@ -113,6 +112,93 @@ public class VolcanoLegibilityTests
         Assert.Equal(3, guides.Count);
         Assert.All(guides, g => Assert.Equal(PlotRenderer.VolcanoGuideColor, g.LineColor));
     }
+
+    /// <summary>
+    /// The shared hit drawing every volcano goes through, the app pane's included: red where the
+    /// effect is positive, blue where negative - the same split as the enrichment up and down lists -
+    /// and a zero effect, which is in neither list, in its own dark color rather than the pooled green.
+    /// </summary>
+    [Fact]
+    public void AddVolcanoHits_SplitsBySign_AndAZeroEffectIsInNeitherSide()
+    {
+        var plt = new Plot();
+        var added = PlotRenderer.AddVolcanoHits(plt,
+            new[] { 1.5, -2.0, 0.0, 3.0, -0.5 }, new[] { 5.0, 6.0, 7.0, 8.0, 9.0 }, 14);
+
+        Assert.Equal(3, added.Count);
+        var up = added[0].Data.GetScatterPoints();
+        var down = added[1].Data.GetScatterPoints();
+        var zero = added[2].Data.GetScatterPoints();
+        Assert.Equal(new[] { 1.5, 3.0 }, up.Select(p => p.X));
+        Assert.Equal(new[] { 5.0, 8.0 }, up.Select(p => p.Y));
+        Assert.Equal(new[] { -2.0, -0.5 }, down.Select(p => p.X));
+        Assert.Equal(new[] { 0.0 }, zero.Select(p => p.X));
+        Assert.Equal(Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Up)), added[0].Color);
+        Assert.Equal(Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Down)), added[1].Color);
+        Assert.Equal(PlotRenderer.VolcanoNoDirectionColor, added[2].Color);
+        Assert.NotEqual(Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Both)), added[2].Color);
+        Assert.All(added, m => Assert.Equal(14f, m.MarkerSize));
+    }
+
+    /// <summary>An empty side adds no series, so a one-sided contrast has one hit series, not three.</summary>
+    [Fact]
+    public void AddVolcanoHits_LeavesOutAnEmptySide()
+    {
+        var plt = new Plot();
+        var added = PlotRenderer.AddVolcanoHits(plt, new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 }, 10);
+
+        Assert.Single(added);
+        Assert.Single(plt.GetPlottables<ScottPlot.Plottables.Markers>());
+        Assert.Empty(PlotRenderer.AddVolcanoHits(new Plot(), Array.Empty<double>(), Array.Empty<double>(), 10));
+    }
+
+    /// <summary>
+    /// The rule's guides: the p cut and the fold-change cut on both sides; with no fold-change cut,
+    /// the p line alone - a line at zero would read as a threshold.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0, 3)]
+    [InlineData(0.0, 1)]
+    public void AddVolcanoGuides_FromTheRule(double lfcCut, int lines)
+    {
+        var plt = new Plot();
+        PlotRenderer.AddVolcanoGuides(plt, SignificanceRule.Default with { Log2FcThreshold = lfcCut });
+
+        var guides = plt.GetPlottables<ScottPlot.Plottables.AxisLine>().ToList();
+        Assert.Equal(lines, guides.Count);
+        var vertical = guides.OfType<ScottPlot.Plottables.VerticalLine>().Select(v => v.X).OrderBy(x => x);
+        Assert.Equal(lfcCut > 0 ? new[] { -lfcCut, lfcCut } : Array.Empty<double>(), vertical);
+        Assert.All(guides, g => Assert.Equal(PlotRenderer.VolcanoGuideColor, g.LineColor));
+    }
+
+    /// <summary>
+    /// The detection volcano colors its hits by direction too: detected more often in B is red, less
+    /// often blue. It drew every hit green.
+    /// </summary>
+    [Fact]
+    public void DetectionVolcano_ColorsHitsByDirection()
+    {
+        var rows = new List<SkylinePrism.Core.DifferentialAnalysis.Detection.DetectionRow>
+        {
+            DetectionRow("UP", 0.2, 0.9, 1e-6),
+            DetectionRow("DN", 0.9, 0.1, 1e-6),
+            DetectionRow("NS", 0.5, 0.5, 0.8),
+        };
+        var plt = new Plot();
+        PlotRenderer.DrawDetectionVolcano(plt, rows, SignificanceRule.Default, corrected: true);
+
+        var marks = plt.GetPlottables<ScottPlot.Plottables.Markers>().ToList();
+        Assert.Equal(3, marks.Count);
+        Assert.Contains(marks, m => m.Color == Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Up))
+            && m.Data.GetScatterPoints().Single().X > 0);
+        Assert.Contains(marks, m => m.Color == Color.FromHex(Enrichment.DirectionColor(EnrichmentDirection.Down))
+            && m.Data.GetScatterPoints().Single().X < 0);
+        Assert.DoesNotContain(marks, m => m.Color == Color.FromHex("#2ca02c"));
+    }
+
+    private static SkylinePrism.Core.DifferentialAnalysis.Detection.DetectionRow DetectionRow(
+        string id, double rateA, double rateB, double p) =>
+        new(id, (int)(rateA * 10), 10, (int)(rateB * 10), 10, rateA, rateB, p, p);
 
     private static readonly PlotRenderer.LabelBox Canvas = new(0, 0, 1000, 600);
 

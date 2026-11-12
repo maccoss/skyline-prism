@@ -615,7 +615,8 @@ The status line names the prior that ran. The **View** selector gives three thin
 contrast:
 
 - **Volcano** — moderated-t log2 fold change against -log10 p, with a ranked hit table beside it.
-  Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
+  Hits are red when higher in B and blue when lower - the Enrichment bars' colors - and pale grey
+  points are not hits; the grey lines are the p and fold-change cuts. Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
   split by the two groups, and selects the protein or peptide in Skyline. Selection works the other way
   too, as on the Dynamic Range plot: select a protein or peptide in Skyline's Targets tree or a document
   grid and it is ringed on the Volcano and its row selected in the table (the boxplot window, if it is
@@ -627,7 +628,8 @@ contrast:
   instead: for each peptide it counts, in each group, the runs where the precursor passed the detection
   q-value cut (`DetectionQValue < 0.01`, read from the transition-level `merged_data`), and tests whether
   those detection RATES differ. The plot is the rate difference (B - A: +0.5 means detected in 50 percentage points
-  more of B's runs, say 30% against 80%) against -log10 p; the table gives each group's rate. Peptide level only. Use it
+  more of B's runs, say 30% against 80%) against -log10 p, hits red when detected more often in B and blue
+  when less, as on the Volcano; the table gives each group's rate. Peptide level only. Use it
   for things that switch on or off between groups rather than shift in amount. Which test runs follows the
   design: Fisher exact when unpaired, **McNemar's exact test** over the matched pairs when the design is
   paired, and a Firth-penalized logistic regression when covariates are set. Under McNemar only the

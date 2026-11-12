@@ -23,9 +23,11 @@ as the GitHub Release description and fails if it is missing.
 - The volcano drew every hit red, while the Enrichment view beside it uses red for higher in B and
   blue for lower - so a red point and a red bar meant different things. Volcano hits are now red
   when higher in B and blue when lower, in the Differential pane and the quant report alike, from
-  the same color definition the enrichment bars use. The threshold guide lines, which had taken
-  ScottPlot's cycle colors (a red line beside the blue hits in the pane), are now neutral grey on
-  every volcano.
+  the same color definition the enrichment bars use. The detection volcanoes, which drew every hit
+  green, follow the same rule (red for detected more often in B). The threshold guide lines, which
+  had taken ScottPlot's cycle colors (a red line beside the blue hits in the pane), are now neutral
+  grey on every volcano, and the Volcano's selection ring is orange, since a red ring around a red
+  hit was hard to find.
 
 ## Performance
 

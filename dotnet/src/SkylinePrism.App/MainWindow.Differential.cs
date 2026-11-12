@@ -2368,7 +2368,7 @@ public partial class MainWindow
         }
 
         AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
+        PlotRenderer.AddVolcanoHits(plt, sigX, sigY, DiffSigPointSize); // by direction, as the Volcano
         PlotRenderer.AddVolcanoGuides(plt, rule.PThreshold, 0.0);
         plt.HideLegend(); // as on the Volcano: the lines and the status line say what the colors mean
         plt.XLabel("log odds ratio (B / A)");
@@ -3015,7 +3015,8 @@ public partial class MainWindow
 
         var bgX = new List<double>();
         var bgY = new List<double>();
-        var sigByDirection = new Dictionary<EnrichmentDirection, (List<double> X, List<double> Y)>();
+        var sigX = new List<double>();
+        var sigY = new List<double>();
         _volcanoPoints = new List<(ScottPlot.Coordinates, string)>(res.Rows.Count);
         _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
@@ -3031,11 +3032,8 @@ public partial class MainWindow
             _volcanoRowById[r.FeatureId] = r;
             if (rule.IsSignificant(r))
             {
-                var dir = Enrichment.DirectionOf(r.LogFc);
-                if (!sigByDirection.TryGetValue(dir, out var xy))
-                    sigByDirection[dir] = xy = (new List<double>(), new List<double>());
-                xy.X.Add(r.LogFc);
-                xy.Y.Add(y);
+                sigX.Add(r.LogFc);
+                sigY.Add(y);
             }
             else
             {
@@ -3046,14 +3044,12 @@ public partial class MainWindow
 
         AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
         // Hits in their direction's color - red higher in B, blue lower - the colors the Enrichment
-        // view's bars use, so the two views of one contrast read the same way.
-        foreach (var (dir, xy) in sigByDirection.OrderBy(kv => kv.Key))
-            AddMarkers(plt, xy.X, xy.Y, Enrichment.DirectionColor(dir), DiffSigPointSize, "significant");
+        // view's bars use, so the two views of one contrast read the same way. The report's volcano
+        // draws its hits through the same helper.
+        PlotRenderer.AddVolcanoHits(plt, sigX, sigY, DiffSigPointSize);
         // The guides ARE the rule, read from the same object that colored the points, so the colored
-        // region and the lines cannot disagree. A zero effect cut draws no vertical guides, because
-        // a line at zero would read as a threshold rather than as its absence.
-        PlotRenderer.AddVolcanoGuides(plt, rule.PThreshold,
-            rule.Log2FcThreshold > 0 ? new[] { -rule.Log2FcThreshold, rule.Log2FcThreshold } : Array.Empty<double>());
+        // region and the lines cannot disagree.
+        PlotRenderer.AddVolcanoGuides(plt, rule);
 
         // Both overlays belong to this Plot instance, so they are recreated with it and must be
         // re-seeded rather than carried over from the previous contrast.
@@ -3097,11 +3093,12 @@ public partial class MainWindow
         text.IsVisible = false;
         _volcanoHoverText = text;
 
-        // Distinguishable from the hover ring at a glance: bigger, thicker, and red rather than
-        // black, because the two can be on screen at the same time.
+        // Distinguishable from the hover ring at a glance: bigger, thicker, and orange rather than
+        // black, because the two can be on screen at the same time. Not red or blue: those are the
+        // hits' own colors, and a red ring around a red hit was hard to find.
         var sel = plt.Add.Marker(
             0, 0, ScottPlot.MarkerShape.OpenCircle, DiffSigPointSize + 15,
-            ScottPlot.Color.FromHex("#d62728"));
+            ScottPlot.Color.FromHex("#ff7f0e"));
         sel.MarkerLineWidth = 3;
         sel.IsVisible = false;
         _volcanoSelMarker = sel;
@@ -3312,7 +3309,7 @@ public partial class MainWindow
         }
 
         AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
+        PlotRenderer.AddVolcanoHits(plt, sigX, sigY, DiffSigPointSize); // by direction, as the Volcano
         PlotRenderer.AddVolcanoGuides(plt, rule.PThreshold, 0.0);
         plt.HideLegend(); // as on the Volcano: the lines and the status line say what the colors mean
         plt.XLabel("detection rate difference (B - A)");

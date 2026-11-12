@@ -1329,7 +1329,6 @@ public static partial class PlotRenderer
     {
         var bgX = new List<double>();
         var bgY = new List<double>();
-        var hitsByDirection = new Dictionary<DifferentialAnalysis.Enrichment.EnrichmentDirection, (List<double> X, List<double> Y)>();
         var hits = new List<(double X, double Y, string Label)>();
         foreach (var r in res.Rows)
         {
@@ -1338,11 +1337,6 @@ public static partial class PlotRenderer
                 continue;
             if (rule.IsSignificant(r))
             {
-                var dir = DifferentialAnalysis.Enrichment.Enrichment.DirectionOf(r.LogFc);
-                if (!hitsByDirection.TryGetValue(dir, out var xy))
-                    hitsByDirection[dir] = xy = (new List<double>(), new List<double>());
-                xy.X.Add(r.LogFc);
-                xy.Y.Add(y);
                 hits.Add((r.LogFc, y, labelFor(r.FeatureId)));
             }
             else
@@ -1361,17 +1355,8 @@ public static partial class PlotRenderer
             bg.MarkerSize = VolcanoBackgroundMarkerSize;
         }
 
-        // Hits in their direction's color - red higher in B, blue lower - the same colors the
-        // enrichment bars use, so a red point and a red bar mean the same thing.
-        foreach (var (dir, xy) in hitsByDirection.OrderBy(kv => kv.Key))
-        {
-            var sig = plt.Add.Markers(xy.X.ToArray(), xy.Y.ToArray());
-            sig.Color = Color.FromHex(DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(dir));
-            sig.MarkerSize = VolcanoHitMarkerSize;
-        }
-
-        AddVolcanoGuides(plt, rule.PThreshold,
-            rule.Log2FcThreshold > 0 ? new[] { -rule.Log2FcThreshold, rule.Log2FcThreshold } : Array.Empty<double>());
+        AddVolcanoHits(plt, hits.Select(h => h.X).ToList(), hits.Select(h => h.Y).ToList(), VolcanoHitMarkerSize);
+        AddVolcanoGuides(plt, rule);
 
         plt.XLabel(xLabel);
         plt.YLabel(rule.YAxisLabel(corrected));
@@ -1581,6 +1566,64 @@ public static partial class PlotRenderer
     }
 
     /// <summary>
+    /// A volcano's hits, one series per side of zero, in the colors the enrichment bars use
+    /// (<see cref="DifferentialAnalysis.Enrichment.Enrichment.DirectionColor"/>): red where the effect
+    /// <paramref name="xs"/> is positive (higher in B), blue where it is negative. A hit at exactly zero
+    /// is in neither direction's hit list, so it is drawn in <see cref="VolcanoNoDirectionColor"/>
+    /// rather than either side's color or the pooled green, which would claim a list it is not in.
+    /// Every volcano - the Differential pane's, the report's and both detection plots - draws its hits
+    /// here, so they cannot drift apart. Returns the series added, up then down then zero, empty ones
+    /// left out.
+    /// </summary>
+    public static List<ScottPlot.Plottables.Markers> AddVolcanoHits(
+        Plot plt, IReadOnlyList<double> xs, IReadOnlyList<double> ys, float markerSize)
+    {
+        var sides = new[]
+        {
+            (Sign: 1, Color: Color.FromHex(DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
+                DifferentialAnalysis.Enrichment.EnrichmentDirection.Up))),
+            (Sign: -1, Color: Color.FromHex(DifferentialAnalysis.Enrichment.Enrichment.DirectionColor(
+                DifferentialAnalysis.Enrichment.EnrichmentDirection.Down))),
+            (Sign: 0, Color: VolcanoNoDirectionColor),
+        };
+        var added = new List<ScottPlot.Plottables.Markers>();
+        foreach (var (sign, color) in sides)
+        {
+            var sx = new List<double>();
+            var sy = new List<double>();
+            for (var i = 0; i < xs.Count; i++)
+            {
+                if (Math.Sign(xs[i]) != sign)
+                    continue;
+                sx.Add(xs[i]);
+                sy.Add(ys[i]);
+            }
+            if (sx.Count == 0)
+                continue;
+            var m = plt.Add.Markers(sx.ToArray(), sy.ToArray());
+            m.Color = color;
+            m.MarkerSize = markerSize;
+            added.Add(m);
+        }
+        return added;
+    }
+
+    /// <summary>
+    /// A hit with no direction - an effect of exactly zero, possible only with no effect-size cut.
+    /// Dark, so it still reads as a hit against the pale non-hits and the grey guides.
+    /// </summary>
+    internal static readonly Color VolcanoNoDirectionColor = Color.FromHex("#3a3a3a");
+
+    /// <summary>
+    /// The guides for <paramref name="rule"/>: its p threshold, and its effect-size cut on both sides
+    /// when there is one. A zero cut draws no vertical guides, because a line at zero would read as a
+    /// threshold rather than as its absence.
+    /// </summary>
+    public static void AddVolcanoGuides(Plot plt, DifferentialAnalysis.SignificanceRule rule) =>
+        AddVolcanoGuides(plt, rule.PThreshold,
+            rule.Log2FcThreshold > 0 ? new[] { -rule.Log2FcThreshold, rule.Log2FcThreshold } : Array.Empty<double>());
+
+    /// <summary>
     /// A volcano's threshold guides: a horizontal line at -log10 of <paramref name="pThreshold"/> and a
     /// vertical line at each of <paramref name="xs"/>. All neutral grey - left to ScottPlot they took
     /// its cycle colors, which put a red line on the side whose hits are blue.
@@ -1610,7 +1653,8 @@ public static partial class PlotRenderer
 
     /// <summary>
     /// A static detection volcano PNG for the quant report: detection-rate difference (B - A) against
-    /// -log10 of the p the <paramref name="rule"/> judges by. There is no effect-size guide - a
+    /// -log10 of the p the <paramref name="rule"/> judges by, hits colored by direction as on the
+    /// fold-change volcano (<see cref="AddVolcanoHits"/>). There is no effect-size guide - a
     /// detection effect is a rate difference, not a fold change - so only the p threshold is drawn.
     /// </summary>
     public static byte[] DetectionVolcanoPng(
@@ -1618,6 +1662,15 @@ public static partial class PlotRenderer
         DifferentialAnalysis.SignificanceRule rule, bool corrected, string? title = null)
     {
         var plt = new Plot();
+        DrawDetectionVolcano(plt, rows, rule, corrected, title);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>Draws <see cref="DetectionVolcanoPng"/>'s plot onto <paramref name="plt"/>, so its marks can be checked.</summary>
+    internal static void DrawDetectionVolcano(
+        Plot plt, IReadOnlyList<DifferentialAnalysis.Detection.DetectionRow> rows,
+        DifferentialAnalysis.SignificanceRule rule, bool corrected, string? title = null)
+    {
         var bgX = new List<double>();
         var bgY = new List<double>();
         var sigX = new List<double>();
@@ -1640,20 +1693,14 @@ public static partial class PlotRenderer
             bg.MarkerSize = VolcanoBackgroundMarkerSize;
         }
 
-        if (sigX.Count > 0)
-        {
-            var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
-            sig.Color = Color.FromHex("#2ca02c");
-            sig.MarkerSize = VolcanoHitMarkerSize;
-        }
-
+        // By direction, as the fold-change volcano: detected more often in B is red, less often blue.
+        AddVolcanoHits(plt, sigX, sigY, VolcanoHitMarkerSize);
         AddVolcanoGuides(plt, rule.PThreshold, 0.0);
         plt.XLabel("detection rate difference (B - A)");
         plt.YLabel(rule.YAxisLabel(corrected));
         StyleQcPlot(plt);
         if (!string.IsNullOrEmpty(title))
             FitTitleToWidth(plt, title, Width);
-        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
     }
 
     /// <summary>

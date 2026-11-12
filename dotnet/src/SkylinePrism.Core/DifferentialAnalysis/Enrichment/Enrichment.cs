@@ -128,7 +128,7 @@ public static class Enrichment
     /// <summary>
     /// <see cref="SigAndBackgroundGenes(DifferentialResult, Func{string, string}, double, double, EnrichmentDirection)"/>
     /// under an explicit <see cref="SignificanceRule"/>, so the genes submitted are exactly the
-    /// points the volcano drew red.
+    /// volcano's hits - for a separate up or down query, exactly its red or its blue points.
     /// </summary>
     public static (List<string> Significant, List<string> Background) SigAndBackgroundGenes(
         DifferentialResult res, Func<string, string?> geneForFeature, SignificanceRule rule,
@@ -301,14 +301,6 @@ public static class Enrichment
         EnrichmentDirection.Down => "#1f77b4",
         _ => "#2ca02c",
     };
-
-    /// <summary>
-    /// Which direction's hit list a feature with this log2 fold change (B / A) belongs to - the same
-    /// split the separate up and down queries make. A zero change is in neither, so it is
-    /// <see cref="EnrichmentDirection.Both"/>.
-    /// </summary>
-    public static EnrichmentDirection DirectionOf(double logFc) =>
-        logFc > 0 ? EnrichmentDirection.Up : logFc < 0 ? EnrichmentDirection.Down : EnrichmentDirection.Both;
 
     /// <summary>What one direction's hit list is, named after arm B: "higher in KO".</summary>
     public static string DescribeDirection(EnrichmentDirection direction, string bLabel) => direction switch

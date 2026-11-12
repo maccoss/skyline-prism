@@ -10,7 +10,7 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// <remarks>
 /// <para>One rule object rather than a pair of loose doubles, because the same decision is read in
 /// four places - the status line's count, the volcano's coloring AND its guide lines, the hit list
-/// handed to enrichment, and <see cref="SignificanceScan"/> - and a volcano whose red points
+/// handed to enrichment, and <see cref="SignificanceScan"/> - and a volcano whose colored hits
 /// disagree with its own threshold lines is worse than either convention on its own.</para>
 ///
 /// <para><b>Raw versus adjusted is a real choice, not a display one.</b> Adjusted is the honest
