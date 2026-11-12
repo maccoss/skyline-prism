@@ -861,15 +861,53 @@ public partial class MainWindow
         // positions are the ones at the top of the plot where the eye starts.
         wanted.Sort((a, b) => b.Entry.Log10Abundance.CompareTo(a.Entry.Log10Abundance));
 
-        var placer = new RangeLabelPlacer(
-            _rangeEntries.Count,
-            _rangeEntries[0].Log10Abundance,
-            _rangeEntries[^1].Log10Abundance,
-            RangePlot.ActualWidth,
-            RangePlot.ActualHeight);
+        // Lay the plot out once at the pane's size, so the placer works on the real axis limits and
+        // the real data area rather than guessing how much of the pane the axes take.
+        var scale = RangePlot.DisplayScale > 0 ? RangePlot.DisplayScale : 1;
+        var paneW = RangePlot.ActualWidth > 50 ? RangePlot.ActualWidth : 900;
+        var paneH = RangePlot.ActualHeight > 50 ? RangePlot.ActualHeight : 600;
+        plt.RenderInMemory((int)(paneW * scale), (int)(paneH * scale));
+        var limits = plt.Axes.GetLimits();
+        var dataRect = plt.RenderManager.LastRender.DataRect;
+        var dataW = dataRect.Width / scale;
+        var dataH = dataRect.Height / scale;
 
-        foreach (var (entry, color) in wanted)
-            AddRangeLabel(plt, entry, color, placer.Place(entry));
+        var placer = new RangeLabelPlacer(
+            _rangeEntries, limits.Left, limits.Right, limits.Bottom, limits.Top,
+            dataW, dataH, pointSize / 2 + 2, new[] { LegendObstacle(byList, dataW, dataH) }, MeasureRangeLabel);
+        var placements = placer.PlaceAll(wanted.Select(w => w.Entry).ToList());
+
+        for (var i = 0; i < wanted.Count; i++)
+            AddRangeLabel(plt, wanted[i].Entry, wanted[i].Color, placements[i]);
+        // The labels must not move the axes the placer laid them out against.
+        plt.Axes.SetLimits(limits);
+    }
+
+    private const float RangeLabelFontSize = 16;
+
+    /// <summary>A label's text size as ScottPlot will draw it, in device-independent pixels.</summary>
+    private static (double Width, double Height) MeasureRangeLabel(string text)
+    {
+        var probe = new ScottPlot.Plottables.Text { LabelText = text };
+        PlotRenderer.StyleTextLabel(probe, RangeLabelFontSize, bold: true);
+        using var paint = Paint.NewDisposablePaint();
+        var size = probe.LabelStyle.Measure(text, paint);
+        return (size.Width, size.Height);
+    }
+
+    /// <summary>
+    /// Roughly where the legend sits (upper right, one row per list), in data-area pixels, so no
+    /// label is placed under it. An estimate, generous on purpose.
+    /// </summary>
+    private static RangeLabelPlacer.Box LegendObstacle(
+        Dictionary<ProteinList, List<AbundanceEntry>> byList, double dataW, double dataH)
+    {
+        if (byList.Count == 0)
+            return new RangeLabelPlacer.Box(-1, -1, -1, -1);
+        var longest = byList.Max(kv => $"{kv.Key.Name} ({kv.Value.Count})".Length);
+        var w = 50 + longest * 16 * 0.58;
+        var h = 16 + byList.Count * 30;
+        return new RangeLabelPlacer.Box(dataW - w - 12, dataW, dataH - h - 12, dataH);
     }
 
     /// <summary>
@@ -900,7 +938,7 @@ public partial class MainWindow
         leader.MarkerSize = 0;
 
         var text = plt.Add.Text(entry.Label, placement.X, placement.Y);
-        PlotRenderer.StyleTextLabel(text, 16, bold: true);
+        PlotRenderer.StyleTextLabel(text, RangeLabelFontSize, bold: true);
         text.LabelFontColor = color;
         text.LabelBackgroundColor = Colors.White.WithAlpha(0.75);
         text.LabelBorderColor = color.WithAlpha(0.4);
