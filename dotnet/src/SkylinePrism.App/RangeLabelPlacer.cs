@@ -34,9 +34,9 @@ namespace SkylinePrism.App;
 /// clear spot it takes the least bad one, because losing a label the user asked for is worse.
 /// </para>
 /// <para>
-/// Work is done in device-independent pixels of the data area, so spacing looks the same whatever
-/// the abundance range or window size. Text boxes are estimated rather than measured - ScottPlot
-/// does not lay text out until it renders - which only has to be good enough to keep them apart.
+/// Work is done in the rendered pixels of the data area - the unit the labels and points are drawn
+/// in - so spacing looks the same whatever the abundance range or window size. Text is measured by
+/// the caller as ScottPlot will draw it; without a measurer it is estimated, generously.
 /// </para>
 /// </summary>
 internal sealed class RangeLabelPlacer
@@ -70,6 +70,9 @@ internal sealed class RangeLabelPlacer
     private const int AnnealMovesPerLabel = 4000;
     private const int AnnealMaxMoves = 150_000;
     private const int AnnealLabelLimit = 100;
+    private const int MaxPolishPasses = 25;
+    private const double LargeListPairBudget = 4e6; // spot-against-label comparisons per pass, past the limit
+    private const int MinSpotsPerLabel = 4;
     private const int PairShortlist = 60;          // spots per label tried in a joint move
     private const double SwapShare = 0.2;          // of annealing moves: swaps between neighbours
     private const double LocalShare = 0.4;         // ... and moves to a spot near the current one
@@ -100,7 +103,7 @@ internal sealed class RangeLabelPlacer
     /// <param name="xMax">Right axis limit.</param>
     /// <param name="yMin">Bottom axis limit, in data units (log10 abundance).</param>
     /// <param name="yMax">Top axis limit.</param>
-    /// <param name="widthPx">The data area's width, in device-independent pixels.</param>
+    /// <param name="widthPx">The data area's width, in the rendered pixels text and markers are sized in.</param>
     /// <param name="heightPx">The data area's height.</param>
     /// <param name="markerRadiusPx">Half a point's drawn size: how close a label may come to a point.</param>
     /// <param name="obstacles">Further boxes to keep clear, in data-area pixels (the legend).</param>
@@ -138,6 +141,20 @@ internal sealed class RangeLabelPlacer
             .Select((e, i) => Candidates(points[i], LabelSize(e.Label), withGrid: n <= AnnealLabelLimit).ToArray())
             .ToArray();
 
+        // A long list gets a bounded amount of work: every step below compares a spot with every
+        // other label, so its cost grows with the square of the label count, and this runs on the
+        // UI thread. Each label keeps only its cheapest spots - as many as the budget allows, at
+        // least a few - and the polish gets a single pass.
+        var polishPasses = MaxPolishPasses;
+        if (n > AnnealLabelLimit)
+        {
+            var keep = (int)Math.Clamp(LargeListPairBudget / ((double)n * n), MinSpotsPerLabel, int.MaxValue);
+            candidates = candidates
+                .Select(cs => cs.OrderBy(c => c.FixedCost).Take(keep).ToArray())
+                .ToArray();
+            polishPasses = 1;
+        }
+
         var chosen = new int[n];
         var placed = new bool[n];
         for (var i = 0; i < n; i++)
@@ -157,11 +174,11 @@ internal sealed class RangeLabelPlacer
             if (coolTotal < hotTotal)
                 Array.Copy(cool, chosen, n);
         }
-        Polish(candidates, chosen, points);
+        Polish(candidates, chosen, points, polishPasses);
         if (n <= AnnealLabelLimit)
         {
             RepairPairs(candidates, chosen, points);
-            Polish(candidates, chosen, points);
+            Polish(candidates, chosen, points, polishPasses);
         }
 
         return chosen.Select((k, i) => ToPlacement(candidates[i][k])).ToArray();
@@ -174,7 +191,7 @@ internal sealed class RangeLabelPlacer
     /// A move changes only the moved label's own terms, so its effect on the total is the change in
     /// that label's cost. T falls geometrically from <paramref name="tStart"/> to below one pixel of
     /// leader, so late in the run only improvements survive. The best layout seen is kept.
-    /// Moves are drawn only from spots whose label is clear of the curve (all of them, if none is):
+    /// Moves are drawn only from spots whose label is clear of the curve and the legend (all of them, if none is):
     /// most spots put the label on it, and a run spent proposing those did not settle. A spot whose
     /// leader merely crosses the curve stays in: on a small pane those are often all there is.
     /// </summary>
@@ -187,7 +204,7 @@ internal sealed class RangeLabelPlacer
         const double tEnd = 0.5;
         var viable = candidates.Select(cs =>
         {
-            var clear = Enumerable.Range(0, cs.Length).Where(k => cs[k].FixedCost < OnCurveCost).ToArray();
+            var clear = Enumerable.Range(0, cs.Length).Where(k => cs[k].LabelClear).ToArray();
             return clear.Length > 0 ? clear : Enumerable.Range(0, cs.Length).ToArray();
         }).ToArray();
         var cooling = Math.Pow(tEnd / tStart, 1.0 / moves);
@@ -303,11 +320,11 @@ internal sealed class RangeLabelPlacer
         return k;
     }
 
-    /// <summary>Move each label to its best spot given all the others, until no move helps.</summary>
-    private void Polish(Candidate[][] candidates, int[] chosen, (double X, double Y)[] points)
+    /// <summary>Move each label to its best spot given all the others, until no move helps or <paramref name="passes"/> run out.</summary>
+    private void Polish(Candidate[][] candidates, int[] chosen, (double X, double Y)[] points, int passes)
     {
         var all = Enumerable.Repeat(true, chosen.Length).ToArray();
-        for (var pass = 0; pass < 25; pass++)
+        for (var pass = 0; pass < passes; pass++)
         {
             var moved = false;
             for (var i = 0; i < chosen.Length; i++)
@@ -471,14 +488,21 @@ internal sealed class RangeLabelPlacer
         // Everything that does not depend on the other labels, worked out once per candidate.
         var length = Math.Sqrt(Sq(ax - point.X) + Sq(ay - point.Y));
         var fixedCost = length + length * length / 200;
+        var labelClear = true;
         if (CoversCurve(box))
+        {
             fixedCost += OnCurveCost;
+            labelClear = false;
+        }
         if (LeaderRunsOverCurve(point.X, point.Y, ax, ay))
             fixedCost += LeaderOverCurveCost;
         foreach (var o in _obstacles)
             if (Overlaps(box, o))
+            {
                 fixedCost += OverlapCost;
-        return new Candidate(point.X, point.Y, ax, ay, box, AlignmentOf(horizontal, vertical), fixedCost);
+                labelClear = false;
+            }
+        return new Candidate(point.X, point.Y, ax, ay, box, AlignmentOf(horizontal, vertical), fixedCost, labelClear);
     }
 
     internal static bool Overlaps(Box a, Box b) =>
@@ -608,7 +632,7 @@ internal sealed class RangeLabelPlacer
 
     private readonly record struct Candidate(
         double PointX, double PointY, double AnchorX, double AnchorY, Box Box, Alignment Alignment,
-        double FixedCost);
+        double FixedCost, bool LabelClear);
 
     /// <summary>A rectangle: in data units on a <see cref="Placement"/>, in data-area pixels for an obstacle.</summary>
     internal readonly record struct Box(double X1, double X2, double Y1, double Y2);

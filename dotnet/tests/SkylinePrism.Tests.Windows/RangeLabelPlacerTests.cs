@@ -201,6 +201,25 @@ public class RangeLabelPlacerTests
         Assert.All(p, q => Assert.False(double.IsNaN(q.X) || double.IsNaN(q.Y)));
     }
 
+    /// <summary>
+    /// A long list - every member labeled - gets a bounded amount of work, because the layout runs
+    /// on the UI thread and every step compares a spot with every other label. Without the budget,
+    /// 400 labels meant 25 polish passes over 144 spots against 400 labels each.
+    /// </summary>
+    [Fact]
+    public void ALongList_IsPlacedInBoundedTime()
+    {
+        var many = Enumerable.Range(0, 400).Select(i => Entry(1 + i * 7, "PROT" + i)).ToList();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var p = NewPlacer().PlaceAll(many);
+        watch.Stop();
+
+        Assert.Equal(400, p.Count);
+        // About a second in Debug here; generous for a loaded CI machine.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"took {watch.Elapsed.TotalSeconds:0.0} s");
+    }
+
     /// <summary>The search is seeded: the same plot always gets the same labels, redraw after redraw.</summary>
     [Fact]
     public void TheLayoutIsTheSameEveryTime()

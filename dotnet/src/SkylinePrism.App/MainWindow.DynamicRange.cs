@@ -861,16 +861,20 @@ public partial class MainWindow
         // positions are the ones at the top of the plot where the eye starts.
         wanted.Sort((a, b) => b.Entry.Log10Abundance.CompareTo(a.Entry.Log10Abundance));
 
-        // Lay the plot out once at the pane's size, so the placer works on the real axis limits and
-        // the real data area rather than guessing how much of the pane the axes take.
+        // Lay the plot out once at the size it is drawn at, so the placer works on the real axis
+        // limits and the real data area rather than guessing how much of the pane the axes take.
+        // In RENDERED pixels throughout: ScottPlot's WPF control never sets Plot.ScaleFactor, so the
+        // text and markers are a fixed number of rendered pixels whatever the display's scaling (see
+        // PlotRenderer.InteractivePointPixels). The data area divided by the display scale, as this
+        // first did, made every label twice its drawn size against the space at 200%.
         var scale = RangePlot.DisplayScale > 0 ? RangePlot.DisplayScale : 1;
         var paneW = RangePlot.ActualWidth > 50 ? RangePlot.ActualWidth : 900;
         var paneH = RangePlot.ActualHeight > 50 ? RangePlot.ActualHeight : 600;
         plt.RenderInMemory((int)(paneW * scale), (int)(paneH * scale));
         var limits = plt.Axes.GetLimits();
         var dataRect = plt.RenderManager.LastRender.DataRect;
-        var dataW = dataRect.Width / scale;
-        var dataH = dataRect.Height / scale;
+        var dataW = (double)dataRect.Width;
+        var dataH = (double)dataRect.Height;
 
         var placer = new RangeLabelPlacer(
             _rangeEntries, limits.Left, limits.Right, limits.Bottom, limits.Top,
