@@ -60,7 +60,7 @@ below. Neither touches any file `prism run` wrote.
 
 | File | One row per | Holds |
 |---|---|---|
-| `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. A protein's `label` is its gene, or its accession where no gene is known; `gene` is empty then, never the `NA` placeholder. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
+| `differential.csv` | tested feature | `feature_id`, `label`, `gene`, `protein`, `accession`, then `log2fc`, `fc`, `ave_expr`, `statistic`, `p_value`, `adj_p_value`, `mean_a`, `mean_b`. A protein's `label` is its gene, or its accession where no gene is known, or its protein-group id where neither is; `gene` is empty then, never the `NA` placeholder. A shared peptide's `gene`, `protein` and `accession` list one member per protein group, in `protein_group`'s order, with an unknown member left empty (`;Icam1`) so each stays beside its own group. Ordered most significant first, with features the test could not evaluate (a constant row, an empty arm) last rather than first. Written to the output directory unless `-o` says otherwise |
 
 Four to seven `#` comment lines precede the header, because a results file outlives the shell that
 produced it and every one of these is a question a reader asks of it:

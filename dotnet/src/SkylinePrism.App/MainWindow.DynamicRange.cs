@@ -1098,9 +1098,15 @@ public partial class MainWindow
     {
         if (entry.ProteinNames.Count == 0)
             return "";
+        // Names are by position, an unknown one empty: that group is shown by its id alone.
         var parts = entry.ProteinNames
-            .Select((name, i) => i < entry.ProteinGroups.Count ? $"{entry.ProteinGroups[i]} ({name})" : name)
+            .Select((name, i) => i >= entry.ProteinGroups.Count ? name
+                : name.Length == 0 ? entry.ProteinGroups[i]
+                : $"{entry.ProteinGroups[i]} ({name})")
+            .Where(p => p.Length > 0)
             .ToList();
+        if (parts.Count == 0)
+            return "";
         return entry.IsShared
             ? $" - shared across {parts.Count} protein groups: {string.Join(", ", parts)}"
             : $" - in {parts[0]}";
@@ -1160,7 +1166,7 @@ public partial class MainWindow
             // "<protein>/<peptide>" per group, in PRISM's group order.
             foreach (var form in forms)
                 foreach (var protein in entry.ProteinNames)
-                    if (_rangeLocatorMap.TryGetValue($"{protein}/{form}", out var byProtein))
+                    if (protein.Length > 0 && _rangeLocatorMap.TryGetValue($"{protein}/{form}", out var byProtein))
                         return byProtein;
 
             // Nothing matched a PRISM group, so take the sequence's first occurrence in the tree - the
