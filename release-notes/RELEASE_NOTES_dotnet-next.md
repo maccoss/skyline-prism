@@ -39,7 +39,14 @@ as the GitHub Release description and fails if it is missing.
   had taken ScottPlot's cycle colors (a red line beside the blue hits in the pane), are now neutral
   grey on every volcano, and the Volcano's selection ring is orange, since a red ring around a red
   hit was hard to find.
-
+- Starting any copy of PRISM re-pointed the Start Menu shortcut at itself - including a development
+  build, which an ordinary `dotnet build` makes without the instrument-file reader. Once one had
+  been started, every Start Menu launch ran it, and ion accounting reported "this build has no
+  instrument-file reader" although the installed Skyline tool had one. Only a copy Skyline
+  installed (in the `Tools` folder beside Skyline itself) re-points the shortcut now, and never to
+  an older version than it points at - PRISM in a release Skyline no longer takes it from
+  Skyline-daily's newer copy. Any other copy leaves it alone and says why in the diagnostic log.
+  Creating the shortcut from the menu still works from any copy.
 ## Performance
 
 ## Breaking Changes
