@@ -45,8 +45,16 @@ as the GitHub Release description and fails if it is missing.
   both sides of the curve, by simulated annealing over a few hundred spots per label, and measured
   as ScottPlot draws them rather than estimated. On a 26-protein plasma list at a typical pane size
   no leaders cross, no labels overlap and nothing sits on the curve; on a small pane a crowded list
-  can still overlap, but leaders do not cross. Placing 26 labels takes about half a second.
-
+  runs more leaders across the curve, and a leader can pass through another label. Placing 26
+  labels takes about half a second; a long list gets a bounded amount of work.
+- Starting any copy of PRISM re-pointed the Start Menu shortcut at itself - including a development
+  build, which an ordinary `dotnet build` makes without the instrument-file reader. Once one had
+  been started, every Start Menu launch ran it, and ion accounting reported "this build has no
+  instrument-file reader" although the installed Skyline tool had one. Only a copy Skyline
+  installed (in the `Tools` folder beside Skyline itself) re-points the shortcut now, and never to
+  an older version than it points at - PRISM in a release Skyline no longer takes it from
+  Skyline-daily's newer copy. Any other copy leaves it alone and says why in the diagnostic log.
+  Creating the shortcut from the menu still works from any copy.
 ## Performance
 
 ## Breaking Changes
