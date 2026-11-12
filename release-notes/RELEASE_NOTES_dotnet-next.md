@@ -6,6 +6,12 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- Every statistical option in the Differential pane now explains itself when hovered: each design
+  (Unpaired, Paired, Blocked by subject), level, test (moderated t, Welch, Student, Mann-Whitney,
+  paired t, Wilcoxon), variance prior, multiple-testing correction and choice of p-value says what it
+  does, what it assumes and when to use it. Before, each picker had one paragraph on the control as
+  a whole and the choices had none, so on the segmented controls the help was hard to reach at all.
+
 ## Bug Fixes
 
 - A protein with no known gene was labeled "NA" in the volcano, the hit table, boxplot titles, the
