@@ -837,7 +837,7 @@
                                     <StackPanel Margin="0,0,0,4">
                                         <TextBlock Text="Test" Margin="0,10,0,3" Foreground="#555" />
                                         <ComboBox x:Name="DiffTestCombo" SelectionChanged="OnDiffTestChanged"
-                                        ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
+                                        ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which needs no normality but asks whether one group tends to run higher rather than whether the means differ. Only the moderated t can adjust for covariates.">
                                         <ComboBoxItem Tag="ModeratedT"
                                         ToolTip="limma's empirical-Bayes t: each feature's variance is shrunk toward a prior fitted across all features, which steadies the test when each group has few samples. The default, and the only test that can adjust for covariates or block by subject.">Moderated t</ComboBoxItem>
                                         <!-- Each of these applies to one design only. UpdateDiffControls
@@ -850,11 +850,11 @@
                                         <ComboBoxItem x:Name="DiffTestStudentItem" Tag="StudentT"
                                         ToolTip="The classic two-sample t-test, assuming both groups have the same variance. Each feature is tested on its own samples alone.">Student t</ComboBoxItem>
                                         <ComboBoxItem x:Name="DiffTestMannWhitneyItem" Tag="MannWhitney"
-                                        ToolTip="Rank test for two independent groups (Wilcoxon rank-sum). Assumes nothing about the distribution and resists outliers, but reports a median shift rather than a mean difference and needs several samples per group to reach a small p.">Mann-Whitney</ComboBoxItem>
+                                        ToolTip="Rank test for two independent groups (Wilcoxon rank-sum). Needs no normality and resists outliers. It tests whether one group's values tend to be higher than the other's - a median shift only if the two groups' distributions have the same shape - and needs several samples per group to reach a small p.">Mann-Whitney</ComboBoxItem>
                                         <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT"
                                         ToolTip="t-test on each subject's A-to-B difference (Paired design). Each feature is tested on its own pairs alone.">Paired t</ComboBoxItem>
                                         <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon"
-                                        ToolTip="Signed-rank test on each subject's A-to-B difference (Paired design): the rank-based counterpart of the paired t, assuming nothing about the distribution.">Wilcoxon</ComboBoxItem>
+                                        ToolTip="Signed-rank test on each subject's A-to-B difference (Paired design): the rank-based counterpart of the paired t. It needs no normality, but it does assume the differences are symmetric about their center; with skewed differences, do not read its p as a test of a zero median.">Wilcoxon</ComboBoxItem>
                                         </ComboBox>
                                         <!-- Tag carries the value, Content the label, as the Density and Ion
                                         Accounting pickers do - so the displayed wording can change
