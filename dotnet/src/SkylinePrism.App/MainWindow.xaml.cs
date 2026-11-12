@@ -117,7 +117,7 @@ public partial class MainWindow : Window
 
         // Skyline reinstalls its tools into a NEW versioned folder on every update, so an existing
         // shortcut is re-pointed at this build whenever an installed copy of PRISM starts.
-        StandaloneShortcut.Refresh(Log);
+        StandaloneShortcut.Refresh(Log, App.WriteLog);
         UpdateShortcutButton();
 
         MetadataReportCombo.Items.Add(DefaultMetadataItem);

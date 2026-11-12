@@ -72,30 +72,39 @@ public static class StandaloneShortcut
 
     /// <summary>
     /// If a shortcut already exists but points somewhere else (a previous Skyline application folder),
-    /// re-point it at this build - but only when this build is an installed Skyline tool
-    /// (<see cref="IsInstalledTool"/>). No-op when absent - creating one is an explicit user choice.
-    /// Returns true when it was rewritten.
+    /// re-point it at this build - when <see cref="Decide"/> says so: only from an installed Skyline
+    /// tool, and never to an older version than the one it points at. No-op when absent - creating
+    /// one is an explicit user choice. Returns true when it was rewritten.
     /// </summary>
     /// <remarks>
     /// Any build used to re-point it, so starting a development build once - built without the
     /// instrument-file reader, as an ordinary <c>dotnet build</c> is - took the shortcut over, and
     /// every later Start Menu launch ran that build: ion accounting then reported "this build has no
     /// instrument-file reader" on a machine whose installed tool had one.
+    /// <para>A declined refresh goes to <paramref name="diagnostic"/> (the log file), not
+    /// <paramref name="log"/>: it is the same on every start of the same copy, and the window's log
+    /// is what a user reads.</para>
     /// </remarks>
-    public static bool Refresh(Action<string>? log = null)
+    public static bool Refresh(Action<string>? log = null, Action<string>? diagnostic = null)
     {
         try
         {
             if (!Exists)
                 return false;
             var target = ReadTarget();
-            if (string.Equals(target, CurrentExePath, StringComparison.OrdinalIgnoreCase))
-                return false;
-            if (!IsInstalledTool(AppContext.BaseDirectory))
+            var shown = string.IsNullOrEmpty(target) ? "(a target that could not be read)" : target;
+            switch (Decide(target, AppContext.BaseDirectory, IsSkylineFolder, File.Exists, ToolVersion))
             {
-                log?.Invoke($"Start Menu shortcut left pointing at {target}: this copy is not an installed "
-                            + "Skyline tool, so it does not take the shortcut over.");
-                return false;
+                case RefreshDecision.AlreadyCurrent:
+                    return false;
+                case RefreshDecision.NotInstalledTool:
+                    diagnostic?.Invoke($"Start Menu shortcut left pointing at {shown}: this copy is not an "
+                                       + "installed Skyline tool, so it does not take the shortcut over.");
+                    return false;
+                case RefreshDecision.TargetIsNewer:
+                    diagnostic?.Invoke($"Start Menu shortcut left pointing at {shown}: that copy is a newer "
+                                       + "version than this one.");
+                    return false;
             }
             Create();
             log?.Invoke($"Updated the Start Menu shortcut to this build ({CurrentExePath}).");
@@ -108,20 +117,78 @@ public static class StandaloneShortcut
         }
     }
 
+    internal enum RefreshDecision { Repoint, AlreadyCurrent, NotInstalledTool, TargetIsNewer }
+
     /// <summary>
-    /// True when <paramref name="exeDirectory"/> is where Skyline installed a tool: its own folder
-    /// directly inside a <c>Tools</c> folder - <c>...\skyl..tion_&lt;hash&gt;\Tools\~SK6C53\</c> for a
-    /// ClickOnce Skyline, <c>...\Tools\SkylinePrism\</c> for others. A build output
-    /// (<c>bin\Debug\net10.0-windows...\</c>) or a copy unzipped somewhere is not.
+    /// Whether the copy running from <paramref name="exeDirectory"/> should re-point a shortcut
+    /// whose target is <paramref name="target"/>. File system access is passed in so the rule can be
+    /// tested without touching the real Start Menu.
     /// </summary>
-    internal static bool IsInstalledTool(string exeDirectory)
+    internal static RefreshDecision Decide(
+        string? target, string exeDirectory, Func<string, bool> isSkylineFolder,
+        Func<string, bool> fileExists, Func<string, Version?> versionOf)
     {
-        var dir = exeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var parent = Path.GetDirectoryName(dir);
-        return !string.IsNullOrEmpty(parent)
-               && string.Equals(Path.GetFileName(parent), "Tools", StringComparison.OrdinalIgnoreCase);
+        var current = Path.Combine(exeDirectory, "SkylinePrism.exe");
+        if (string.Equals(target, current, StringComparison.OrdinalIgnoreCase))
+            return RefreshDecision.AlreadyCurrent;
+        if (!IsInstalledTool(exeDirectory, isSkylineFolder))
+            return RefreshDecision.NotInstalledTool;
+        // Never backwards: PRISM in a release Skyline must not take the shortcut from Skyline-daily's
+        // newer copy. A target that is gone, or whose version cannot be read, is replaced.
+        if (!string.IsNullOrEmpty(target) && fileExists(target)
+            && Path.GetDirectoryName(target) is { } targetDir
+            && versionOf(targetDir) is { } theirs && versionOf(exeDirectory) is { } ours
+            && theirs > ours)
+            return RefreshDecision.TargetIsNewer;
+        return RefreshDecision.Repoint;
     }
 
+    /// <summary>
+    /// True when <paramref name="exeDirectory"/> is where Skyline installed a tool: its own folder
+    /// directly inside the <c>Tools</c> folder of a Skyline installation -
+    /// <c>...\skyl..tion_&lt;hash&gt;\Tools\~SK6C53\</c> for a ClickOnce Skyline. The Tools folder's
+    /// parent must hold Skyline itself (<paramref name="isSkylineFolder"/>): a folder merely NAMED
+    /// Tools, such as <c>C:\Tools\prism\</c> where portable copies are often kept, is not one.
+    /// </summary>
+    internal static bool IsInstalledTool(string exeDirectory, Func<string, bool> isSkylineFolder)
+    {
+        var dir = exeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var tools = Path.GetDirectoryName(dir);
+        if (string.IsNullOrEmpty(tools)
+            || !string.Equals(Path.GetFileName(tools), "Tools", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var skyline = Path.GetDirectoryName(tools);
+        return !string.IsNullOrEmpty(skyline) && isSkylineFolder(skyline);
+    }
+
+    /// <summary>A folder holding Skyline itself - release or daily - as a Skyline tool's grandparent does.</summary>
+    private static bool IsSkylineFolder(string folder) =>
+        File.Exists(Path.Combine(folder, "Skyline.exe")) || File.Exists(Path.Combine(folder, "Skyline-daily.exe"));
+
+    /// <summary>
+    /// The tool version of the copy in <paramref name="exeDirectory"/>, from the <c>Version =</c> line of
+    /// its <c>tool-inf\info.properties</c> (which every build copies beside the exe); null if unreadable.
+    /// </summary>
+    internal static Version? ToolVersion(string exeDirectory)
+    {
+        try
+        {
+            var file = Path.Combine(exeDirectory, "tool-inf", "info.properties");
+            if (!File.Exists(file))
+                return null;
+            foreach (var line in File.ReadLines(file))
+            {
+                var parts = line.Split('=', 2);
+                if (parts.Length == 2 && parts[0].Trim().Equals("Version", StringComparison.OrdinalIgnoreCase))
+                    return Version.TryParse(parts[1].Trim(), out var v) ? v : null;
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
     /// <summary>The executable an existing shortcut points at, or null.</summary>
     public static string? ReadTarget()
     {
