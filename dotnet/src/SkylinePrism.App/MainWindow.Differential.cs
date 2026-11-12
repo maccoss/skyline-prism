@@ -1187,8 +1187,7 @@ public partial class MainWindow
         _diffGeneById = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < ds.FeatureIds.Length; i++)
         {
-            _diffLabelById[ds.FeatureIds[i]] =
-                string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
+            _diffLabelById[ds.FeatureIds[i]] = ds.FeatureLabels[i]; // never empty: Load falls back to the id
             if (!string.IsNullOrEmpty(ds.FeatureGenes[i]))
                 _diffGeneById[ds.FeatureIds[i]] = ds.FeatureGenes[i];
         }
@@ -2763,17 +2762,14 @@ public partial class MainWindow
         Label: identity.Label,
         // The first group's own names, null where that group's is unknown (an empty slot), as
         // DynamicRange.FirstGroup gives them - never a later group's name in its place.
-        Accession: FirstKnown(identity.Accessions),
-        Gene: FirstKnown(identity.Genes),
-        ProteinName: FirstKnown(identity.ProteinNames),
+        Accession: NamePlaceholder.FirstMember(identity.Accessions),
+        Gene: NamePlaceholder.FirstMember(identity.Genes),
+        ProteinName: NamePlaceholder.FirstMember(identity.ProteinNames),
         MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0)
     {
         ProteinGroups = identity.ProteinGroups,
         ProteinNames = identity.ProteinNames,
     };
-
-    private static string? FirstKnown(IReadOnlyList<string> members) =>
-        members.Count > 0 && members[0].Length > 0 ? members[0] : null;
 
     // ---------------------------------------------------------------- follow Skyline's selection
     //

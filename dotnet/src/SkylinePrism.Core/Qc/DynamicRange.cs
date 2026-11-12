@@ -216,7 +216,7 @@ public static class DynamicRange
             // Names by position, an unknown one left empty in its place, so name k stays group k's.
             var allGroups = SplitGroups(Value(peptideGroups, row));
             var allNames = NamePlaceholder.SplitAligned(Value(proteinNames, row));
-            var protein = FirstGroup(Value(proteinNames, row));
+            var protein = NamePlaceholder.FirstMember(allNames);
             var accession = FirstGroup(Value(peptideAccessions, row));
             var gene = FirstGroup(Value(peptideGenes, row));
             // The label stays the sequence - a peptide plot labeled by gene would collide for every

@@ -312,9 +312,13 @@ public class DifferentialDatasetTests
             Assert.Equal(new[] { "", "Icam1" }, identity.Genes);
             Assert.Equal(new[] { "", "ICAM1_MOUSE" }, identity.ProteinNames);
             Assert.Equal(new[] { "", "P13597" }, identity.Accessions);
+            // Named for its FIRST group, as everything else is: that group's names are unknown, so the
+            // label is the group id and the readout does not borrow PG0004's gene or name.
+            Assert.Equal("PG0003;PG0004", identity.Label);
+            Assert.Equal("PG0003;PG0004  (shared across 2 protein groups)", identity.Describe());
 
             var row = WriteCsvLines(d, dir).Single(l => l.StartsWith("PG0003;PG0004,", StringComparison.Ordinal));
-            Assert.StartsWith("PG0003;PG0004,Icam1,;Icam1,;ICAM1_MOUSE,;P13597,", row);
+            Assert.StartsWith("PG0003;PG0004,PG0003;PG0004,;Icam1,;ICAM1_MOUSE,;P13597,", row);
         }
         finally
         {

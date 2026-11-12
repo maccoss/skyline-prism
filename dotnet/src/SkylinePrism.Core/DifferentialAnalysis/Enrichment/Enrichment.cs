@@ -106,9 +106,17 @@ public static class Enrichment
             {
                 if (IO.NamePlaceholder.Is(member))
                     continue;
-                foreach (var tok in member.Split('/'))
+                // A placeholder can also be "/"-joined to a symbol ("ALB/N/A"), so two neighbouring
+                // pieces that together make one ("N" + "A") are dropped as a pair.
+                var pieces = member.Split('/');
+                for (var k = 0; k < pieces.Length; k++)
                 {
-                    var s = tok.Trim();
+                    if (k + 1 < pieces.Length && IO.NamePlaceholder.Is(pieces[k] + "/" + pieces[k + 1]))
+                    {
+                        k++;
+                        continue;
+                    }
+                    var s = pieces[k].Trim();
                     if (IO.NamePlaceholder.Is(s) || seen.Contains(s))
                         continue;
                     seen.Add(s);

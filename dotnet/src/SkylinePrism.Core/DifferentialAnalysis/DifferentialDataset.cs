@@ -52,11 +52,12 @@ public sealed record FeatureIdentity(
     public string Describe()
     {
         var parts = new List<string>();
-        var gene = Genes.FirstOrDefault(g => !string.IsNullOrEmpty(g));
+        // The FIRST group's gene and protein, as everything else names a feature by - not a later
+        // group's in their place: with that one unknown, the "shared across" part says the rest.
+        var gene = NamePlaceholder.FirstMember(Genes);
         if (gene is not null && gene != Label)
             parts.Add(gene);
-        var protein = ProteinNames.FirstOrDefault(n => !string.IsNullOrEmpty(n))
-                      ?? Accessions.FirstOrDefault(a => !string.IsNullOrEmpty(a));
+        var protein = NamePlaceholder.FirstMember(ProteinNames) ?? NamePlaceholder.FirstMember(Accessions);
         if (protein is not null && protein != Label)
             parts.Add(protein);
         if (IsShared)
@@ -721,16 +722,17 @@ public sealed class DifferentialDataset
             : Enumerable.Repeat(string.Empty, nFeatures).ToArray();
 
     /// <summary>
-    /// The first of <paramref name="candidates"/> that names something, with the empty members of a
-    /// ";"-separated list left out; empty when none does.
+    /// The first of <paramref name="candidates"/> whose FIRST member names something, with any empty
+    /// later members left out; empty when none does. A row in several groups whose first group's gene
+    /// is unknown is not labeled with the second group's gene: it falls to the next candidate.
     /// </summary>
     private static string FirstNamed(params string[] candidates)
     {
         foreach (var c in candidates)
         {
-            var named = c.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            if (named.Length > 0)
-                return string.Join(";", named);
+            var members = NamePlaceholder.SplitAligned(c);
+            if (NamePlaceholder.FirstMember(members) is not null)
+                return string.Join(";", members.Where(m => m.Length > 0));
         }
         return string.Empty;
     }

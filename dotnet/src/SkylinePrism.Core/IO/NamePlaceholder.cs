@@ -67,11 +67,11 @@ public static class NamePlaceholder
     /// The first member of a ";"-separated identity value - the first group's - or null when that
     /// member is unknown. Never a later group's name borrowed in its place.
     /// </summary>
-    public static string? FirstMember(string? value)
-    {
-        var members = SplitAligned(value);
-        return members.Count > 0 && members[0].Length > 0 ? members[0] : null;
-    }
+    public static string? FirstMember(string? value) => FirstMember(SplitAligned(value));
+
+    /// <summary><see cref="FirstMember(string?)"/> for members already split by <see cref="SplitAligned"/>.</summary>
+    public static string? FirstMember(IReadOnlyList<string> members) =>
+        members.Count > 0 && members[0].Length > 0 ? members[0] : null;
 
     /// <summary>
     /// Members back into one ";"-separated value, keeping each in its place: <c>["", "ALB"]</c> is
