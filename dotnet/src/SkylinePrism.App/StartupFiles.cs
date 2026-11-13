@@ -62,6 +62,12 @@ internal static class StartupFiles
     }
 
     /// <summary>What the user is shown instead of the exception once a startup file is missing.</summary>
+    /// <remarks>
+    /// Names both ways in: Skyline's Tools menu, and the Start Menu shortcut that
+    /// <see cref="StandaloneShortcut"/> creates for standalone use. Someone who opened PRISM from the
+    /// shortcut, with no Skyline running, would otherwise be told to restart it from a menu they never
+    /// used.
+    /// </remarks>
     internal static string RestartMessage(string missingPath, string logPath) =>
         "Skyline-PRISM needs to be restarted." + Environment.NewLine + Environment.NewLine
         + "A file it was started from is no longer on disk:" + Environment.NewLine
@@ -69,7 +75,8 @@ internal static class StartupFiles
         + "This happens when a .NET update is installed, or PRISM is reinstalled or updated in Skyline, "
         + "while PRISM is open. Anything PRISM has not loaded yet can no longer load, so more errors "
         + "will follow until it is restarted." + Environment.NewLine + Environment.NewLine
-        + "Close PRISM and start it again from Skyline's Tools menu. Results already written to disk "
-        + "are not affected." + Environment.NewLine + Environment.NewLine
+        + "Close PRISM and start it again the way you opened it: from Skyline's Tools menu, or from "
+        + "the Skyline-PRISM shortcut in the Start Menu. Results already written to disk are not "
+        + "affected." + Environment.NewLine + Environment.NewLine
         + "The error was written to:" + Environment.NewLine + logPath;
 }

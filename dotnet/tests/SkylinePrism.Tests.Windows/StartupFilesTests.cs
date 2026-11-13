@@ -79,7 +79,9 @@ public class StartupFilesTests
 
         Assert.Contains(@"C:\runtime\10.0.14\PresentationCore.dll", text);
         Assert.Contains(@"C:\logs\prism-tool.log", text);
+        // Both ways PRISM is opened: from Skyline, and standalone from the Start Menu shortcut.
         Assert.Contains("Tools menu", text);
+        Assert.Contains("Start Menu", text);
     }
 
     [Fact]
