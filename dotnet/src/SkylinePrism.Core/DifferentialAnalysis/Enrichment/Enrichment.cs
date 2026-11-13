@@ -80,11 +80,13 @@ public static class Enrichment
     /// was actually queried rather than a copy of it.
     /// </summary>
     public static IReadOnlyList<string> DefaultSources { get; } = new[] { "GO:BP", "GO:MF", "GO:CC", "REAC", "KEGG" };
-    private static readonly Regex SymbolSplit = new(@"[;,/|\s]+", RegexOptions.Compiled);
+    // Every list delimiter except "/", which is split last (see CleanSymbols).
+    private static readonly Regex ListSplit = new(@"[;,|\s]+", RegexOptions.Compiled);
 
     /// <summary>
     /// De-duplicate and stringify gene symbols (order preserving), splitting delimited multi-gene
-    /// fields on <c>; , / |</c> and whitespace and dropping empty / "nan" / "none". Real HGNC symbols
+    /// fields on <c>; , / |</c> and whitespace and dropping empty values and every placeholder
+    /// <see cref="IO.NamePlaceholder"/> knows - "NA", "nan", "none" and the rest. Real HGNC symbols
     /// contain none of those characters, so a delimited value must be split before use.
     /// </summary>
     public static List<string> CleanSymbols(IEnumerable<string?> genes)
@@ -93,16 +95,33 @@ public static class Enrichment
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var g in genes)
         {
-            if (g is null)
+            if (string.IsNullOrWhiteSpace(g))
                 continue;
-            foreach (var tok in SymbolSplit.Split(g.Trim()))
+            // Two passes, because "/" is both a list delimiter and part of placeholders: "N/A" split
+            // on "/" is the two "symbols" N and A. So split on everything else first, drop the
+            // placeholders among those members, and only then split what is left on "/". Cleaning
+            // ";" members alone before one combined split missed a placeholder after any other
+            // delimiter: "ALB,N/A" gave ALB, N and A.
+            foreach (var member in ListSplit.Split(g.Trim()))
             {
-                var s = tok.Trim();
-                if (s.Length == 0 || s.Equals("nan", StringComparison.OrdinalIgnoreCase)
-                    || s.Equals("none", StringComparison.OrdinalIgnoreCase) || seen.Contains(s))
+                if (IO.NamePlaceholder.Is(member))
                     continue;
-                seen.Add(s);
-                outList.Add(s);
+                // A placeholder can also be "/"-joined to a symbol ("ALB/N/A"), so two neighbouring
+                // pieces that together make one ("N" + "A") are dropped as a pair.
+                var pieces = member.Split('/');
+                for (var k = 0; k < pieces.Length; k++)
+                {
+                    if (k + 1 < pieces.Length && IO.NamePlaceholder.Is(pieces[k] + "/" + pieces[k + 1]))
+                    {
+                        k++;
+                        continue;
+                    }
+                    var s = pieces[k].Trim();
+                    if (IO.NamePlaceholder.Is(s) || seen.Contains(s))
+                        continue;
+                    seen.Add(s);
+                    outList.Add(s);
+                }
             }
         }
 
@@ -124,7 +143,7 @@ public static class Enrichment
     /// <summary>
     /// <see cref="SigAndBackgroundGenes(DifferentialResult, Func{string, string}, double, double, EnrichmentDirection)"/>
     /// under an explicit <see cref="SignificanceRule"/>, so the genes submitted are exactly the
-    /// points the volcano drew red.
+    /// volcano's hits - for a separate up or down query, exactly its red or its blue points.
     /// </summary>
     public static (List<string> Significant, List<string> Background) SigAndBackgroundGenes(
         DifferentialResult res, Func<string, string?> geneForFeature, SignificanceRule rule,
@@ -287,8 +306,9 @@ public static class Enrichment
     };
 
     /// <summary>
-    /// The bar color for a direction - red for higher in B, blue for lower, green when pooled - shared
-    /// by the pane and the report so the two read the same way.
+    /// The color for a direction - red for higher in B, blue for lower, green when pooled - shared by
+    /// the enrichment bars and the volcano's hits, in the pane and the report, so a red bar and a red
+    /// point mean the same thing everywhere.
     /// </summary>
     public static string DirectionColor(EnrichmentDirection direction) => direction switch
     {

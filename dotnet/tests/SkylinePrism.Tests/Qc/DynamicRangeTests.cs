@@ -72,6 +72,30 @@ public class DynamicRangeTests
         }
     }
 
+    /// <summary>
+    /// Parsimony writes "NA" for a protein with no known gene. It is no name: the label falls back to
+    /// the accession, and the entry reports no gene - before, the plot labeled every such protein "NA".
+    /// </summary>
+    [Fact]
+    public void Compute_APlaceholderGeneIsNoGene_TheAccessionLabelsIt()
+    {
+        var dir = TempDir();
+        try
+        {
+            var path = WriteProteins(
+                dir, new[] { "ALB", "NA" }, new[] { "P02768", "A0A024R161" },
+                new[] { 1000000.0, 1000 }, new[] { 1000000.0, 1000 });
+            var entries = DynamicRange.Compute(ParquetTable.Load(path), AbundanceLevel.Protein);
+
+            Assert.Equal(new[] { "ALB", "A0A024R161" }, entries.Select(e => e.Label));
+            Assert.Null(entries[1].Gene);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Compute_HonoursAReplicateSubsetAndCanReorderTheRanking()
     {
@@ -249,8 +273,51 @@ public class DynamicRangeTests
     [InlineData(" PG0002 ; PG0007 ", "PG0002")]
     [InlineData("", null)]
     [InlineData(null, null)]
+    // An unknown first member is no first member - not the second group's value borrowed.
+    [InlineData(";IKBKG", null)]
+    [InlineData("NA;IKBKG", null)]
     public void FirstGroup_TakesTheLeadingEntryOfAMultiGroupValue(string? value, string? expected)
         => Assert.Equal(expected, DynamicRange.FirstGroup(value));
+
+    /// <summary>
+    /// A shared peptide whose FIRST group has no known name or gene. The names are positional - name
+    /// k is group k's - so the unknown one must stay as an empty slot: dropped, the second protein's
+    /// name was shown against the first group, and the first group's gene was the second's.
+    /// </summary>
+    [Fact]
+    public void Compute_ASharedPeptidesUnknownFirstName_KeepsTheNamesAlignedWithTheirGroups()
+    {
+        var dir = TempDir();
+        try
+        {
+            var path = Path.Combine(dir, "corrected_peptides.parquet");
+            ParquetWideWriter.Write(
+                path,
+                new[]
+                {
+                    ParquetWideWriter.Strings("Peptide Modified Sequence Unimod Ids", new[] { "SHAREDPEPTIDEK" }),
+                    ParquetWideWriter.Strings("protein_group", new[] { "PG0001;PG0002" }),
+                    ParquetWideWriter.Strings("leading_protein", new[] { "NA;P13597" }),
+                    ParquetWideWriter.Strings("leading_name", new[] { "NA;ICAM1_MOUSE" }),
+                    ParquetWideWriter.Strings("leading_gene_name", new[] { "NA;Icam1" }),
+                },
+                new[] { "R1", "R2" },
+                new[] { new[] { 5000.0 }, new[] { 5200.0 } },
+                1);
+
+            var entry = DynamicRange.Compute(ParquetTable.Load(path), AbundanceLevel.Peptide).Single();
+
+            Assert.Equal(new[] { "PG0001", "PG0002" }, entry.ProteinGroups);
+            Assert.Equal(new[] { "", "ICAM1_MOUSE" }, entry.ProteinNames);
+            Assert.Null(entry.ProteinName);
+            Assert.Null(entry.Accession);
+            Assert.Null(entry.Gene);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 
     [Fact]
     public void ProteinList_MatchesASharedPeptidesFirstGroup()

@@ -40,8 +40,10 @@ public class DifferentialDatasetTests
     }
 
     /// <summary>
-    /// Genes are their own array, never the display label. At protein level the two happen to agree
-    /// - the label IS leading_gene_name - so this side only fixes that FeatureGenes is populated.
+    /// Genes are their own array, never the display label. At protein level the two agree wherever a
+    /// gene is known - the label is the gene, falling back to the accession only where there is none
+    /// (<see cref="Load_Protein_PlaceholderGene_FallsBackToAccession_NeverNA"/>) - so this side only
+    /// fixes that FeatureGenes is populated.
     /// </summary>
     [Fact]
     public void Load_Protein_CarriesGeneSymbols()
@@ -218,5 +220,135 @@ public class DifferentialDatasetTests
         {
             File.Delete(path);
         }
+    }
+
+    /// <summary>
+    /// The mini output with its identity columns replaced: PG0002 has no gene, PG0003 has neither a
+    /// gene nor an accession. "NA" is what parsimony writes for an unknown name
+    /// (<c>ParsimonyEngine</c>, <c>ProteinGroup</c>), so that is what a real output carries -
+    /// a non-model-organism run has thousands of them. With <paramref name="sharedLastRow"/>, the
+    /// last row is instead in two groups, the first unknown and the second ICAM1, as a shared
+    /// peptide's identity columns list them.
+    /// </summary>
+    private static string WriteMiniWithPlaceholderNames(bool sharedLastRow = false)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-na-labels-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        File.Copy(Path.Combine(MiniOutput, "sample_metadata.csv"), Path.Combine(dir, "sample_metadata.csv"));
+
+        var mini = SkylinePrism.Core.IO.ParquetTable.Load(Path.Combine(MiniOutput, "corrected_proteins.parquet"));
+        var sampleCols = mini.ColumnNames.Where(c => c.Contains("__@__", StringComparison.Ordinal)).ToList();
+        var meta = new[]
+        {
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("protein_group",
+                new[] { "PG0001", "PG0002", sharedLastRow ? "PG0003;PG0004" : "PG0003" }),
+            // PG0002's leading_protein is the whole FASTA id, as when Skyline knew the protein by name
+            // only; the clean accession is in leading_uniprot_id.
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_protein",
+                new[] { "E9Q0F0", "sp|P13597|ICAM1_MOUSE", sharedLastRow ? "NA;P13597" : "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_name",
+                new[] { "E9Q0F0_MOUSE", "ICAM1_MOUSE", sharedLastRow ? "NA;ICAM1_MOUSE" : "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_uniprot_id",
+                new[] { "E9Q0F0", "P13597", sharedLastRow ? "NA;P13597" : "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Strings("leading_gene_name",
+                new[] { "Krt78", "NA", sharedLastRow ? "NA;Icam1" : "NA" }),
+            SkylinePrism.Core.IO.ParquetWideWriter.Longs("n_peptides", new long[] { 3, 3, 3 }),
+        };
+        var values = sampleCols.Select(c => mini.GetDouble(c).Select(v => v ?? double.NaN).ToArray()).ToList();
+        SkylinePrism.Core.IO.ParquetWideWriter.Write(
+            Path.Combine(dir, "corrected_proteins.parquet"), meta, sampleCols, values, 3);
+        return dir;
+    }
+
+    /// <summary>
+    /// A volcano, hit table and boxplot title label a protein by its gene. With no gene known the
+    /// placeholder "NA" was shown instead - every unannotated protein labeled the same, which says
+    /// nothing. The label must fall back to the protein's UniProt accession - the clean one, not a
+    /// whole FASTA id - and with neither, to the protein-group id. The gene
+    /// array must not carry the placeholder either: enrichment submits it to g:Profiler as a symbol.
+    /// </summary>
+    [Fact]
+    public void Load_Protein_PlaceholderGene_FallsBackToAccession_NeverNA()
+    {
+        var dir = WriteMiniWithPlaceholderNames();
+        try
+        {
+            var d = DifferentialDataset.Load(dir, FeatureLevel.Protein);
+
+            Assert.Equal(new[] { "Krt78", "P13597", "PG0003" }, d.FeatureLabels);
+            Assert.Equal(new[] { "Krt78", "", "" }, d.FeatureGenes);
+            var identity = d.IdentityOf("PG0003")!;
+            Assert.Empty(identity.Accessions);
+            Assert.Empty(identity.ProteinNames);
+            Assert.Empty(identity.Genes);
+            // The readout and the CSV use the label as is: a blank one printed nothing.
+            Assert.StartsWith("PG0003", identity.Describe());
+
+            var row = WriteCsvLines(d, dir).Single(l => l.StartsWith("PG0003,", StringComparison.Ordinal));
+            Assert.StartsWith("PG0003,PG0003,,,,", row);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A row in two groups whose FIRST group has no known gene, name or accession. The identity lists
+    /// are positional - member k is group k's - so the unknown member stays as an empty slot, in the
+    /// identity and in differential.csv. Dropping it put the second group's gene at index 0, where it
+    /// reads as the first group's.
+    /// </summary>
+    [Fact]
+    public void IdentityOf_AnUnknownFirstMember_KeepsEveryListAlignedWithItsGroups()
+    {
+        var dir = WriteMiniWithPlaceholderNames(sharedLastRow: true);
+        try
+        {
+            var d = DifferentialDataset.Load(dir, FeatureLevel.Protein);
+            var identity = d.IdentityOf("PG0003;PG0004")!;
+
+            Assert.Equal(new[] { "PG0003", "PG0004" }, identity.ProteinGroups);
+            Assert.Equal(new[] { "", "Icam1" }, identity.Genes);
+            Assert.Equal(new[] { "", "ICAM1_MOUSE" }, identity.ProteinNames);
+            Assert.Equal(new[] { "", "P13597" }, identity.Accessions);
+            // Named for its FIRST group, as everything else is: that group's names are unknown, so the
+            // label is the group id and the readout does not borrow PG0004's gene or name.
+            Assert.Equal("PG0003;PG0004", identity.Label);
+            Assert.Equal("PG0003;PG0004  (shared across 2 protein groups)", identity.Describe());
+
+            var row = WriteCsvLines(d, dir).Single(l => l.StartsWith("PG0003;PG0004,", StringComparison.Ordinal));
+            Assert.StartsWith("PG0003;PG0004,PG0003;PG0004,;Icam1,;ICAM1_MOUSE,;P13597,", row);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>differential.csv for the experimental samples split in half, as the end-to-end test splits them.</summary>
+    private static string[] WriteCsvLines(DifferentialDataset d, string dir)
+    {
+        var types = d.MetadataValues("sample_type");
+        var experimental = Enumerable.Range(0, d.SampleIds.Length).Where(j => types[j] == "experimental").ToList();
+        var half = experimental.Count / 2;
+        var res = Differential.Run(d.ExprLog2, d.FeatureIds, experimental.Take(half).ToList(), experimental.Skip(half).ToList());
+        var csv = Path.Combine(dir, "differential.csv");
+        DifferentialCsv.Write(csv, res, d, new DifferentialOptions(), SignificanceRule.Default, "g", "A", "B");
+        return File.ReadAllLines(csv);
+    }
+
+    [Theory]
+    [InlineData("NA;ALB", new[] { "", "ALB" })]
+    [InlineData("ALB;NA", new[] { "ALB", "" })]
+    [InlineData(" ALB ; HBB ", new[] { "ALB", "HBB" })]
+    [InlineData("NA;N/A", new string[0])]
+    [InlineData("", new string[0])]
+    [InlineData(null, new string[0])]
+    public void NamePlaceholder_SplitAligned_KeepsEachMemberInItsPlace(string? value, string[] expected)
+    {
+        Assert.Equal(expected, SkylinePrism.Core.IO.NamePlaceholder.SplitAligned(value));
+        Assert.Equal(expected.Length == 0 ? "" : string.Join(";", expected),
+            SkylinePrism.Core.IO.NamePlaceholder.JoinAligned(expected));
     }
 }

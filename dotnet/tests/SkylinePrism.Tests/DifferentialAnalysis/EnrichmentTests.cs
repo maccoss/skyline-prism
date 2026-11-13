@@ -37,6 +37,34 @@ public class EnrichmentTests
         Assert.Equal(new[] { "GENEA", "GENEB" }, Enrichment.CleanSymbols(new[] { "GENEA;GENEB" }));
     }
 
+    /// <summary>
+    /// "NA" is parsimony's placeholder for an unknown gene; it was submitted to g:Profiler as a gene
+    /// symbol, once per unannotated hit. No placeholder may be.
+    /// </summary>
+    [Fact]
+    public void CleanSymbols_DropsEveryNamePlaceholder()
+    {
+        Assert.Equal(new[] { "ALB" },
+            Enrichment.CleanSymbols(new[] { "NA", "ALB", "N/A", "#N/A", "None", "null", "na;NA" }));
+    }
+
+    /// <summary>
+    /// A placeholder inside a list joined by any delimiter, not only ";": "ALB,N/A" gave ALB, N and
+    /// A, fabricated symbols that went into both the query and the background. "/" still splits a
+    /// real pair of symbols.
+    /// </summary>
+    [Theory]
+    [InlineData("ALB,N/A", new[] { "ALB" })]
+    [InlineData("ALB|#N/A", new[] { "ALB" })]
+    [InlineData("ALB N/A", new[] { "ALB" })]
+    [InlineData("N/A,ALB;#N/A|TP53/MDM2", new[] { "ALB", "TP53", "MDM2" })]
+    [InlineData("HBA1/HBA2", new[] { "HBA1", "HBA2" })]
+    [InlineData("ALB/N/A", new[] { "ALB" })]
+    [InlineData("ALB/#N/A", new[] { "ALB" })]
+    [InlineData("#N/A/ALB/HBB", new[] { "ALB", "HBB" })]
+    public void CleanSymbols_DropsAPlaceholderAfterAnyDelimiter(string value, string[] expected)
+        => Assert.Equal(expected, Enrichment.CleanSymbols(new[] { value }));
+
     [Fact]
     public void GProfiler_ComputesFoldEnrichmentAndSendsPayload()
     {
