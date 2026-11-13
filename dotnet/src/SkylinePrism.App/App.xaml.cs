@@ -59,6 +59,18 @@ public partial class App : Application
     /// </remarks>
     private static volatile bool _shutdownStarted;
 
+    /// <summary>
+    /// Set by the first fault reported after a startup file went missing, so the restart message is
+    /// shown once and every later fault is only logged. See <see cref="StartupFiles"/>.
+    /// </summary>
+    /// <remarks>
+    /// The reported case raised the same fault seven times in six seconds - once per tablet message - and
+    /// each one stacked another dialog over the last, all saying a restart was needed. An int rather
+    /// than a bool so <see cref="Interlocked.Exchange(ref int, int)"/> can claim it: a stale process
+    /// can fault on a worker thread and the UI thread at once, and both must not show it.
+    /// </remarks>
+    private static int _restartMessageShown;
+
     private static string InitLogPath()
     {
         try
@@ -163,31 +175,59 @@ public partial class App : Application
             return;
         }
 
-        try
+        string title, text;
+        MessageBoxImage image;
+
+        // Checked before the copyable window is tried, and answered with the plain message box. In a
+        // process whose runtime folder is gone, a NEW WPF window can need exactly what can no longer
+        // load: the reported dialog was the message box below, which this method reaches on the UI
+        // thread only after PrismMessageWindow.ShowError has thrown. The message box is user32's own
+        // and needs nothing from the missing folder.
+        var missing = StartupFiles.FirstMissing(StartupFiles.Probes());
+        if (missing is not null)
         {
-            // The copyable window where it can be shown - on the UI thread, with a dispatcher that is
-            // still running. A fault on a worker thread gets the plain message box, which is safe from
-            // any thread; marshalling to a UI thread that may itself be stuck could hang instead.
-            if (Current?.Dispatcher is { HasShutdownStarted: false } d && d.CheckAccess())
+            if (Interlocked.Exchange(ref _restartMessageShown, 1) != 0)
             {
-                PrismMessageWindow.ShowError(Current.MainWindow, "Skyline-PRISM error",
-                    ex?.Message ?? "Unknown error", ex, LogFilePath);
+                WriteLog("  Startup files still missing - logged only; the restart message was already shown.");
                 return;
             }
+            WriteLog($"  {missing} no longer exists: this process outlived the files it started from "
+                + "(a .NET update or a tool reinstall while PRISM was open). Showing the restart message "
+                + "instead of the error.");
+            title = "Skyline-PRISM needs to be restarted";
+            text = StartupFiles.RestartMessage(missing, LogFilePath);
+            image = MessageBoxImage.Warning;
         }
-        catch
+        else
         {
-            // Fall through to the message box below.
+            try
+            {
+                // The copyable window where it can be shown - on the UI thread, with a dispatcher that
+                // is still running. A fault on a worker thread gets the plain message box, which is
+                // safe from any thread; marshalling to a UI thread that may itself be stuck could hang
+                // instead.
+                if (Current?.Dispatcher is { HasShutdownStarted: false } d && d.CheckAccess())
+                {
+                    PrismMessageWindow.ShowError(Current.MainWindow, "Skyline-PRISM error",
+                        ex?.Message ?? "Unknown error", ex, LogFilePath);
+                    return;
+                }
+            }
+            catch
+            {
+                // Fall through to the message box below.
+            }
+
+            title = "Skyline-PRISM error";
+            text = (ex?.ToString() ?? "Unknown error")
+                + Environment.NewLine + Environment.NewLine
+                + "A copy of this error was written to:" + Environment.NewLine + LogFilePath;
+            image = MessageBoxImage.Error;
         }
 
         try
         {
-            MessageBox.Show(
-                (ex?.ToString() ?? "Unknown error")
-                + Environment.NewLine + Environment.NewLine
-                + "A copy of this error was written to:" + Environment.NewLine + LogFilePath,
-                "Skyline-PRISM error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(text, title, MessageBoxButton.OK, image);
         }
         catch
         {
