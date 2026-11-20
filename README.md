@@ -131,6 +131,10 @@ Install the **.NET 10 Desktop Runtime** (see the prerequisite above —
 it in Skyline via **Tools → Tool Store → Install from file**. The tool appears under the Tools menu
 and connects to the running document.
 
+![Skyline-PRISM on Skyline's Tools menu](images/gui/00-skyline-tools-menu.png)
+
+![The PRISM window launched from Skyline, on the Inputs tab](images/gui/00b-prism-from-skyline.png)
+
 On the **Inputs** tab you add one input per batch and PRISM runs them as a single cohort, so a study
 split across several Skyline documents does not need each report exported by hand:
 
