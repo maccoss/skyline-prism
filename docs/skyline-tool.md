@@ -4,6 +4,11 @@ PRISM ships as a Skyline external tool: a Windows window that runs the pipeline 
 documents and then shows interactive plots of the result. Installation is in the
 [README](../README.md#skyline-external-tool-windows); this describes what the window does.
 
+Once installed, it is on Skyline's **Tools** menu. Launched from there, it connects to that Skyline
+instance, and the line under the title says so.
+
+![Skyline-PRISM on Skyline's Tools menu](../images/gui/00-skyline-tools-menu.png)
+
 It also runs **standalone** — double-click the installed `SkylinePrism.exe` and you get the same window
 with no Skyline attached. Everything below works except the parts that talk to a document (exporting from
 an open document, and the two-way selection on the Dynamic Range plot).
@@ -34,6 +39,19 @@ and **Browse...** is disabled, since the run is writing into it.
 | **Settings** | Pipeline options; **Show command line** |
 | **Log** | The full run log — the first place to look when something is slower or emptier than expected |
 
+![The Inputs tab with three Skyline documents, one per plate](../images/gui/01-inputs.png)
+
+*Inputs: one Skyline document per plate, each with its own batch label. The status column shows each
+document's report once it has been exported.*
+
+![The Settings tab listing the pipeline stages in order](../images/gui/02-settings.png)
+
+*Settings: the pipeline stages in the order they run, from transition rollup through ion accounting.*
+
+![The Log tab at the end of a run](../images/gui/03-log.png)
+
+*Log: the full run log, here ending with the per-file ion-accounting summary.*
+
 ### Visualization
 
 Chosen from the list down the left-hand side rather than from a tab strip, because the plots are
@@ -51,6 +69,22 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
 so an empty result cannot be misread as a flat measurement.
+
+![QC Plots showing a sample PCA of the raw protein matrix, colored by sample type](../images/gui/04b-qc-pca-raw.png)
+
+*QC Plots, PCA of the raw protein matrix colored by `SampleType`. Each kind of control injection
+(orange, red) forms a tight cluster, while the study samples (blue) spread much more widely.*
+
+![The same PCA with View set to Corrected](../images/gui/04c-qc-pca-corrected.png)
+
+*The same plot with **View** set to **Corrected**. Toggling **View** is how you compare a matrix before
+and after normalization (and batch correction, when ComBat is on); **PCs** picks any component pair up
+to PC6.*
+
+![QC Plots showing the control-correlation heatmap](../images/gui/04-qc-plots.png)
+
+*QC Plots, **Control correlation**: pairwise correlation of the control samples. Each control type
+should correlate tightly within itself.*
 
 ---
 
@@ -86,6 +120,11 @@ developers. `SkylineCmd` does the same work in ~9 s.
 
 Log10 abundance against abundance rank — the shape of Skyline's Relative Abundance plot — computed from
 the **corrected** PRISM matrices (`corrected_proteins.parquet` / `corrected_peptides.parquet`).
+
+![Dynamic Range plot of protein abundance against rank, with an EV marker list labeled](../images/gui/06-dynamic-range.png)
+
+*Dynamic Range at the protein level, with the **EV markers (extended)** protein list switched on and
+labeled. Clicking a point selects that protein in Skyline.*
 
 Switch between **Protein** and **Peptide**, and average over **All** replicates or any subset you tick.
 Abundances are averaged on the **linear** scale and only then log-transformed, and anything never measured
@@ -320,6 +359,11 @@ guess which document you meant.
 sequence to?** Measured from the instrument files at each MS level, so both sides of the ratio are the
 same quantity and the fraction is a genuine one.
 
+![Ion accounting: acquired, explained and quantified MS2 signal for each of 264 replicates](../images/gui/07-ion-accounting.png)
+
+*Ion accounting, per replicate at MS2: the acquired signal (gray) with the explained and quantified
+portions stacked inside it, colored by sample type. The title gives the median shares across the run.*
+
 At MS2 the question is asked twice, because it has two honest answers:
 
 | | what it counts | what it tells you |
@@ -448,6 +492,16 @@ and the **max q-value** that counts as a detection (default 0.01). A very wide m
 bin to keep the grid bounded; the status line always names the bin actually used, and says when it had
 to widen it. Hovering reads out the isolation window and exact count under the cursor.
 
+![Spectrum density heatmap: precursor m/z against retention time, colored by precursors per spectrum](../images/gui/05a-spectrum-density-heatmap.png)
+
+*The **Heatmap** view for one run: each row is one of the acquisition's isolation windows, each column
+a 0.01 min RT bin.*
+
+![Spectrum density load histogram: number of spectra against precursors co-eluting in a spectrum](../images/gui/05b-spectrum-density-histogram.png)
+
+*The **Load histogram** view of the same run: how many spectra had to resolve 0, 1, 2… co-eluting
+precursors, with the mean marked.*
+
 **The rows are the acquisition's real isolation windows**, not an assumed bin width, so a cell really is
 one DIA spectrum — including for variable-width and staggered schemes. This matters more than it sounds:
 a real forbidden-zone scheme has 3.0014 Th windows starting at 400.4319, so a uniform 3 Th grid starting
@@ -499,6 +553,12 @@ notebook, no Python, no network except the optional enrichment call. It reads
 `corrected_proteins.parquet` / `corrected_peptides.parquet` and `sample_metadata.csv` from the output
 directory, so it works on a finished run or any previous run's output directory, with or without a live
 Skyline connection.
+
+![Differential pane: settings column, volcano plot and sortable hit table](../images/gui/08-differential.png)
+
+*Differential: an unpaired protein-level contrast of two sample types. The settings column is on the
+left, the volcano plot in the middle and the sortable hit table on the right. Clicking a point or a row
+opens that feature's boxplot and selects it in Skyline.*
 
 **Where the settings are.** They sit in a column on the left of the plot rather than a toolbar above
 it, grouped in the order you decide them: **Compare** (the design: Unpaired, Paired, Trend, Trend by
